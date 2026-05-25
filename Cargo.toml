@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["uncurses", "uncurses-ratatui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/aymanbagabas/uncurses"
+
+[workspace.dependencies]
+bitflags = "2"
+compact_str = "0.8"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+icu_segmenter = { version = "2", default-features = false, features = ["compiled_data"] }
+icu_properties = { version = "2", default-features = false, features = ["compiled_data"] }
+libc = "0.2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }

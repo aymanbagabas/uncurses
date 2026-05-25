@@ -1,0 +1,9 @@
+[package]
+name = "uncurses-ratatui"
+description = "Integration adapter for the uncurses terminal rendering library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

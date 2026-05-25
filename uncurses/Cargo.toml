@@ -1,0 +1,27 @@
+[package]
+name = "uncurses"
+description = "A Rust terminal rendering library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+icu = ["dep:icu_segmenter", "dep:icu_properties"]
+
+[dependencies]
+bitflags.workspace = true
+compact_str.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+icu_segmenter = { workspace = true, optional = true }
+icu_properties = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
