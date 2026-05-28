@@ -1,0 +1,100 @@
+//! OSC (Operating System Command) decoder.
+//!
+//! Format: `ESC ]` (or 8-bit `0x9D`) followed by a payload terminated by
+//! BEL (`0x07`), 8-bit ST (`0x9C`), or 7-bit ST (`ESC \`). OSC is the
+//! only sequence class that accepts BEL as a terminator.
+
+use super::Decoder;
+use super::result::ParseResult;
+use super::util::intro_prefix_len;
+use crate::color::Color;
+use crate::event::{ClipboardSelection, Event};
+
+impl Decoder {
+    pub(super) fn parse_osc(&self, buf: &[u8]) -> ParseResult {
+        let prefix_len = intro_prefix_len(buf[0]);
+        // Find a terminator: BEL (OSC-only), 8-bit ST (0x9C), or 7-bit ST (ESC \).
+        for i in prefix_len..buf.len() {
+            if buf[i] == 0x07 || buf[i] == 0x9c {
+                let payload = &buf[prefix_len..i];
+                return ParseResult::Event(self.finalize_osc(payload), i + 1);
+            }
+            if buf[i] == 0x1b && i + 1 < buf.len() && buf[i + 1] == b'\\' {
+                let payload = &buf[prefix_len..i];
+                return ParseResult::Event(self.finalize_osc(payload), i + 2);
+            }
+        }
+        ParseResult::Incomplete
+    }
+
+    /// Dispatch order: user hooks first, then the builtin OSC recogniser,
+    /// then [`Event::UnknownOsc`] as a last resort. Hooks run first so a
+    /// consumer can override defaults (e.g. reinterpret OSC 10).
+    fn finalize_osc(&self, payload: &[u8]) -> Event {
+        self.handlers
+            .dispatch_osc(super::handlers::Osc { payload })
+            .or_else(|| recognize(payload))
+            .unwrap_or_else(|| Event::UnknownOsc(payload.to_vec()))
+    }
+}
+
+/// Builtin OSC recogniser. Returns `None` for unrecognised payloads so the
+/// caller can decide the fallback.
+fn recognize(payload: &[u8]) -> Option<Event> {
+    // Split the leading numeric command from the rest.
+    let semi = payload.iter().position(|&b| b == b';')?;
+    let cmd_bytes = &payload[..semi];
+    let rest = &payload[semi + 1..];
+    let cmd: u32 = std::str::from_utf8(cmd_bytes).ok()?.parse().ok()?;
+
+    match cmd {
+        10 => parse_osc_color(rest).map(Event::ForegroundColor),
+        11 => parse_osc_color(rest).map(Event::BackgroundColor),
+        12 => parse_osc_color(rest).map(Event::CursorColor),
+        52 => parse_osc_clipboard(rest),
+        _ => None,
+    }
+}
+
+/// Parse an OSC color value like `rgb:RRRR/GGGG/BBBB` (xterm common form) or
+/// `rgb:RR/GG/BB`. Returns `None` if unrecognized.
+fn parse_osc_color(s: &[u8]) -> Option<Color> {
+    let s = std::str::from_utf8(s).ok()?;
+    let s = s.strip_prefix("rgb:")?;
+    let mut parts = s.split('/');
+    let r = parse_hex_channel(parts.next()?)?;
+    let g = parse_hex_channel(parts.next()?)?;
+    let b = parse_hex_channel(parts.next()?)?;
+    Some(Color::Rgb(r, g, b))
+}
+
+/// Parse a 1–4 hex-digit channel value, scaling down to a u8.
+fn parse_hex_channel(s: &str) -> Option<u8> {
+    if s.is_empty() || s.len() > 4 {
+        return None;
+    }
+    let v = u32::from_str_radix(s, 16).ok()?;
+    let scaled = match s.len() {
+        1 => (v * 0x11) as u8,
+        2 => v as u8,
+        3 => (v >> 4) as u8,
+        4 => (v >> 8) as u8,
+        _ => unreachable!(),
+    };
+    Some(scaled)
+}
+
+/// Parse an OSC 52 payload: `<selection>;<base64-content-or-?>`.
+fn parse_osc_clipboard(s: &[u8]) -> Option<Event> {
+    let semi = s.iter().position(|&b| b == b';')?;
+    let sel_bytes = &s[..semi];
+    let content = &s[semi + 1..];
+    let selection = match sel_bytes.first().copied() {
+        Some(b'c') => ClipboardSelection::System,
+        Some(b'p') => ClipboardSelection::Primary,
+        Some(c) => ClipboardSelection::Other(c as char),
+        None => ClipboardSelection::System,
+    };
+    let content = std::str::from_utf8(content).ok()?.to_string();
+    Some(Event::Clipboard { selection, content })
+}
