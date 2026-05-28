@@ -1,0 +1,589 @@
+//! Terminal capability flags and detection from a `TERM` value.
+
+use bitflags::bitflags;
+
+use crate::terminal::Env;
+
+bitflags! {
+    /// Terminal optimizations the renderer can use. Flag names follow
+    /// the short capability names used by `infocmp` where they exist;
+    /// `BS` (backspace character) and `ONLCR` (termios output flag)
+    /// are not terminfo caps but are named after the well-known
+    /// control character / termios flag they gate respectively.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct Optimizations: u32 {
+        /// Terminal supports ECH (Erase Characters).
+        const ECH    = 1 <<  0;
+        /// Terminal supports REP (Repeat Character).
+        const REP    = 1 <<  1;
+        /// Terminal supports ICH (Insert Characters).
+        const ICH    = 1 <<  2;
+        /// Terminal supports DCH (Delete Characters).
+        const DCH    = 1 <<  3;
+        /// Terminal supports scroll regions (DECSTBM; terminfo `csr`).
+        const CSR    = 1 <<  4;
+        /// Terminal supports SU/SD (Scroll Up/Down).
+        const SU_SD  = 1 <<  5;
+        /// Terminal supports IL/DL (Insert/Delete Line).
+        const IL_DL  = 1 <<  6;
+        /// Terminal supports BCE (Background Color Erase).
+        const BCE    = 1 <<  7;
+        /// Terminal supports CHA (Cursor Horizontal Absolute).
+        const CHA    = 1 <<  8;
+        /// Terminal supports HPA (Horizontal Position Absolute).
+        const HPA    = 1 <<  9;
+        /// Terminal supports VPA (Vertical Position Absolute).
+        const VPA    = 1 << 10;
+        /// Tab stops are set every 8 columns.
+        const TABS   = 1 << 11;
+        /// Terminal supports CBT (Cursor Backward Tab).
+        const CBT    = 1 << 12;
+        /// Terminal supports CHT (Cursor Horizontal Tab).
+        const CHT    = 1 << 13;
+        /// Terminal supports BS (the backspace control character,
+        /// `\x08`) for cursor-left-by-one.
+        const BS     = 1 << 14;
+        /// Whether the terminal currently maps `\n` to `\r\n`
+        /// (termios ONLCR). In raw mode this is unset and `\n` only
+        /// moves the cursor down without resetting the column.
+        const ONLCR  = 1 << 15;
+    }
+}
+
+impl Default for Optimizations {
+    /// The default is [`Optimizations::xterm`] — the modern baseline
+    /// for the overwhelming majority of terminals reachable from a
+    /// generic `TERM=xterm-256color` session.
+    fn default() -> Self {
+        Self::xterm()
+    }
+}
+
+impl Optimizations {
+    /// Every escape-sequence cap turned off; only the termios-gated
+    /// caps (`TABS`, `BS`) stay on. Use this as a conservative
+    /// baseline for an unknown or genuinely capability-less terminal.
+    pub const fn none() -> Self {
+        Self::TABS.union(Self::BS)
+    }
+
+    /// Every cap enabled (except ONLCR — raw mode is the default
+    /// assumption). The modern reference baseline matched by the
+    /// contemporary xterm-compatible terminal emulators.
+    pub const fn modern() -> Self {
+        Self::ECH
+            .union(Self::REP)
+            .union(Self::ICH)
+            .union(Self::DCH)
+            .union(Self::CSR)
+            .union(Self::SU_SD)
+            .union(Self::IL_DL)
+            .union(Self::BCE)
+            .union(Self::CHA)
+            .union(Self::HPA)
+            .union(Self::VPA)
+            .union(Self::TABS)
+            .union(Self::CBT)
+            .union(Self::CHT)
+            .union(Self::BS)
+    }
+
+    /// The xterm baseline. Compared to [`Self::modern`], `HPA`,
+    /// `CHT`, and `REP` are off:
+    /// - `HPA`: konsole and several xterm-compatible terminals lack
+    ///   HPA; xterm-256color terminfo defines HPA via the same
+    ///   sequence as CHA, so CHA is the safer choice.
+    /// - `CHT`: forward-tab support is historically inconsistent
+    ///   across xterm-compatible emulators.
+    /// - `REP`: REP is not universally implemented across the
+    ///   xterm-compatible family.
+    pub const fn xterm() -> Self {
+        Self::modern().difference(Self::HPA.union(Self::CHT).union(Self::REP))
+    }
+
+    /// The VT100/VT102 baseline. Predates the xterm extensions for
+    /// absolute positioning (CHA/HPA/VPA), ECH, REP, BCE, SU/SD, and
+    /// CBT, but supports DECSTBM, hardware tabs, BS, and on the
+    /// VT102 the ICH/DCH/IL/DL editing pairs.
+    pub const fn vt100() -> Self {
+        Self::ICH
+            .union(Self::DCH)
+            .union(Self::CSR)
+            .union(Self::IL_DL)
+            .union(Self::TABS)
+            .union(Self::BS)
+    }
+
+    /// The Linux console baseline. The kernel's terminal driver
+    /// implements a narrow subset of ECMA-48 — only absolute
+    /// positioning (CHA/HPA/VPA), ECH, and ICH on top of the
+    /// hardware tab stops and BS handled by termios.
+    /// See `console_codes(4)`.
+    pub const fn linux() -> Self {
+        Self::ECH
+            .union(Self::ICH)
+            .union(Self::CHA)
+            .union(Self::HPA)
+            .union(Self::VPA)
+            .union(Self::TABS)
+            .union(Self::BS)
+    }
+
+    /// The GNU screen baseline, derived from
+    /// `infocmp -x1 screen-256color`. screen multiplexes onto the
+    /// host terminal and only re-advertises a conservative subset:
+    /// no `BCE`, `ECH`, `REP`, `CHA`, or `CHT`.
+    pub const fn screen() -> Self {
+        Self::ICH
+            .union(Self::DCH)
+            .union(Self::CSR)
+            .union(Self::SU_SD)
+            .union(Self::IL_DL)
+            .union(Self::HPA)
+            .union(Self::VPA)
+            .union(Self::TABS)
+            .union(Self::CBT)
+            .union(Self::BS)
+    }
+
+    /// Toggle hardware tab support (`TABS`). Disable when the
+    /// receiving terminal is in cooked mode without `TAB0` set on
+    /// `c_oflag` and `\t` would otherwise be expanded to spaces.
+    #[must_use]
+    pub const fn with_tabs(self, enabled: bool) -> Self {
+        self.with_flag(Self::TABS, enabled)
+    }
+
+    /// Toggle backspace-character support (`BS`). Disable when the
+    /// receiving terminal does not interpret `\x08` as cursor-left
+    /// by one cell.
+    #[must_use]
+    pub const fn with_bs(self, enabled: bool) -> Self {
+        self.with_flag(Self::BS, enabled)
+    }
+
+    /// Toggle the assumption that `\n` is mapped to `\r\n` (`ONLCR`).
+    /// Enable when the terminal is in cooked mode with `ONLCR` set
+    /// so a newline both advances a row and resets the column.
+    #[must_use]
+    pub const fn with_onlcr(self, enabled: bool) -> Self {
+        self.with_flag(Self::ONLCR, enabled)
+    }
+
+    /// Toggle erase-character (`ECH`).
+    #[must_use]
+    pub const fn with_ech(self, enabled: bool) -> Self {
+        self.with_flag(Self::ECH, enabled)
+    }
+
+    /// Toggle repeat-character (`REP`).
+    #[must_use]
+    pub const fn with_rep(self, enabled: bool) -> Self {
+        self.with_flag(Self::REP, enabled)
+    }
+
+    /// Toggle insert-character (`ICH`).
+    #[must_use]
+    pub const fn with_ich(self, enabled: bool) -> Self {
+        self.with_flag(Self::ICH, enabled)
+    }
+
+    /// Toggle delete-character (`DCH`).
+    #[must_use]
+    pub const fn with_dch(self, enabled: bool) -> Self {
+        self.with_flag(Self::DCH, enabled)
+    }
+
+    /// Toggle DECSTBM scroll-region support (`CSR`).
+    #[must_use]
+    pub const fn with_csr(self, enabled: bool) -> Self {
+        self.with_flag(Self::CSR, enabled)
+    }
+
+    /// Toggle scroll-up/scroll-down (`SU_SD`).
+    #[must_use]
+    pub const fn with_su_sd(self, enabled: bool) -> Self {
+        self.with_flag(Self::SU_SD, enabled)
+    }
+
+    /// Toggle insert/delete-line (`IL_DL`).
+    #[must_use]
+    pub const fn with_il_dl(self, enabled: bool) -> Self {
+        self.with_flag(Self::IL_DL, enabled)
+    }
+
+    /// Toggle back-color-erase (`BCE`).
+    #[must_use]
+    pub const fn with_bce(self, enabled: bool) -> Self {
+        self.with_flag(Self::BCE, enabled)
+    }
+
+    /// Toggle cursor-horizontal-absolute (`CHA`).
+    #[must_use]
+    pub const fn with_cha(self, enabled: bool) -> Self {
+        self.with_flag(Self::CHA, enabled)
+    }
+
+    /// Toggle horizontal-position-absolute (`HPA`).
+    #[must_use]
+    pub const fn with_hpa(self, enabled: bool) -> Self {
+        self.with_flag(Self::HPA, enabled)
+    }
+
+    /// Toggle vertical-position-absolute (`VPA`).
+    #[must_use]
+    pub const fn with_vpa(self, enabled: bool) -> Self {
+        self.with_flag(Self::VPA, enabled)
+    }
+
+    /// Toggle cursor-backward-tab (`CBT`).
+    #[must_use]
+    pub const fn with_cbt(self, enabled: bool) -> Self {
+        self.with_flag(Self::CBT, enabled)
+    }
+
+    /// Toggle cursor-horizontal-tab (`CHT`).
+    #[must_use]
+    pub const fn with_cht(self, enabled: bool) -> Self {
+        self.with_flag(Self::CHT, enabled)
+    }
+
+    /// Const-friendly helper used by the `with_*` builders.
+    const fn with_flag(self, flag: Self, enabled: bool) -> Self {
+        if enabled {
+            self.union(flag)
+        } else {
+            self.difference(flag)
+        }
+    }
+
+    /// Derive an optimization set from a `TERM` value. Falls back to
+    /// [`Self::none`] for unknown, empty, or `dumb` terminals.
+    pub fn from_term(term: &str) -> Self {
+        let head = term.split('-').next().unwrap_or("");
+        // xterm-<vendor> reassignment when the vendor is a known modern
+        // terminal advertising xterm compatibility.
+        if head == "xterm"
+            && let Some(rest) = term.strip_prefix("xterm-")
+        {
+            let vendor = rest.split('-').next().unwrap_or("");
+            if matches!(vendor, "ghostty" | "kitty" | "rio") {
+                return Self::modern();
+            }
+        }
+        match head {
+            "" | "dumb" => Self::none(),
+            // Modern terminals that advertise the full xterm-era cap
+            // set. Alacritty falls into this bucket too: upstream
+            // disables CHT (forward tab) only, which we do not track.
+            "alacritty" | "contour" | "foot" | "ghostty" | "kitty" | "rio" | "st" | "tmux"
+            | "wezterm" => Self::modern(),
+            "xterm" => Self::xterm(),
+            "screen" => Self::screen(),
+            "linux" => Self::linux(),
+            _ => Self::none(),
+        }
+    }
+
+    /// Derive an optimization set from an [`Env`]. Routes `$TERM`
+    /// through [`Self::from_term`] when it is set, and falls back to
+    /// [`Self::default`] (the xterm baseline) when `$TERM` is unset
+    /// entirely — callers with no environment information (CI
+    /// harnesses, embedded sinks) keep the previous default rather
+    /// than collapsing to [`Self::none`].
+    pub fn from_env(env: &Env) -> Self {
+        match env.get("TERM") {
+            Some(term) => Self::from_term(&term),
+            None => Self::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_xterm() {
+        assert_eq!(Optimizations::default(), Optimizations::xterm());
+    }
+
+    #[test]
+    fn none_disables_escape_caps_only() {
+        let o = Optimizations::none();
+        assert!(!o.intersects(
+            Optimizations::ECH
+                | Optimizations::REP
+                | Optimizations::ICH
+                | Optimizations::DCH
+                | Optimizations::CSR
+                | Optimizations::SU_SD
+                | Optimizations::IL_DL
+                | Optimizations::BCE
+                | Optimizations::CHA
+                | Optimizations::HPA
+                | Optimizations::VPA
+                | Optimizations::CBT
+                | Optimizations::CHT
+                | Optimizations::ONLCR,
+        ));
+        // Termios-gated stays on.
+        assert!(o.contains(Optimizations::TABS));
+        assert!(o.contains(Optimizations::BS));
+    }
+
+    #[test]
+    fn modern_enables_everything_except_onlcr() {
+        let o = Optimizations::modern();
+        let everything_but_onlcr = Optimizations::all().difference(Optimizations::ONLCR);
+        assert_eq!(o, everything_but_onlcr);
+    }
+
+    #[test]
+    fn xterm_drops_hpa_cht_rep() {
+        let o = Optimizations::xterm();
+        assert!(!o.contains(Optimizations::HPA));
+        assert!(!o.contains(Optimizations::CHT));
+        assert!(!o.contains(Optimizations::REP));
+        let expected = Optimizations::modern()
+            .difference(Optimizations::HPA | Optimizations::CHT | Optimizations::REP);
+        assert_eq!(o, expected);
+    }
+
+    #[test]
+    fn vt100_predates_xterm_extensions() {
+        let o = Optimizations::vt100();
+        // No xterm-era absolute positioning or extensions.
+        let missing = Optimizations::CHA
+            | Optimizations::HPA
+            | Optimizations::VPA
+            | Optimizations::ECH
+            | Optimizations::REP
+            | Optimizations::SU_SD
+            | Optimizations::BCE
+            | Optimizations::CBT
+            | Optimizations::CHT
+            | Optimizations::ONLCR;
+        assert!(!o.intersects(missing));
+        // VT100 era margins + VT102 editing pairs.
+        let present = Optimizations::CSR
+            | Optimizations::ICH
+            | Optimizations::DCH
+            | Optimizations::IL_DL
+            | Optimizations::TABS
+            | Optimizations::BS;
+        assert!(o.contains(present));
+    }
+
+    #[test]
+    fn linux_matches_console_codes_4() {
+        let o = Optimizations::linux();
+        let present = Optimizations::ECH
+            | Optimizations::ICH
+            | Optimizations::CHA
+            | Optimizations::HPA
+            | Optimizations::VPA
+            | Optimizations::TABS
+            | Optimizations::BS;
+        assert_eq!(o, present);
+    }
+
+    #[test]
+    fn screen_matches_infocmp_x1_screen_256color() {
+        let o = Optimizations::screen();
+        let present = Optimizations::ICH
+            | Optimizations::DCH
+            | Optimizations::CSR
+            | Optimizations::SU_SD
+            | Optimizations::IL_DL
+            | Optimizations::HPA
+            | Optimizations::VPA
+            | Optimizations::TABS
+            | Optimizations::CBT
+            | Optimizations::BS;
+        assert_eq!(o, present);
+        assert!(!o.contains(Optimizations::BCE));
+        assert!(!o.contains(Optimizations::ECH));
+        assert!(!o.contains(Optimizations::REP));
+        assert!(!o.contains(Optimizations::CHA));
+        assert!(!o.contains(Optimizations::CHT));
+    }
+
+    #[test]
+    fn from_term_kitty() {
+        let o = Optimizations::from_term("kitty");
+        assert!(o.contains(Optimizations::REP | Optimizations::HPA | Optimizations::VPA));
+    }
+
+    #[test]
+    fn from_term_xterm_excludes_hpa_cht_rep() {
+        let o = Optimizations::from_term("xterm-256color");
+        assert!(!o.contains(Optimizations::HPA));
+        assert!(!o.contains(Optimizations::CHT));
+        assert!(!o.contains(Optimizations::REP));
+        assert!(o.contains(Optimizations::CHA));
+    }
+
+    #[test]
+    fn from_term_xterm_kitty_promotes() {
+        let o = Optimizations::from_term("xterm-kitty");
+        assert!(o.contains(Optimizations::HPA | Optimizations::REP));
+    }
+
+    #[test]
+    fn from_term_xterm_ghostty_promotes() {
+        let o = Optimizations::from_term("xterm-ghostty");
+        assert!(o.contains(Optimizations::HPA | Optimizations::REP));
+    }
+
+    #[test]
+    fn from_term_xterm_rio_promotes() {
+        let o = Optimizations::from_term("xterm-rio");
+        assert!(o.contains(Optimizations::HPA | Optimizations::REP));
+    }
+
+    #[test]
+    fn from_term_linux_console() {
+        assert_eq!(Optimizations::from_term("linux"), Optimizations::linux());
+    }
+
+    #[test]
+    fn from_term_dumb_is_none() {
+        assert_eq!(Optimizations::from_term("dumb"), Optimizations::none());
+    }
+
+    #[test]
+    fn from_term_empty_is_none() {
+        assert_eq!(Optimizations::from_term(""), Optimizations::none());
+    }
+
+    #[test]
+    fn from_term_unknown_falls_back_to_none() {
+        assert_eq!(
+            Optimizations::from_term("madeupterm-256color"),
+            Optimizations::none(),
+        );
+    }
+
+    #[test]
+    fn xterm_term_enables_cha() {
+        let o = Optimizations::from_term("xterm-256color");
+        assert!(o.contains(Optimizations::CHA));
+        assert!(!o.contains(Optimizations::HPA));
+    }
+
+    #[test]
+    fn linux_term_supports_vpa_hpa_not_rep() {
+        let o = Optimizations::from_term("linux");
+        assert!(o.contains(Optimizations::VPA | Optimizations::HPA));
+        assert!(!o.contains(Optimizations::REP));
+    }
+
+    #[test]
+    fn alacritty_term_has_explicit_caps() {
+        let o = Optimizations::from_term("alacritty");
+        assert!(o.contains(Optimizations::CHA | Optimizations::ECH | Optimizations::REP));
+    }
+
+    #[test]
+    fn screen_term_uses_screen_profile() {
+        assert_eq!(
+            Optimizations::from_term("screen-256color"),
+            Optimizations::screen(),
+        );
+    }
+
+    #[test]
+    fn tmux_term_supports_vpa() {
+        assert!(Optimizations::from_term("tmux-256color").contains(Optimizations::VPA));
+    }
+
+    #[test]
+    fn from_term_modern_families_all_enable_rep() {
+        for term in [
+            "contour",
+            "foot",
+            "ghostty",
+            "kitty",
+            "rio",
+            "st",
+            "tmux",
+            "wezterm",
+            "alacritty",
+        ] {
+            let o = Optimizations::from_term(term);
+            assert!(
+                o.contains(Optimizations::REP | Optimizations::HPA),
+                "{term} should enable REP and HPA"
+            );
+        }
+    }
+
+    #[test]
+    fn with_tabs_toggles_tabs() {
+        let on = Optimizations::none().with_tabs(true);
+        let off = Optimizations::none().with_tabs(false);
+        assert!(on.contains(Optimizations::TABS));
+        assert!(!off.contains(Optimizations::TABS));
+    }
+
+    #[test]
+    fn with_bs_toggles_bs() {
+        let on = Optimizations::none().with_bs(true);
+        let off = Optimizations::none().with_bs(false);
+        assert!(on.contains(Optimizations::BS));
+        assert!(!off.contains(Optimizations::BS));
+    }
+
+    #[test]
+    fn with_onlcr_toggles_onlcr() {
+        let on = Optimizations::none().with_onlcr(true);
+        let off = Optimizations::modern().with_onlcr(false);
+        assert!(on.contains(Optimizations::ONLCR));
+        assert!(!off.contains(Optimizations::ONLCR));
+    }
+
+    #[test]
+    fn with_builders_compose() {
+        let o = Optimizations::xterm()
+            .with_rep(true)
+            .with_hpa(true)
+            .with_cha(false);
+        assert!(o.contains(Optimizations::REP | Optimizations::HPA));
+        assert!(!o.contains(Optimizations::CHA));
+    }
+
+    #[test]
+    fn from_env_uses_term_when_set() {
+        let env = Env::from_pairs([("TERM", "xterm-kitty")]);
+        assert_eq!(Optimizations::from_env(&env), Optimizations::modern());
+    }
+
+    #[test]
+    fn from_env_dumb_collapses_to_none() {
+        let env = Env::from_pairs([("TERM", "dumb")]);
+        assert_eq!(Optimizations::from_env(&env), Optimizations::none());
+    }
+
+    #[test]
+    fn from_env_empty_term_collapses_to_none() {
+        let env = Env::from_pairs([("TERM", "")]);
+        assert_eq!(Optimizations::from_env(&env), Optimizations::none());
+    }
+
+    #[test]
+    fn from_env_missing_term_falls_back_to_default() {
+        let env = Env::empty();
+        assert_eq!(Optimizations::from_env(&env), Optimizations::default());
+    }
+
+    #[test]
+    fn with_builders_are_idempotent() {
+        let a = Optimizations::modern().with_tabs(true).with_tabs(true);
+        let b = Optimizations::modern().with_tabs(true);
+        assert_eq!(a, b);
+        let c = Optimizations::modern().with_rep(false).with_rep(false);
+        let d = Optimizations::modern().with_rep(false);
+        assert_eq!(c, d);
+    }
+}

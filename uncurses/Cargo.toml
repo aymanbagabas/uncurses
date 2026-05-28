@@ -8,11 +8,16 @@ repository.workspace = true
 
 [features]
 default = []
+bench = []
+# Use `icu_segmenter` for grapheme-cluster segmentation instead of
+# `unicode-segmentation`. Faster on emoji/ZWJ-heavy text; larger
+# binary.
 icu = ["dep:icu_segmenter", "dep:icu_properties"]
 
 [dependencies]
 bitflags.workspace = true
 compact_str.workspace = true
+rustc-hash.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 icu_segmenter = { workspace = true, optional = true }
@@ -25,3 +30,9 @@ libc.workspace = true
 windows-sys.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "renderer"
+harness = false
+required-features = ["bench"]

@@ -1,0 +1,1967 @@
+//! Input byte stream parser — converts raw terminal bytes into Events.
+
+use super::key::{Key, KeyCode, KeyModifiers};
+mod apc;
+mod csi;
+mod dcs;
+mod escape;
+mod flags;
+pub mod handlers;
+#[cfg(test)]
+mod handlers_tests;
+mod kitty;
+mod osc;
+mod paste;
+mod result;
+mod sos_pm;
+mod ss3;
+mod utf8;
+mod util;
+mod win32;
+use super::Event;
+pub use flags::DecoderFlags;
+use handlers::Handlers;
+pub use handlers::{Apc, Csi, Dcs, HandlerId, Osc, Pm, Sos, Ss3};
+use result::ParseResult;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+pub(crate) use util::is_c1_introducer;
+
+/// Input parser that accumulates bytes and produces events.
+pub struct Decoder {
+    buf: Vec<u8>,
+    /// Decoder behavior flags (disambiguation toggles for legacy keys).
+    pub(super) flags: DecoderFlags,
+    /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
+    pub(super) in_paste: bool,
+    /// When `true`, raw mouse coordinates after `CSI M` are decoded as UTF-8
+    /// codepoints (mode 1005) instead of single bytes.
+    utf8_mouse: bool,
+    /// When `true`, the parse loop treats any `ParseResult::Incomplete` as a
+    /// timed-out partial sequence and resolves it to best-effort events
+    /// (typically a bare Escape key followed by the remaining bytes).
+    expired: bool,
+    /// Events queued by sequences that expand into more than one event
+    /// (e.g. a win32-input-mode key with `wRepeatCount > 1`). These are
+    /// drained before consuming any new bytes.
+    pub(super) pending: RefCell<VecDeque<Event>>,
+    /// Last-seen control-key state from the win32-input-mode stream. Used
+    /// to recover left/right modifier identity on key-release records.
+    pub(super) win32_last_cks: Cell<u32>,
+    /// High UTF-16 surrogate buffered from a `vk == 0` win32-input-mode
+    /// record, indexed by `bKeyDown` (0 = release, 1 = press).
+    pub(super) win32_high_surrogate: Cell<[Option<u16>; 2]>,
+    /// Caller-registered hooks for unrecognised sequences. Empty by
+    /// default; see [`Decoder::on_csi`] and siblings.
+    pub(in crate::event::decode) handlers: Handlers,
+}
+
+impl Default for Decoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Decoder {
+    pub fn new() -> Self {
+        Self {
+            buf: Vec::with_capacity(256),
+            flags: DecoderFlags::empty(),
+            in_paste: false,
+            utf8_mouse: false,
+            expired: false,
+            pending: RefCell::new(VecDeque::new()),
+            win32_last_cks: Cell::new(0),
+            win32_high_surrogate: Cell::new([None, None]),
+            handlers: Handlers::default(),
+        }
+    }
+
+    /// Builder: set the decoder behavior flags. By default no flags are set,
+    /// which preserves historical key mappings (Tab/Enter/Esc/Backspace for
+    /// the ambiguous C0 bytes, Home/End for the VT220 tilde codes). Set
+    /// flags to opt into the alternative readings. See [`DecoderFlags`].
+    #[must_use]
+    pub fn with_flags(mut self, flags: DecoderFlags) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    /// Returns `true` when the parser holds an unfinished escape sequence
+    /// (a buffered partial input that begins with `ESC` or with one of the
+    /// 8-bit C1 sequence introducers, and is not part of an active bracketed
+    /// paste).
+    ///
+    /// Callers can use this to drive an escape-sequence timeout: if no
+    /// further bytes arrive before the timeout elapses, call
+    /// [`Decoder::drain`] to resolve the partial sequence.
+    pub fn has_pending(&self) -> bool {
+        if self.buf.is_empty() || self.in_paste {
+            return false;
+        }
+        let b0 = self.buf[0];
+        b0 == 0x1b || is_c1_introducer(b0)
+    }
+
+    /// Force-drain any buffered partial escape sequence as best-effort events.
+    ///
+    /// A leading `ESC` byte is emitted as [`KeyCode::Escape`]; the remaining
+    /// bytes are then re-parsed normally (so e.g. `ESC '['` becomes an `Esc`
+    /// keypress followed by a `Char('[')` keypress).
+    ///
+    /// While a bracketed paste is in progress this is a no-op — paste content
+    /// is allowed to span arbitrary time.
+    pub fn drain(&mut self) -> Vec<Event> {
+        if self.in_paste || self.buf.is_empty() {
+            return Vec::new();
+        }
+        self.expired = true;
+        let events = self.parse(&[]);
+        self.expired = false;
+        events
+    }
+
+    /// Enable UTF-8 mouse decoding (xterm mode 1005).
+    pub fn set_utf8_mouse(&mut self, enabled: bool) {
+        self.utf8_mouse = enabled;
+    }
+
+    /// Whether UTF-8 mouse decoding (xterm mode 1005) is currently enabled.
+    pub fn utf8_mouse(&self) -> bool {
+        self.utf8_mouse
+    }
+
+    /// Slice-driven parse — pulls **one** event from `data` and returns
+    /// `(consumed, event)`.
+    ///
+    /// * `(n, Some(event))` — `event` was decoded; the caller should
+    ///   advance its buffer past the first `n` bytes.
+    /// * `(0, None)` — the buffer holds a partial sequence; the caller
+    ///   should keep the bytes and retry after reading more input.
+    /// * `(n, None)` with `n > 0` — `n` bytes were consumed but produced
+    ///   no user-facing event (e.g. a swallowed OSC/DCS terminator).
+    ///
+    /// The parser does **not** retain `data` between calls. Any unconsumed
+    /// bytes remain the caller's responsibility. Inside a bracketed
+    /// paste, paste content streams as [`Event::PasteChunk`] — large
+    /// pastes split across multiple calls naturally.
+    ///
+    /// Escape-sequence timeout is **not** handled here; if `data`
+    /// begins with `0x1B` and no continuation byte is available, this
+    /// returns `(0, None)`. The caller (typically an `EventSource`)
+    /// must apply its own timeout policy and synthesise a bare
+    /// [`KeyCode::Escape`] when desired.
+    pub fn parse_one(&mut self, data: &[u8]) -> (usize, Option<Event>) {
+        if let Some(evt) = self.pending.borrow_mut().pop_front() {
+            return (0, Some(evt));
+        }
+        if data.is_empty() {
+            return (0, None);
+        }
+
+        if self.in_paste {
+            return self.parse_paste_chunk(data);
+        }
+
+        match self.try_parse(data) {
+            ParseResult::Event(event, consumed) => {
+                if matches!(event, Event::PasteStart) {
+                    self.in_paste = true;
+                }
+                match event {
+                    Event::Multi(group) => {
+                        let mut it = group.into_iter();
+                        let first = it.next();
+                        for e in it {
+                            self.pending.borrow_mut().push_back(e);
+                        }
+                        (consumed, first)
+                    }
+                    other => (consumed, Some(other)),
+                }
+            }
+            ParseResult::Incomplete => (0, None),
+            ParseResult::None(consumed) => {
+                if consumed > 0 {
+                    (consumed, None)
+                } else {
+                    let bytes = &data[..1];
+                    let evt = self
+                        .handlers
+                        .dispatch_unknown(bytes)
+                        .unwrap_or_else(|| Event::Unknown(bytes.to_vec()));
+                    (1, Some(evt))
+                }
+            }
+        }
+    }
+
+    /// `true` while the decoder is between `PasteStart` and `PasteEnd`.
+    /// Useful for embedders implementing their own watchdog or
+    /// idle-timeout policy on top of `Source`.
+    pub fn in_paste(&self) -> bool {
+        self.in_paste
+    }
+
+    /// Force-exit bracketed paste mode. If the decoder was inside a
+    /// paste, the flag is cleared and `Some(Event::PasteEnd)` is
+    /// returned for the caller to enqueue. Returns `None` when the
+    /// decoder was not in paste.
+    ///
+    /// Intended as an escape hatch for callers detecting a stuck
+    /// paste (e.g. a malformed stream that never sent the terminator)
+    /// or applying their own size cap / cooldown policy.
+    pub fn end_paste(&mut self) -> Option<Event> {
+        if self.in_paste {
+            self.in_paste = false;
+            Some(Event::PasteEnd)
+        } else {
+            None
+        }
+    }
+
+    /// Toggle the escape-timeout flag. When `true`, the decoder
+    /// commits buffered partial escape sequences as best-effort key
+    /// events instead of returning `Incomplete`. Embedders driving the
+    /// decoder against an external buffer (e.g. [`crate::event::Source`])
+    /// set this before draining once the escape deadline elapses.
+    pub(crate) fn set_expired(&mut self, value: bool) {
+        self.expired = value;
+    }
+
+    /// Synthesise the timeout fallback for a leading byte that the
+    /// caller has decided cannot be a partial sequence anymore.
+    ///
+    /// `data[0]` must be either `0x1B` (bare Escape key) or an 8-bit
+    /// C1 introducer (Ctrl+Alt fallback). Returns the synthesised
+    /// event; the caller should advance its buffer by one byte.
+    pub(crate) fn expire_leading(&self, b0: u8) -> Option<Event> {
+        if b0 == 0x1b {
+            let key = if self.flags.contains(DecoderFlags::CTRL_OPEN_BRACKET) {
+                Key::new(KeyCode::Char('[')).with_modifiers(KeyModifiers::CTRL)
+            } else {
+                Key::new(KeyCode::Escape)
+            };
+            Some(Event::KeyPress(key))
+        } else if is_c1_introducer(b0) {
+            let c = (b0 - 0x40) as char;
+            Some(Event::KeyPress(
+                Key::new(KeyCode::Char(c)).with_modifiers(KeyModifiers::CTRL | KeyModifiers::ALT),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Feed bytes into the parser and extract all complete events.
+    pub fn parse(&mut self, data: &[u8]) -> Vec<Event> {
+        #[cfg(debug_assertions)]
+        crate::trace::tee_input(data);
+
+        self.buf.extend_from_slice(data);
+        let mut events = Vec::new();
+
+        loop {
+            // Drain any events queued by previously-parsed sequences (e.g. a
+            // win32-input-mode key with a repeat count greater than one)
+            // before consuming new bytes.
+            if let Some(evt) = self.pending.borrow_mut().pop_front() {
+                events.push(evt);
+                continue;
+            }
+            if self.buf.is_empty() {
+                break;
+            }
+
+            // While in bracketed paste, stream the bytes as PasteChunk
+            // events. Assembly is the caller's responsibility.
+            if self.in_paste {
+                let mut scan = 0;
+                let mut terminated = false;
+                let mut hold_from: Option<usize> = None;
+                while scan < self.buf.len() {
+                    if self.buf[scan] != 0x1B {
+                        scan += 1;
+                        continue;
+                    }
+                    match self.try_parse(&self.buf[scan..]) {
+                        ParseResult::Event(Event::PasteEnd, consumed) => {
+                            if scan > 0 {
+                                events.push(Event::PasteChunk(self.buf[..scan].to_vec()));
+                            }
+                            self.buf.drain(..scan + consumed);
+                            self.in_paste = false;
+                            events.push(Event::PasteEnd);
+                            terminated = true;
+                            break;
+                        }
+                        ParseResult::Incomplete => {
+                            hold_from = Some(scan);
+                            break;
+                        }
+                        ParseResult::Event(_, consumed) => {
+                            scan += consumed.max(1);
+                        }
+                        ParseResult::None(consumed) => {
+                            scan += consumed.max(1);
+                        }
+                    }
+                }
+                if terminated {
+                    continue;
+                }
+                let take = hold_from.unwrap_or(self.buf.len());
+                if take > 0 {
+                    events.push(Event::PasteChunk(self.buf[..take].to_vec()));
+                    self.buf.drain(..take);
+                }
+                break;
+            }
+
+            match self.try_parse(&self.buf) {
+                ParseResult::Event(event, consumed) => {
+                    let is_paste_start = matches!(event, Event::PasteStart);
+                    // Flatten `Event::Multi` into individual events so callers
+                    // that match by enum variant don't miss anything.
+                    match event {
+                        Event::Multi(group) => {
+                            for e in group {
+                                events.push(e);
+                            }
+                        }
+                        other => events.push(other),
+                    }
+                    self.buf.drain(..consumed);
+                    if is_paste_start {
+                        self.in_paste = true;
+                    }
+                }
+                ParseResult::Incomplete => {
+                    if self.expired {
+                        // Timeout reached: resolve the partial sequence as
+                        // best-effort. A leading ESC becomes a standalone
+                        // Escape keypress; a leading 8-bit C1 introducer
+                        // becomes its Ctrl+Alt+<code-0x40> fallback; anything
+                        // else is reported as Unknown so no bytes are
+                        // silently dropped.
+                        let b0 = self.buf[0];
+                        if b0 == 0x1b {
+                            events.push(Event::KeyPress(Key::new(KeyCode::Escape)));
+                            self.buf.drain(..1);
+                            continue;
+                        }
+                        if is_c1_introducer(b0) {
+                            let c = (b0 - 0x40) as char;
+                            events.push(Event::KeyPress(
+                                Key::new(KeyCode::Char(c))
+                                    .with_modifiers(KeyModifiers::CTRL | KeyModifiers::ALT),
+                            ));
+                            self.buf.drain(..1);
+                            continue;
+                        }
+                        events.push(
+                            self.handlers
+                                .dispatch_unknown(&self.buf)
+                                .unwrap_or_else(|| Event::Unknown(self.buf.clone())),
+                        );
+                        self.buf.clear();
+                    }
+                    break;
+                }
+                ParseResult::None(consumed) => {
+                    if consumed > 0 {
+                        self.buf.drain(..consumed);
+                    } else {
+                        let byte = self.buf[0];
+                        let evt = self
+                            .handlers
+                            .dispatch_unknown(&[byte])
+                            .unwrap_or_else(|| Event::Unknown(vec![byte]));
+                        events.push(evt);
+                        self.buf.drain(..1);
+                    }
+                }
+            }
+        }
+
+        events
+    }
+
+    fn try_parse(&self, buf: &[u8]) -> ParseResult {
+        if buf.is_empty() {
+            return ParseResult::Incomplete;
+        }
+
+        match buf[0] {
+            0x1b => self.parse_escape(buf),
+            0x01..=0x08 | 0x0b..=0x0c | 0x0e..=0x1a => {
+                // Ctrl+A through Ctrl+Z (excluding Tab/LF/CR/Esc which have dedicated keys).
+                let c = (buf[0] - 1 + b'a') as char;
+                ParseResult::Event(
+                    Event::KeyPress(Key::new(KeyCode::Char(c)).with_modifiers(KeyModifiers::CTRL)),
+                    1,
+                )
+            }
+            0x09 => {
+                if self.flags.contains(DecoderFlags::CTRL_I) {
+                    ParseResult::Event(
+                        Event::KeyPress(
+                            Key::new(KeyCode::Char('i')).with_modifiers(KeyModifiers::CTRL),
+                        ),
+                        1,
+                    )
+                } else {
+                    ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Tab)), 1)
+                }
+            }
+            0x0a => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Enter)), 1),
+            0x0d => {
+                if self.flags.contains(DecoderFlags::CTRL_M) {
+                    ParseResult::Event(
+                        Event::KeyPress(
+                            Key::new(KeyCode::Char('m')).with_modifiers(KeyModifiers::CTRL),
+                        ),
+                        1,
+                    )
+                } else {
+                    ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Enter)), 1)
+                }
+            }
+            0x00 => {
+                let key = if self.flags.contains(DecoderFlags::CTRL_AT) {
+                    Key::new(KeyCode::Char('@')).with_modifiers(KeyModifiers::CTRL)
+                } else {
+                    Key::new(KeyCode::Char(' ')).with_modifiers(KeyModifiers::CTRL)
+                };
+                ParseResult::Event(Event::KeyPress(key), 1)
+            }
+            // Ctrl+\, Ctrl+], Ctrl+^, Ctrl+_
+            0x1c => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Char('\\')).with_modifiers(KeyModifiers::CTRL)),
+                1,
+            ),
+            0x1d => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Char(']')).with_modifiers(KeyModifiers::CTRL)),
+                1,
+            ),
+            0x1e => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Char('^')).with_modifiers(KeyModifiers::CTRL)),
+                1,
+            ),
+            0x1f => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Char('_')).with_modifiers(KeyModifiers::CTRL)),
+                1,
+            ),
+            0x7f => {
+                let code = if self.flags.contains(DecoderFlags::BACKSPACE_IS_DELETE) {
+                    KeyCode::Delete
+                } else {
+                    KeyCode::Backspace
+                };
+                ParseResult::Event(Event::KeyPress(Key::new(code)), 1)
+            }
+            // 8-bit C1 control codes that introduce a string/control sequence
+            // (equivalent to their `ESC X` 7-bit forms).
+            0x8f => self.parse_ss3(buf),
+            0x90 => self.parse_dcs(buf),
+            0x98 => self.parse_sos_pm_apc(buf, b'X'),
+            0x9b => self.parse_csi(buf),
+            0x9d => self.parse_osc(buf),
+            0x9e => self.parse_sos_pm_apc(buf, b'^'),
+            0x9f => self.parse_apc(buf),
+            // Remaining C1 control codes (0x80..=0x9F) — including a stray
+            // ST (0x9C) — are encoded as Ctrl+Alt+<code - 0x40>.
+            b @ 0x80..=0x9f => {
+                let c = (b - 0x40) as char;
+                ParseResult::Event(
+                    Event::KeyPress(
+                        Key::new(KeyCode::Char(c))
+                            .with_modifiers(KeyModifiers::CTRL | KeyModifiers::ALT),
+                    ),
+                    1,
+                )
+            }
+            b if b >= 0x80 => self.parse_utf8(buf),
+            b => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Char(b as char))), 1),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color::Color;
+    use crate::event::ClipboardSelection;
+
+    #[test]
+    fn test_parse_simple_char() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"a");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('a'));
+            }
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ctrl_c() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(&[0x03]);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('c'));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_arrow_up() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[A");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Up),
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_shift_arrow() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[1;2A");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Up);
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_f5() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[15~");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::F(5)),
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_sgr_mouse() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[<0;10;20M");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Event::MouseClick(_)));
+    }
+
+    #[test]
+    fn test_parse_focus() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[I");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0], Event::FocusIn);
+
+        let events = parser.parse(b"\x1b[O");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0], Event::FocusOut);
+    }
+
+    #[test]
+    fn test_parse_cursor_position() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[5;10R");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::CursorPosition(pos) => {
+                assert_eq!(pos.y, 4);
+                assert_eq!(pos.x, 9);
+            }
+            _ => panic!("Expected CursorPosition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_backtab() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[Z");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::BackTab);
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_alt_char() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1ba");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('a'));
+                assert!(k.modifiers.contains(KeyModifiers::ALT));
+            }
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_paste_bracketed() {
+        let mut parser = Decoder::new();
+        // Full paste sequence in one feed: start + content + end.
+        let events = parser.parse(b"\x1b[200~hello world\x1b[201~");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], Event::PasteStart);
+        assert_eq!(events[1], Event::PasteChunk(b"hello world".to_vec()));
+        assert_eq!(events[2], Event::PasteEnd);
+    }
+
+    #[test]
+    fn test_parse_paste_split_across_feeds() {
+        let mut parser = Decoder::new();
+        let e1 = parser.parse(b"\x1b[200~hello ");
+        assert_eq!(
+            e1,
+            vec![Event::PasteStart, Event::PasteChunk(b"hello ".to_vec())]
+        );
+        let e2 = parser.parse(b"world\x1b[201~");
+        assert_eq!(
+            e2,
+            vec![Event::PasteChunk(b"world".to_vec()), Event::PasteEnd]
+        );
+    }
+
+    #[test]
+    fn test_parse_paste_escape_inside() {
+        // ESC sequences inside paste should be preserved verbatim (no
+        // re-interpretation).
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[200~a\x1b[Ab\x1b[201~");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], Event::PasteStart);
+        assert_eq!(events[1], Event::PasteChunk(b"a\x1b[Ab".to_vec()));
+        assert_eq!(events[2], Event::PasteEnd);
+    }
+
+    #[test]
+    fn test_parse_paste_preserves_control_codes_and_sequences() {
+        // A paste body that mixes:
+        //   * raw control bytes (NUL, BEL, BS, HT, LF, VT, FF, CR, DEL),
+        //   * a C1 introducer (0x9B),
+        //   * a full CSI sequence (Up arrow),
+        //   * an OSC sequence (set title),
+        //   * an SS3 sequence (F1),
+        //   * a nested PasteStart marker,
+        //   * raw non-UTF-8 bytes (0xFF 0xFE).
+        // Everything except the closing `\x1b[201~` must round-trip
+        // verbatim through a single PasteChunk.
+        let body: Vec<u8> = [
+            b"text".as_slice(),
+            b"\x00\x07\x08\x09\x0a\x0b\x0c\x0d\x7f",
+            b"\x9b",          // 8-bit CSI introducer (literal)
+            b"\x1b[A",        // Up arrow CSI
+            b"\x1b]0;hi\x07", // OSC set-title
+            b"\x1bOP",        // SS3 F1
+            b"\x1b[200~",     // nested PasteStart marker (literal)
+            b"\xff\xfe",      // invalid UTF-8
+            b"end",
+        ]
+        .concat();
+
+        let mut wire = Vec::new();
+        wire.extend_from_slice(b"\x1b[200~");
+        wire.extend_from_slice(&body);
+        wire.extend_from_slice(b"\x1b[201~");
+
+        let mut parser = Decoder::new();
+        let events = parser.parse(&wire);
+
+        assert_eq!(events.first(), Some(&Event::PasteStart));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
+
+        let mut assembled = Vec::new();
+        for ev in &events {
+            if let Event::PasteChunk(b) = ev {
+                assembled.extend_from_slice(b);
+            }
+        }
+        assert_eq!(assembled, body);
+    }
+
+    #[test]
+    fn test_parse_paste_8bit_start_and_end() {
+        // 8-bit C1 introducers may START the paste (0x9B = CSI, followed
+        // by `200~`). The closing terminator, however, is required to be
+        // the 7-bit `\x1b[201~` form: 0x9B is a valid UTF-8 continuation
+        // byte and treating it as an introducer inside paste content
+        // would cause real Cyrillic/CJK paste content to escape paste
+        // mode (see `test_paste_body_with_0x9b_is_not_terminated`).
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x9b200~hello\x1b[201~");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], Event::PasteStart);
+        assert_eq!(events[1], Event::PasteChunk(b"hello".to_vec()));
+        assert_eq!(events[2], Event::PasteEnd);
+    }
+
+    #[test]
+    fn test_paste_body_with_0x9b_is_not_terminated() {
+        // Regression: 0x9B inside paste content (here, the second byte
+        // of the UTF-8 encoding of `ћ` U+045B = D1 9B) must NOT be
+        // treated as an 8-bit CSI introducer that could match a
+        // following `201~` and escape paste mode. The bytes between the
+        // 7-bit `\x1b[200~` start and the 7-bit `\x1b[201~` end must be
+        // delivered verbatim as paste content.
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[200~hello\xd1\x9b201~world\x1b[201~");
+        let chunks: Vec<&[u8]> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PasteChunk(b) => Some(b.as_slice()),
+                _ => None,
+            })
+            .collect();
+        let joined: Vec<u8> = chunks.concat();
+        assert_eq!(joined, b"hello\xd1\x9b201~world");
+        assert_eq!(events.first(), Some(&Event::PasteStart));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::PasteEnd))
+                .count(),
+            1,
+            "exactly one PasteEnd; the 8-bit `\\x9b201~` substring must \
+             not be recognised as a terminator",
+        );
+        // No stray keypresses (no Event::Key in the output).
+        assert!(
+            !events.iter().any(|e| e.as_key().is_some()),
+            "paste content must not surface as keypresses: {events:?}",
+        );
+    }
+
+    #[test]
+    fn test_paste_body_with_0x9b_via_parse_one() {
+        // Same regression as above, but exercising the `parse_one` path
+        // (used by `Source::drain_parser`) rather than the
+        // streaming `parse` path.
+        let mut parser = Decoder::new();
+        let mut buf: Vec<u8> = Vec::from(&b"\x1b[200~hello\xd1\x9b201~world\x1b[201~"[..]);
+        let mut events = Vec::new();
+        loop {
+            let (n, ev) = parser.parse_one(&buf);
+            if n == 0 && ev.is_none() {
+                break;
+            }
+            if n > 0 {
+                buf.drain(..n);
+            }
+            if let Some(ev) = ev {
+                events.push(ev);
+            }
+        }
+        let chunks: Vec<u8> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PasteChunk(b) => Some(b.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(chunks, b"hello\xd1\x9b201~world");
+        assert_eq!(events.first(), Some(&Event::PasteStart));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::PasteEnd))
+                .count(),
+            1,
+        );
+        assert!(!events.iter().any(|e| e.as_key().is_some()));
+    }
+
+    #[test]
+    fn test_decoder_end_paste_escape_hatch() {
+        // end_paste() force-exits paste mode when in paste, returning
+        // a PasteEnd event for the caller to enqueue.
+        let mut parser = Decoder::new();
+        let evs = parser.parse(b"\x1b[200~partial");
+        assert_eq!(evs[0], Event::PasteStart);
+        assert!(parser.in_paste());
+
+        let synth = parser.end_paste();
+        assert_eq!(synth, Some(Event::PasteEnd));
+        assert!(!parser.in_paste());
+
+        // Subsequent bytes are no longer treated as paste content.
+        let evs = parser.parse(b"a");
+        assert!(matches!(
+            evs[0],
+            Event::KeyPress(ref k) if k.code == KeyCode::Char('a')
+        ));
+    }
+
+    #[test]
+    fn test_decoder_end_paste_noop_when_not_in_paste() {
+        let mut parser = Decoder::new();
+        assert!(!parser.in_paste());
+        assert_eq!(parser.end_paste(), None);
+    }
+
+    #[test]
+    fn test_parse_c0_extras() {
+        let mut parser = Decoder::new();
+        // 0x1c -> Ctrl+\
+        let events = parser.parse(&[0x1c]);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('\\'));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            _ => panic!("expected key"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dcs_xtgettcap() {
+        let mut parser = Decoder::new();
+        // DCS 1+r 626f3d31 ST -> bo=1 (hex-encoded)
+        let events = parser.parse(b"\x1bP1+r626F=31\x1b\\");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Event::Termcap(_)));
+    }
+
+    #[test]
+    fn test_parse_apc_kitty_graphics() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b_Ga=T,f=32,s=2,v=2;BASE64DATA\x1b\\");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KittyGraphics { options, payload } => {
+                assert_eq!(options.len(), 4);
+                assert_eq!(options[0], ("a".to_string(), "T".to_string()));
+                assert_eq!(payload, b"BASE64DATA");
+            }
+            other => panic!("expected KittyGraphics, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sos_pm() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1bXabc\x1b\\");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Event::UnknownSos(_)));
+
+        let events = parser.parse(b"\x1b^pm\x1b\\");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], Event::UnknownPm(_)));
+    }
+
+    #[test]
+    fn test_parse_kitty_key_release() {
+        let mut parser = Decoder::new();
+        // CSI 97 ; 1:3 u  -> 'a' release
+        let events = parser.parse(b"\x1b[97;1:3u");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyRelease(k) => assert_eq!(k.code, KeyCode::Char('a')),
+            other => panic!("expected KeyRelease, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_kitty_key_with_alternates() {
+        let mut parser = Decoder::new();
+        // CSI 97:65:97 ; 2 u  -> 'a' with shifted='A', base='a', shift mod
+        let events = parser.parse(b"\x1b[97:65:97;2u");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('a'));
+                assert_eq!(k.shifted_key, Some('A'));
+                assert_eq!(k.base_key, Some('a'));
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            other => panic!("expected Key, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_events() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"abc");
+        assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_ss3_f1() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1bOP");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::F(1)),
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_da1() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[?64;1;2;6;9c");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::PrimaryDeviceAttributes(p) => {
+                assert_eq!(p, &vec![Some(64), Some(1), Some(2), Some(6), Some(9)])
+            }
+            other => panic!("Expected PrimaryDeviceAttributes, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_da2() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[>1;95;0c");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::SecondaryDeviceAttributes(p) => {
+                assert_eq!(p, &vec![Some(1), Some(95), Some(0)])
+            }
+            other => panic!("Expected SecondaryDeviceAttributes, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_decrpm() {
+        let mut parser = Decoder::new();
+        // CSI ? 1049 ; 1 $ y  -> alt-screen is Set
+        let events = parser.parse(b"\x1b[?1049;1$y");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::ModeReport { mode, setting } => {
+                assert_eq!(*mode, crate::ansi::mode::Mode::ALT_SCREEN_SAVE_CURSOR);
+                assert_eq!(*setting, crate::ansi::mode::ModeSetting::Set);
+            }
+            other => panic!("Expected ModeReport, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_pixel_size() {
+        let mut parser = Decoder::new();
+        // CSI 4 ; 600 ; 800 t
+        let events = parser.parse(b"\x1b[4;600;800t");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::WindowPixelSize {
+                width: 800,
+                height: 600
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_cell_size() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[6;16;8t");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            Event::CellPixelSize {
+                width: 8,
+                height: 16
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_keyboard_enhancements() {
+        let mut parser = Decoder::new();
+        // CSI ? 5 u (DISAMBIGUATE | REPORT_ALT_KEYS)
+        let events = parser.parse(b"\x1b[?5u");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0], Event::KeyboardEnhancements { flags: 5 });
+    }
+
+    #[test]
+    fn test_parse_osc_fg_color() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b]10;rgb:abcd/0000/ffff\x1b\\");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::ForegroundColor(Color::Rgb(r, g, b)) => {
+                assert_eq!((*r, *g, *b), (0xab, 0x00, 0xff));
+            }
+            other => panic!("Expected ForegroundColor, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_clipboard() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b]52;c;SGVsbG8=\x07");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::Clipboard { selection, content } => {
+                assert_eq!(*selection, ClipboardSelection::System);
+                assert_eq!(content, "SGVsbG8=");
+            }
+            other => panic!("Expected Clipboard, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_modify_other_keys() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[>4;2m");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::ModifyOtherKeys(m) => {
+                assert_eq!(*m, crate::event::ModifyOtherKeysMode::Mode2)
+            }
+            other => panic!("Expected ModifyOtherKeys, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_urxvt_mouse() {
+        let mut parser = Decoder::new();
+        // URxvt: CSI Cb;Cx;Cy M with Cb=32 (left button press), col 11, row 21
+        let events = parser.parse(b"\x1b[32;11;21M");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::MouseClick(m) => {
+                assert_eq!(m.x, 10);
+                assert_eq!(m.y, 20);
+                assert_eq!(m.button, crate::event::MouseButton::Left);
+            }
+            other => panic!("Expected Mouse Click, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_utf8_mouse() {
+        let mut parser = Decoder::new();
+        parser.set_utf8_mouse(true);
+        // 3 bytes: cb=32, cx=33, cy=33 → button Left, x=0, y=0
+        let events = parser.parse(b"\x1b[M\x20\x21\x21");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::MouseClick(m) => {
+                assert_eq!(m.x, 0);
+                assert_eq!(m.y, 0);
+            }
+            other => panic!("Expected Mouse Click, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_sgr_pixel_mouse_decoded_as_offsets() {
+        // SGR-Pixel (mode 1016) uses the same wire format as SGR (1006). The
+        // parser doesn't distinguish; it just emits 0-based offsets and the
+        // caller interprets them as pixels.
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[<0;100;200M");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::MouseClick(m) => {
+                assert_eq!(m.x, 99);
+                assert_eq!(m.y, 199);
+            }
+            other => panic!("Expected Mouse Click, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_legacy_key_urxvt_shift_arrows() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[a");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Up);
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            other => panic!("Expected Key Up+Shift, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_legacy_key_urxvt_shift_f11() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[23$");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::F(11));
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            other => panic!("Expected Key F11+Shift, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_legacy_key_urxvt_ctrl_f1() {
+        let mut parser = Decoder::new();
+        let events = parser.parse(b"\x1b[11^");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::F(1));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            other => panic!("Expected Key F1+Ctrl, got {:?}", other),
+        }
+    }
+
+    // --- 8-bit C1 control codes -------------------------------------------
+
+    #[test]
+    fn test_c1_csi_arrow_equivalent_to_esc_csi() {
+        // 0x9B is the 8-bit form of CSI; `0x9B A` should decode to Up arrow,
+        // matching the 7-bit `ESC [ A` form.
+        let mut a = Decoder::new();
+        let mut b = Decoder::new();
+        let evs_8bit = a.parse(&[0x9b, b'A']);
+        let evs_7bit = b.parse(b"\x1b[A");
+        assert_eq!(evs_8bit, evs_7bit);
+        assert!(matches!(
+            evs_8bit.first(),
+            Some(Event::KeyPress(k)) if k.code == KeyCode::Up
+        ));
+    }
+
+    #[test]
+    fn test_c1_ss3_f1_equivalent_to_esc_o() {
+        // 0x8F is the 8-bit form of SS3; `0x8F P` should decode to F1.
+        let mut p = Decoder::new();
+        let evs = p.parse(&[0x8f, b'P']);
+        assert!(matches!(
+            evs.first(),
+            Some(Event::KeyPress(k)) if k.code == KeyCode::F(1)
+        ));
+    }
+
+    #[test]
+    fn test_c1_osc_terminated_by_8bit_st() {
+        // 0x9D = 8-bit OSC introducer, 0x9C = 8-bit ST terminator.
+        let mut p = Decoder::new();
+        let mut buf = vec![0x9d];
+        buf.extend_from_slice(b"10;rgb:1234/5678/9abc");
+        buf.push(0x9c);
+        let evs = p.parse(&buf);
+        assert!(
+            evs.iter().any(|e| matches!(e, Event::ForegroundColor(_))),
+            "expected ForegroundColor event, got {:?}",
+            evs
+        );
+    }
+
+    #[test]
+    fn test_c1_dcs_terminated_by_8bit_st() {
+        // 0x90 = 8-bit DCS introducer; payload is an XTGETTCAP-style reply
+        // with the cap name and value both hex-encoded (TN=xterm).
+        let mut p = Decoder::new();
+        let mut buf = vec![0x90];
+        buf.extend_from_slice(b"1+r544E=787465726D");
+        buf.push(0x9c);
+        let evs = p.parse(&buf);
+        match evs.first() {
+            Some(Event::Termcap(s)) => assert!(s.starts_with("TN=")),
+            other => panic!("expected Capability event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bel_does_not_terminate_dcs() {
+        // BEL is an OSC-only terminator. Inside a DCS payload it must be
+        // treated as part of the body, not as ST.
+        let mut p = Decoder::new();
+        let evs = p.parse(b"\x1bP1$r0\x07more\x1b\\");
+        // Single event: a Capability covering the whole payload (with BEL
+        // embedded). The parser must NOT split it on BEL.
+        assert_eq!(evs.len(), 1, "expected 1 event, got {:?}", evs);
+        match &evs[0] {
+            Event::Termcap(s) => {
+                assert!(s.starts_with("1$r0"));
+                assert!(s.contains('\u{07}'));
+                assert!(s.ends_with("more"));
+            }
+            other => panic!("expected Capability, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_bel_terminates_osc() {
+        // OSC keeps its BEL-as-terminator behaviour.
+        let mut p = Decoder::new();
+        let evs = p.parse(b"\x1b]10;rgb:1234/5678/9abc\x07");
+        assert!(
+            evs.iter().any(|e| matches!(e, Event::ForegroundColor(_))),
+            "expected ForegroundColor, got {:?}",
+            evs
+        );
+    }
+
+    #[test]
+    fn test_stray_c1_becomes_ctrl_alt_keypress() {
+        // 0x9C (a stray ST byte) and other non-introducer C1 codes fall
+        // through to the Ctrl+Alt+<code-0x40> encoding.
+        let mut p = Decoder::new();
+        let evs = p.parse(&[0x9c]);
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('\\'));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+                assert!(k.modifiers.contains(KeyModifiers::ALT));
+            }
+            other => panic!("expected Ctrl+Alt+\\ keypress, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_partial_c1_csi_is_incomplete_then_completes() {
+        // A buffered 0x9B alone is incomplete (waiting for the final byte);
+        // feeding the final byte should resolve it.
+        let mut p = Decoder::new();
+        let evs1 = p.parse(&[0x9b]);
+        assert!(evs1.is_empty(), "expected no events, got {:?}", evs1);
+        assert!(p.has_pending(), "scanner should treat 0x9B as pending");
+        let evs2 = p.parse(b"A");
+        assert!(matches!(
+            evs2.first(),
+            Some(Event::KeyPress(k)) if k.code == KeyCode::Up
+        ));
+        assert!(!p.has_pending());
+    }
+
+    #[test]
+    fn test_flush_partial_c1_emits_ctrl_alt_fallback() {
+        // A timed-out stray 0x9B should resolve to Ctrl+Alt+[ (its C1
+        // fallback) so no bytes are silently dropped.
+        let mut p = Decoder::new();
+        let _ = p.parse(&[0x9b]);
+        let evs = p.drain();
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('['));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+                assert!(k.modifiers.contains(KeyModifiers::ALT));
+            }
+            other => panic!("expected Ctrl+Alt+[, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_win32_input_mode_press_release() {
+        let mut p = Decoder::new();
+        // 'A' (vk=0x41), Ctrl+Shift, key down, repeat 1.
+        let evs = p.parse(b"\x1b[65;30;65;1;24;1_");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('A'));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            other => panic!("expected KeyPress, got {:?}", other),
+        }
+        // Same key, key up, repeat 1.
+        let evs = p.parse(b"\x1b[65;30;65;0;24;1_");
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], Event::KeyRelease(_)));
+    }
+
+    #[test]
+    fn test_win32_input_mode_repeat_count() {
+        let mut p = Decoder::new();
+        // 'a' down, no modifiers, repeat 3.
+        let evs = p.parse(b"\x1b[65;30;97;1;0;3_");
+        assert_eq!(evs.len(), 3);
+        for e in &evs {
+            match e {
+                Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Char('a')),
+                other => panic!("expected Key, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_win32_input_mode_arrow() {
+        let mut p = Decoder::new();
+        // VK_LEFT (0x25), no character.
+        let evs = p.parse(b"\x1b[37;75;0;1;0;1_");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Left),
+            other => panic!("expected Left, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_win32_input_mode_surrogate_pair() {
+        let mut p = Decoder::new();
+        // High surrogate of U+1F600 (😀): vk=0, ch=0xD83D.
+        let evs = p.parse(b"\x1b[0;0;55357;1;0;1_");
+        assert!(evs.is_empty(), "high surrogate should buffer silently");
+        // Low surrogate: 0xDE00.
+        let evs = p.parse(b"\x1b[0;0;56832;1;0;1_");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Char('\u{1F600}')),
+            other => panic!("expected combined char, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_modify_other_keys_2() {
+        let mut p = Decoder::new();
+        // Ctrl+a via modifyOtherKeys-2: CSI 27;5;97~
+        let evs = p.parse(b"\x1b[27;5;97~");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('a'));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            other => panic!("expected Key, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_modify_other_keys_2_astral_codepoint() {
+        // 😀 = U+1F600 = 128512 (above u16::MAX); the param must round-trip
+        // through the parser without truncation.
+        let mut p = Decoder::new();
+        let evs = p.parse(b"\x1b[27;0;128512~");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Char('\u{1f600}')),
+            other => panic!("expected Key('😀'), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_f3_cpr_ambiguity_emits_multi() {
+        let mut p = Decoder::new();
+        let evs = p.parse(b"\x1b[1;5R");
+        assert_eq!(evs.len(), 2);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::F(3));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            other => panic!("expected F3, got {:?}", other),
+        }
+        match &evs[1] {
+            Event::CursorPosition(pos) if pos.x == 4 && pos.y == 0 => {}
+            other => panic!("expected CursorPosition (4, 0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_csi_8_t_emits_window_cell_size() {
+        let mut p = Decoder::new();
+        let evs = p.parse(b"\x1b[8;24;80t");
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(
+            evs[0],
+            Event::WindowCellSize {
+                width: 80,
+                height: 24
+            }
+        ));
+    }
+
+    #[test]
+    fn test_csi_48_t_emits_resize() {
+        let mut p = Decoder::new();
+        // CSI 48 ; rows ; cols ; ypixel ; xpixel t (mode 2048 report).
+        let evs = p.parse(b"\x1b[48;24;80;480;1600t");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Resize(ws) => {
+                assert_eq!(ws.row, 24);
+                assert_eq!(ws.col, 80);
+                assert_eq!(ws.ypixel, 480);
+                assert_eq!(ws.xpixel, 1600);
+            }
+            other => panic!("expected Resize, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtversion() {
+        let mut p = Decoder::new();
+        let evs = p.parse(b"\x1bP>|xterm 380\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::TerminalVersion(s) => assert_eq!(s, "xterm 380"),
+            other => panic!("expected TerminalVersion, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_tertiary_da() {
+        let mut p = Decoder::new();
+        // Hex-encoded "~VTE" (7E 56 54 45).
+        let evs = p.parse(b"\x1bP!|7E565445\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::TertiaryDeviceAttributes(s) => assert_eq!(s, "~VTE"),
+            other => panic!("expected TertiaryDeviceAttributes, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtgettcap_hex_decodes_pairs() {
+        let mut p = Decoder::new();
+        // 1+r TN=78746572 6D ; Co=323536
+        // Hex-encoded "TN=xterm;Co=256".
+        let evs = p.parse(b"\x1bP1+r544E=787465726D;436F=323536\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Termcap(s) => assert_eq!(s, "TN=xterm;Co=256"),
+            other => panic!("expected Capability, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtgettcap_skips_invalid_pairs() {
+        let mut p = Decoder::new();
+        // Three entries: invalid hex name, valid pair, valid name-only.
+        let evs = p.parse(b"\x1bP1+rZZ=AA;544E=78;6B62\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            // "TN=x" and "kb" survive; the bogus "ZZ=AA" entry is skipped.
+            Event::Termcap(s) => assert_eq!(s, "TN=x;kb"),
+            other => panic!("expected Capability, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_kitty_text_astral_codepoint() {
+        let mut p = Decoder::new();
+        // 'a' key with associated-text "😀" (U+1F600, > 0xFFFF).
+        let evs = p.parse(b"\x1b[97;1;128512u");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => assert_eq!(k.text.as_deref(), Some("\u{1F600}")),
+            other => panic!("expected Key, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_win32_lock_modifiers_propagated() {
+        let mut p = Decoder::new();
+        // 'a' with CapsLock-on (cks=0x80).
+        let evs = p.parse(b"\x1b[65;30;97;1;128;1_");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert!(k.modifiers.contains(KeyModifiers::CAPS_LOCK))
+            }
+            other => panic!("expected Key, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_kitty_lock_modifiers() {
+        let mut p = Decoder::new();
+        // 'a' with CapsLock (kitty bit 64, encoded as 65 = 64+1).
+        let evs = p.parse(b"\x1b[97;65u");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert!(k.modifiers.contains(KeyModifiers::CAPS_LOCK))
+            }
+            other => panic!("expected Key, got {:?}", other),
+        }
+    }
+
+    // --- parse_one (slice-driven) -----------------------------------------
+
+    #[test]
+    fn test_parse_one_simple_key() {
+        let mut p = Decoder::new();
+        let (n, ev) = p.parse_one(b"a");
+        assert_eq!(n, 1);
+        match ev {
+            Some(Event::KeyPress(k)) => assert_eq!(k.code, KeyCode::Char('a')),
+            other => panic!("expected Key('a'), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_one_incomplete_returns_zero() {
+        let mut p = Decoder::new();
+        assert_eq!(p.parse_one(b"\x1b"), (0, None));
+        assert_eq!(p.parse_one(b"\x1b["), (0, None));
+        assert_eq!(p.parse_one(b"\x1b[2"), (0, None));
+    }
+
+    #[test]
+    fn test_parse_one_expire_leading_esc() {
+        let p = Decoder::new();
+        match p.expire_leading(0x1b) {
+            Some(Event::KeyPress(k)) => assert_eq!(k.code, KeyCode::Escape),
+            other => panic!("expected Escape, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_one_paste_stream() {
+        let mut p = Decoder::new();
+        // PasteStart
+        let (n, ev) = p.parse_one(b"\x1b[200~");
+        assert_eq!(n, 6);
+        assert!(matches!(ev, Some(Event::PasteStart)));
+
+        // Chunk 1: "hello"
+        let (n, ev) = p.parse_one(b"hello");
+        assert_eq!(n, 5);
+        match ev {
+            Some(Event::PasteChunk(b)) => assert_eq!(b, b"hello"),
+            other => panic!("expected PasteChunk, got {:?}", other),
+        }
+
+        // Chunk 2: " world" followed by terminator
+        let (n, ev) = p.parse_one(b" world\x1b[201~");
+        // Emits the content chunk first; PasteEnd is queued.
+        match ev {
+            Some(Event::PasteChunk(b)) => assert_eq!(b, b" world"),
+            other => panic!("expected PasteChunk, got {:?}", other),
+        }
+        assert_eq!(n, 12);
+
+        // Drain the queued PasteEnd.
+        let (n, ev) = p.parse_one(b"");
+        assert_eq!(n, 0);
+        assert!(matches!(ev, Some(Event::PasteEnd)));
+    }
+
+    #[test]
+    fn test_parse_one_paste_partial_terminator_holdback() {
+        let mut p = Decoder::new();
+        let (_, _) = p.parse_one(b"\x1b[200~"); // PasteStart
+        // Buffer ends with the first two bytes of the terminator — the
+        // parser must hold them back so it can complete the match on the
+        // next call.
+        let (n, ev) = p.parse_one(b"abc\x1b[");
+        assert_eq!(n, 3);
+        match ev {
+            Some(Event::PasteChunk(b)) => assert_eq!(b, b"abc"),
+            other => panic!("expected PasteChunk(\"abc\"), got {:?}", other),
+        }
+    }
+
+    // --- chunked-input tests --------------------------------------------
+    //
+    // The decoder is fed in arbitrary fragments by callers (Source).
+    // These tests verify that splitting any byte sequence at any boundary
+    // produces the same Events as feeding it whole.
+
+    #[test]
+    fn test_chunked_csi_focus_then_text() {
+        // First chunk is just the CSI introducer; no event yet.
+        let mut p = Decoder::new();
+        assert_eq!(p.parse(b"\x1b["), vec![]);
+
+        // Second chunk completes the focus-in and adds three plain chars.
+        let events = p.parse(b"Iabc");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0], Event::FocusIn);
+        for (i, ch) in ['a', 'b', 'c'].iter().enumerate() {
+            match &events[i + 1] {
+                Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Char(*ch)),
+                other => panic!("expected Char({ch}), got {other:?}"),
+            }
+        }
+    }
+
+    /// Feed `data` to a fresh decoder one byte at a time, returning the
+    /// collected Events. Mirrors how an `Source` would deliver bytes
+    /// from a slow tty (one read at a time).
+    fn feed_byte_by_byte(data: &[u8]) -> Vec<Event> {
+        let mut p = Decoder::new();
+        let mut events = Vec::new();
+        for b in data {
+            events.extend(p.parse(std::slice::from_ref(b)));
+        }
+        events
+    }
+
+    #[test]
+    fn test_chunked_byte_by_byte_focus_in() {
+        assert_eq!(feed_byte_by_byte(b"\x1b[I"), vec![Event::FocusIn]);
+    }
+
+    #[test]
+    fn test_chunked_byte_by_byte_focus_out() {
+        assert_eq!(feed_byte_by_byte(b"\x1b[O"), vec![Event::FocusOut]);
+    }
+
+    #[test]
+    fn test_chunked_byte_by_byte_modified_arrow() {
+        // Ctrl+Up encoded as CSI 1 ; 5 A — every byte after the first
+        // ESC must be buffered until A arrives.
+        let events = feed_byte_by_byte(b"\x1b[1;5A");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Up);
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            other => panic!("expected Ctrl+Up, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_chunked_byte_by_byte_sgr_mouse_press() {
+        // SGR mouse press button 0 at (10,20).
+        let events = feed_byte_by_byte(b"\x1b[<0;11;21M");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::MouseClick(m) => {
+                assert_eq!(m.x, 10);
+                assert_eq!(m.y, 20);
+                assert_eq!(m.button, crate::event::MouseButton::Left);
+            }
+            other => panic!("expected Mouse Click, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_chunked_byte_by_byte_utf8_multibyte_char() {
+        // 📺 is U+1F4FA, encoded as four UTF-8 bytes (F0 9F 93 BA).
+        // Feeding one byte at a time must coalesce them into a single
+        // Char keypress without emitting Unknown for partial bytes.
+        let events = feed_byte_by_byte("📺".as_bytes());
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Char('📺')),
+            other => panic!("expected Char('📺'), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_chunked_byte_by_byte_bracketed_paste() {
+        // PasteStart, content "hi📺", PasteEnd — fed one byte at a time.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"\x1b[200~hi");
+        bytes.extend_from_slice("📺".as_bytes());
+        bytes.extend_from_slice(b"\x1b[201~");
+
+        let events = feed_byte_by_byte(&bytes);
+        // PasteStart first, PasteEnd last, with any number of PasteChunk
+        // events in between whose concatenation matches the original
+        // content (replacement chars allowed for partial UTF-8 splits).
+        assert_eq!(events.first(), Some(&Event::PasteStart));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
+        let mut chunk_count = 0;
+        let mut buf = Vec::new();
+        for ev in &events {
+            if let Event::PasteChunk(b) = ev {
+                chunk_count += 1;
+                buf.extend_from_slice(b);
+            }
+        }
+        assert!(chunk_count >= 1, "expected at least one PasteChunk");
+        // The bytes between PasteStart and PasteEnd should round-trip
+        // verbatim when reassembled by the caller.
+        assert_eq!(buf, "hi📺".as_bytes());
+    }
+
+    #[test]
+    fn test_chunked_split_in_middle_of_csi_params() {
+        // Ctrl+Up split in the middle of the parameter list.
+        let mut p = Decoder::new();
+        assert_eq!(p.parse(b"\x1b[1;"), vec![]);
+        let events = p.parse(b"5A");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Up);
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            other => panic!("expected Ctrl+Up, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_chunked_split_after_intermediate_only() {
+        // Just the ESC by itself should buffer with no event yet.
+        let mut p = Decoder::new();
+        assert_eq!(p.parse(b"\x1b"), vec![]);
+        assert_eq!(p.parse(b"["), vec![]);
+        assert_eq!(p.parse(b"I"), vec![Event::FocusIn]);
+    }
+
+    fn press(events: Vec<Event>) -> Key {
+        match events.as_slice() {
+            [Event::KeyPress(k)] => k.clone(),
+            other => panic!("expected single KeyPress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decoder_flag_ctrl_i_swaps_tab() {
+        let mut p = Decoder::new();
+        assert_eq!(press(p.parse(b"\t")).code, KeyCode::Tab);
+
+        let mut p = Decoder::new().with_flags(DecoderFlags::CTRL_I);
+        let k = press(p.parse(b"\t"));
+        assert_eq!(k.code, KeyCode::Char('i'));
+        assert_eq!(k.modifiers, KeyModifiers::CTRL);
+    }
+
+    #[test]
+    fn decoder_flag_ctrl_m_swaps_enter() {
+        let mut p = Decoder::new();
+        assert_eq!(press(p.parse(b"\r")).code, KeyCode::Enter);
+
+        let mut p = Decoder::new().with_flags(DecoderFlags::CTRL_M);
+        let k = press(p.parse(b"\r"));
+        assert_eq!(k.code, KeyCode::Char('m'));
+        assert_eq!(k.modifiers, KeyModifiers::CTRL);
+    }
+
+    #[test]
+    fn decoder_flag_ctrl_at_swaps_ctrl_space() {
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"\x00"));
+        assert_eq!(k.code, KeyCode::Char(' '));
+        assert_eq!(k.modifiers, KeyModifiers::CTRL);
+
+        let mut p = Decoder::new().with_flags(DecoderFlags::CTRL_AT);
+        let k = press(p.parse(b"\x00"));
+        assert_eq!(k.code, KeyCode::Char('@'));
+        assert_eq!(k.modifiers, KeyModifiers::CTRL);
+    }
+
+    #[test]
+    fn decoder_flag_backspace_is_delete() {
+        let mut p = Decoder::new();
+        assert_eq!(press(p.parse(b"\x7f")).code, KeyCode::Backspace);
+
+        let mut p = Decoder::new().with_flags(DecoderFlags::BACKSPACE_IS_DELETE);
+        assert_eq!(press(p.parse(b"\x7f")).code, KeyCode::Delete);
+    }
+
+    #[test]
+    fn decoder_flag_ctrl_open_bracket_swaps_lone_esc() {
+        // Default: lone ESC -> Escape.
+        let p = Decoder::new();
+        let ev = p.expire_leading(0x1b).expect("expire returns event");
+        match ev {
+            Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Escape),
+            other => panic!("expected KeyPress(Escape), got {other:?}"),
+        }
+
+        // With CTRL_OPEN_BRACKET: lone ESC -> Ctrl+[.
+        let p = Decoder::new().with_flags(DecoderFlags::CTRL_OPEN_BRACKET);
+        let ev = p.expire_leading(0x1b).expect("expire returns event");
+        match ev {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('['));
+                assert_eq!(k.modifiers, KeyModifiers::CTRL);
+            }
+            other => panic!("expected Ctrl+[, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decoder_flag_find_key_swaps_csi_1_tilde() {
+        let mut p = Decoder::new();
+        assert_eq!(press(p.parse(b"\x1b[1~")).code, KeyCode::Home);
+
+        let mut p = Decoder::new().with_flags(DecoderFlags::FIND_KEY);
+        assert_eq!(press(p.parse(b"\x1b[1~")).code, KeyCode::Find);
+
+        // Code 7 (Home alias) is unaffected.
+        let mut p = Decoder::new().with_flags(DecoderFlags::FIND_KEY);
+        assert_eq!(press(p.parse(b"\x1b[7~")).code, KeyCode::Home);
+    }
+
+    #[test]
+    fn decoder_flag_select_key_swaps_csi_4_tilde() {
+        let mut p = Decoder::new();
+        assert_eq!(press(p.parse(b"\x1b[4~")).code, KeyCode::End);
+
+        let mut p = Decoder::new().with_flags(DecoderFlags::SELECT_KEY);
+        assert_eq!(press(p.parse(b"\x1b[4~")).code, KeyCode::Select);
+
+        // Code 8 (End alias) is unaffected.
+        let mut p = Decoder::new().with_flags(DecoderFlags::SELECT_KEY);
+        assert_eq!(press(p.parse(b"\x1b[8~")).code, KeyCode::End);
+    }
+
+    #[test]
+    fn decoder_flag_find_key_swaps_urxvt_modifier_suffix() {
+        // URxvt: ESC [ 1 $ -> Shift+Home; with FIND_KEY -> Shift+Find.
+        let mut p = Decoder::new().with_flags(DecoderFlags::FIND_KEY);
+        let k = press(p.parse(b"\x1b[1$"));
+        assert_eq!(k.code, KeyCode::Find);
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn esc_esc_alone_waits_for_timeout_then_alt_esc() {
+        let mut p = Decoder::new();
+        // Before expiry, holding ESC ESC produces no event.
+        assert_eq!(p.parse(b"\x1b\x1b"), vec![]);
+        // After drain (timeout) the pair resolves to Alt+Esc.
+        let events = p.drain();
+        match events.as_slice() {
+            [Event::KeyPress(k)] => {
+                assert_eq!(k.code, KeyCode::Escape);
+                assert_eq!(k.modifiers, KeyModifiers::ALT);
+            }
+            other => panic!("expected single Alt+Esc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn esc_esc_arrow_promotes_to_alt_up() {
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"\x1b\x1b[A"));
+        assert_eq!(k.code, KeyCode::Up);
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn esc_esc_printable_yields_lone_esc_then_alt_char() {
+        // ESC ESC <printable>: the inner ESC <printable> already
+        // resolves to Alt+<printable>, so the outer ESC has nothing
+        // new to add and lands as a standalone Esc keypress first.
+        let mut p = Decoder::new();
+        let events = p.parse(b"\x1b\x1ba");
+        match events.as_slice() {
+            [Event::KeyPress(esc), Event::KeyPress(alt_a)] => {
+                assert_eq!(esc.code, KeyCode::Escape);
+                assert!(!esc.modifiers.contains(KeyModifiers::ALT));
+                assert_eq!(alt_a.code, KeyCode::Char('a'));
+                assert_eq!(alt_a.modifiers, KeyModifiers::ALT);
+            }
+            other => panic!("expected [Esc, Alt+a], got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn esc_esc_modified_arrow_compounds_alt() {
+        // Shift+Up via CSI 1;2A, prefixed with another ESC -> Shift+Alt+Up.
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"\x1b\x1b[1;2A"));
+        assert_eq!(k.code, KeyCode::Up);
+        assert!(k.modifiers.contains(KeyModifiers::ALT));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn esc_esc_non_key_emits_lone_esc_then_inner() {
+        // ESC followed by a focus-in (CSI I, non-key). The leading ESC has
+        // nothing to promote, so it lands as a standalone Esc keypress and
+        // FocusIn follows on the next iteration.
+        let mut p = Decoder::new();
+        let events = p.parse(b"\x1b\x1b[I");
+        match events.as_slice() {
+            [Event::KeyPress(k), Event::FocusIn] => {
+                assert_eq!(k.code, KeyCode::Escape);
+                assert!(!k.modifiers.contains(KeyModifiers::ALT));
+            }
+            other => panic!("expected [Esc, FocusIn], got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn triple_esc_then_arrow_yields_lone_esc_then_alt_up() {
+        let mut p = Decoder::new();
+        let events = p.parse(b"\x1b\x1b\x1b[A");
+        match events.as_slice() {
+            [Event::KeyPress(esc), Event::KeyPress(alt_up)] => {
+                assert_eq!(esc.code, KeyCode::Escape);
+                assert!(!esc.modifiers.contains(KeyModifiers::ALT));
+                assert_eq!(alt_up.code, KeyCode::Up);
+                assert_eq!(alt_up.modifiers, KeyModifiers::ALT);
+            }
+            other => panic!("expected [Esc, Alt+Up], got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn triple_esc_alone_drains_to_lone_esc_then_alt_esc() {
+        let mut p = Decoder::new();
+        assert_eq!(p.parse(b"\x1b\x1b\x1b"), vec![]);
+        let events = p.drain();
+        match events.as_slice() {
+            [Event::KeyPress(esc), Event::KeyPress(alt_esc)] => {
+                assert_eq!(esc.code, KeyCode::Escape);
+                assert!(!esc.modifiers.contains(KeyModifiers::ALT));
+                assert_eq!(alt_esc.code, KeyCode::Escape);
+                assert_eq!(alt_esc.modifiers, KeyModifiers::ALT);
+            }
+            other => panic!("expected [Esc, Alt+Esc], got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn esc_alt_letter_unchanged() {
+        // Regression: a single ESC + printable still resolves to Alt+<char>
+        // with no extra events.
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"\x1ba"));
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn esc_run_drains_letters_and_holds_trailing_esc() {
+        // `\x1babc\x1b` (no timeout) drains Alt+a, b, c and leaves the
+        // trailing ESC pending for the next event or timeout.
+        let mut p = Decoder::new();
+        let events = p.parse(b"\x1babc\x1b");
+        match events.as_slice() {
+            [
+                Event::KeyPress(alt_a),
+                Event::KeyPress(b),
+                Event::KeyPress(c),
+            ] => {
+                assert_eq!(alt_a.code, KeyCode::Char('a'));
+                assert_eq!(alt_a.modifiers, KeyModifiers::ALT);
+                assert_eq!(b.code, KeyCode::Char('b'));
+                assert!(b.modifiers.is_empty());
+                assert_eq!(c.code, KeyCode::Char('c'));
+                assert!(c.modifiers.is_empty());
+            }
+            other => panic!("expected [Alt+a, b, c], got {other:?}"),
+        }
+        // The trailing ESC resolves on timeout.
+        let tail = p.drain();
+        match tail.as_slice() {
+            [Event::KeyPress(esc)] => {
+                assert_eq!(esc.code, KeyCode::Escape);
+                assert!(esc.modifiers.is_empty());
+            }
+            other => panic!("expected trailing Esc, got {other:?}"),
+        }
+    }
+}
