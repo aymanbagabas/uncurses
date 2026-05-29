@@ -92,9 +92,11 @@ pub(crate) fn subscribe(fd: i32) -> std::io::Result<Subscription> {
 
 #[cfg(not(unix))]
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct Subscription;
 
 #[cfg(not(unix))]
+#[allow(dead_code)]
 pub(crate) fn subscribe(_fd: i32) -> std::io::Result<Subscription> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,

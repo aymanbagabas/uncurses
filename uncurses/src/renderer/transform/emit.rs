@@ -98,7 +98,7 @@ impl Renderer {
                 && (count as usize) > ech_b + cup_b
                 && can_clear_with(cell0, self.opts.contains(Optimizations::BCE))
             {
-                self.update_pen(out, Some(&cell0))?;
+                self.update_pen(out, Some(cell0))?;
                 ansi::write_ech(out, count)?;
                 if j > last {
                     return Ok(true);
@@ -124,7 +124,7 @@ impl Renderer {
                     rep_count -= 1;
                 }
 
-                self.update_pen(out, Some(&cell0))?;
+                self.update_pen(out, Some(cell0))?;
                 self.put_glyph_bytes(
                     out,
                     cell0.content().as_bytes(),
@@ -185,7 +185,7 @@ impl Renderer {
         if cell.is_continuation() {
             return Ok(());
         }
-        self.update_pen(out, Some(&cell))?;
+        self.update_pen(out, Some(cell))?;
         if cell.content().is_empty() {
             self.put_glyph_bytes(out, b" ", 1, surface_width, surface_height)
         } else {
@@ -209,7 +209,7 @@ impl Renderer {
     /// to the end of the interval before any follow-on positional
     /// operation; otherwise the cursor naturally landed at `end + 1`
     /// and no move is required.
-
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn put_range(
         &mut self,
         out: &mut Vec<u8>,
@@ -304,7 +304,6 @@ impl Renderer {
     /// of a wide character no-op but still consume one of the count
     /// units, mirroring the cursor advance the terminal performs for
     /// the inserted blanks.
-
     pub(super) fn insert_cells_op(
         &mut self,
         out: &mut Vec<u8>,
@@ -326,7 +325,7 @@ impl Renderer {
             match line.get(i) {
                 Some(cell) if cell.is_continuation() => continue,
                 Some(cell) => {
-                    self.update_pen(out, Some(&cell))?;
+                    self.update_pen(out, Some(cell))?;
                     self.put_glyph_bytes(
                         out,
                         cell.content().as_bytes(),

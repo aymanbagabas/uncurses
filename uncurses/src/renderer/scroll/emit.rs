@@ -28,6 +28,7 @@ use crate::renderer::{RenderBuffer, Renderer};
 ///
 /// Branches 2 and 4 require `opts.contains(Optimizations::IL_DL)`; branch 3's SU requires
 /// `opts.contains(Optimizations::SU_SD)` (its LF fallback is unconditional).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn scroll_up(
     out: &mut Vec<u8>,
     renderer: &mut Renderer,
@@ -70,6 +71,7 @@ pub(super) fn scroll_up(
 /// scrolls within the region only when the cursor sits at its top
 /// row, and IL inserts blank rows at the cursor position pushing the
 /// rest down (with the bottom rows clipped past `max_y`).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn scroll_down(
     out: &mut Vec<u8>,
     renderer: &mut Renderer,

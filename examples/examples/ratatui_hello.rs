@@ -6,14 +6,14 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use uncurses::event::{Event, Source};
-use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
-use uncurses_ratatui::UncursesBackend;
 use ratatui::Terminal;
 use ratatui::layout::Alignment;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
+use uncurses::event::{Event, Source};
+use uncurses::screen::Screen;
+use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses_ratatui::UncursesBackend;
 
 fn main() -> io::Result<()> {
     let raw_state = enable_raw_mode(stdin(), stdout())?;

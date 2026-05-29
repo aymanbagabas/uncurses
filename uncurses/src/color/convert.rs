@@ -71,8 +71,8 @@ fn nearest_gray(v: u8) -> u8 {
     }
     // gray_value = 8 + 10 * (idx - 232)
     // idx = (v - 8) / 10 + 232, rounded
-    let idx = ((v as u16 - 8 + 5) / 10 + 232).min(255) as u8;
-    idx
+
+    ((v as u16 - 8 + 5) / 10 + 232).min(255) as u8
 }
 
 /// Squared Euclidean distance in RGB space.

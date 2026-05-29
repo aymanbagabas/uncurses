@@ -320,13 +320,13 @@ fn collect_primaries<S: SurfaceMut + ?Sized>(
     let mut out = Vec::new();
     let mut x = left;
     while x < right {
-        if let Some(cell) = s.cell(Position::new(x, y)) {
-            if !cell.is_continuation() {
-                let cw = (cell.width() as u16).max(1);
-                out.push((x, cell.clone()));
-                x = x.saturating_add(cw);
-                continue;
-            }
+        if let Some(cell) = s.cell(Position::new(x, y))
+            && !cell.is_continuation()
+        {
+            let cw = (cell.width() as u16).max(1);
+            out.push((x, cell.clone()));
+            x = x.saturating_add(cw);
+            continue;
         }
         x = x.saturating_add(1);
     }
@@ -484,7 +484,7 @@ mod tests {
             for (x, ch) in row.chars().enumerate() {
                 win.set_cell(
                     Position::new(x as u16, y as u16),
-                    &Cell::new(&ch.to_string(), 1),
+                    &Cell::new(ch.to_string(), 1),
                 );
             }
         }

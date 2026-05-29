@@ -10,7 +10,7 @@ pub(super) use crate::ansi::params::Params;
 /// Decode an ASCII hex byte string (e.g. `"61"` → `b"a"`). Returns `None` if
 /// the input has an odd length or contains a non-hex byte.
 pub(super) fn hex_decode(data: &[u8]) -> Option<Vec<u8>> {
-    if data.len() % 2 != 0 {
+    if !data.len().is_multiple_of(2) {
         return None;
     }
     let nib = |b: u8| -> Option<u8> {
@@ -54,11 +54,11 @@ pub(super) fn decode_termcap_payload(data: &[u8]) -> String {
             out.push(';');
         }
         out.push_str(&name);
-        if let Some(v) = value {
-            if !v.is_empty() {
-                out.push('=');
-                out.push_str(&v);
-            }
+        if let Some(v) = value
+            && !v.is_empty()
+        {
+            out.push('=');
+            out.push_str(&v);
         }
     }
     out

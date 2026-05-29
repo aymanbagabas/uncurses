@@ -390,7 +390,7 @@ fn pad_to(s: &str, width: u16) -> String {
     let mut out = s.to_string();
     let cur: usize = s.chars().map(unicode_char_width).sum();
     if cur < width as usize {
-        out.extend(std::iter::repeat(' ').take(width as usize - cur));
+        out.extend(std::iter::repeat_n(' ', width as usize - cur));
     }
     out
 }
