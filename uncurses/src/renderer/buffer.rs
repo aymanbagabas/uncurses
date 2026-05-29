@@ -187,14 +187,34 @@ impl RenderBuffer {
             .filter_map(|(i, t)| t.map(|span| (i as u16, span)))
     }
 
-    /// Insert `n` lines at `y`. Freed rows are filled with `fill`.
+    /// Insert `n` lines at `y`. Freed rows are filled with `fill`. All
+    /// rows in `[y, bounds_bottom)` are marked touched across the full
+    /// width so the renderer redraws them on the next frame.
     pub fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         self.buffer.insert_lines(y, n, bounds_bottom, fill);
+        let bottom = bounds_bottom.min(self.height());
+        if y >= bottom || self.width() == 0 {
+            return;
+        }
+        let last_col = self.width() - 1;
+        for row in y..bottom {
+            self.touch_line(row, 0, last_col);
+        }
     }
 
-    /// Delete `n` lines at `y`. Freed rows are filled with `fill`.
+    /// Delete `n` lines at `y`. Freed rows are filled with `fill`. All
+    /// rows in `[y, bounds_bottom)` are marked touched across the full
+    /// width so the renderer redraws them on the next frame.
     pub fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         self.buffer.delete_lines(y, n, bounds_bottom, fill);
+        let bottom = bounds_bottom.min(self.height());
+        if y >= bottom || self.width() == 0 {
+            return;
+        }
+        let last_col = self.width() - 1;
+        for row in y..bottom {
+            self.touch_line(row, 0, last_col);
+        }
     }
 
     /// Insert `n` cells at `pos`, touching the line. Delegates to
@@ -275,6 +295,30 @@ impl SurfaceMut for RenderBuffer {
         for y in clipped.top()..clipped.bottom() {
             self.touch_line(y, clipped.left(), last_col);
         }
+    }
+
+    /// Delegate to [`RenderBuffer::insert_lines`] for the row-swap fast
+    /// path and the precise touched-span bookkeeping it performs.
+    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        RenderBuffer::insert_lines(self, y, n, bounds_bottom, fill);
+    }
+
+    /// Delegate to [`RenderBuffer::delete_lines`] for the row-swap fast
+    /// path and the precise touched-span bookkeeping it performs.
+    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        RenderBuffer::delete_lines(self, y, n, bounds_bottom, fill);
+    }
+
+    /// Delegate to [`RenderBuffer::insert_cells`] for the in-place
+    /// rotate fast path and the row-touch bookkeeping it performs.
+    fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+        RenderBuffer::insert_cells(self, pos, n, bounds_right, fill);
+    }
+
+    /// Delegate to [`RenderBuffer::delete_cells`] for the in-place
+    /// rotate fast path and the row-touch bookkeeping it performs.
+    fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+        RenderBuffer::delete_cells(self, pos, n, bounds_right, fill);
     }
 }
 
