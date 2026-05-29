@@ -1,12 +1,12 @@
 use std::io::{self, Write};
 
+use ratatui::backend::{Backend, ClearType, WindowSize};
+use ratatui::buffer::Cell as RtCell;
+use ratatui::layout::{Position as RtPosition, Size as RtSize};
 use uncurses::buffer::{Bounded, Surface, SurfaceMut};
 use uncurses::cell::Cell as CzCell;
 use uncurses::screen::Screen;
 use uncurses::terminal::{size as size_mod, tty};
-use ratatui::backend::{Backend, ClearType, WindowSize};
-use ratatui::buffer::Cell as RtCell;
-use ratatui::layout::{Position as RtPosition, Size as RtSize};
 
 use crate::convert::cell_from_ratatui;
 
@@ -17,6 +17,15 @@ use crate::convert::cell_from_ratatui;
 /// (`hide_cursor`, `show_cursor`, `set_cursor_position`, `clear`,
 /// `clear_region`) flush immediately, while `draw` only updates the back
 /// buffer and defers I/O to the next `flush`.
+///
+/// # Supported viewports
+///
+/// Only [`ratatui::Viewport::Fullscreen`] and [`ratatui::Viewport::Fixed`]
+/// are supported. [`ratatui::Viewport::Inline`] requires the backend to
+/// report the real cursor position from the controlling terminal so
+/// ratatui can anchor the inline area; that is not implemented here, and
+/// constructing a `Terminal` with an inline viewport will fail with
+/// [`io::ErrorKind::Unsupported`] from [`Backend::get_cursor_position`].
 pub struct UncursesBackend<W: Write> {
     screen: Screen<W>,
 }
@@ -78,8 +87,18 @@ impl<W: Write> Backend for UncursesBackend<W> {
     }
 
     fn get_cursor_position(&mut self) -> io::Result<RtPosition> {
-        let p = self.screen.cursor_position();
-        Ok(RtPosition { x: p.x, y: p.y })
+        // Reporting the real cursor position requires a DSR/CPR round-trip
+        // through the controlling terminal. That path is not implemented,
+        // and returning the locally-cached position would silently break
+        // any caller that depends on a true reading (e.g. ratatui's
+        // inline viewport anchor). Surface the limitation as Unsupported
+        // so Terminal::with_options(Viewport::Inline(_)) fails cleanly at
+        // construction time.
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "get_cursor_position is not supported by UncursesBackend; \
+             only fullscreen and fixed viewports are supported",
+        ))
     }
 
     fn set_cursor_position<P: Into<RtPosition>>(&mut self, position: P) -> io::Result<()> {
@@ -118,8 +137,10 @@ impl<W: Write> Backend for UncursesBackend<W> {
             }
             ClearType::BeforeCursor => {
                 if cursor.y > 0 {
-                    self.screen
-                        .fill_rect(uncurses::layout::Rect::new(0, 0, w, cursor.y), &CzCell::BLANK);
+                    self.screen.fill_rect(
+                        uncurses::layout::Rect::new(0, 0, w, cursor.y),
+                        &CzCell::BLANK,
+                    );
                 }
                 (cursor.y < h).then(|| {
                     let head_w = (cursor.x.min(w).saturating_add(1)).min(w);
