@@ -316,9 +316,7 @@ fn invalidate_bad_hunks(oldnum: &mut [i32], height: usize) {
 
         let cushion = (size / 8).min(2);
         if size < 3 || size + cushion < shift.abs() {
-            for j in start..i {
-                oldnum[j] = NO_MAP;
-            }
+            oldnum[start..i].fill(NO_MAP);
         }
     }
 }
@@ -430,9 +428,7 @@ mod tests {
         for (i, slot) in new.iter_mut().enumerate() {
             *slot = (i as u64 + 1) * 1000 + 7;
         }
-        for k in 0..5 {
-            new[20 + k] = old[10 + k];
-        }
+        new[20..25].copy_from_slice(&old[10..15]);
         let (mut r, buf) = renderer_with_hashes(old, new, 30);
         r.update_hashmap(&buf, 30);
         for k in 0..5 {
@@ -455,9 +451,7 @@ mod tests {
         for (i, slot) in new.iter_mut().enumerate() {
             *slot = (i as u64 + 1) * 1000 + 7;
         }
-        for k in 0..12 {
-            new[12 + k] = old[2 + k];
-        }
+        new[12..24].copy_from_slice(&old[2..14]);
         let (mut r, buf) = renderer_with_hashes(old, new, 30);
         r.update_hashmap(&buf, 30);
         for k in 0..12 {

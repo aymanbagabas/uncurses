@@ -5,11 +5,11 @@
 
 use std::io::{self, Write};
 
+use ratatui::Terminal;
 use uncurses::event::{Event, Source};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
-use ratatui::Terminal;
 
 fn main() -> io::Result<()> {
     let raw_state = enable_raw_mode(stdin(), stdout())?;

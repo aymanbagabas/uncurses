@@ -119,7 +119,6 @@ impl Renderer {
     /// buffer already has the trailing region matching `blank` at every
     /// position. Picks EL-0 over a run of explicit blanks when the EL
     /// byte cost is no larger than the fill cost.
-
     pub(super) fn clear_to_end(
         &mut self,
         out: &mut Vec<u8>,
@@ -137,7 +136,7 @@ impl Renderer {
         if !need {
             return Ok(());
         }
-        self.update_pen(out, Some(&blank))?;
+        self.update_pen(out, Some(blank))?;
         let count = width.saturating_sub(cur_x);
         if self.el0_cost() <= count {
             ansi::write_erase_to_eol(out)?;

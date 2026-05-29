@@ -33,7 +33,7 @@ impl PrefixShape {
         }
     }
 
-    fn from_position(self, from: Position) -> Position {
+    fn apply_to(self, from: Position) -> Position {
         match self {
             PrefixShape::None => from,
             PrefixShape::Cr => Position { y: from.y, x: 0 },
@@ -107,7 +107,7 @@ impl Renderer {
                 if matches!(prefix, PrefixShape::Home) && self.relative_cursor {
                     continue;
                 }
-                let cand_from = prefix.from_position(from);
+                let cand_from = prefix.apply_to(from);
                 let plan = self.relative_cursor_plan(
                     cand_from,
                     to,

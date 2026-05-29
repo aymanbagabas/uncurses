@@ -296,8 +296,8 @@ impl Capabilities {
         match ev {
             Event::PrimaryDeviceAttributes(params) => {
                 self.da1 = params.clone();
-                self.sixel = Some(params.iter().any(|p| *p == Some(4)));
-                self.regis = Some(params.iter().any(|p| *p == Some(3)));
+                self.sixel = Some(params.contains(&Some(4)));
+                self.regis = Some(params.contains(&Some(3)));
                 true
             }
             Event::SecondaryDeviceAttributes(params) => {
@@ -394,7 +394,7 @@ impl Capabilities {
 /// Returns `None` if the input is not an even number of ASCII hex
 /// digits.
 fn decode_hex_ascii(s: &str) -> Option<String> {
-    if !s.is_ascii() || s.len() % 2 != 0 {
+    if !s.is_ascii() || !s.len().is_multiple_of(2) {
         return None;
     }
     let mut out = String::with_capacity(s.len() / 2);

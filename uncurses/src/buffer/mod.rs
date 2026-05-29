@@ -123,11 +123,8 @@ impl Buffer {
             // Verify we found a primary cell (not a continuation at position 0)
             if !line[pc].is_continuation() {
                 let pw = line[pc].width() as usize;
-                for i in pc..pc + pw {
-                    if i < width {
-                        line[i] = Cell::BLANK;
-                    }
-                }
+                let end = (pc + pw).min(width);
+                line[pc..end].fill(Cell::BLANK);
             } else {
                 // Buffer is corrupted — just blank the single cell
                 line[x] = Cell::BLANK;
@@ -137,11 +134,8 @@ impl Buffer {
         // If we're overwriting the primary cell of a wide char, blank continuations
         if line[x].width() > 1 {
             let w = line[x].width() as usize;
-            for i in x + 1..x + w {
-                if i < width {
-                    line[i] = Cell::BLANK;
-                }
-            }
+            let end = (x + w).min(width);
+            line[x + 1..end].fill(Cell::BLANK);
         }
 
         let cell_width = cell.width() as usize;
@@ -153,11 +147,8 @@ impl Buffer {
                     // If we'd overwrite a wide cell's primary, blank its continuations
                     if line[i].width() > 1 {
                         let w = line[i].width() as usize;
-                        for j in i + 1..i + w {
-                            if j < width {
-                                line[j] = Cell::BLANK;
-                            }
-                        }
+                        let end = (i + w).min(width);
+                        line[i + 1..end].fill(Cell::BLANK);
                     }
                     line[i] = Cell::new("", 0);
                 }

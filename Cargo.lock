@@ -344,31 +344,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "uncurses"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.11.1",
- "compact_str 0.8.2",
- "criterion",
- "icu_properties",
- "icu_segmenter",
- "libc",
- "rustc-hash",
- "unicode-segmentation",
- "unicode-width",
- "windows-sys",
-]
-
-[[package]]
-name = "uncurses-ratatui"
-version = "0.1.0"
-dependencies = [
- "uncurses",
- "ratatui",
- "unicode-width",
-]
-
-[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -504,10 +479,10 @@ dependencies = [
 name = "examples"
 version = "0.1.0"
 dependencies = [
- "uncurses",
- "uncurses-ratatui",
  "libc",
  "ratatui",
+ "uncurses",
+ "uncurses-ratatui",
 ]
 
 [[package]]
@@ -1882,6 +1857,31 @@ name = "ucd-trie"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
+
+[[package]]
+name = "uncurses"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.1",
+ "compact_str 0.8.2",
+ "criterion",
+ "icu_properties",
+ "icu_segmenter",
+ "libc",
+ "rustc-hash",
+ "unicode-segmentation",
+ "unicode-width",
+ "windows-sys",
+]
+
+[[package]]
+name = "uncurses-ratatui"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+ "uncurses",
+ "unicode-width",
+]
 
 [[package]]
 name = "unicode-ident"

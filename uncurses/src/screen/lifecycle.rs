@@ -114,11 +114,11 @@ impl<W: Write> Screen<W> {
 
         let lines: Vec<&str> = content.split('\n').collect();
         let mut offset: u16 = lines.len() as u16;
-        if width > 0 {
-            for line in &lines {
-                let lw = ansi::text::string_width(line.as_bytes(), self.width_mode(), self.eaw_wide)
-                    as u16;
-                offset = offset.saturating_add(lw / width);
+        for line in &lines {
+            let lw =
+                ansi::text::string_width(line.as_bytes(), self.width_mode(), self.eaw_wide) as u16;
+            if let Some(n) = lw.checked_div(width) {
+                offset = offset.saturating_add(n);
             }
         }
 

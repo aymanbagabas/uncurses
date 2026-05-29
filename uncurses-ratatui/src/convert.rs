@@ -1,7 +1,7 @@
+use ratatui::style::{Color as RtColor, Modifier, Style as RtStyle};
 use uncurses::cell::Cell as CzCell;
 use uncurses::color::{BasicColor, Color as CzColor};
 use uncurses::style::{AttrFlags, Style as CzStyle, UnderlineStyle};
-use ratatui::style::{Color as RtColor, Modifier, Style as RtStyle};
 
 /// Convert a ratatui color into a uncurses color. `Reset` maps to `None`.
 pub fn to_uncurses_color(c: RtColor) -> Option<CzColor> {

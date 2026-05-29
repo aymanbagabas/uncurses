@@ -6,16 +6,16 @@
 
 use std::io::{self, Write};
 
-use uncurses::event::{Event, KeyCode, Source};
-use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
-use uncurses_ratatui::UncursesBackend;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListItem, Paragraph};
+use uncurses::event::{Event, KeyCode, Source};
+use uncurses::screen::Screen;
+use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses_ratatui::UncursesBackend;
 
 enum InputMode {
     Normal,
