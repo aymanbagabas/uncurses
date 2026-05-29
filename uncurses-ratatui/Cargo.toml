@@ -7,3 +7,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+uncurses = { path = "../uncurses" }
+ratatui = { version = "0.30", default-features = false, features = ["underline-color", "scrolling-regions"] }
+unicode-width = "0.2"
