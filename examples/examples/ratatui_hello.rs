@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use uncurses::event::{Event, Source};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size};
+use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
 use ratatui::Terminal;
 use ratatui::layout::Alignment;
@@ -16,15 +16,15 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 fn main() -> io::Result<()> {
-    let raw_state = enable_raw_mode(io::stdin(), io::stdout())?;
+    let raw_state = enable_raw_mode(stdin(), stdout())?;
     let result = run();
-    disable_raw_mode(io::stdin(), io::stdout(), &raw_state)?;
+    disable_raw_mode(stdin(), stdout(), &raw_state)?;
     result
 }
 
 fn run() -> io::Result<()> {
-    let size = get_window_size(io::stdout()).unwrap_or_default();
-    let mut screen = Screen::new(io::stdout()).with_size(size.col, size.row);
+    let size = get_window_size(stdout()).unwrap_or_default();
+    let mut screen = Screen::new(stdout()).with_size(size.col, size.row);
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 
@@ -44,7 +44,7 @@ fn run() -> io::Result<()> {
         f.render_widget(para, f.area());
     })?;
 
-    let mut events = Source::new(io::stdin())?;
+    let mut events = Source::new(stdin())?;
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if events.poll(Some(Duration::from_millis(100)))?

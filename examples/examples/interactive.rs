@@ -8,27 +8,27 @@
 //! header, even when no input has arrived.
 
 use std::collections::VecDeque;
-use std::io::{self, Write};
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size};
+use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
 
 const TICK: Duration = Duration::from_millis(500);
 
 fn main() -> std::io::Result<()> {
-    let state = enable_raw_mode(io::stdin(), io::stdout())?;
+    let state = enable_raw_mode(stdin(), stdout())?;
 
-    let size = get_window_size(io::stdout()).unwrap_or_default();
-    let mut screen = Screen::new(io::stdout()).with_size(size.col, size.row);
+    let size = get_window_size(stdout()).unwrap_or_default();
+    let mut screen = Screen::new(stdout()).with_size(size.col, size.row);
 
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(io::stdin())?;
+    let mut events = Source::new(stdin())?;
 
     let started = Instant::now();
     let mut log: VecDeque<String> = VecDeque::with_capacity(64);
@@ -95,7 +95,7 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(io::stdin(), io::stdout(), &state)?;
+    disable_raw_mode(stdin(), stdout(), &state)?;
     Ok(())
 }
 

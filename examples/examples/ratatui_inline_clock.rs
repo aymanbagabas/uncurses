@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use uncurses::event::{Event, KeyCode, Source};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size};
+use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -19,16 +19,16 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 fn main() -> io::Result<()> {
-    let raw_state = enable_raw_mode(io::stdin(), io::stdout())?;
+    let raw_state = enable_raw_mode(stdin(), stdout())?;
     let result = run();
-    disable_raw_mode(io::stdin(), io::stdout(), &raw_state)?;
+    disable_raw_mode(stdin(), stdout(), &raw_state)?;
     result
 }
 
 fn run() -> io::Result<()> {
     const VIEWPORT_HEIGHT: u16 = 3;
-    let size = get_window_size(io::stdout()).unwrap_or_default();
-    let mut screen = Screen::new(io::stdout()).with_size(size.col, VIEWPORT_HEIGHT);
+    let size = get_window_size(stdout()).unwrap_or_default();
+    let mut screen = Screen::new(stdout()).with_size(size.col, VIEWPORT_HEIGHT);
     screen.set_cursor_visible(false)?;
 
     let mut terminal = Terminal::with_options(
@@ -37,7 +37,7 @@ fn run() -> io::Result<()> {
             viewport: Viewport::Inline(VIEWPORT_HEIGHT),
         },
     )?;
-    let mut events = Source::new(io::stdin())?;
+    let mut events = Source::new(stdin())?;
 
     let start = Instant::now();
     let mut next_tick = start + Duration::from_secs(1);
