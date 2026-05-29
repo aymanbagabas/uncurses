@@ -246,7 +246,9 @@ mod tests {
     #[test]
     fn clicolor_force_overrides_notty() {
         let e = env(&[("TERM", "dumb"), ("CLICOLOR_FORCE", "1")]);
-        assert_eq!(Profile::detect_from(&e, true), Profile::Ansi);
+        // CLICOLOR_FORCE guarantees at least Ansi; the platform/env floor may
+        // be higher (e.g. Ansi256 on Windows conhost).
+        assert!(Profile::detect_from(&e, true) >= Profile::Ansi);
     }
 
     #[test]

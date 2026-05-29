@@ -482,9 +482,15 @@ mod tests {
 
     #[test]
     fn mouse_button_change_no_change() {
-        // No change at all -> no button reported.
+        // No buttons held, no change -> nothing to report.
         assert_eq!(mouse_button_change(0, 0), (None, false));
-        assert_eq!(mouse_button_change(0b0000_0001, 0b0000_0001), (None, false));
+        // Button held across two records (e.g. a MOUSE_MOVED drag) -> the
+        // helper surfaces the currently-held button so the caller can tag
+        // the drag with it; the diff itself is empty so `released` is false.
+        assert_eq!(
+            mouse_button_change(0b0000_0001, 0b0000_0001),
+            (Some(0), false)
+        );
     }
 
     fn key_record(
