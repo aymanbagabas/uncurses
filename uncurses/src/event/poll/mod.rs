@@ -13,6 +13,7 @@
 //! | `linux`                                                    | `epoll`                              |
 //! | `freebsd`, `netbsd`, `openbsd`, `dragonfly`                | `kqueue`                             |
 //! | `macos`                                                    | `kqueue` (or `select` on tty fds)    |
+//! | `windows`                                                  | `WaitForMultipleObjects`             |
 //! | otherwise (`solaris`, `illumos`, generic unix)             | `poll(2)`                            |
 //!
 //! All backends are level-triggered, treat `HUP`/`ERR`/`EOF` on any
@@ -21,24 +22,33 @@
 //! `EINTR` retries from an absolute deadline so callers' timeouts are
 //! honoured exactly.
 
-#![cfg(unix)]
-
 use std::io;
+#[cfg(unix)]
 use std::os::fd::RawFd;
+#[cfg(windows)]
+use std::os::windows::io::RawHandle;
 use std::time::{Duration, Instant};
 
-/// A file descriptor plus the readiness bit [`Poller::poll`] writes
+/// A handle to wait on plus the readiness bit [`Poller::poll`] writes
 /// back. The caller constructs these with [`PollFd::new`], passes a
 /// mutable slice to [`Poller::poll`], and reads `ready` per entry on
 /// return.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PollFd {
+pub struct PollFd {
+    #[cfg(unix)]
     pub fd: RawFd,
+    #[cfg(windows)]
+    pub fd: RawHandle,
     pub ready: bool,
 }
 
 impl PollFd {
+    #[cfg(unix)]
     pub fn new(fd: RawFd) -> Self {
+        Self { fd, ready: false }
+    }
+    #[cfg(windows)]
+    pub fn new(fd: RawHandle) -> Self {
         Self { fd, ready: false }
     }
 }
@@ -93,7 +103,7 @@ fn remaining(deadline: Option<Instant>) -> Option<Duration> {
 ///   read path can surface the underlying error,
 /// * loop on `EINTR` against an absolute deadline derived from the
 ///   first call.
-pub(crate) trait Poll: Sized {
+pub trait Poll: Sized {
     fn new() -> io::Result<Self>;
     fn poll(&mut self, fds: &mut [PollFd], timeout: Option<Duration>) -> io::Result<usize>;
 }
@@ -110,15 +120,19 @@ pub(crate) mod epoll;
 ))]
 pub(crate) mod kqueue;
 
+#[cfg(unix)]
 pub(crate) mod poll_sys;
+#[cfg(unix)]
 pub(crate) mod select;
+#[cfg(windows)]
+pub(crate) mod windows;
 
 /// Platform-default readiness wait. Picks the best-available backend
 /// at compile time. On macOS, swaps between [`kqueue::KqueuePoller`]
 /// and [`select::SelectPoller`] on the fly based on whether the
 /// current fd slice contains any tty fd (Darwin's kqueue spins on tty
 /// character devices).
-pub(crate) struct Poller {
+pub struct Poller {
     inner: Inner,
 }
 
@@ -139,6 +153,9 @@ enum Inner {
     Select(select::SelectPoller),
 }
 
+#[cfg(windows)]
+type Inner = windows::WindowsPoller;
+
 #[cfg(not(any(
     target_os = "linux",
     target_os = "macos",
@@ -146,6 +163,7 @@ enum Inner {
     target_os = "netbsd",
     target_os = "openbsd",
     target_os = "dragonfly",
+    windows,
 )))]
 type Inner = poll_sys::PollPoller;
 
@@ -189,8 +207,12 @@ fn _assert_poll<T: Poll>() {}
 #[allow(dead_code)]
 fn _assert() {
     _assert_poll::<Poller>();
+    #[cfg(unix)]
     _assert_poll::<select::SelectPoller>();
+    #[cfg(unix)]
     _assert_poll::<poll_sys::PollPoller>();
+    #[cfg(windows)]
+    _assert_poll::<windows::WindowsPoller>();
     #[cfg(target_os = "linux")]
     _assert_poll::<epoll::EpollPoller>();
     #[cfg(any(
