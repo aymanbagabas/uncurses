@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 uncurses = { path = "../uncurses" }
+uncurses-ratatui = { path = "../uncurses-ratatui" }
+ratatui = { version = "0.30", features = ["underline-color"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
