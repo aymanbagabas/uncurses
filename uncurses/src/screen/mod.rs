@@ -305,6 +305,22 @@ impl<W: Write> SurfaceMut for Screen<W> {
     fn cell_mut(&mut self, pos: crate::Position) -> Option<&mut Cell> {
         self.front_buf.cell_mut(pos)
     }
+
+    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        self.front_buf.insert_lines(y, n, bounds_bottom, fill);
+    }
+
+    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        self.front_buf.delete_lines(y, n, bounds_bottom, fill);
+    }
+
+    fn insert_cells(&mut self, pos: crate::Position, n: u16, bounds_right: u16, fill: &Cell) {
+        self.front_buf.insert_cells(pos, n, bounds_right, fill);
+    }
+
+    fn delete_cells(&mut self, pos: crate::Position, n: u16, bounds_right: u16, fill: &Cell) {
+        self.front_buf.delete_cells(pos, n, bounds_right, fill);
+    }
 }
 
 impl<W: Write> Write for Screen<W> {

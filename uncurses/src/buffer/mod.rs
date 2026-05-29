@@ -307,4 +307,20 @@ impl SurfaceMut for Buffer {
             line[lo..hi].fill(cell.clone());
         }
     }
+
+    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        Buffer::insert_lines(self, y, n, bounds_bottom, fill);
+    }
+
+    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        Buffer::delete_lines(self, y, n, bounds_bottom, fill);
+    }
+
+    fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+        Buffer::insert_cells(self, pos, n, bounds_right, fill);
+    }
+
+    fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+        Buffer::delete_cells(self, pos, n, bounds_right, fill);
+    }
 }
