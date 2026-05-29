@@ -12,8 +12,7 @@ mod decode_safety_tests;
 mod key;
 mod mouse;
 mod pending;
-#[cfg(unix)]
-pub(crate) mod poll;
+pub mod poll;
 mod sigwinch;
 pub mod source;
 #[cfg(windows)]

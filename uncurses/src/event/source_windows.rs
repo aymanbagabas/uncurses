@@ -25,24 +25,20 @@
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Console::{
     ENABLE_VIRTUAL_TERMINAL_INPUT, FOCUS_EVENT, GetConsoleMode, GetNumberOfConsoleInputEvents,
     INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, MENU_EVENT, MOUSE_EVENT,
     MOUSE_HWHEELED, MOUSE_MOVED, MOUSE_WHEELED, RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED,
     ReadConsoleInputW, SHIFT_PRESSED, WINDOW_BUFFER_SIZE_EVENT,
 };
-use windows_sys::Win32::System::Threading::{
-    CreateEventW, ResetEvent, SetEvent, WaitForMultipleObjects,
-};
+use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::Decoder;
 use super::source::{DeadlineKind, Input, Source, Waker};
 
-const WAKE_INDEX: u32 = WAIT_OBJECT_0 + 1;
-const INFINITE: u32 = u32::MAX;
 const READ_BATCH: usize = 64;
 
 /// Inner waker state. Owns a Win32 `Event` HANDLE that signals the
@@ -170,28 +166,24 @@ where
     }
 
     fn wait(&self, timeout: Option<Duration>) -> io::Result<WaitOutcome> {
-        let handles: [HANDLE; 2] = [self.input_handle(), self.wake_event];
-        let deadline = timeout.map(|t| Instant::now() + t);
-        loop {
-            let ms = match deadline {
-                None => INFINITE,
-                Some(d) => {
-                    let now = Instant::now();
-                    if d <= now {
-                        0
-                    } else {
-                        duration_to_wait_ms(Some(d - now))
-                    }
-                }
-            };
-            let rc = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, ms) };
-            return match rc {
-                WAIT_OBJECT_0 => Ok(WaitOutcome::Input),
-                WAKE_INDEX => Ok(WaitOutcome::Wake),
-                WAIT_TIMEOUT => Ok(WaitOutcome::Timeout),
-                _ => Err(io::Error::last_os_error()),
-            };
+        use super::poll::{Poll, PollFd, Poller};
+        let input = self.input_handle();
+        let mut fds = [
+            PollFd::new(input as *mut _ as std::os::windows::io::RawHandle),
+            PollFd::new(self.wake_event as *mut _ as std::os::windows::io::RawHandle),
+        ];
+        let mut poller = Poller::new()?;
+        let n = poller.poll(&mut fds, timeout)?;
+        if n == 0 {
+            return Ok(WaitOutcome::Timeout);
         }
+        if fds[0].ready {
+            return Ok(WaitOutcome::Input);
+        }
+        if fds[1].ready {
+            return Ok(WaitOutcome::Wake);
+        }
+        Ok(WaitOutcome::Timeout)
     }
 
     fn read_records(&mut self) -> io::Result<()> {
@@ -389,20 +381,6 @@ fn serialize_focus_event(
 // helpers
 // ---------------------------------------------------------------------------
 
-fn duration_to_wait_ms(timeout: Option<Duration>) -> u32 {
-    match timeout {
-        None => INFINITE,
-        Some(d) => {
-            let ms = d.as_millis();
-            if ms >= INFINITE as u128 {
-                INFINITE - 1
-            } else {
-                ms as u32
-            }
-        }
-    }
-}
-
 fn push_utf8(buf: &mut Vec<u8>, c: char) {
     buf.extend_from_slice(c.encode_utf8(&mut [0u8; 4]).as_bytes());
 }
@@ -448,14 +426,6 @@ mod tests {
         COORD, FOCUS_EVENT_RECORD, KEY_EVENT_RECORD, KEY_EVENT_RECORD_0, MOUSE_EVENT_RECORD,
         WINDOW_BUFFER_SIZE_RECORD,
     };
-
-    #[test]
-    fn duration_to_wait_caps_at_infinite_minus_one() {
-        let huge = Duration::from_secs(u64::MAX / 2);
-        assert!(duration_to_wait_ms(Some(huge)) < INFINITE);
-        assert_eq!(duration_to_wait_ms(None), INFINITE);
-        assert_eq!(duration_to_wait_ms(Some(Duration::from_millis(0))), 0);
-    }
 
     #[test]
     fn surrogate_decoding_roundtrip() {
