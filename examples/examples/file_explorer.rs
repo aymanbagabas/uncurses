@@ -42,7 +42,7 @@ use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton, Source};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size};
+use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
 
 const PREVIEW_LIMIT: usize = 64 * 1024;
@@ -413,10 +413,10 @@ fn run() -> std::io::Result<()> {
 
     let mut app = App::new(start_dir);
 
-    let state = enable_raw_mode(io::stdin(), io::stdout())?;
+    let state = enable_raw_mode(stdin(), stdout())?;
 
-    let size = get_window_size(io::stdout()).unwrap_or_default();
-    let mut screen = Screen::new(io::stdout()).with_size(size.col, size.row);
+    let size = get_window_size(stdout()).unwrap_or_default();
+    let mut screen = Screen::new(stdout()).with_size(size.col, size.row);
 
     // Enter the alt screen, hide the cursor, and enable SGR-encoded
     // mouse tracking via the screen API so internal state stays in
@@ -433,7 +433,7 @@ fn run() -> std::io::Result<()> {
     screen.render()?;
     screen.flush()?;
 
-    let mut events = Source::new(io::stdin())?;
+    let mut events = Source::new(stdin())?;
     let waker = events.waker();
 
     let (tx, rx) = mpsc::channel::<Event>();
@@ -546,7 +546,7 @@ fn run() -> std::io::Result<()> {
     // Restore terminal.
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(io::stdin(), io::stdout(), &state)?;
+    disable_raw_mode(stdin(), stdout(), &state)?;
     Ok(())
 }
 
