@@ -152,11 +152,14 @@ fn recognize(
     // Currently the spec uses at most one intermediate; expose it as
     // `Option<u8>` to mirror the previous single-byte detection.
     let intermediate = view.intermediates.last().copied();
+    let no_intermediate = intermediate.is_none();
 
-    // URxvt mouse: CSI Cb;Cx;Cy M  (no `<` prefix, semicolon params)
+    // URxvt mouse: CSI Cb;Cx;Cy M  (no `<` prefix, semicolon params,
+    // no intermediate, exactly 3 params)
     if !has_private
+        && no_intermediate
         && final_byte == b'M'
-        && params.len() >= 3
+        && params.len() == 3
         && let Some(event) = decode_urxvt_mouse(params)
     {
         return Some(event);
@@ -164,8 +167,12 @@ fn recognize(
 
     // SGR mouse: CSI < Cb ; Cx ; Cy M/m. Coordinates are always reported
     // 0-based regardless of encoding; callers using SGR-Pixel (1016)
-    // interpret the result as pixel offsets.
-    if view.private == Some(b'<') && (final_byte == b'M' || final_byte == b'm') && params.len() >= 3
+    // interpret the result as pixel offsets. Exactly 3 params, no
+    // intermediate.
+    if view.private == Some(b'<')
+        && no_intermediate
+        && (final_byte == b'M' || final_byte == b'm')
+        && params.len() == 3
     {
         let is_release = final_byte == b'm';
         if let Some(event) = decode_sgr_mouse(params, is_release) {
@@ -173,27 +180,30 @@ fn recognize(
         }
     }
 
-    // Kitty keyboard: CSI ... u  (sub-parameter aware).
+    // Kitty keyboard: CSI ... u  (sub-parameter aware). No private byte,
+    // no intermediate. Param count is variable.
     if final_byte == b'u'
         && !has_private
+        && no_intermediate
         && let Some(ev) = kitty::decode_kitty_key(view.params(), &[])
     {
         return Some(ev);
     }
 
-    // Focus events
-    if final_byte == b'I' && !has_private {
+    // Focus events: CSI I / CSI O. No private, no intermediate, no params.
+    if final_byte == b'I' && !has_private && no_intermediate && params.is_empty() {
         return Some(Event::FocusIn);
     }
-    if final_byte == b'O' && !has_private {
+    if final_byte == b'O' && !has_private && no_intermediate && params.is_empty() {
         return Some(Event::FocusOut);
     }
 
-    // Cursor position report: CSI row ; col R. Ambiguous with the
-    // modified-F3 form `CSI 1 ; <mod> R` when the cursor is at row 1
-    // (column - 1 fits in the 4-bit modifier mask). In that case emit
-    // both events as a Multi and let the consumer decide.
-    if final_byte == b'R' && params.len() >= 2 && !has_private {
+    // Cursor position report: CSI row ; col R. No private, no
+    // intermediate, exactly 2 params. Ambiguous with the modified-F3
+    // form `CSI 1 ; <mod> R` when the cursor is at row 1 (column - 1
+    // fits in the 4-bit modifier mask). In that case emit both events
+    // as a Multi and let the consumer decide.
+    if final_byte == b'R' && !has_private && no_intermediate && params.len() == 2 {
         let row = params.get_or(0, 1).max(1);
         let col = params.get_or(1, 1).max(1);
         let cpr = Event::CursorPosition(crate::Position::new((col - 1) as u16, (row - 1) as u16));
@@ -210,7 +220,7 @@ fn recognize(
     // 2031 is enabled. Exactly two params and no intermediate.
     if final_byte == b'n'
         && view.private == Some(b'?')
-        && intermediate.is_none()
+        && no_intermediate
         && params.len() == 2
         && params.get_or(0, 0) == 997
     {
@@ -221,22 +231,23 @@ fn recognize(
         };
     }
 
-    // DA1 response: CSI ? ... c
-    if final_byte == b'c' && view.private == Some(b'?') {
+    // DA1 response: CSI ? ... c. No intermediate.
+    if final_byte == b'c' && view.private == Some(b'?') && no_intermediate {
         return Some(Event::PrimaryDeviceAttributes(
             params.iter().map(|g| g.first()).collect(),
         ));
     }
 
-    // DA2 response: CSI > ... c
-    if final_byte == b'c' && view.private == Some(b'>') {
+    // DA2 response: CSI > ... c. No intermediate.
+    if final_byte == b'c' && view.private == Some(b'>') && no_intermediate {
         return Some(Event::SecondaryDeviceAttributes(
             params.iter().map(|g| g.first()).collect(),
         ));
     }
 
-    // Mode report: CSI ? Ps ; Pm $ y (DECRPM) or CSI Ps ; Pm $ y (RM-style)
-    if final_byte == b'y' && intermediate == Some(b'$') && params.len() >= 2 {
+    // Mode report: CSI ? Ps ; Pm $ y (DECRPM) or CSI Ps ; Pm $ y
+    // (RM-style). Intermediate `$`, exactly 2 params.
+    if final_byte == b'y' && intermediate == Some(b'$') && params.len() == 2 {
         let mode_n = params.get_or(0, 0) as u16;
         let setting_n = params.get_or(1, 0) as u16;
         let mode = if has_private {
@@ -248,23 +259,36 @@ fn recognize(
         return Some(Event::ModeReport { mode, setting });
     }
 
-    // Keyboard enhancements report: CSI ? flags u
-    if final_byte == b'u' && has_private && !params.is_empty() {
+    // Keyboard enhancements report: CSI ? flags u. No intermediate,
+    // exactly 1 param.
+    if final_byte == b'u' && view.private == Some(b'?') && no_intermediate && params.len() == 1 {
         return Some(Event::KeyboardEnhancements {
             flags: params.get_or(0, 0) as u8,
         });
     }
 
-    // Window size in pixels: CSI 4 ; height ; width t
-    if final_byte == b't' && !has_private && params.len() >= 3 && params.get_or(0, 0) == 4 {
+    // Window size in pixels: CSI 4 ; height ; width t. No private, no
+    // intermediate, exactly 3 params.
+    if final_byte == b't'
+        && !has_private
+        && no_intermediate
+        && params.len() == 3
+        && params.get_or(0, 0) == 4
+    {
         return Some(Event::WindowPixelSize {
             width: params.get_or(2, 0) as u16,
             height: params.get_or(1, 0) as u16,
         });
     }
 
-    // Cell size in pixels: CSI 6 ; height ; width t
-    if final_byte == b't' && !has_private && params.len() >= 3 && params.get_or(0, 0) == 6 {
+    // Cell size in pixels: CSI 6 ; height ; width t. No private, no
+    // intermediate, exactly 3 params.
+    if final_byte == b't'
+        && !has_private
+        && no_intermediate
+        && params.len() == 3
+        && params.get_or(0, 0) == 6
+    {
         return Some(Event::CellPixelSize {
             width: params.get_or(2, 0) as u16,
             height: params.get_or(1, 0) as u16,
@@ -273,8 +297,14 @@ fn recognize(
 
     // Window size in chars: CSI 8 ; height ; width t — reply to the
     // application's CSI 18 t query. This is a query reply, not a change
-    // notification; surface it as such.
-    if final_byte == b't' && !has_private && params.len() >= 3 && params.get_or(0, 0) == 8 {
+    // notification; surface it as such. No private, no intermediate,
+    // exactly 3 params.
+    if final_byte == b't'
+        && !has_private
+        && no_intermediate
+        && params.len() == 3
+        && params.get_or(0, 0) == 8
+    {
         return Some(Event::WindowCellSize {
             width: params.get_or(2, 0) as u16,
             height: params.get_or(1, 0) as u16,
@@ -282,8 +312,14 @@ fn recognize(
     }
 
     // In-band resize report (mode 2048):
-    // CSI 48 ; height_chars ; width_chars ; height_pix ; width_pix t
-    if final_byte == b't' && !has_private && params.len() >= 5 && params.get_or(0, 0) == 48 {
+    // CSI 48 ; height_chars ; width_chars ; height_pix ; width_pix t.
+    // No private, no intermediate, exactly 5 params.
+    if final_byte == b't'
+        && !has_private
+        && no_intermediate
+        && params.len() == 5
+        && params.get_or(0, 0) == 48
+    {
         return Some(Event::Resize(crate::terminal::size::Winsize {
             row: params.get_or(1, 0) as u16,
             col: params.get_or(2, 0) as u16,
@@ -292,18 +328,21 @@ fn recognize(
         }));
     }
 
-    // Generic window-op fallback for other CSI t variants.
-    if final_byte == b't' && !has_private && !params.is_empty() {
+    // Generic window-op fallback for other CSI t variants. No private,
+    // no intermediate.
+    if final_byte == b't' && !has_private && no_intermediate && !params.is_empty() {
         return Some(Event::WindowOp {
             op: params.get_or(0, 0),
             args: params.slice_from(1).iter().map(|g| g.first()).collect(),
         });
     }
 
-    // modifyOtherKeys report: CSI > 4 ; Pn m
+    // modifyOtherKeys report: CSI > 4 ; Pn m. No intermediate, exactly
+    // 2 params.
     if final_byte == b'm'
         && view.private == Some(b'>')
-        && params.len() >= 2
+        && no_intermediate
+        && params.len() == 2
         && params.get_or(0, 0) == 4
     {
         return Some(Event::ModifyOtherKeys(
@@ -311,35 +350,38 @@ fn recognize(
         ));
     }
 
-    // Standard final-byte cursor / function-key dispatch.
-    let key_code = match final_byte {
-        b'A' => Some(KeyCode::Up),
-        b'B' => Some(KeyCode::Down),
-        b'C' => Some(KeyCode::Right),
-        b'D' => Some(KeyCode::Left),
-        b'E' => Some(KeyCode::KpBegin),
-        b'H' => Some(KeyCode::Home),
-        b'F' => Some(KeyCode::End),
-        b'P' => Some(KeyCode::F(1)),
-        b'Q' => Some(KeyCode::F(2)),
-        b'S' if !has_private => Some(KeyCode::F(4)),
-        _ => None,
-    };
-    if let Some(kc) = key_code {
-        return Some(Event::KeyPress(key_with_mods(kc, csi_modifiers(params))));
-    }
-    match final_byte {
-        b'Z' => {
-            return Some(Event::KeyPress(
-                Key::new(KeyCode::BackTab).with_modifiers(KeyModifiers::SHIFT),
-            ));
+    // Standard final-byte cursor / function-key dispatch. No private,
+    // no intermediate.
+    if !has_private && no_intermediate {
+        let key_code = match final_byte {
+            b'A' => Some(KeyCode::Up),
+            b'B' => Some(KeyCode::Down),
+            b'C' => Some(KeyCode::Right),
+            b'D' => Some(KeyCode::Left),
+            b'E' => Some(KeyCode::KpBegin),
+            b'H' => Some(KeyCode::Home),
+            b'F' => Some(KeyCode::End),
+            b'P' => Some(KeyCode::F(1)),
+            b'Q' => Some(KeyCode::F(2)),
+            b'S' => Some(KeyCode::F(4)),
+            _ => None,
+        };
+        if let Some(kc) = key_code {
+            return Some(Event::KeyPress(key_with_mods(kc, csi_modifiers(params))));
         }
-        b'~' => {
-            if let Some(ev) = recognize_tilde(params, flags) {
-                return Some(ev);
+        match final_byte {
+            b'Z' => {
+                return Some(Event::KeyPress(
+                    Key::new(KeyCode::BackTab).with_modifiers(KeyModifiers::SHIFT),
+                ));
             }
+            b'~' => {
+                if let Some(ev) = recognize_tilde(params, flags) {
+                    return Some(ev);
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 
     // Last resort before falling back to `Event::UnknownCsi`: the legacy
