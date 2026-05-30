@@ -147,16 +147,16 @@ fn recognize(
     flags: DecoderFlags,
 ) -> Option<Event> {
     let final_byte = view.final_byte;
-    let has_private = view.private.is_some();
     let params = view.params();
     // Currently the spec uses at most one intermediate; expose it as
     // `Option<u8>` to mirror the previous single-byte detection.
     let intermediate = view.intermediates.last().copied();
+    let no_private = view.private.is_none();
     let no_intermediate = intermediate.is_none();
 
     // URxvt mouse: CSI Cb;Cx;Cy M  (no `<` prefix, semicolon params,
     // no intermediate, exactly 3 params)
-    if !has_private
+    if no_private
         && no_intermediate
         && final_byte == b'M'
         && params.len() == 3
@@ -183,7 +183,7 @@ fn recognize(
     // Kitty keyboard: CSI ... u  (sub-parameter aware). No private byte,
     // no intermediate. Param count is variable.
     if final_byte == b'u'
-        && !has_private
+        && no_private
         && no_intermediate
         && let Some(ev) = kitty::decode_kitty_key(view.params(), &[])
     {
@@ -191,10 +191,10 @@ fn recognize(
     }
 
     // Focus events: CSI I / CSI O. No private, no intermediate, no params.
-    if final_byte == b'I' && !has_private && no_intermediate && params.is_empty() {
+    if final_byte == b'I' && no_private && no_intermediate && params.is_empty() {
         return Some(Event::FocusIn);
     }
-    if final_byte == b'O' && !has_private && no_intermediate && params.is_empty() {
+    if final_byte == b'O' && no_private && no_intermediate && params.is_empty() {
         return Some(Event::FocusOut);
     }
 
@@ -203,7 +203,7 @@ fn recognize(
     // form `CSI 1 ; <mod> R` when the cursor is at row 1 (column - 1
     // fits in the 4-bit modifier mask). In that case emit both events
     // as a Multi and let the consumer decide.
-    if final_byte == b'R' && !has_private && no_intermediate && params.len() == 2 {
+    if final_byte == b'R' && no_private && no_intermediate && params.len() == 2 {
         let row = params.get_or(0, 1).max(1);
         let col = params.get_or(1, 1).max(1);
         let cpr = Event::CursorPosition(crate::Position::new((col - 1) as u16, (row - 1) as u16));
@@ -250,10 +250,10 @@ fn recognize(
     if final_byte == b'y' && intermediate == Some(b'$') && params.len() == 2 {
         let mode_n = params.get_or(0, 0) as u16;
         let setting_n = params.get_or(1, 0) as u16;
-        let mode = if has_private {
-            crate::ansi::mode::Mode::Dec(mode_n)
-        } else {
+        let mode = if no_private {
             crate::ansi::mode::Mode::Ansi(mode_n)
+        } else {
+            crate::ansi::mode::Mode::Dec(mode_n)
         };
         let setting = crate::ansi::mode::ModeSetting::from_value(setting_n);
         return Some(Event::ModeReport { mode, setting });
@@ -270,7 +270,7 @@ fn recognize(
     // Window size in pixels: CSI 4 ; height ; width t. No private, no
     // intermediate, exactly 3 params.
     if final_byte == b't'
-        && !has_private
+        && no_private
         && no_intermediate
         && params.len() == 3
         && params.get_or(0, 0) == 4
@@ -284,7 +284,7 @@ fn recognize(
     // Cell size in pixels: CSI 6 ; height ; width t. No private, no
     // intermediate, exactly 3 params.
     if final_byte == b't'
-        && !has_private
+        && no_private
         && no_intermediate
         && params.len() == 3
         && params.get_or(0, 0) == 6
@@ -300,7 +300,7 @@ fn recognize(
     // notification; surface it as such. No private, no intermediate,
     // exactly 3 params.
     if final_byte == b't'
-        && !has_private
+        && no_private
         && no_intermediate
         && params.len() == 3
         && params.get_or(0, 0) == 8
@@ -315,7 +315,7 @@ fn recognize(
     // CSI 48 ; height_chars ; width_chars ; height_pix ; width_pix t.
     // No private, no intermediate, exactly 5 params.
     if final_byte == b't'
-        && !has_private
+        && no_private
         && no_intermediate
         && params.len() == 5
         && params.get_or(0, 0) == 48
@@ -330,7 +330,7 @@ fn recognize(
 
     // Generic window-op fallback for other CSI t variants. No private,
     // no intermediate.
-    if final_byte == b't' && !has_private && no_intermediate && !params.is_empty() {
+    if final_byte == b't' && no_private && no_intermediate && !params.is_empty() {
         return Some(Event::WindowOp {
             op: params.get_or(0, 0),
             args: params.slice_from(1).iter().map(|g| g.first()).collect(),
@@ -352,7 +352,7 @@ fn recognize(
 
     // Standard final-byte cursor / function-key dispatch. No private,
     // no intermediate.
-    if !has_private && no_intermediate {
+    if no_private && no_intermediate {
         let key_code = match final_byte {
             b'A' => Some(KeyCode::Up),
             b'B' => Some(KeyCode::Down),
