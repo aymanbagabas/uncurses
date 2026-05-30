@@ -205,6 +205,22 @@ fn recognize(
         return Some(cpr);
     }
 
+    // Light/dark color scheme report: CSI ? 997 ; {1|2} n.
+    // Sent both as reply to `CSI ? 996 n` and unsolicited when DEC mode
+    // 2031 is enabled. Exactly two params and no intermediate.
+    if final_byte == b'n'
+        && view.private == Some(b'?')
+        && intermediate.is_none()
+        && params.len() == 2
+        && params.get_or(0, 0) == 997
+    {
+        return match params.get_or(1, 0) {
+            1 => Some(Event::DarkColorScheme),
+            2 => Some(Event::LightColorScheme),
+            _ => None,
+        };
+    }
+
     // DA1 response: CSI ? ... c
     if final_byte == b'c' && view.private == Some(b'?') {
         return Some(Event::PrimaryDeviceAttributes(

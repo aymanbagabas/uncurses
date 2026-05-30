@@ -577,6 +577,37 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_color_scheme_report() {
+        let mut parser = Decoder::new();
+        assert_eq!(parser.parse(b"\x1b[?997;1n"), vec![Event::DarkColorScheme]);
+        assert_eq!(parser.parse(b"\x1b[?997;2n"), vec![Event::LightColorScheme]);
+        // Unknown sub-report value: branch returns None; consumer may
+        // see a fallthrough Unknown event but never DarkColorScheme/Light.
+        let evs = parser.parse(b"\x1b[?997;9n");
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
+        );
+        // Wrong primary param is not a color scheme report.
+        let evs = parser.parse(b"\x1b[?996;1n");
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
+        );
+        // Wrong number of params (1 or 3) is rejected.
+        let evs = parser.parse(b"\x1b[?997n");
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
+        );
+        let evs = parser.parse(b"\x1b[?997;1;0n");
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
+        );
+    }
+
+    #[test]
     fn test_parse_cursor_position() {
         let mut parser = Decoder::new();
         let events = parser.parse(b"\x1b[5;10R");
