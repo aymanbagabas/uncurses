@@ -42,6 +42,9 @@ impl<W: Write> Screen<W> {
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.reset(&mut self.buf)?;
         }
+        if self.state.color_scheme_updates {
+            mode::Mode::LIGHT_DARK.reset(&mut self.buf)?;
+        }
         if self.state.title.is_some() {
             ansi::write_window_title(&mut self.buf, "")?;
         }
@@ -60,6 +63,9 @@ impl<W: Write> Screen<W> {
         }
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.set(&mut self.buf)?;
+        }
+        if self.state.color_scheme_updates {
+            mode::Mode::LIGHT_DARK.set(&mut self.buf)?;
         }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf)?;

@@ -281,6 +281,10 @@ pub struct Capabilities {
     pub background: Option<Color>,
     /// Default cursor color from OSC 12 reply.
     pub cursor_color: Option<Color>,
+    /// Last reported color scheme from DEC mode 2031 reports
+    /// (`CSI ? 997 ; {1|2} n`). Updated on every
+    /// [`Event::DarkColorScheme`] / [`Event::LightColorScheme`].
+    pub color_scheme: Option<crate::event::ColorScheme>,
 }
 
 impl Capabilities {
@@ -344,6 +348,14 @@ impl Capabilities {
             }
             Event::CursorColor(c) => {
                 self.cursor_color = Some(*c);
+                true
+            }
+            Event::DarkColorScheme => {
+                self.color_scheme = Some(crate::event::ColorScheme::Dark);
+                true
+            }
+            Event::LightColorScheme => {
+                self.color_scheme = Some(crate::event::ColorScheme::Light);
                 true
             }
             _ => false,

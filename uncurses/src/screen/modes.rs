@@ -126,6 +126,31 @@ impl<W: Write> Screen<W> {
         Ok(())
     }
 
+    /// Enable or disable color scheme update notifications
+    /// (DEC private mode 2031). When enabled, the terminal sends a
+    /// `CSI ? 997 ; {1|2} n` report whenever the user or operating
+    /// system switches between dark and light themes; these surface as
+    /// [`Event::DarkColorScheme`] / [`Event::LightColorScheme`].
+    ///
+    /// [`Event::DarkColorScheme`]: crate::event::Event::DarkColorScheme
+    /// [`Event::LightColorScheme`]: crate::event::Event::LightColorScheme
+    pub fn set_color_scheme_updates(&mut self, enable: bool) -> io::Result<()> {
+        if self.state.color_scheme_updates != enable {
+            if enable {
+                mode::Mode::LIGHT_DARK.set(&mut self.buf)?;
+            } else {
+                mode::Mode::LIGHT_DARK.reset(&mut self.buf)?;
+            }
+            self.state.color_scheme_updates = enable;
+        }
+        Ok(())
+    }
+
+    /// Whether color scheme update notifications (DEC 2031) are enabled.
+    pub fn color_scheme_updates(&self) -> bool {
+        self.state.color_scheme_updates
+    }
+
     /// Set window title.
     pub fn set_title(&mut self, title: &str) -> io::Result<()> {
         ansi::write_window_title(&mut self.buf, title)?;

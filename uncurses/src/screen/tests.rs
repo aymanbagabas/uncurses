@@ -56,6 +56,26 @@ fn with_eaw_wide_sets_eaw_wide() {
 }
 
 #[test]
+fn set_color_scheme_updates_emits_decset_2031_and_tracks_state() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        assert!(!screen.color_scheme_updates());
+        screen.set_color_scheme_updates(true).unwrap();
+        assert!(screen.color_scheme_updates());
+        // Idempotent: second enable doesn't write again.
+        screen.set_color_scheme_updates(true).unwrap();
+        screen.set_color_scheme_updates(false).unwrap();
+        assert!(!screen.color_scheme_updates());
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains("\x1b[?2031h"));
+    assert!(out.contains("\x1b[?2031l"));
+    assert_eq!(out.matches("\x1b[?2031h").count(), 1);
+}
+
+#[test]
 fn set_grapheme_clusters_toggles_width_mode_and_emits_decset() {
     let mut buf: Vec<u8> = Vec::new();
     {

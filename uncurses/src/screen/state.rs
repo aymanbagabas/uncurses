@@ -26,6 +26,10 @@ pub(super) struct State {
     /// width is calculated per grapheme cluster (UTS-29 + emoji rules);
     /// when `false`, width is calculated per code point (wcwidth-style).
     pub grapheme_clusters: bool,
+    /// Color scheme update notifications (DEC 2031). When `true`, the
+    /// terminal sends unsolicited reports as the user/OS toggles the
+    /// dark/light theme.
+    pub color_scheme_updates: bool,
     /// Window title.
     pub title: Option<String>,
 }
@@ -42,6 +46,7 @@ impl Default for State {
             focus_events: false,
             sync_updates: false,
             grapheme_clusters: false,
+            color_scheme_updates: false,
             title: None,
         }
     }

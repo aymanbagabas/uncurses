@@ -60,6 +60,15 @@ impl ModifyOtherKeysMode {
     }
 }
 
+/// Reported terminal color scheme (DEC mode 2031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorScheme {
+    /// Dark mode (`CSI ? 997 ; 1 n`).
+    Dark,
+    /// Light mode (`CSI ? 997 ; 2 n`).
+    Light,
+}
+
 /// A terminal event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
