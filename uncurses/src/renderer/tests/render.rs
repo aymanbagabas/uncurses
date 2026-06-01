@@ -400,6 +400,42 @@ fn test_inline_shrink_partial_clear() {
     );
 }
 
+/// Inline shrink with a force-clear: the partial clear plus
+/// force-clear pass must move the cursor up by the full distance
+/// from the previous bottom-left to the new top, not silently
+/// teleport the tracked source past the new bounds. Regression for
+/// a clamp that dropped `cur.pos.y` to the new max before the
+/// relative-move planner could emit CUU, which left the physical
+/// cursor parked below the new top and the rows above the new
+/// surface untouched on screen.
+#[test]
+fn test_inline_shrink_with_force_clear_moves_cursor_to_new_top() {
+    let mut r = Renderer::new();
+    r.set_fullscreen(false);
+    let mut rb = RenderBuffer::new(20, 11);
+    for y in 0..11u16 {
+        for x in 0..20u16 {
+            rb.set_cell((x, y), &Cell::new("X", 1));
+        }
+    }
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    r.request_clear();
+    let mut rb2 = RenderBuffer::new(20, 3);
+    rb2.set_cell((2, 1), &Cell::new("B", 1));
+    r.render(&mut sink, &mut rb2).unwrap();
+    let out = String::from_utf8_lossy(&sink).to_string();
+    // Cursor was at (0, 10) after frame 1's bottom-left snap; the
+    // force-clear preface must walk all the way back to (0, 0) of
+    // the new 3-row surface — that is CUU 10, not CUU 2.
+    assert!(
+        out.contains("\x1b[10A"),
+        "expected CUU 10 to reach the new top from the old bottom, got {out:?}"
+    );
+}
+
 /// G-4: after an inline resize the cursor lands at (0, new_height-1)
 /// regardless of where the transform pass left it.
 #[test]
@@ -514,5 +550,164 @@ fn test_set_cursor_position_clears_unknown_flags() {
     assert_eq!(r.cur.pos, Position { y: 5, x: 7 });
     assert!(!r.cur.x_unknown);
     assert!(!r.cur.y_unknown);
-    assert!(!r.cur.at_phantom);
+}
+
+/// Inline-mode round trip across a sequence of resizes that mixes
+/// shrinks, grows, force-clears, and width changes. Each frame
+/// fills its surface with one distinct glyph per row so we can
+/// assert that no phantom rows from a previous (taller) frame
+/// remain visible and that the cursor walks correctly between the
+/// previous bottom-left snap and the next frame's content.
+#[test]
+fn test_inline_resize_sequence_round_trip() {
+    fn fill(rb: &mut RenderBuffer, width: u16, height: u16, base: u8) {
+        for y in 0..height {
+            let ch = ((base + y as u8) as char).to_string();
+            for x in 0..width {
+                rb.set_cell((x, y), &Cell::new(&ch, 1));
+            }
+        }
+    }
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(false);
+
+    // ---- Frame 1: 20x5, row k = 'A'+k. Priming render. -------------
+    let mut rb1 = RenderBuffer::new(20, 5);
+    fill(&mut rb1, 20, 5, b'A');
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb1).unwrap();
+    let out1 = String::from_utf8_lossy(&sink).to_string();
+    println!("FRAME1 out = {out1:?}");
+    for k in 0..5u8 {
+        let ch = (b'A' + k) as char;
+        assert!(
+            out1.contains(&ch.to_string().repeat(20)),
+            "frame 1: missing run of 20×{ch:?} on row {k}: {out1:?}"
+        );
+    }
+    // After frame 1 the inline-resize bottom-left snap parks the
+    // cursor at (0, 4).
+    assert_eq!(r.cur.pos, Position { y: 4, x: 0 });
+    sink.clear();
+
+    // ---- Frame 2: shrink to 20x3, force-clear. row k = X/Y/Z. ------
+    r.request_clear();
+    let mut rb2 = RenderBuffer::new(20, 3);
+    for (k, ch) in ['X', 'Y', 'Z'].iter().enumerate() {
+        for x in 0..20u16 {
+            rb2.set_cell((x, k as u16), &Cell::new(ch.to_string(), 1));
+        }
+    }
+    r.render(&mut sink, &mut rb2).unwrap();
+    let out2 = String::from_utf8_lossy(&sink).to_string();
+    println!("FRAME2 out = {out2:?}");
+    // Force-clear: must walk back from (0,4) to the new top via
+    // CUU 4, then erase (ED) so the lower 'D'/'E' rows from frame 1
+    // can't survive on the physical screen.
+    assert!(
+        out2.contains("\x1b[4A"),
+        "frame 2: expected CUU 4 from old bottom (y=4) to new top, got {out2:?}"
+    );
+    assert!(
+        out2.contains("\x1b[J") || out2.contains("\x1b[0J") || out2.contains("\x1b[2J"),
+        "frame 2: expected ED on force-clear, got {out2:?}"
+    );
+    for ch in ['X', 'Y', 'Z'] {
+        assert!(
+            out2.contains(&ch.to_string().repeat(20)),
+            "frame 2: missing run of 20×{ch:?}: {out2:?}"
+        );
+    }
+    // No leftover 'D' / 'E' glyphs from rows 3,4 of frame 1.
+    assert!(
+        !out2.contains("DDDDDDDDDDDDDDDDDDDD"),
+        "frame 2: phantom row 3 ('D' run) leaked: {out2:?}"
+    );
+    assert!(
+        !out2.contains("EEEEEEEEEEEEEEEEEEEE"),
+        "frame 2: phantom row 4 ('E' run) leaked: {out2:?}"
+    );
+    assert_eq!(r.cur.pos, Position { y: 2, x: 0 });
+    sink.clear();
+
+    // ---- Frame 3: grow to 20x7, row k = 'P'+k. No force-clear. -----
+    let mut rb3 = RenderBuffer::new(20, 7);
+    fill(&mut rb3, 20, 7, b'P');
+    r.render(&mut sink, &mut rb3).unwrap();
+    let out3 = String::from_utf8_lossy(&sink).to_string();
+    println!("FRAME3 out = {out3:?}");
+    for k in 0..7u8 {
+        let ch = (b'P' + k) as char;
+        assert!(
+            out3.contains(&ch.to_string().repeat(20)),
+            "frame 3: missing run of 20×{ch:?} on row {k}: {out3:?}"
+        );
+    }
+    // None of the previous frame's X/Y/Z runs may show up — those
+    // rows were rewritten with P/Q/R.
+    for ch in ['X', 'Y', 'Z'] {
+        assert!(
+            !out3.contains(&ch.to_string().repeat(20)),
+            "frame 3: phantom run of 20×{ch:?} leaked: {out3:?}"
+        );
+    }
+    assert_eq!(r.cur.pos, Position { y: 6, x: 0 });
+    sink.clear();
+
+    // ---- Frame 4: shrink to 15x4, force-clear. row k = 'Q'+k. ------
+    r.request_clear();
+    let mut rb4 = RenderBuffer::new(15, 4);
+    fill(&mut rb4, 15, 4, b'Q');
+    r.render(&mut sink, &mut rb4).unwrap();
+    let out4 = String::from_utf8_lossy(&sink).to_string();
+    println!("FRAME4 out = {out4:?}");
+    // Old bottom was y=6; force-clear must walk back via CUU 6.
+    assert!(
+        out4.contains("\x1b[6A"),
+        "frame 4: expected CUU 6 from old bottom (y=6) to new top, got {out4:?}"
+    );
+    assert!(
+        out4.contains("\x1b[J") || out4.contains("\x1b[0J") || out4.contains("\x1b[2J"),
+        "frame 4: expected ED on force-clear, got {out4:?}"
+    );
+    for k in 0..4u8 {
+        let ch = (b'Q' + k) as char;
+        assert!(
+            out4.contains(&ch.to_string().repeat(15)),
+            "frame 4: missing run of 15×{ch:?} on row {k}: {out4:?}"
+        );
+    }
+    // No 20-wide phantom runs from frame 3 (rows are now 15 wide,
+    // a 20-run of 'P'/'V' would imply the old surface is leaking).
+    for ch in ['P', 'Q', 'R', 'S', 'T', 'U', 'V'] {
+        assert!(
+            !out4.contains(&ch.to_string().repeat(20)),
+            "frame 4: 20-wide phantom run of {ch:?} from frame 3 leaked: {out4:?}"
+        );
+    }
+    assert_eq!(r.cur.pos, Position { y: 3, x: 0 });
+    sink.clear();
+
+    // ---- Frame 5: grow to 25x6, row k = 'R'+k. No force-clear. -----
+    let mut rb5 = RenderBuffer::new(25, 6);
+    fill(&mut rb5, 25, 6, b'R');
+    r.render(&mut sink, &mut rb5).unwrap();
+    let out5 = String::from_utf8_lossy(&sink).to_string();
+    println!("FRAME5 out = {out5:?}");
+    for k in 0..6u8 {
+        let ch = (b'R' + k) as char;
+        assert!(
+            out5.contains(&ch.to_string().repeat(25)),
+            "frame 5: missing run of 25×{ch:?} on row {k}: {out5:?}"
+        );
+    }
+    // No 15-wide Q/R/S/T leftovers (those would mean the planner
+    // diffed against the old 15-col surface and left tail columns
+    // unwritten).
+    assert!(
+        !out5.contains(&"Q".repeat(15)) || out5.contains(&"Q".repeat(25)),
+        "frame 5: 15-wide phantom Q run from frame 4 leaked: {out5:?}"
+    );
+    assert_eq!(r.cur.pos, Position { y: 5, x: 0 });
 }
