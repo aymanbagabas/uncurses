@@ -57,11 +57,11 @@ pub enum UnderlineStyle {
 /// keeps a single allocation.
 #[derive(Debug, Clone, Default)]
 pub struct Style {
-    pub fg: Option<Color>,
-    pub bg: Option<Color>,
-    pub underline_color: Option<Color>,
-    pub underline: UnderlineStyle,
-    pub attrs: AttrFlags,
+    pub(crate) fg: Option<Color>,
+    pub(crate) bg: Option<Color>,
+    pub(crate) underline_color: Option<Color>,
+    pub(crate) underline: UnderlineStyle,
+    pub(crate) attrs: AttrFlags,
     pub(crate) link: Option<Rc<LinkData>>,
 }
 
@@ -181,6 +181,12 @@ impl Style {
         self
     }
 
+    /// Replace the entire attribute flag set.
+    pub fn with_attrs(mut self, attrs: AttrFlags) -> Self {
+        self.attrs = attrs;
+        self
+    }
+
     /// Attach a hyperlink to this style. Pass an empty `url` to clear
     /// the link; `params` are OSC 8 parameter pairs (e.g. `"id=foo"`)
     /// or empty.
@@ -212,6 +218,31 @@ impl Style {
     /// Whether this style carries a hyperlink.
     pub fn has_link(&self) -> bool {
         self.link.is_some()
+    }
+
+    /// Foreground color, if any.
+    pub fn fg(&self) -> Option<Color> {
+        self.fg
+    }
+
+    /// Background color, if any.
+    pub fn bg(&self) -> Option<Color> {
+        self.bg
+    }
+
+    /// Underline color, if any.
+    pub fn underline_color(&self) -> Option<Color> {
+        self.underline_color
+    }
+
+    /// Underline style.
+    pub fn underline_style(&self) -> UnderlineStyle {
+        self.underline
+    }
+
+    /// Text attribute flags.
+    pub fn attrs(&self) -> AttrFlags {
+        self.attrs
     }
 }
 
