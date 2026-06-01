@@ -50,14 +50,18 @@ impl Renderer {
             self.cur.at_phantom = false;
         }
 
-        // Clamp both the tracked position and the target to the
-        // surface height: we may be mid-resize and `last_height`
-        // could already reflect the new size.
+        // Clamp the target to the surface height: we may be mid-resize
+        // and `last_height` could already reflect the new size. The
+        // tracked source position is left untouched — when it sits
+        // outside the new bounds (e.g. a finalize-snapped cursor at
+        // the bottom of the previous, taller surface), the relative
+        // move planner must still emit the full CUU back to the new
+        // bounds. Clamping the source would silently drop those rows
+        // and leave the physical cursor below where the renderer
+        // believes it is, leaving stale content above the new surface
+        // on inline shrinks.
         if self.last_height > 0 {
             let max_y = self.last_height - 1;
-            if self.cur.pos.y > max_y {
-                self.cur.pos.y = max_y;
-            }
             if y > max_y {
                 y = max_y;
             }
