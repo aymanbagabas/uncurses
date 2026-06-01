@@ -6,7 +6,6 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
-use uncurses::cell::Link;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::screen::Screen;
@@ -91,12 +90,11 @@ fn redraw<W: Write>(screen: &mut Screen<W>, alt: bool) {
     let help = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
 
     screen.set_str((2, 1), "You're in", WrapMode::Truncate);
-    screen.set_str_with((12, 1), mode, WrapMode::Truncate, keyword, Link::EMPTY);
+    screen.set_str_with((12, 1), mode, WrapMode::Truncate, keyword);
     screen.set_str_with(
         (2, 3),
         "space: switch modes • q: quit",
         WrapMode::Truncate,
         help,
-        Link::EMPTY,
     );
 }

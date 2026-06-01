@@ -15,14 +15,8 @@ use std::collections::HashMap;
 
 use rustc_hash::FxBuildHasher;
 
-use crate::cell::Link;
 use crate::color::{Color, Profile};
 use crate::style::Style;
-
-// Stable storage so the `Disabled` fast paths can return a borrowed
-// reference instead of forcing callers to own an empty value.
-static EMPTY_STYLE: Style = Style::EMPTY;
-static EMPTY_LINK: Link = Link::EMPTY;
 
 /// Profile + per-instance memo of nearest-palette conversions.
 #[derive(Debug, Default)]
@@ -78,43 +72,31 @@ impl ColorCache {
 
     /// Cached counterpart of [`crate::style::diff::convert_style`] —
     /// downsample a style under the wrapped profile, hitting the cache
-    /// for each colored field.
+    /// for each colored field. Hyperlinks are dropped entirely under
+    /// [`Profile::Disabled`] so piped / non-TTY output stays free of
+    /// OSC 8 sequences.
     ///
     /// Returns a borrowed reference whenever possible to avoid the
     /// per-cell rebuild on the hot pen-update path:
     /// - `TrueColor`: pass-through (no downsampling needed).
-    /// - `Disabled`: borrow a shared empty style.
+    /// - `Disabled`: owned empty style (no SGR, no link).
     /// - `Ascii` / `Ansi` / `Ansi256`: build an owned, converted copy.
     pub(super) fn convert_style<'a>(&self, style: &'a Style) -> Cow<'a, Style> {
         match self.profile {
             Profile::TrueColor => Cow::Borrowed(style),
-            Profile::Disabled => Cow::Borrowed(&EMPTY_STYLE),
+            Profile::Disabled => Cow::Owned(Style::EMPTY),
             Profile::Ascii => Cow::Owned(Style {
                 fg: None,
                 bg: None,
                 underline_color: None,
-                ..*style
+                ..style.clone()
             }),
             Profile::Ansi | Profile::Ansi256 => Cow::Owned(Style {
                 fg: style.fg.and_then(|c| self.convert(c)),
                 bg: style.bg.and_then(|c| self.convert(c)),
                 underline_color: style.underline_color.and_then(|c| self.convert(c)),
-                ..*style
+                ..style.clone()
             }),
-        }
-    }
-
-    /// Downsample a hyperlink under the wrapped profile. Hyperlinks are
-    /// dropped entirely when the profile cannot render any styling, so
-    /// piped / non-TTY output stays free of OSC 8 sequences.
-    ///
-    /// Returns a borrowed reference — the only transformation is
-    /// "drop the link under `Disabled`", so non-disabled profiles can
-    /// pass through without cloning the underlying strings.
-    pub(super) fn convert_link<'a>(&self, link: &'a Link) -> &'a Link {
-        match self.profile {
-            Profile::Disabled => &EMPTY_LINK,
-            _ => link,
         }
     }
 }

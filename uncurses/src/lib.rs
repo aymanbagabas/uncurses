@@ -18,7 +18,6 @@
 //! use std::io::Write;
 //! use uncurses::screen::Screen;
 //! use uncurses::style::Style;
-//! use uncurses::cell::Link;
 //! use uncurses::color::{Color, BasicColor};
 //! use uncurses::text::WrapMode;
 //!
@@ -26,7 +25,7 @@
 //! let style = Style::EMPTY
 //!     .bold()
 //!     .with_fg(Color::Basic(BasicColor::Green));
-//! screen.set_str_with((0, 0), "Hello, terminal!", WrapMode::Truncate, style, Link::EMPTY);
+//! screen.set_str_with((0, 0), "Hello, terminal!", WrapMode::Truncate, style);
 //!
 //! screen.render().unwrap();
 //! screen.flush().unwrap();

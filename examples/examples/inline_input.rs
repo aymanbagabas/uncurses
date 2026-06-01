@@ -19,7 +19,6 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
-use uncurses::cell::Link;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, PasteBuffer, Source};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -183,7 +182,6 @@ fn redraw<W: std::io::Write>(screen: &mut Screen<W>, buf: &Buffer) {
         &cursor_ch.to_string(),
         WrapMode::Truncate,
         Style::EMPTY.reverse(),
-        Link::EMPTY,
     );
 }
 

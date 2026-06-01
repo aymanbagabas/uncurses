@@ -4,7 +4,6 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
-use uncurses::cell::Link;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::screen::Screen;
@@ -81,7 +80,6 @@ fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
             footer_text,
             WrapMode::Truncate,
             footer,
-            Link::EMPTY,
         );
     }
 
@@ -128,22 +126,15 @@ fn draw_card<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, label: &str, bord
         .chain(std::iter::repeat_n('─', w as usize - 2))
         .chain(std::iter::once('╯'))
         .collect();
-    screen.set_str_with((x, y), &top, WrapMode::Truncate, border, Link::EMPTY);
-    screen.set_str_with(
-        (x, y + h - 1),
-        &bot,
-        WrapMode::Truncate,
-        border,
-        Link::EMPTY,
-    );
+    screen.set_str_with((x, y), &top, WrapMode::Truncate, border.clone());
+    screen.set_str_with((x, y + h - 1), &bot, WrapMode::Truncate, border.clone());
     for row in 1..h - 1 {
-        screen.set_str_with((x, y + row), "│", WrapMode::Truncate, border, Link::EMPTY);
+        screen.set_str_with((x, y + row), "│", WrapMode::Truncate, border.clone());
         screen.set_str_with(
             (x + w - 1, y + row),
             "│",
             WrapMode::Truncate,
-            border,
-            Link::EMPTY,
+            border.clone(),
         );
     }
 

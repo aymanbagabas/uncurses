@@ -7,7 +7,6 @@ use std::io::Write;
 
 use uncurses::SurfaceMut;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
-use uncurses::cell::Link;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton, Source};
 use uncurses::screen::Screen;
@@ -124,17 +123,11 @@ fn redraw<W: Write>(screen: &mut Screen<W>, count: u32) {
         .with_fg(BasicColor::BrightWhite.into())
         .with_bg(BasicColor::Blue.into())
         .bold();
-    screen.set_str_with((x, y), &inner, WrapMode::Truncate, button, Link::EMPTY);
+    screen.set_str_with((x, y), &inner, WrapMode::Truncate, button);
 
     let help = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
     let hint = "click / enter / space: increment • q: quit";
     let hint_w = hint.chars().count() as u16;
     let hx = w.saturating_sub(hint_w) / 2;
-    screen.set_str_with(
-        (hx, h.saturating_sub(2)),
-        hint,
-        WrapMode::Truncate,
-        help,
-        Link::EMPTY,
-    );
+    screen.set_str_with((hx, h.saturating_sub(2)), hint, WrapMode::Truncate, help);
 }

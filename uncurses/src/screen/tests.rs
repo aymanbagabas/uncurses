@@ -241,7 +241,6 @@ fn test_screen_clears_stale_chars_after_navigating() {
 // single Screen lifetime, and assert that the relevant content and
 // clearing sequences appear in the cumulative byte stream.
 
-use crate::cell::Link;
 use crate::color::{BasicColor, Color};
 use crate::renderer::Optimizations;
 use crate::style::{Style, UnderlineStyle};
@@ -809,11 +808,11 @@ fn hyperlinks_emit_osc8_with_url() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::new(&mut buf).with_size(10, 1);
-        let link = Link::new("https://example.com");
+        let style = Style::EMPTY.with_link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
-                &Cell::new(ch.to_string(), 1).with_link(link.clone()),
+                &Cell::new(ch.to_string(), 1).with_style(style.clone()),
             );
         }
         screen.render().unwrap();
@@ -835,11 +834,11 @@ fn hyperlinks_suppressed_under_disabled_profile() {
         let mut screen = Screen::new(&mut buf)
             .with_size(10, 1)
             .with_color_profile(Profile::Disabled);
-        let link = Link::new("https://example.com");
+        let style = Style::EMPTY.with_link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
-                &Cell::new(ch.to_string(), 1).with_link(link.clone()),
+                &Cell::new(ch.to_string(), 1).with_style(style.clone()),
             );
         }
         screen.render().unwrap();
@@ -966,7 +965,7 @@ fn text_attribute_variants_emit_matching_sgr_params() {
             Style::EMPTY.bold(),
         ];
         for (i, st) in styles.iter().enumerate() {
-            screen.set_cell((i as u16, 0u16), &Cell::new("A", 1).with_style(*st));
+            screen.set_cell((i as u16, 0u16), &Cell::new("A", 1).with_style(st.clone()));
         }
         screen.render().unwrap();
         screen.flush().unwrap();

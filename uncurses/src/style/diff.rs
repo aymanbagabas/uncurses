@@ -11,9 +11,11 @@ use super::{AttrFlags, RESET, Style, UnderlineStyle};
 
 /// Write the minimal SGR sequence to transition from `from` to `to`.
 ///
-/// Returns `true` if any output was written.
+/// Returns `true` if any output was written. Hyperlinks (OSC 8) are
+/// orthogonal to SGR and ignored here — emit them separately.
 pub fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<bool> {
-    if from == to {
+    let from_sgr = sgr_eq(from, to);
+    if from_sgr {
         return Ok(false);
     }
 
@@ -161,15 +163,27 @@ pub fn convert_style(style: &Style, profile: crate::color::Profile) -> Style {
             fg: None,
             bg: None,
             underline_color: None,
-            ..*style
+            ..style.clone()
         },
         _ => Style {
             fg: style.fg.and_then(|c| profile.convert(c)),
             bg: style.bg.and_then(|c| profile.convert(c)),
             underline_color: style.underline_color.and_then(|c| profile.convert(c)),
-            ..*style
+            ..style.clone()
         },
     }
+}
+
+/// Whether two styles are equal in their SGR-relevant fields (colors,
+/// attributes, underline). Hyperlinks are ignored — they're emitted
+/// via OSC 8 separately from SGR, so a hyperlink-only change doesn't
+/// require any SGR transition.
+fn sgr_eq(a: &Style, b: &Style) -> bool {
+    a.fg == b.fg
+        && a.bg == b.bg
+        && a.underline_color == b.underline_color
+        && a.underline == b.underline
+        && a.attrs == b.attrs
 }
 
 #[cfg(test)]

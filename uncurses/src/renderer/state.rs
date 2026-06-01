@@ -2,10 +2,8 @@
 //! and the constructor / [`Default`] impl. Behavior methods live in the
 //! sibling submodules.
 
-use std::rc::Rc;
-
 use crate::Position;
-use crate::cell::{Cell, Link};
+use crate::cell::Cell;
 use crate::color::{Color, Profile};
 use crate::renderer::buffer::RenderBuffer;
 use crate::renderer::caps::Optimizations;
@@ -14,22 +12,17 @@ use crate::renderer::{scroll, tabstops};
 use crate::style::Style;
 
 /// The renderer's tracked cursor: the on-screen position, the active
-/// pen (style + link) used for subsequent glyph output, the
-/// right-margin phantom flag, and the per-axis "unknown" bits that
-/// say whether each coordinate of `pos` is a trustworthy reflection
-/// of where the terminal cursor actually sits.
+/// pen (style — including any open hyperlink) used for subsequent
+/// glyph output, the right-margin phantom flag, and the per-axis
+/// "unknown" bits that say whether each coordinate of `pos` is a
+/// trustworthy reflection of where the terminal cursor actually sits.
 #[derive(Debug, Clone)]
 pub(super) struct Cursor {
-    /// Active style applied to subsequent glyph output. Kept in sync
-    /// with the terminal's SGR state by [`Renderer::update_pen`].
-    /// Mutate via [`Cursor::set_style`] so the pen-cache invariant
-    /// holds.
+    /// Active style applied to subsequent glyph output, including any
+    /// open hyperlink. Kept in sync with the terminal's SGR + OSC 8
+    /// state by [`Renderer::update_pen`]. Mutate via
+    /// [`Cursor::set_style`] so the pen-cache invariant holds.
     style: Style,
-    /// Active hyperlink (OSC 8) applied to subsequent glyph output,
-    /// or `None` when no link is open. Reference-counted so cloning
-    /// the cursor (save / restore) never deep-copies the link
-    /// strings. Mutate via [`Cursor::set_link`].
-    link: Option<Rc<Link>>,
     pub(super) pos: Position,
     /// Whether the cursor is parked in the right-margin "phantom" cell.
     ///
@@ -62,10 +55,10 @@ pub(super) struct Cursor {
     /// inline.
     pub(super) x_unknown: bool,
     pub(super) y_unknown: bool,
-    /// Cached blank cell matching the active pen (style + link).
+    /// Cached blank cell matching the active pen.
     /// Lazily rebuilt by [`Cursor::current_blank`] when
     /// [`Cursor::blank_dirty`] is set; callers that mutate
-    /// `style` / `link` directly must call
+    /// `style` directly must call
     /// [`Cursor::mark_pen_changed`] to invalidate the cache.
     blank: Cell,
     /// Set whenever the pen mutates; cleared on the next
@@ -81,7 +74,8 @@ pub(super) struct Cursor {
 }
 
 impl Cursor {
-    /// Active style applied to subsequent glyph output.
+    /// Active style applied to subsequent glyph output (including any
+    /// open hyperlink).
     #[inline]
     pub(super) fn style(&self) -> &Style {
         &self.style
@@ -94,33 +88,14 @@ impl Cursor {
         self.mark_pen_changed();
     }
 
-    /// Borrow the active hyperlink, returning a reference to a shared
-    /// empty link when none is set so call sites can compare
-    /// `url` / `params` uniformly.
-    pub(super) fn link(&self) -> &Link {
-        static EMPTY: Link = Link::EMPTY;
-        self.link.as_deref().unwrap_or(&EMPTY)
-    }
-
+    /// Whether the active pen carries a hyperlink.
     pub(super) fn has_link(&self) -> bool {
-        self.link.is_some()
-    }
-
-    /// Adopt `link` as the active hyperlink, dropping the previous
-    /// `Rc` if any. Empty links collapse to `None`.
-    pub(super) fn set_link(&mut self, link: Link) {
-        if link.is_empty() {
-            self.link = None;
-        } else {
-            self.link = Some(Rc::new(link));
-        }
-        self.mark_pen_changed();
+        self.style.has_link()
     }
 
     /// Invalidate the cached pen-derived blanks so the next
     /// [`Cursor::current_blank`] / [`Cursor::bce_blank`] call rebuilds.
-    /// Called automatically by [`Cursor::set_style`] and
-    /// [`Cursor::set_link`].
+    /// Called automatically by [`Cursor::set_style`].
     pub(super) fn mark_pen_changed(&mut self) {
         self.blank_dirty = true;
         // bce_blank also depends on style.bg; clearing its key forces
@@ -132,8 +107,7 @@ impl Cursor {
     /// lazily on first access after a pen change.
     pub(super) fn current_blank(&mut self) -> &Cell {
         if self.blank_dirty {
-            let link = self.link.as_deref().cloned().unwrap_or(Link::EMPTY);
-            self.blank = Cell::BLANK.with_style(self.style).with_link(link);
+            self.blank = Cell::BLANK.with_style(self.style.clone());
             self.blank_dirty = false;
         }
         &self.blank
@@ -164,7 +138,6 @@ impl Default for Cursor {
     fn default() -> Self {
         Self {
             style: Style::default(),
-            link: None,
             pos: Position::default(),
             at_phantom: false,
             // Until proven otherwise the cursor is wherever the
