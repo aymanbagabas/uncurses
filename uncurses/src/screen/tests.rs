@@ -1418,15 +1418,42 @@ fn reset_moves_cursor_to_last_row_alt_screen() {
     let out = String::from_utf8_lossy(&buf);
     let leave = out.find("\x1b[?1049l").expect("alt-screen leave");
     let head = &out[..leave];
-    // Alt-screen: emit the move before leaving so the renderer's
-    // tracked position matches the surface's last row. The actual
-    // bytes are planner-chosen; just assert *some* downward motion
-    // landed before the leave sequence.
+    // Alt-screen: emit the move before leaving so terminals that
+    // don't honor DECRST 1049's saved-cursor restore still land at
+    // a sensible row. Terminals that do honor it will undo our move.
     assert!(
         head.contains("\x1b[5;1H")
             || head.contains("\x1b[5H")
             || head.contains("\x1b[4B")
             || head.matches('\n').count() >= 4,
         "expected cursor move to last row before alt-screen leave, head={head:?}"
+    );
+}
+
+#[test]
+fn reset_uses_front_buf_height_not_live_height_after_resize() {
+    // Simulate the user's bug: small render, terminal grows, quit.
+    // The cursor must land on the bottom of the *rendered* surface
+    // (5 rows), not the new live height (50 rows), so a terminal
+    // that loses the alt-screen saved cursor across a resize doesn't
+    // pull the post-quit cursor far below where the user started.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 5);
+        screen.set_alt_screen(true).unwrap();
+        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.render().unwrap();
+        // Grow the screen. front_buf still reflects the 5-row render.
+        screen.resize(20, 50);
+        screen.reset().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    let leave = out.find("\x1b[?1049l").expect("alt-screen leave");
+    let head = &out[..leave];
+    // Must not target row 50.
+    assert!(
+        !head.contains("\x1b[50;1H") && !head.contains("\x1b[50H"),
+        "reset targeted live height instead of front-buf height: head={head:?}"
     );
 }

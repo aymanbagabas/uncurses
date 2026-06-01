@@ -16,9 +16,23 @@ impl<W: Write> Screen<W> {
     /// not mutate `self.state`, so a subsequent [`Screen::restore`]
     /// can re-apply the same modes verbatim.
     pub fn reset(&mut self) -> io::Result<()> {
-        if self.height > 0 {
+        // Walk to the bottom of the *last rendered* surface before any
+        // mode teardown. Use the renderer's last-render height rather
+        // than the live screen height: a terminal that grew between
+        // the last render and quit hasn't drawn anything below the
+        // old bottom row, so addressing the new (taller) bottom would
+        // pull the post-quit cursor far below where the user started
+        // on terminals where DECRST 1049's saved-cursor restore is
+        // unreliable across resizes. Done in both inline and
+        // alt-screen modes: in inline mode we need it so a returning
+        // shell prompt prints below the surface; in alt-screen mode,
+        // terminals that don't honor 1049's saved cursor still land
+        // at a sensible position rather than wherever the last render
+        // left the cursor.
+        let (_, last_height) = self.renderer.last_size();
+        if last_height > 0 {
             self.renderer
-                .move_to(&mut self.buf, &self.front_buf, self.height - 1, 0)?;
+                .move_to(&mut self.buf, &self.front_buf, last_height - 1, 0)?;
         }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.set(&mut self.buf)?;

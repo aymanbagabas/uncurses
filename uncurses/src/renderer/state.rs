@@ -270,6 +270,16 @@ impl Renderer {
         self.cur.pos
     }
 
+    /// Surface dimensions captured at the most recent render. Returns
+    /// `(0, 0)` before the first render. Differs from the
+    /// [`Screen`](crate::Screen)'s live size when the terminal has
+    /// resized but no frame has been rendered yet — useful when
+    /// teardown needs to address the *rendered* surface rather than
+    /// rows that were never drawn.
+    pub(crate) fn last_size(&self) -> (u16, u16) {
+        (self.last_width, self.last_height)
+    }
+
     /// Override the renderer's idea of where the cursor currently is. The
     /// caller is responsible for having actually moved the terminal cursor
     /// to that position; this only updates the bookkeeping.
