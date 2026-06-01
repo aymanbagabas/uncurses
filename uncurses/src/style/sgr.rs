@@ -203,21 +203,26 @@ pub(super) fn push_bg_params<const N: usize>(buf: &mut SmallSeq<N>, color: Color
 }
 
 pub(super) fn push_underline_color_params<const N: usize>(buf: &mut SmallSeq<N>, color: Color) {
+    // ITU T.416 colon subparam form: terminals that don't recognise the
+    // `58` extension treat the whole `58:…` token as a single unknown
+    // param and skip it. The legacy semicolon form `58;5;n` would let
+    // unsupporting parsers re-interpret `5`/`n` as standalone SGR
+    // codes, leaking spurious attributes (slow blink, etc.).
     match color {
         Color::Basic(c) => {
-            buf.extend_from_slice(b"58;5;");
+            buf.extend_from_slice(b"58:5:");
             push_u8(buf, c.as_u8());
         }
         Color::Indexed(idx) => {
-            buf.extend_from_slice(b"58;5;");
+            buf.extend_from_slice(b"58:5:");
             push_u8(buf, idx);
         }
         Color::Rgb(r, g, b) => {
-            buf.extend_from_slice(b"58;2;");
+            buf.extend_from_slice(b"58:2::");
             push_u8(buf, r);
-            buf.push(b';');
+            buf.push(b':');
             push_u8(buf, g);
-            buf.push(b';');
+            buf.push(b':');
             push_u8(buf, b);
         }
     }
