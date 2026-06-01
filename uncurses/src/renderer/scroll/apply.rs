@@ -470,8 +470,7 @@ mod tests {
             .difference(Optimizations::CSR | Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
         let bg_style = Style::EMPTY.with_bg(Color::Basic(BasicColor::Blue));
-        renderer.cur.set_style(bg_style);
-        renderer.cur.mark_pen_changed();
+        renderer.cur.set_style(bg_style.clone());
         renderer.cur.pos = Position { y: 3, x: 0 };
         let mut new_buf = RenderBuffer::new(10, 4);
         new_buf.clear_touched();

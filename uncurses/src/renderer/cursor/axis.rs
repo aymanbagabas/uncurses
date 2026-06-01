@@ -421,7 +421,7 @@ impl Renderer {
         // iteration-free on long forward moves.
         if (n as usize) < cuf
             && let Some(line) = overwrite_line
-            && let Some(ow) = cost::overwrite_cost(line, self.cur.style(), self.cur.link(), fx, tx)
+            && let Some(ow) = cost::overwrite_cost(line, self.cur.style(), fx, tx)
             && ow < best_cost
         {
             best_kind = ForwardKind::Overwrite { fx, tx };
@@ -447,7 +447,6 @@ impl Renderer {
                     &mut tmp,
                     line,
                     self.cur.style(),
-                    self.cur.link(),
                     fx,
                     tx,
                 );
@@ -545,7 +544,7 @@ mod tests {
         let line: Vec<Cell> = (0..20)
             .map(|i| {
                 Cell::new(((b'a' + (i as u8 % 26)) as char).to_string(), 1)
-                    .with_style(*r.cur.style())
+                    .with_style(r.cur.style().clone())
             })
             .collect();
         for fx in 0u16..20 {

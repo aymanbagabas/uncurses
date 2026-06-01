@@ -8,7 +8,6 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
-use uncurses::cell::Link;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::screen::Screen;
@@ -180,17 +179,17 @@ fn draw_choices<W: Write>(screen: &mut Screen<W>, s: &State) {
         let row = y + i as u16;
         if i == s.choice {
             let line = format!("[x] {choice}");
-            screen.set_str_with((2, row), &line, WrapMode::Truncate, checkbox, Link::EMPTY);
+            screen.set_str_with((2, row), &line, WrapMode::Truncate, checkbox.clone());
         } else {
             let line = format!("[ ] {choice}");
-            screen.set_str_with((2, row), &line, WrapMode::Truncate, subtle, Link::EMPTY);
+            screen.set_str_with((2, row), &line, WrapMode::Truncate, subtle.clone());
         }
     }
 
     y += CHOICES.len() as u16 + 1;
     screen.set_str((2, y), "Program quits in", WrapMode::Truncate);
     let n = format!(" {} ", s.ticks);
-    screen.set_str_with((2 + 17, y), &n, WrapMode::Truncate, ticks_st, Link::EMPTY);
+    screen.set_str_with((2 + 17, y), &n, WrapMode::Truncate, ticks_st.clone());
     let after_x = 2 + 17 + n.chars().count() as u16;
     screen.set_str((after_x, y), "seconds", WrapMode::Truncate);
 
@@ -199,8 +198,7 @@ fn draw_choices<W: Write>(screen: &mut Screen<W>, s: &State) {
         (2, y),
         "j/k or up/down: select  •  enter: choose  •  q: quit",
         WrapMode::Truncate,
-        subtle,
-        Link::EMPTY,
+        subtle.clone(),
     );
 }
 
@@ -229,11 +227,11 @@ fn draw_chosen<W: Write>(screen: &mut Screen<W>, s: &State) {
     let prefix = "Need ";
     screen.set_str((2, y), prefix, WrapMode::Truncate);
     let mut x = 2 + prefix.chars().count() as u16;
-    screen.set_str_with((x, y), deps[0], WrapMode::Truncate, keyword, Link::EMPTY);
+    screen.set_str_with((x, y), deps[0], WrapMode::Truncate, keyword.clone());
     x += deps[0].chars().count() as u16;
     screen.set_str((x, y), " and ", WrapMode::Truncate);
     x += 5;
-    screen.set_str_with((x, y), deps[1], WrapMode::Truncate, keyword, Link::EMPTY);
+    screen.set_str_with((x, y), deps[1], WrapMode::Truncate, keyword.clone());
     x += deps[1].chars().count() as u16;
     screen.set_str((x, y), "...", WrapMode::Truncate);
     y += 2;
@@ -245,13 +243,12 @@ fn draw_chosen<W: Write>(screen: &mut Screen<W>, s: &State) {
     let filled = (BAR_WIDTH as f32 * s.progress).round() as u16;
     let filled_str: String = "█".repeat(filled as usize);
     let empty_str: String = "░".repeat((BAR_WIDTH - filled) as usize);
-    screen.set_str_with((2, y), &filled_str, WrapMode::Truncate, bar_st, Link::EMPTY);
+    screen.set_str_with((2, y), &filled_str, WrapMode::Truncate, bar_st.clone());
     screen.set_str_with(
         (2 + filled, y),
         &empty_str,
         WrapMode::Truncate,
-        empty_st,
-        Link::EMPTY,
+        empty_st.clone(),
     );
     let pct = format!(" {:>3.0}%", s.progress * 100.0);
     screen.set_str((2 + BAR_WIDTH, y), &pct, WrapMode::Truncate);
@@ -260,7 +257,7 @@ fn draw_chosen<W: Write>(screen: &mut Screen<W>, s: &State) {
         y += 2;
         screen.set_str((2, y), "Exiting in", WrapMode::Truncate);
         let n = format!(" {} ", s.ticks);
-        screen.set_str_with((2 + 11, y), &n, WrapMode::Truncate, ticks_st, Link::EMPTY);
+        screen.set_str_with((2 + 11, y), &n, WrapMode::Truncate, ticks_st.clone());
         let after_x = 2 + 11 + n.chars().count() as u16;
         screen.set_str((after_x, y), "seconds", WrapMode::Truncate);
     }

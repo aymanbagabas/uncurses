@@ -6,9 +6,22 @@ pub use diff::*;
 pub use parse::*;
 pub use sgr::*;
 
+use std::rc::Rc;
+
 use bitflags::bitflags;
 
 use crate::color::Color;
+
+/// Hyperlink target carried by a [`Style`]. Stored behind an [`Rc`]
+/// so cells in a hyperlink span share a single allocation. Private
+/// to the style module — public callers interact with hyperlinks
+/// through [`Style::with_link`] and the [`Style::link_url`] /
+/// [`Style::link_params`] accessors.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct LinkData {
+    url: String,
+    params: String,
+}
 
 bitflags! {
     /// Text attribute flags.
@@ -38,14 +51,48 @@ pub enum UnderlineStyle {
     Dashed = 5,
 }
 
-/// A complete text style: colors, attributes, and underline style.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+/// A complete text style: colors, attributes, underline style, and
+/// optional hyperlink target. Cloning a styled cell only bumps the
+/// shared link refcount, so a long span of identically-linked cells
+/// keeps a single allocation.
+#[derive(Debug, Clone, Default)]
 pub struct Style {
     pub fg: Option<Color>,
     pub bg: Option<Color>,
     pub underline_color: Option<Color>,
     pub underline: UnderlineStyle,
     pub attrs: AttrFlags,
+    pub(crate) link: Option<Rc<LinkData>>,
+}
+
+impl PartialEq for Style {
+    fn eq(&self, other: &Self) -> bool {
+        self.fg == other.fg
+            && self.bg == other.bg
+            && self.underline_color == other.underline_color
+            && self.underline == other.underline
+            && self.attrs == other.attrs
+            && match (&self.link, &other.link) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b) || **a == **b,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for Style {}
+
+impl std::hash::Hash for Style {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.fg.hash(state);
+        self.bg.hash(state);
+        self.underline_color.hash(state);
+        self.underline.hash(state);
+        self.attrs.hash(state);
+        if let Some(l) = &self.link {
+            l.hash(state);
+        }
+    }
 }
 
 impl Style {
@@ -55,11 +102,18 @@ impl Style {
         underline_color: None,
         underline: UnderlineStyle::None,
         attrs: AttrFlags::empty(),
+        link: None,
     };
 
-    /// Whether this style has any non-default attributes.
+    /// Whether this style has no SGR-relevant settings (colors,
+    /// attributes, underline). The hyperlink does not factor in: it's
+    /// orthogonal to SGR and emitted via OSC 8.
     pub fn is_empty(&self) -> bool {
-        *self == Self::EMPTY
+        self.fg.is_none()
+            && self.bg.is_none()
+            && self.underline_color.is_none()
+            && self.underline == UnderlineStyle::None
+            && self.attrs.is_empty()
     }
 
     pub fn bold(mut self) -> Self {
@@ -125,6 +179,39 @@ impl Style {
     pub fn with_underline_style(mut self, style: UnderlineStyle) -> Self {
         self.underline = style;
         self
+    }
+
+    /// Attach a hyperlink to this style. Pass an empty `url` to clear
+    /// the link; `params` are OSC 8 parameter pairs (e.g. `"id=foo"`)
+    /// or empty.
+    pub fn with_link(mut self, url: impl Into<String>, params: impl Into<String>) -> Self {
+        let url = url.into();
+        if url.is_empty() {
+            self.link = None;
+        } else {
+            self.link = Some(Rc::new(LinkData {
+                url,
+                params: params.into(),
+            }));
+        }
+        self
+    }
+
+    /// The attached hyperlink URL, or `None` when no link is set.
+    pub fn link_url(&self) -> Option<&str> {
+        self.link.as_deref().map(|l| l.url.as_str())
+    }
+
+    /// The attached hyperlink parameters (e.g. `id=foo`), or `None`
+    /// when no link is set. Returns an empty string for a link with
+    /// no parameters.
+    pub fn link_params(&self) -> Option<&str> {
+        self.link.as_deref().map(|l| l.params.as_str())
+    }
+
+    /// Whether this style carries a hyperlink.
+    pub fn has_link(&self) -> bool {
+        self.link.is_some()
     }
 }
 

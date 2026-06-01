@@ -37,7 +37,6 @@ use std::sync::mpsc;
 use std::thread;
 
 use uncurses::SurfaceMut;
-use uncurses::cell::Link;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton, Source};
 use uncurses::screen::Screen;
@@ -285,7 +284,7 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
     let selected = Style::EMPTY
         .with_bg(Color::Basic(BasicColor::Blue))
         .with_fg(Color::Basic(BasicColor::BrightWhite));
-    let selected_dir = selected.bold();
+    let selected_dir = selected.clone().bold();
 
     // Header bar across full width.
     {
@@ -296,7 +295,7 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
         );
         let pad = clip_to(&pad, w);
         {
-            screen.set_str_with((0, 0), &pad, WrapMode::Truncate, header, Link::EMPTY);
+            screen.set_str_with((0, 0), &pad, WrapMode::Truncate, header.clone());
         };
     }
 
@@ -320,13 +319,13 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
             // pad the row so the selection bar covers the whole list column
             let padded = pad_to(&line, list_w);
             let style = match (idx == app.selected, entry.is_dir) {
-                (true, true) => selected_dir,
-                (true, false) => selected,
-                (false, true) => dir_style,
-                (false, false) => normal,
+                (true, true) => selected_dir.clone(),
+                (true, false) => selected.clone(),
+                (false, true) => dir_style.clone(),
+                (false, false) => normal.clone(),
             };
             {
-                screen.set_str_with((0, y), &padded, WrapMode::Truncate, style, Link::EMPTY);
+                screen.set_str_with((0, y), &padded, WrapMode::Truncate, style.clone());
             };
         }
     }
@@ -334,7 +333,7 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
     // Vertical divider.
     for row in 0..body_h {
         {
-            screen.set_str_with((list_w, row + 1), "│", WrapMode::Truncate, dim, Link::EMPTY);
+            screen.set_str_with((list_w, row + 1), "│", WrapMode::Truncate, dim.clone());
         };
     }
 
@@ -349,8 +348,7 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
                     (preview_x, row as u16 + 1),
                     &s,
                     WrapMode::Truncate,
-                    normal,
-                    Link::EMPTY,
+                    normal.clone(),
                 );
             };
         }
@@ -368,7 +366,6 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
         Style::EMPTY
             .with_bg(Color::Basic(BasicColor::BrightBlack))
             .with_fg(Color::Basic(BasicColor::White)),
-        Link::EMPTY,
     );
 }
 

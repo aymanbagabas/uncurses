@@ -248,7 +248,6 @@ pub const fn tab_cost(n: u16) -> usize {
 pub fn overwrite_cost(
     line: &[crate::cell::Cell],
     style: &crate::style::Style,
-    link: &crate::cell::Link,
     from: u16,
     to: u16,
 ) -> Option<usize> {
@@ -262,7 +261,7 @@ pub fn overwrite_cost(
     while i < to {
         let cell = &line[i];
         if cell.width() > 0 {
-            if cell.style() != style || cell.link() != link {
+            if cell.style() != style {
                 return None;
             }
             cost += cell.width() as usize;

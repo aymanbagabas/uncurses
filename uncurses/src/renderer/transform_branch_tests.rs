@@ -1,5 +1,5 @@
 use super::{Optimizations, RenderBuffer, Renderer};
-use crate::cell::{Cell, Link};
+use crate::cell::Cell;
 use crate::color::{BasicColor, Color};
 use crate::style::Style;
 
@@ -246,9 +246,9 @@ fn transform_osc8_link_open_and_close() {
     let mut renderer = renderer(width, 1, Optimizations::none());
     renderer.cur_buf = Some(RenderBuffer::new(width, 1));
 
-    let link = Link::new("https://example.test");
+    let linked_style = Style::EMPTY.with_link("https://example.test", "");
     let mut linked_buf = RenderBuffer::new(width, 1);
-    linked_buf.set_cell((0, 0), &Cell::new("L", 1).with_link(link));
+    linked_buf.set_cell((0, 0), &Cell::new("L", 1).with_style(linked_style));
     let open = transform_output(&mut renderer, &linked_buf);
     assert!(
         open.windows(b"\x1b]8;;https://example.test\x1b\\L".len())
@@ -270,7 +270,9 @@ fn transform_osc8_link_open_and_close() {
 #[test]
 fn reset_pen_closes_osc8_and_emits_sgr_reset() {
     let mut renderer = renderer(10, 1, Optimizations::none());
-    renderer.cur.set_link(Link::new("https://example.test"));
+    renderer
+        .cur
+        .set_style(Style::EMPTY.with_link("https://example.test", ""));
 
     let mut out = Vec::new();
     renderer.reset_pen(&mut out).unwrap();
@@ -335,9 +337,7 @@ fn clear_bottom_with_styled_blank() {
     let bg = Style::EMPTY.with_bg(Color::Basic(BasicColor::Blue));
     let blank = Cell::BLANK.with_style(bg);
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
-    renderer.cur.set_style(*blank.style());
-    renderer.cur.set_link(blank.link().clone());
-    renderer.cur.mark_pen_changed();
+    renderer.cur.set_style(blank.style().clone());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
@@ -371,9 +371,7 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
     let bg = Style::EMPTY.with_bg(Color::Basic(BasicColor::Blue));
     let blank = Cell::BLANK.with_style(bg);
     let mut renderer = renderer(width, height, Optimizations::none());
-    renderer.cur.set_style(*blank.style());
-    renderer.cur.set_link(blank.link().clone());
-    renderer.cur.mark_pen_changed();
+    renderer.cur.set_style(blank.style().clone());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {

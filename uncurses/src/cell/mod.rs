@@ -1,10 +1,6 @@
-mod link;
 pub mod segment;
 
-pub use link::*;
 pub use segment::graphemes;
-
-use std::rc::Rc;
 
 use compact_str::CompactString;
 
@@ -16,16 +12,11 @@ pub struct Cell {
     /// The grapheme cluster content. Empty string for a wide-cell
     /// continuation placeholder.
     content: CompactString,
-    /// Visual style. Stored inline; [`Style::EMPTY`] represents "no
-    /// style". The style is small (16 B) and `Copy`, so inlining
-    /// avoids per-cell allocation churn on the write path.
+    /// Visual style: colors, attributes, underline, and any attached
+    /// hyperlink. The link inside `style` is reference-counted so a
+    /// run of identically-linked cells shares a single allocation
+    /// without per-cell deep clones.
     style: Style,
-    /// OSC 8 hyperlink, ref-counted so cells in a hyperlink span can
-    /// share one allocation. Stored as `Some` only when the link is
-    /// non-empty; the [`Cell::link`] accessor returns [`Link::EMPTY`]
-    /// when this is `None`. Keep this invariant (set the field only
-    /// via [`Cell::with_link`]) so cell equality stays correct.
-    link: Option<Rc<Link>>,
     /// Display width: 1 for normal, 2 for wide, 0 for wide-char
     /// continuation. Pairs with [`Cell::content`]: width `0` always
     /// implies an empty content string.
@@ -35,14 +26,7 @@ pub struct Cell {
 impl PartialEq for Cell {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width
-            && self.style == other.style
-            && match (&self.link, &other.link) {
-                (None, None) => true,
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b) || **a == **b,
-                _ => false,
-            }
-            && self.content == other.content
+        self.width == other.width && self.style == other.style && self.content == other.content
     }
 }
 
@@ -59,7 +43,6 @@ impl Cell {
     pub const BLANK: Cell = Cell {
         content: CompactString::const_new(" "),
         style: Style::EMPTY,
-        link: None,
         width: 1,
     };
 
@@ -79,7 +62,6 @@ impl Cell {
         Cell {
             content: content.into(),
             style: Style::EMPTY,
-            link: None,
             width,
         }
     }
@@ -108,46 +90,16 @@ impl Cell {
         self.width
     }
 
-    /// The cell's style.
+    /// The cell's style (colors, attributes, underline, and any
+    /// attached hyperlink).
     #[inline]
     pub fn style(&self) -> &Style {
         &self.style
     }
 
-    /// The cell's hyperlink, or [`Link::EMPTY`] when none is set.
-    #[inline]
-    pub fn link(&self) -> &Link {
-        // A `static` is required (not `const`) to take a stable
-        // reference; `const` items synthesise a fresh value per use.
-        static EMPTY: Link = Link::EMPTY;
-        match &self.link {
-            Some(l) => l,
-            None => &EMPTY,
-        }
-    }
-
-    /// Whether a non-empty hyperlink is attached.
-    #[inline]
-    pub fn has_link(&self) -> bool {
-        self.link.is_some()
-    }
-
     /// Return a copy of this cell with the given style.
     pub fn with_style(mut self, style: Style) -> Self {
         self.style = style;
-        self
-    }
-
-    /// Return a copy of this cell with the given hyperlink. Empty
-    /// links collapse to `None` so the `None ⇔ empty` invariant holds;
-    /// an identical existing link is retained to keep the `Rc` shared
-    /// instead of allocating a fresh one.
-    pub fn with_link(mut self, link: Link) -> Self {
-        if link.is_empty() {
-            self.link = None;
-        } else if !matches!(&self.link, Some(rc) if **rc == link) {
-            self.link = Some(Rc::new(link));
-        }
         self
     }
 }

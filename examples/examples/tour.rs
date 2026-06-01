@@ -13,7 +13,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
-use uncurses::cell::{Cell, Link};
+use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::layout::Position;
@@ -67,11 +67,10 @@ fn paint_blank<W: Write>(screen: &mut Screen<W>) {
     screen.clear();
 }
 
-fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: Style) {
+fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
     let (x0, y0) = (a.x, a.y);
     let (x1, y1) = (a.x + BOX_W - 1, a.y + BOX_H - 1);
 
-    let painter_link = Link::EMPTY;
     let mut top = String::with_capacity(BOX_W as usize);
     top.push('┌');
     for _ in 0..BOX_W - 2 {
@@ -85,40 +84,16 @@ fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: Style) {
     }
     bot.push('┘');
 
-    screen.set_str_with(
-        (x0, y0),
-        &top,
-        WrapMode::Truncate,
-        style,
-        painter_link.clone(),
-    );
-    screen.set_str_with(
-        (x0, y1),
-        &bot,
-        WrapMode::Truncate,
-        style,
-        painter_link.clone(),
-    );
+    screen.set_str_with((x0, y0), &top, WrapMode::Truncate, style.clone());
+    screen.set_str_with((x0, y1), &bot, WrapMode::Truncate, style.clone());
     for y in y0 + 1..y1 {
-        screen.set_str_with(
-            (x0, y),
-            "│",
-            WrapMode::Truncate,
-            style,
-            painter_link.clone(),
-        );
-        screen.set_str_with(
-            (x1, y),
-            "│",
-            WrapMode::Truncate,
-            style,
-            painter_link.clone(),
-        );
+        screen.set_str_with((x0, y), "│", WrapMode::Truncate, style.clone());
+        screen.set_str_with((x1, y), "│", WrapMode::Truncate, style.clone());
     }
 }
 
-fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: Style) {
-    let cell = Cell::new(" ", 1).with_style(style);
+fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
+    let cell = Cell::new(" ", 1).with_style(style.clone());
     for y in a.y + 1..a.y + BOX_H - 1 {
         for x in a.x + 1..a.x + BOX_W - 1 {
             screen.set_cell(Position::new(x, y), &cell);
@@ -126,17 +101,16 @@ fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: Style) {
     }
 }
 
-fn write<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: Style) {
-    screen.set_str_with((x, y), s, WrapMode::Truncate, style, Link::EMPTY);
+fn write<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Style) {
+    screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone());
 }
 
-fn write_link<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: Style, url: &str) {
+fn write_link<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
     screen.set_str_with(
         (x, y),
         s,
         WrapMode::Truncate,
-        style,
-        Link::new(url.to_string()),
+        style.clone().with_link(url, ""),
     );
 }
 
@@ -145,7 +119,7 @@ fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
     let label_w = hint.chars().count() as i32;
     let center = a.x as i32 + BOX_W as i32 / 2;
     let lx = (center - label_w / 2).max(0) as u16;
-    write(screen, lx, a.y + BOX_H, hint, dim);
+    write(screen, lx, a.y + BOX_H, hint, &dim);
 }
 
 /// Drive a scene until the user presses a key or `dur` elapses (when
@@ -230,7 +204,7 @@ fn scene_sprinkles<W: Write>(
                 draw_box(
                     screen,
                     a,
-                    Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
+                    &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
                 );
                 footer(screen, a, "scene 1 / 6 — sprinkles");
             }
@@ -336,19 +310,19 @@ fn scene_panels<W: Write>(
             draw_box(
                 screen,
                 a,
-                Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
+                &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
             );
             for &(dx, dy, w, h, bg, fg, label, attr) in &panels {
                 let x = a.x + dx;
                 let y = a.y + dy;
                 let style = Style::EMPTY.with_bg(bg.into()).with_fg(fg.into());
-                let cell = Cell::new(" ", 1).with_style(style);
+                let cell = Cell::new(" ", 1).with_style(style.clone());
                 for yy in y..y + h {
                     for xx in x..x + w {
                         screen.set_cell(Position::new(xx, yy), &cell);
                     }
                 }
-                write(screen, x + 2, y + 1, label, attr(style));
+                write(screen, x + 2, y + 1, label, &attr(style));
             }
             footer(screen, a, "scene 2 / 6 — nested panels");
             Ok(())
@@ -398,8 +372,8 @@ fn scene_art<W: Write>(
                 }
                 if last_row == usize::MAX {
                     paint_blank(screen);
-                    fill_inside(screen, a, Style::EMPTY.with_bg(BasicColor::Black.into()));
-                    draw_box(screen, a, Style::EMPTY.with_fg(BasicColor::Red.into()));
+                    fill_inside(screen, a, &Style::EMPTY.with_bg(BasicColor::Black.into()));
+                    draw_box(screen, a, &Style::EMPTY.with_fg(BasicColor::Red.into()));
                     footer(screen, a, "scene 3 / 6 — line-by-line art");
                 }
                 last_row = row;
@@ -407,7 +381,7 @@ fn scene_art<W: Write>(
                     .with_fg(BasicColor::BrightWhite.into())
                     .with_bg(BasicColor::Black.into());
                 for (i, line) in ART.iter().take(row).enumerate() {
-                    write(screen, label_x, label_y + i as u16, line, style);
+                    write(screen, label_x, label_y + i as u16, line, &style);
                 }
             } else {
                 let phase = ((ms - draw_ms) / 250).is_multiple_of(2);
@@ -422,7 +396,7 @@ fn scene_art<W: Write>(
                     style = style.faint();
                 }
                 for (i, line) in ART.iter().enumerate() {
-                    write(screen, label_x, label_y + i as u16, line, style);
+                    write(screen, label_x, label_y + i as u16, line, &style);
                 }
             }
             Ok(())
@@ -449,11 +423,11 @@ fn scene_banner<W: Write>(
             draw_box(
                 screen,
                 a,
-                Style::EMPTY.with_fg(BasicColor::BrightCyan.into()),
+                &Style::EMPTY.with_fg(BasicColor::BrightCyan.into()),
             );
 
             let title = Style::EMPTY.with_fg(BasicColor::BrightWhite.into()).bold();
-            write(screen, a.x + 4, a.y + 1, "Style sampler", title);
+            write(screen, a.x + 4, a.y + 1, "Style sampler", &title);
 
             // Underline styles row.
             let row = a.y + 3;
@@ -462,76 +436,76 @@ fn scene_banner<W: Write>(
             let single = Style::EMPTY
                 .with_fg(BasicColor::BrightWhite.into())
                 .with_underline_style(UnderlineStyle::Single);
-            write(screen, col, row, "single", single);
+            write(screen, col, row, "single", &single);
 
             let double = Style::EMPTY
                 .with_fg(BasicColor::BrightWhite.into())
                 .with_underline_style(UnderlineStyle::Double)
                 .with_underline_color(BasicColor::Cyan.into());
-            write(screen, col + 10, row, "double", double);
+            write(screen, col + 10, row, "double", &double);
 
             let curly = Style::EMPTY
                 .with_fg(BasicColor::BrightWhite.into())
                 .with_underline_style(UnderlineStyle::Curly)
                 .with_underline_color(BasicColor::BrightRed.into());
-            write(screen, col + 20, row, "curly", curly);
+            write(screen, col + 20, row, "curly", &curly);
 
             let dotted = Style::EMPTY
                 .with_fg(BasicColor::BrightWhite.into())
                 .with_underline_style(UnderlineStyle::Dotted)
                 .with_underline_color(BasicColor::BrightYellow.into());
-            write(screen, col + 30, row, "dotted", dotted);
+            write(screen, col + 30, row, "dotted", &dotted);
 
             let dashed = Style::EMPTY
                 .with_fg(BasicColor::BrightWhite.into())
                 .with_underline_style(UnderlineStyle::Dashed)
                 .with_underline_color(BasicColor::BrightGreen.into());
-            write(screen, col + 40, row, "dashed", dashed);
+            write(screen, col + 40, row, "dashed", &dashed);
 
             // Text attributes row.
             let attr_row = a.y + 5;
             let white = || Style::EMPTY.with_fg(BasicColor::BrightWhite.into());
-            write(screen, col, attr_row, "bold", white().bold());
-            write(screen, col + 6, attr_row, "italic", white().italic());
-            write(screen, col + 14, attr_row, "faint", white().faint());
-            write(screen, col + 21, attr_row, " reverse ", white().reverse());
+            write(screen, col, attr_row, "bold", &white().bold());
+            write(screen, col + 6, attr_row, "italic", &white().italic());
+            write(screen, col + 14, attr_row, "faint", &white().faint());
+            write(screen, col + 21, attr_row, " reverse ", &white().reverse());
             write(
                 screen,
                 col + 32,
                 attr_row,
                 "strike",
-                white().strikethrough(),
+                &white().strikethrough(),
             );
-            write(screen, col + 40, attr_row, "blink", white().blink());
+            write(screen, col + 40, attr_row, "blink", &white().blink());
 
             // Spell-check look (curly red underline on a typo).
             let plain = white();
-            write(screen, col, a.y + 7, "spell-check look:", plain);
+            write(screen, col, a.y + 7, "spell-check look:", &plain);
             let typo = white()
                 .with_underline_style(UnderlineStyle::Curly)
                 .with_underline_color(BasicColor::BrightRed.into());
-            write(screen, col + 19, a.y + 7, "teh", typo);
-            write(screen, col + 23, a.y + 7, "quick brown fox", plain);
+            write(screen, col + 19, a.y + 7, "teh", &typo);
+            write(screen, col + 23, a.y + 7, "quick brown fox", &plain);
 
             // Mixed-style demo line: bold + italic + colored fg.
             let mixed = Style::EMPTY
                 .with_fg(BasicColor::BrightMagenta.into())
                 .bold()
                 .italic();
-            write(screen, col, a.y + 9, "bold + italic + magenta", mixed);
+            write(screen, col, a.y + 9, "bold + italic + magenta", &mixed);
 
             // Hyperlink line.
             let link_label = Style::EMPTY
                 .with_fg(BasicColor::BrightBlue.into())
                 .with_underline_style(UnderlineStyle::Single)
                 .bold();
-            write(screen, col, a.y + 11, "open the project page →", plain);
+            write(screen, col, a.y + 11, "open the project page →", &plain);
             write_link(
                 screen,
                 col + 24,
                 a.y + 11,
                 "click here",
-                link_label,
+                &link_label,
                 LINK_URL,
             );
 
@@ -611,7 +585,7 @@ fn scene_marquee<W: Write>(
             draw_box(
                 screen,
                 a,
-                Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
+                &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
             );
             footer(
                 screen,
@@ -629,7 +603,7 @@ fn scene_marquee<W: Write>(
         let row = a.y + BOX_H / 2;
         let blank = Style::EMPTY;
         let spaces: String = " ".repeat(inner_w);
-        write(screen, a.x + 2, row, &spaces, blank);
+        write(screen, a.x + 2, row, &spaces, &blank);
 
         let chars: Vec<char> = joined.chars().collect();
         for col in 0..inner_w {
@@ -647,7 +621,7 @@ fn scene_marquee<W: Write>(
                     break;
                 }
             }
-            write(screen, a.x + 2 + col as u16, row, s, style);
+            write(screen, a.x + 2 + col as u16, row, s, &style);
         }
         Ok(())
     })
@@ -707,7 +681,7 @@ fn scene_balls<W: Write>(
             draw_box(
                 screen,
                 a,
-                Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
+                &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
             );
             // Hint sits below the box; full interior is free for bouncing.
             footer(

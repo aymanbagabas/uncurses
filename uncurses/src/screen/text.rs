@@ -2,7 +2,6 @@
 
 use std::io::Write;
 
-use crate::cell::Link;
 use crate::layout::Rect;
 use crate::style::Style;
 use crate::text::{Painter, WidthMode, WrapMode};
@@ -12,9 +11,9 @@ use super::Screen;
 impl<W: Write> Screen<W> {
     /// Paint `s` into this screen starting at `pos`. See
     /// [`Painter::set_str`] for full semantics — inline SGR (`CSI … m`)
-    /// updates style mid-stream and inline OSC 8 sequences set a hyperlink
-    /// on subsequent cells. Returns the position immediately after the
-    /// last painted cell.
+    /// updates style mid-stream and inline OSC 8 sequences attach a
+    /// hyperlink to subsequent cells. Returns the position immediately
+    /// after the last painted cell.
     ///
     /// ```ignore
     /// screen.set_str((0, 0), "hi", WrapMode::Truncate);
@@ -32,22 +31,21 @@ impl<W: Write> Screen<W> {
             .set_str(pos, s, wrap)
     }
 
-    /// Like [`Self::set_str`] but starts with the given `style` and
-    /// `link` instead of empty defaults. Inline SGR/OSC 8 sequences in
-    /// `s` still mutate the painter's state as they're encountered.
+    /// Like [`Self::set_str`] but starts with the given `style` instead
+    /// of [`Style::EMPTY`]. Inline SGR/OSC 8 sequences in `s` still
+    /// mutate the painter's state as they're encountered.
     pub fn set_str_with(
         &mut self,
         pos: impl Into<crate::Position>,
         s: &str,
         wrap: WrapMode,
         style: Style,
-        link: Link,
     ) -> crate::Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide);
         Painter::new(self)
             .with_mode(mode)
             .with_eaw_wide(eaw)
-            .set_str_with(pos, s, wrap, style, link)
+            .set_str_with(pos, s, wrap, style)
     }
 
     /// Paint `s` clipped to `rect` (in the screen's own coordinate
@@ -66,21 +64,20 @@ impl<W: Write> Screen<W> {
             .set_str_rect(rect, s, wrap)
     }
 
-    /// Like [`Self::set_str_rect`] but starts with the given `style` and
-    /// `link` instead of empty defaults.
+    /// Like [`Self::set_str_rect`] but starts with the given `style`
+    /// instead of [`Style::EMPTY`].
     pub fn set_str_rect_with(
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
         style: Style,
-        link: Link,
     ) -> crate::Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide);
         Painter::new(self)
             .with_mode(mode)
             .with_eaw_wide(eaw)
-            .set_str_rect_with(rect, s, wrap, style, link)
+            .set_str_rect_with(rect, s, wrap, style)
     }
 
     /// The width-calculation mode the screen currently uses. Derived

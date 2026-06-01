@@ -12,15 +12,16 @@
 //! ```
 //!
 //! Inline SGR sequences update the painter's current [`Style`]; OSC 8
-//! sequences update its current [`Link`]. The state persists across
-//! calls so a single painter can stitch many styled segments together.
-//! Call [`Painter::reset`] to clear both back to their empty values.
+//! sequences attach a hyperlink to subsequent cells via the same
+//! [`Style`]. The state persists across calls so a single painter can
+//! stitch many styled segments together. Call [`Painter::reset`] to
+//! clear the style back to its empty value.
 
 use crate::ansi::hyperlink::parse_hyperlink;
 use crate::ansi::params::Params;
 use crate::ansi::text::{Token, tokenize};
 use crate::buffer::SurfaceMut;
-use crate::cell::{Cell, Link};
+use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 use crate::style::{Style, read_style};
 
@@ -43,29 +44,28 @@ pub enum WrapMode {
 ///
 /// The painter is parameterised by a [`WidthMode`] and an East-Asian
 /// Ambiguous policy (`eaw_wide`) — both fixed for the lifetime of the
-/// painter — plus a *current* [`Style`] and [`Link`] that are mutated
-/// in-place when the input contains `CSI … m` or `OSC 8 ; … ; … ST`
-/// sequences. The current state persists across [`set_str`](Self::set_str)
-/// /[`set_str_rect`](Self::set_str_rect) calls; use [`reset`](Self::reset)
-/// to clear it.
+/// painter — plus a *current* [`Style`] (including any active
+/// hyperlink) that is mutated in-place when the input contains
+/// `CSI … m` or `OSC 8 ; … ; … ST` sequences. The current state
+/// persists across [`set_str`](Self::set_str) /
+/// [`set_str_rect`](Self::set_str_rect) calls; use
+/// [`reset`](Self::reset) to clear it.
 pub struct Painter<'s, S: SurfaceMut + ?Sized> {
     target: &'s mut S,
     mode: WidthMode,
     eaw_wide: bool,
     style: Style,
-    link: Link,
 }
 
 impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     /// New painter writing into `target` with default [`WidthMode`],
-    /// `eaw_wide = false`, and empty current style + link.
+    /// `eaw_wide = false`, and an empty current style.
     pub fn new(target: &'s mut S) -> Self {
         Self {
             target,
             mode: WidthMode::default(),
             eaw_wide: false,
             style: Style::EMPTY,
-            link: Link::EMPTY,
         }
     }
 
@@ -81,11 +81,10 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         self
     }
 
-    /// Clear the current style and link back to [`Style::EMPTY`] /
-    /// [`Link::EMPTY`]. Returns `&mut self` for chaining.
+    /// Clear the current style back to [`Style::EMPTY`]. Returns
+    /// `&mut self` for chaining.
     pub fn reset(&mut self) -> &mut Self {
         self.style = Style::EMPTY;
-        self.link = Link::EMPTY;
         self
     }
 
@@ -99,24 +98,20 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         self.eaw_wide
     }
 
-    /// The painter's current style (mutated by inline SGR).
-    pub fn style(&self) -> Style {
-        self.style
-    }
-
-    /// The painter's current link (mutated by inline OSC 8).
-    pub fn link(&self) -> &Link {
-        &self.link
+    /// The painter's current style (mutated by inline SGR and OSC 8).
+    pub fn style(&self) -> &Style {
+        &self.style
     }
 
     /// Paint `s` starting at `pos`, clipped to the target's bounds.
     ///
     /// Inline SGR (`CSI … m`) updates the painter's style; inline OSC 8
-    /// updates its link. `\n` advances to the next row at the bounds'
-    /// left edge; `\r` returns to that left edge on the current row.
-    /// `wrap` controls behaviour when a cluster would cross the right
-    /// edge: [`WrapMode::Truncate`] stops, [`WrapMode::Wrap`] continues
-    /// on the next row until the bottom edge is reached.
+    /// attaches a hyperlink to the same style. `\n` advances to the
+    /// next row at the bounds' left edge; `\r` returns to that left
+    /// edge on the current row. `wrap` controls behaviour when a
+    /// cluster would cross the right edge: [`WrapMode::Truncate`]
+    /// stops, [`WrapMode::Wrap`] continues on the next row until the
+    /// bottom edge is reached.
     ///
     /// Returns the position immediately after the last written cell.
     pub fn set_str(&mut self, pos: impl Into<Position>, s: &str, wrap: WrapMode) -> Position {
@@ -125,18 +120,16 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     }
 
     /// Like [`set_str`](Self::set_str) but resets the painter's current
-    /// style + link to `style` + `link` before painting. The painter's
-    /// state may be further mutated by inline SGR/OSC 8 in `s`.
+    /// style to `style` before painting. The painter's state may be
+    /// further mutated by inline SGR/OSC 8 in `s`.
     pub fn set_str_with(
         &mut self,
         pos: impl Into<Position>,
         s: &str,
         wrap: WrapMode,
         style: Style,
-        link: Link,
     ) -> Position {
         self.style = style;
-        self.link = link;
         self.set_str(pos, s, wrap)
     }
 
@@ -153,18 +146,15 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     }
 
     /// Like [`set_str_rect`](Self::set_str_rect) but resets the
-    /// painter's current style + link to `style` + `link` before
-    /// painting.
+    /// painter's current style to `style` before painting.
     pub fn set_str_rect_with(
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
         style: Style,
-        link: Link,
     ) -> Position {
         self.style = style;
-        self.link = link;
         self.set_str_rect(rect, s, wrap)
     }
 
@@ -190,7 +180,7 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
                         }
                         continue;
                     }
-                    flush_pending(self.target, &mut pending, clip, &self.style, &self.link);
+                    flush_pending(self.target, &mut pending, clip, &self.style);
 
                     if x + cw as u16 > clip.right() {
                         match wrap {
@@ -214,21 +204,17 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
                     if seq.last() == Some(&b'm')
                         && let Some(body) = csi_body(seq)
                     {
-                        flush_pending(self.target, &mut pending, clip, &self.style, &self.link);
+                        flush_pending(self.target, &mut pending, clip, &self.style);
                         read_style(Params::from_raw(body), &mut self.style);
                     } else if let Some(body) = osc_body(seq)
                         && let Some((params, url)) = parse_hyperlink(body)
                     {
-                        flush_pending(self.target, &mut pending, clip, &self.style, &self.link);
-                        self.link = if url.is_empty() {
-                            Link::EMPTY
-                        } else {
-                            Link::new(url).with_params(params)
-                        };
+                        flush_pending(self.target, &mut pending, clip, &self.style);
+                        self.style = self.style.clone().with_link(url, params);
                     }
                 }
                 Token::Control(0x0A) => {
-                    flush_pending(self.target, &mut pending, clip, &self.style, &self.link);
+                    flush_pending(self.target, &mut pending, clip, &self.style);
                     y = y.saturating_add(1);
                     x = clip.left();
                     if y >= clip.bottom() {
@@ -236,13 +222,13 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
                     }
                 }
                 Token::Control(0x0D) => {
-                    flush_pending(self.target, &mut pending, clip, &self.style, &self.link);
+                    flush_pending(self.target, &mut pending, clip, &self.style);
                     x = clip.left();
                 }
                 Token::Control(_) => {}
             }
         }
-        flush_pending(self.target, &mut pending, clip, &self.style, &self.link);
+        flush_pending(self.target, &mut pending, clip, &self.style);
         Position::new(x, y)
     }
 }
@@ -252,21 +238,15 @@ fn flush_pending<S: SurfaceMut + ?Sized>(
     pending: &mut Option<(u16, u16, String, u8)>,
     clip: Rect,
     style: &Style,
-    link: &Link,
 ) {
     if let Some((px, py, content, w)) = pending.take()
         && clip.contains(Position::new(px, py))
     {
-        target.set_cell(Position::new(px, py), &make_cell(&content, w, style, link));
+        target.set_cell(
+            Position::new(px, py),
+            &Cell::new(&*content, w).with_style(style.clone()),
+        );
     }
-}
-
-fn make_cell(content: &str, width: u8, style: &Style, link: &Link) -> Cell {
-    let mut cell = Cell::new(content, width).with_style(*style);
-    if !link.is_empty() {
-        cell = cell.with_link(link.clone());
-    }
-    cell
 }
 
 /// Return the body of a CSI sequence (between introducer and final byte).
@@ -374,8 +354,8 @@ mod tests {
             "\x1b]8;;https://x\x1b\\a\x1b]8;;\x1b\\b",
             WrapMode::Truncate,
         );
-        assert_eq!(cell_at(&b, 0, 0).link().url, "https://x");
-        assert!(!cell_at(&b, 1, 0).has_link());
+        assert_eq!(cell_at(&b, 0, 0).style().link_url(), Some("https://x"));
+        assert!(!cell_at(&b, 1, 0).style().has_link());
     }
 
     #[test]
@@ -389,8 +369,8 @@ mod tests {
             "\x1b]8;;https://x\x1b\\a\x1b]8;garbage\x1b\\b",
             WrapMode::Truncate,
         );
-        assert_eq!(cell_at(&b, 0, 0).link().url, "https://x");
-        assert_eq!(cell_at(&b, 1, 0).link().url, "https://x");
+        assert_eq!(cell_at(&b, 0, 0).style().link_url(), Some("https://x"));
+        assert_eq!(cell_at(&b, 1, 0).style().link_url(), Some("https://x"));
     }
 
     #[test]
@@ -479,21 +459,14 @@ mod tests {
             (0, 0),
             "a",
             WrapMode::Truncate,
-            Style::EMPTY.bold(),
-            Link::new("https://x"),
+            Style::EMPTY.bold().with_link("https://x", ""),
         );
         assert!(cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 0, 0).link().url, "https://x");
-        // Second call with `_with` and empty style/link must reset.
-        Painter::new(&mut b).set_str_with(
-            (1, 0),
-            "b",
-            WrapMode::Truncate,
-            Style::EMPTY,
-            Link::EMPTY,
-        );
+        assert_eq!(cell_at(&b, 0, 0).style().link_url(), Some("https://x"));
+        // Second call with `_with` and an empty style must reset.
+        Painter::new(&mut b).set_str_with((1, 0), "b", WrapMode::Truncate, Style::EMPTY);
         assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).has_link());
+        assert!(!cell_at(&b, 1, 0).style().has_link());
     }
 
     #[test]
@@ -517,14 +490,14 @@ mod tests {
             WrapMode::Truncate,
         );
         assert!(p.style().attrs.contains(AttrFlags::BOLD));
-        assert_eq!(p.link().url, "https://x");
+        assert_eq!(p.style().link_url(), Some("https://x"));
         p.reset();
         assert!(p.style().is_empty());
-        assert!(p.link().is_empty());
+        assert!(!p.style().has_link());
         // Subsequent paint reflects the reset.
         p.set_str((1, 0), "b", WrapMode::Truncate);
         assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).has_link());
+        assert!(!cell_at(&b, 1, 0).style().has_link());
     }
 
     #[test]

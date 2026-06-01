@@ -18,7 +18,7 @@ use crate::style::{AttrFlags, UnderlineStyle};
 /// The cell must always be a plain space, with no link, no underline,
 /// and only "invisible-on-blank" attributes (bold/faint/italic/blink).
 pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
-    if cell.width() != 1 || cell.content() != " " || cell.has_link() {
+    if cell.width() != 1 || cell.content() != " " || cell.style().has_link() {
         return false;
     }
     let allowed_attrs = AttrFlags::BOLD
@@ -50,7 +50,6 @@ pub(super) fn cells_equal_blank(cell: &Cell, blank: &Cell) -> bool {
             || (cell.content().is_empty() && blank.content() == " ")
             || (cell.content() == " " && blank.content().is_empty()))
         && cell.style() == blank.style()
-        && cell.link() == blank.link()
 }
 
 /// Whether `bytes` is safe to repeat with the REP escape.
