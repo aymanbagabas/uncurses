@@ -249,9 +249,9 @@ fn scene_panels<W: Write>(
         &'static str,
         PanelAttr,
     );
-    let id_attr: PanelAttr = |s| s.italic();
-    let bd_attr: PanelAttr = |s| s.bold();
-    let mx_attr: PanelAttr = |s| s.bold().italic();
+    let id_attr: PanelAttr = |s| s.with_italic();
+    let bd_attr: PanelAttr = |s| s.with_bold();
+    let mx_attr: PanelAttr = |s| s.with_bold().with_italic();
     let mut panels: Vec<Panel> = vec![
         (
             4,
@@ -393,7 +393,7 @@ fn scene_art<W: Write>(
                     .with_fg(BasicColor::BrightWhite.into())
                     .with_bg(BasicColor::Black.into());
                 if phase {
-                    style = style.faint();
+                    style = style.with_faint();
                 }
                 for (i, line) in ART.iter().enumerate() {
                     write(screen, label_x, label_y + i as u16, line, &style);
@@ -426,7 +426,9 @@ fn scene_banner<W: Write>(
                 &Style::EMPTY.with_fg(BasicColor::BrightCyan.into()),
             );
 
-            let title = Style::EMPTY.with_fg(BasicColor::BrightWhite.into()).bold();
+            let title = Style::EMPTY
+                .with_fg(BasicColor::BrightWhite.into())
+                .with_bold();
             write(screen, a.x + 4, a.y + 1, "Style sampler", &title);
 
             // Underline styles row.
@@ -465,18 +467,24 @@ fn scene_banner<W: Write>(
             // Text attributes row.
             let attr_row = a.y + 5;
             let white = || Style::EMPTY.with_fg(BasicColor::BrightWhite.into());
-            write(screen, col, attr_row, "bold", &white().bold());
-            write(screen, col + 6, attr_row, "italic", &white().italic());
-            write(screen, col + 14, attr_row, "faint", &white().faint());
-            write(screen, col + 21, attr_row, " reverse ", &white().reverse());
+            write(screen, col, attr_row, "bold", &white().with_bold());
+            write(screen, col + 6, attr_row, "italic", &white().with_italic());
+            write(screen, col + 14, attr_row, "faint", &white().with_faint());
+            write(
+                screen,
+                col + 21,
+                attr_row,
+                " reverse ",
+                &white().with_reverse(),
+            );
             write(
                 screen,
                 col + 32,
                 attr_row,
                 "strike",
-                &white().strikethrough(),
+                &white().with_strikethrough(),
             );
-            write(screen, col + 40, attr_row, "blink", &white().blink());
+            write(screen, col + 40, attr_row, "blink", &white().with_blink());
 
             // Spell-check look (curly red underline on a typo).
             let plain = white();
@@ -490,15 +498,15 @@ fn scene_banner<W: Write>(
             // Mixed-style demo line: bold + italic + colored fg.
             let mixed = Style::EMPTY
                 .with_fg(BasicColor::BrightMagenta.into())
-                .bold()
-                .italic();
+                .with_bold()
+                .with_italic();
             write(screen, col, a.y + 9, "bold + italic + magenta", &mixed);
 
             // Hyperlink line.
             let link_label = Style::EMPTY
                 .with_fg(BasicColor::BrightBlue.into())
                 .with_underline_style(UnderlineStyle::Single)
-                .bold();
+                .with_bold();
             write(screen, col, a.y + 11, "open the project page →", &plain);
             write_link(
                 screen,
@@ -719,7 +727,7 @@ fn scene_balls<W: Write>(
         for ball in &balls {
             let cx = a.x + 1 + ball.x as u16;
             let cy = a.y + 1 + ball.y as u16;
-            let style = Style::EMPTY.with_fg(ball.color.into()).bold();
+            let style = Style::EMPTY.with_fg(ball.color.into()).with_bold();
             let cell = Cell::new(ball.glyph, 1).with_style(style);
             screen.set_cell(Position::new(cx, cy), &cell);
         }

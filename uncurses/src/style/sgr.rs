@@ -78,7 +78,7 @@ pub(super) fn push_sep<const N: usize>(buf: &mut SmallSeq<N>, body_start: usize)
 /// Write a style as a *single* CSI ... m sequence with all attrs, underline,
 /// fg, bg and underline-color joined by `;`.
 pub fn write_style<W: Write>(w: &mut W, style: &Style) -> io::Result<()> {
-    if style.is_empty() {
+    if style.is_sgr_empty() {
         return w.write_all(RESET);
     }
 
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_write_bold() {
         let mut buf = Vec::new();
-        write_style(&mut buf, &Style::EMPTY.bold()).unwrap();
+        write_style(&mut buf, &Style::EMPTY.with_bold()).unwrap();
         assert_eq!(buf, b"\x1b[1m");
     }
 
@@ -251,8 +251,8 @@ mod tests {
     fn test_write_combined_single_csi() {
         let mut buf = Vec::new();
         let s = Style::EMPTY
-            .bold()
-            .italic()
+            .with_bold()
+            .with_italic()
             .with_fg(Color::Basic(BasicColor::Red))
             .with_bg(Color::Indexed(42));
         write_style(&mut buf, &s).unwrap();

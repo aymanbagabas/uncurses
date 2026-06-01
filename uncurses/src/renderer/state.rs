@@ -88,11 +88,6 @@ impl Cursor {
         self.mark_pen_changed();
     }
 
-    /// Whether the active pen carries a hyperlink.
-    pub(super) fn has_link(&self) -> bool {
-        self.style.has_link()
-    }
-
     /// Invalidate the cached pen-derived blanks so the next
     /// [`Cursor::current_blank`] / [`Cursor::bce_blank`] call rebuilds.
     /// Called automatically by [`Cursor::set_style`].

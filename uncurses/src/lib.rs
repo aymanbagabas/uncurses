@@ -23,7 +23,7 @@
 //!
 //! let mut screen = Screen::new(std::io::stdout()).with_size(80, 24);
 //! let style = Style::EMPTY
-//!     .bold()
+//!     .with_bold()
 //!     .with_fg(Color::Basic(BasicColor::Green));
 //! screen.set_str_with((0, 0), "Hello, terminal!", WrapMode::Truncate, style);
 //!

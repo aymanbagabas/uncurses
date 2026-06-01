@@ -283,7 +283,7 @@ fn reset_pen_closes_osc8_and_emits_sgr_reset() {
         std::str::from_utf8(&out)
     );
     assert!(
-        !renderer.cur.has_link(),
+        renderer.cur.style().link().is_none(),
         "link tracking should be cleared after reset_pen"
     );
 }

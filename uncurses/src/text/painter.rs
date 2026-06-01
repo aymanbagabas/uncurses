@@ -354,8 +354,8 @@ mod tests {
             "\x1b]8;;https://x\x1b\\a\x1b]8;;\x1b\\b",
             WrapMode::Truncate,
         );
-        assert_eq!(cell_at(&b, 0, 0).style().link_url(), Some("https://x"));
-        assert!(!cell_at(&b, 1, 0).style().has_link());
+        assert_eq!(cell_at(&b, 0, 0).style().link(), Some(("https://x", "")));
+        assert!(cell_at(&b, 1, 0).style().link().is_none());
     }
 
     #[test]
@@ -369,8 +369,8 @@ mod tests {
             "\x1b]8;;https://x\x1b\\a\x1b]8;garbage\x1b\\b",
             WrapMode::Truncate,
         );
-        assert_eq!(cell_at(&b, 0, 0).style().link_url(), Some("https://x"));
-        assert_eq!(cell_at(&b, 1, 0).style().link_url(), Some("https://x"));
+        assert_eq!(cell_at(&b, 0, 0).style().link(), Some(("https://x", "")));
+        assert_eq!(cell_at(&b, 1, 0).style().link(), Some(("https://x", "")));
     }
 
     #[test]
@@ -459,14 +459,14 @@ mod tests {
             (0, 0),
             "a",
             WrapMode::Truncate,
-            Style::EMPTY.bold().with_link("https://x", ""),
+            Style::EMPTY.with_bold().with_link("https://x", ""),
         );
         assert!(cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 0, 0).style().link_url(), Some("https://x"));
+        assert_eq!(cell_at(&b, 0, 0).style().link(), Some(("https://x", "")));
         // Second call with `_with` and an empty style must reset.
         Painter::new(&mut b).set_str_with((1, 0), "b", WrapMode::Truncate, Style::EMPTY);
         assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).style().has_link());
+        assert!(cell_at(&b, 1, 0).style().link().is_none());
     }
 
     #[test]
@@ -490,14 +490,14 @@ mod tests {
             WrapMode::Truncate,
         );
         assert!(p.style().attrs.contains(AttrFlags::BOLD));
-        assert_eq!(p.style().link_url(), Some("https://x"));
+        assert_eq!(p.style().link(), Some(("https://x", "")));
         p.reset();
         assert!(p.style().is_empty());
-        assert!(!p.style().has_link());
+        assert!(p.style().link().is_none());
         // Subsequent paint reflects the reset.
         p.set_str((1, 0), "b", WrapMode::Truncate);
         assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).style().has_link());
+        assert!(cell_at(&b, 1, 0).style().link().is_none());
     }
 
     #[test]

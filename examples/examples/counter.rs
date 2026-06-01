@@ -122,7 +122,7 @@ fn redraw<W: Write>(screen: &mut Screen<W>, count: u32) {
     let button = Style::EMPTY
         .with_fg(BasicColor::BrightWhite.into())
         .with_bg(BasicColor::Blue.into())
-        .bold();
+        .with_bold();
     screen.set_str_with((x, y), &inner, WrapMode::Truncate, button);
 
     let help = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());

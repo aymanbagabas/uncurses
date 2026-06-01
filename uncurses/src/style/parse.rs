@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn reset() {
-        let mut s = Style::EMPTY.bold();
+        let mut s = Style::EMPTY.with_bold();
         read_style(Params::from_raw(b"0"), &mut s);
         assert!(s.is_empty());
     }
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(rs(b"4:3").underline, UnderlineStyle::Curly);
         assert_eq!(rs(b"4").underline, UnderlineStyle::Single);
 
-        let mut s = Style::EMPTY.underline();
+        let mut s = Style::EMPTY.with_underline();
         read_style(Params::from_raw(b"24"), &mut s);
         assert_eq!(s.underline, UnderlineStyle::None);
     }
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn clear_bold_keeps_faint_off() {
         // `22` should clear both bold and faint.
-        let mut s = Style::EMPTY.bold().faint();
+        let mut s = Style::EMPTY.with_bold().with_faint();
         read_style(Params::from_raw(b"22"), &mut s);
         assert!(!s.attrs.contains(AttrFlags::BOLD));
         assert!(!s.attrs.contains(AttrFlags::FAINT));
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn empty_params_resets() {
-        let mut s = Style::EMPTY.bold();
+        let mut s = Style::EMPTY.with_bold();
         read_style(Params::EMPTY, &mut s);
         assert!(s.is_empty());
     }
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn omitted_top_level_param_acts_as_reset() {
         // `CSI ; m` — leading empty slot decodes as `0` ⇒ reset.
-        let mut s = Style::EMPTY.bold();
+        let mut s = Style::EMPTY.with_bold();
         read_style(Params::from_raw(b";"), &mut s);
         assert!(s.is_empty());
     }

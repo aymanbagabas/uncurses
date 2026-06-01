@@ -25,7 +25,7 @@ fn test_post_scroll_splitter_chain_emits_correct_horizontal_back() {
     let mut rb = RenderBuffer::new(120, 50);
 
     let splitter_col: u16 = 55;
-    let dim_splitter = Cell::new("│", 1).with_style(Style::EMPTY.faint());
+    let dim_splitter = Cell::new("│", 1).with_style(Style::EMPTY.with_faint());
 
     // Frame 1: priming render so cur_buf is initialised. Just put a
     // splitter on row 0 so render() has at least one change.

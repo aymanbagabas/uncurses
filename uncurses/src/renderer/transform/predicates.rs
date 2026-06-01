@@ -18,7 +18,7 @@ use crate::style::{AttrFlags, UnderlineStyle};
 /// The cell must always be a plain space, with no link, no underline,
 /// and only "invisible-on-blank" attributes (bold/faint/italic/blink).
 pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
-    if cell.width() != 1 || cell.content() != " " || cell.style().has_link() {
+    if cell.width() != 1 || cell.content() != " " || !cell.style().is_link_empty() {
         return false;
     }
     let allowed_attrs = AttrFlags::BOLD

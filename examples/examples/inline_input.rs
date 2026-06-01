@@ -181,7 +181,7 @@ fn redraw<W: std::io::Write>(screen: &mut Screen<W>, buf: &Buffer) {
         (cursor_x, buf.row as u16),
         &cursor_ch.to_string(),
         WrapMode::Truncate,
-        Style::EMPTY.reverse(),
+        Style::EMPTY.with_reverse(),
     );
 }
 

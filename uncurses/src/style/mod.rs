@@ -15,8 +15,7 @@ use crate::color::Color;
 /// Hyperlink target carried by a [`Style`]. Stored behind an [`Rc`]
 /// so cells in a hyperlink span share a single allocation. Private
 /// to the style module — public callers interact with hyperlinks
-/// through [`Style::with_link`] and the [`Style::link_url`] /
-/// [`Style::link_params`] accessors.
+/// through [`Style::with_link`] and [`Style::link`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct LinkData {
     url: String,
@@ -105,10 +104,16 @@ impl Style {
         link: None,
     };
 
-    /// Whether this style has no SGR-relevant settings (colors,
-    /// attributes, underline). The hyperlink does not factor in: it's
-    /// orthogonal to SGR and emitted via OSC 8.
+    /// Whether this style is entirely empty — no colors, attributes,
+    /// underline, or hyperlink. Equivalent to `*self == Style::EMPTY`.
     pub fn is_empty(&self) -> bool {
+        self.is_sgr_empty() && self.is_link_empty()
+    }
+
+    /// Whether this style has no SGR-relevant settings (colors,
+    /// attributes, underline). The hyperlink is intentionally
+    /// ignored — it's orthogonal to SGR and emitted via OSC 8.
+    pub(crate) fn is_sgr_empty(&self) -> bool {
         self.fg.is_none()
             && self.bg.is_none()
             && self.underline_color.is_none()
@@ -116,47 +121,54 @@ impl Style {
             && self.attrs.is_empty()
     }
 
-    pub fn bold(mut self) -> Self {
+    /// Whether this style carries no hyperlink. Companion to
+    /// [`Style::is_sgr_empty`]; together they decide whether the
+    /// style would emit any bytes at all.
+    pub(crate) fn is_link_empty(&self) -> bool {
+        self.link.is_none()
+    }
+
+    pub fn with_bold(mut self) -> Self {
         self.attrs |= AttrFlags::BOLD;
         self
     }
 
-    pub fn faint(mut self) -> Self {
+    pub fn with_faint(mut self) -> Self {
         self.attrs |= AttrFlags::FAINT;
         self
     }
 
-    pub fn italic(mut self) -> Self {
+    pub fn with_italic(mut self) -> Self {
         self.attrs |= AttrFlags::ITALIC;
         self
     }
 
-    pub fn underline(mut self) -> Self {
+    pub fn with_underline(mut self) -> Self {
         self.underline = UnderlineStyle::Single;
         self
     }
 
-    pub fn strikethrough(mut self) -> Self {
+    pub fn with_strikethrough(mut self) -> Self {
         self.attrs |= AttrFlags::STRIKETHROUGH;
         self
     }
 
-    pub fn blink(mut self) -> Self {
+    pub fn with_blink(mut self) -> Self {
         self.attrs |= AttrFlags::SLOW_BLINK;
         self
     }
 
-    pub fn rapid_blink(mut self) -> Self {
+    pub fn with_rapid_blink(mut self) -> Self {
         self.attrs |= AttrFlags::RAPID_BLINK;
         self
     }
 
-    pub fn reverse(mut self) -> Self {
+    pub fn with_reverse(mut self) -> Self {
         self.attrs |= AttrFlags::REVERSE;
         self
     }
 
-    pub fn conceal(mut self) -> Self {
+    pub fn with_conceal(mut self) -> Self {
         self.attrs |= AttrFlags::CONCEAL;
         self
     }
@@ -203,21 +215,12 @@ impl Style {
         self
     }
 
-    /// The attached hyperlink URL, or `None` when no link is set.
-    pub fn link_url(&self) -> Option<&str> {
-        self.link.as_deref().map(|l| l.url.as_str())
-    }
-
-    /// The attached hyperlink parameters (e.g. `id=foo`), or `None`
-    /// when no link is set. Returns an empty string for a link with
-    /// no parameters.
-    pub fn link_params(&self) -> Option<&str> {
-        self.link.as_deref().map(|l| l.params.as_str())
-    }
-
-    /// Whether this style carries a hyperlink.
-    pub fn has_link(&self) -> bool {
-        self.link.is_some()
+    /// The attached hyperlink as `(url, params)`, or `None` when no
+    /// link is set. `params` is empty when the link has none.
+    pub fn link(&self) -> Option<(&str, &str)> {
+        self.link
+            .as_deref()
+            .map(|l| (l.url.as_str(), l.params.as_str()))
     }
 
     /// Foreground color, if any.
@@ -244,6 +247,42 @@ impl Style {
     pub fn attrs(&self) -> AttrFlags {
         self.attrs
     }
+
+    pub fn is_bold(&self) -> bool {
+        self.attrs.contains(AttrFlags::BOLD)
+    }
+
+    pub fn is_faint(&self) -> bool {
+        self.attrs.contains(AttrFlags::FAINT)
+    }
+
+    pub fn is_italic(&self) -> bool {
+        self.attrs.contains(AttrFlags::ITALIC)
+    }
+
+    pub fn is_underlined(&self) -> bool {
+        self.underline != UnderlineStyle::None
+    }
+
+    pub fn is_strikethrough(&self) -> bool {
+        self.attrs.contains(AttrFlags::STRIKETHROUGH)
+    }
+
+    pub fn is_blinking(&self) -> bool {
+        self.attrs.contains(AttrFlags::SLOW_BLINK)
+    }
+
+    pub fn is_rapid_blinking(&self) -> bool {
+        self.attrs.contains(AttrFlags::RAPID_BLINK)
+    }
+
+    pub fn is_reversed(&self) -> bool {
+        self.attrs.contains(AttrFlags::REVERSE)
+    }
+
+    pub fn is_concealed(&self) -> bool {
+        self.attrs.contains(AttrFlags::CONCEAL)
+    }
 }
 
 #[cfg(test)]
@@ -260,12 +299,26 @@ mod tests {
     #[test]
     fn test_style_builder() {
         let s = Style::EMPTY
-            .bold()
-            .italic()
+            .with_bold()
+            .with_italic()
             .with_fg(Color::Basic(BasicColor::Red));
         assert!(s.attrs.contains(AttrFlags::BOLD));
         assert!(s.attrs.contains(AttrFlags::ITALIC));
         assert_eq!(s.fg, Some(Color::Basic(BasicColor::Red)));
         assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn with_link_empty_url_clears() {
+        let s = Style::EMPTY.with_link("https://x", "id=42");
+        assert_eq!(s.link(), Some(("https://x", "id=42")));
+
+        // Empty url clears, regardless of params.
+        let s = s.with_link("", "id=ignored");
+        assert!(s.link().is_none());
+        assert!(s.is_empty());
+
+        let s = Style::EMPTY.with_link("", "");
+        assert!(s.link().is_none());
     }
 }

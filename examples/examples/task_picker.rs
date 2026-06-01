@@ -168,8 +168,8 @@ fn redraw<W: Write>(screen: &mut Screen<W>, s: &State) {
 
 fn draw_choices<W: Write>(screen: &mut Screen<W>, s: &State) {
     let subtle = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
-    let checkbox = Style::EMPTY.with_fg(BasicColor::Cyan.into()).bold();
-    let ticks_st = Style::EMPTY.with_fg(BasicColor::Yellow.into()).bold();
+    let checkbox = Style::EMPTY.with_fg(BasicColor::Cyan.into()).with_bold();
+    let ticks_st = Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold();
 
     let mut y = 1u16;
     screen.set_str((2, y), "What to do today?", WrapMode::Truncate);
@@ -205,8 +205,8 @@ fn draw_choices<W: Write>(screen: &mut Screen<W>, s: &State) {
 fn draw_chosen<W: Write>(screen: &mut Screen<W>, s: &State) {
     let keyword = Style::EMPTY
         .with_fg(BasicColor::BrightMagenta.into())
-        .bold();
-    let ticks_st = Style::EMPTY.with_fg(BasicColor::Yellow.into()).bold();
+        .with_bold();
+    let ticks_st = Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold();
     let bar_st = Style::EMPTY.with_fg(BasicColor::BrightGreen.into());
     let empty_st = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
 

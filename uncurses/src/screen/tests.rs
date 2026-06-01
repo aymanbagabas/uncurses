@@ -779,7 +779,7 @@ fn styled_text_emits_specific_sgr_payloads() {
         let mut screen = Screen::new(&mut buf).with_size(4, 1);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.bold()),
+            &Cell::new("X", 1).with_style(Style::EMPTY.with_bold()),
         );
         screen.set_cell(
             (1u16, 0u16),
@@ -791,7 +791,7 @@ fn styled_text_emits_specific_sgr_payloads() {
         );
         screen.set_cell(
             (3u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.bold().with_fg(Color::rgb(0, 0, 255))),
+            &Cell::new("X", 1).with_style(Style::EMPTY.with_bold().with_fg(Color::rgb(0, 0, 255))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -958,11 +958,11 @@ fn text_attribute_variants_emit_matching_sgr_params() {
     {
         let mut screen = Screen::new(&mut buf).with_size(5, 1);
         let styles = [
-            Style::EMPTY.italic(),
-            Style::EMPTY.faint(),
-            Style::EMPTY.reverse(),
-            Style::EMPTY.strikethrough(),
-            Style::EMPTY.bold(),
+            Style::EMPTY.with_italic(),
+            Style::EMPTY.with_faint(),
+            Style::EMPTY.with_reverse(),
+            Style::EMPTY.with_strikethrough(),
+            Style::EMPTY.with_bold(),
         ];
         for (i, st) in styles.iter().enumerate() {
             screen.set_cell((i as u16, 0u16), &Cell::new("A", 1).with_style(st.clone()));
@@ -1196,7 +1196,7 @@ fn renderer_redraws_when_style_changes() {
 
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("A", 1).with_style(Style::EMPTY.bold()),
+            &Cell::new("A", 1).with_style(Style::EMPTY.with_bold()),
         );
         screen.render().unwrap();
         screen.flush().unwrap();

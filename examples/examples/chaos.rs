@@ -56,9 +56,9 @@ fn build_pattern(width: u16, height: u16, rng: &mut Rng) -> Vec<Cell> {
         let mut style = Style::EMPTY.with_fg(fg).with_bg(bg);
         style = match attr {
             Attr::None => style,
-            Attr::Bold => style.bold(),
-            Attr::Italic => style.italic(),
-            Attr::Reverse => style.reverse(),
+            Attr::Bold => style.with_bold(),
+            Attr::Italic => style.with_italic(),
+            Attr::Reverse => style.with_reverse(),
         };
         cells.push(Cell::new(glyph, 1).with_style(style));
     }
