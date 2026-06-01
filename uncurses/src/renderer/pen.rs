@@ -36,9 +36,9 @@ impl Renderer {
         // Hyperlink diff. Both sides come from `convert_style`, which
         // drops the link entirely under `Profile::Disabled`, so OSC 8
         // is auto-suppressed there with no special-case code here.
-        if to.link_url() != from.link_url() || to.link_params() != from.link_params() {
-            match to.link_url() {
-                Some(url) => ansi::write_hyperlink_start(out, url, to.link_params().unwrap_or(""))?,
+        if to.link() != from.link() {
+            match to.link() {
+                Some((url, params)) => ansi::write_hyperlink_start(out, url, params)?,
                 None => ansi::write_hyperlink_end(out)?,
             }
         }

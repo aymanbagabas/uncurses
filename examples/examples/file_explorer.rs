@@ -275,16 +275,16 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
     let header = Style::EMPTY
         .with_fg(Color::Basic(BasicColor::Black))
         .with_bg(Color::Basic(BasicColor::Cyan))
-        .bold();
+        .with_bold();
     let normal = Style::EMPTY;
-    let dim = Style::EMPTY.faint();
+    let dim = Style::EMPTY.with_faint();
     let dir_style = Style::EMPTY
         .with_fg(Color::Basic(BasicColor::BrightBlue))
-        .bold();
+        .with_bold();
     let selected = Style::EMPTY
         .with_bg(Color::Basic(BasicColor::Blue))
         .with_fg(Color::Basic(BasicColor::BrightWhite));
-    let selected_dir = selected.clone().bold();
+    let selected_dir = selected.clone().with_bold();
 
     // Header bar across full width.
     {

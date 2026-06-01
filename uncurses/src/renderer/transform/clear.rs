@@ -28,7 +28,7 @@ impl Renderer {
         new_buf: &RenderBuffer,
     ) -> io::Result<usize> {
         let height = new_buf.height();
-        if self.cur.has_link() {
+        if !self.cur.style().is_link_empty() {
             return Ok(height as usize);
         }
         let bce = self.opts.contains(Optimizations::BCE);

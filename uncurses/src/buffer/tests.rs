@@ -282,11 +282,11 @@ fn write_string_with_link() {
         Style::EMPTY.with_link("https://example.com", ""),
     );
     assert_eq!(
-        buf.cell(Position::new(0, 0)).unwrap().style().link_url(),
-        Some("https://example.com")
+        buf.cell(Position::new(0, 0)).unwrap().style().link(),
+        Some(("https://example.com", ""))
     );
     assert_eq!(
-        buf.cell(Position::new(1, 0)).unwrap().style().link_url(),
-        Some("https://example.com")
+        buf.cell(Position::new(1, 0)).unwrap().style().link(),
+        Some(("https://example.com", ""))
     );
 }

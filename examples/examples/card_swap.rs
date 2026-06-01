@@ -87,10 +87,12 @@ fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
         return;
     }
 
-    let border_a = Style::EMPTY.with_fg(BasicColor::BrightYellow.into()).bold();
+    let border_a = Style::EMPTY
+        .with_fg(BasicColor::BrightYellow.into())
+        .with_bold();
     let border_b = Style::EMPTY
         .with_fg(BasicColor::BrightMagenta.into())
-        .bold();
+        .with_bold();
 
     // Card A at (3, 1); Card B offset by (10, 2) from A.
     let ax = 3u16;

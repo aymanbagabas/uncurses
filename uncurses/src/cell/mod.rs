@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_cell_with_style() {
-        let c = Cell::new("x", 1).with_style(Style::EMPTY.bold());
+        let c = Cell::new("x", 1).with_style(Style::EMPTY.with_bold());
         assert!(c.style().attrs.contains(crate::style::AttrFlags::BOLD));
     }
 }

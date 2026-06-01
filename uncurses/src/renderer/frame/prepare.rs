@@ -148,11 +148,11 @@ impl Renderer {
 
         // Sync cur_buf to the blank state we just left on the screen
         // (so transform_line skips rows that are already blank in
-        // new_buf). When the pen is empty the blank is exactly
-        // Cell::BLANK whose Link::EMPTY contains two empty Strings —
-        // assigning it is a flat memcpy with no heap allocations, so
-        // fast-path that case past the styled-blank clone.
-        let pen_empty = self.cur.style().is_empty() && !self.cur.has_link();
+        // new_buf). When the pen is fully empty the blank is exactly
+        // Cell::BLANK — assigning it is a flat memcpy with no heap
+        // allocations, so fast-path that case past the styled-blank
+        // clone.
+        let pen_empty = self.cur.style().is_empty();
         // Split-borrow: `self.cur` is disjoint from `self.cur_buf`, so
         // the blank template ref stays live while the loop mutates
         // cur_buf's lines.

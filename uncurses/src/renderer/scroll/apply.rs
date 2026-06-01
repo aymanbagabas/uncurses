@@ -510,7 +510,7 @@ mod tests {
         let pen = Style::EMPTY
             .with_bg(Color::Basic(BasicColor::Red))
             .with_fg(Color::Basic(BasicColor::White))
-            .bold();
+            .with_bold();
         renderer.cur.set_style(pen);
         renderer.cur.mark_pen_changed();
         renderer.cur.pos = Position { y: 3, x: 0 };
