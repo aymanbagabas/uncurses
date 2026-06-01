@@ -66,14 +66,15 @@ impl Profile {
     pub fn detect_from(env: &Env, is_tty: bool) -> Self {
         let is_tty = is_tty || env.bool("TTY_FORCE");
         let term = env.get("TERM").unwrap_or_default();
-        let is_dumb = term.is_empty() || term == DUMB_TERM;
 
+        // `env_color_profile` is responsible for translating the
+        // environment to a profile, including the empty-or-`dumb` TERM
+        // case: on Unix that means Disabled, on Windows it falls back
+        // to a platform-specific probe (e.g. WT_SESSION → TrueColor)
+        // because Windows shells routinely leave TERM unset. The only
+        // unconditional clamp here is non-TTY output.
         let envp = env_color_profile(env, &term);
-        let mut p = if !is_tty || is_dumb {
-            Profile::Disabled
-        } else {
-            envp
-        };
+        let mut p = if !is_tty { Profile::Disabled } else { envp };
 
         // NO_COLOR: clamp to Ascii (decoration still allowed).
         if env.bool("NO_COLOR") && is_tty {
@@ -94,6 +95,7 @@ impl Profile {
             return p;
         }
 
+        let is_dumb = term.is_empty() || term == DUMB_TERM;
         // CLICOLOR: bump non-dumb TTY to at least Ansi.
         if env.bool("CLICOLOR") && is_tty && !is_dumb && p < Profile::Ansi {
             p = Profile::Ansi;
@@ -332,6 +334,24 @@ mod tests {
     fn wt_session_implies_truecolor() {
         let e = env(&[("TERM", "xterm"), ("WT_SESSION", "1234")]);
         assert_eq!(Profile::detect_from(&e, true), Profile::TrueColor);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wt_session_without_term_is_truecolor_on_windows() {
+        // Windows shells (PowerShell, cmd, Windows Terminal) routinely
+        // leave TERM unset. WT_SESSION must still pin TrueColor.
+        let e = env(&[("WT_SESSION", "1234")]);
+        assert_eq!(Profile::detect_from(&e, true), Profile::TrueColor);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn empty_term_falls_back_to_ansi256_on_windows() {
+        // Without WT_SESSION, conhost still supports VT sequences on
+        // supported Windows versions; floor is Ansi256.
+        let e = env(&[]);
+        assert_eq!(Profile::detect_from(&e, true), Profile::Ansi256);
     }
 
     #[test]
