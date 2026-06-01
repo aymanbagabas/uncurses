@@ -64,17 +64,22 @@ fn to_attrs(m: Modifier) -> AttrFlags {
 /// otherwise.
 pub fn to_uncurses_style(s: RtStyle) -> CzStyle {
     let attrs = to_attrs(s.add_modifier);
-    let mut style = CzStyle::EMPTY;
-    style.fg = s.fg.and_then(to_uncurses_color);
-    style.bg = s.bg.and_then(to_uncurses_color);
-    style.underline_color = s.underline_color.and_then(to_uncurses_color);
-    style.underline = if s.add_modifier.contains(Modifier::UNDERLINED) {
+    let underline = if s.add_modifier.contains(Modifier::UNDERLINED) {
         UnderlineStyle::Single
     } else {
         UnderlineStyle::None
     };
-    style.attrs = attrs;
-    style
+    let mut style = CzStyle::EMPTY.with_underline_style(underline);
+    if let Some(fg) = s.fg.and_then(to_uncurses_color) {
+        style = style.with_fg(fg);
+    }
+    if let Some(bg) = s.bg.and_then(to_uncurses_color) {
+        style = style.with_bg(bg);
+    }
+    if let Some(uc) = s.underline_color.and_then(to_uncurses_color) {
+        style = style.with_underline_color(uc);
+    }
+    style.with_attrs(attrs)
 }
 
 /// Halfwidth Katakana Voiced Sound Mark (dakuten).
