@@ -1384,3 +1384,50 @@ fn redraw_identical_frame_after_clear_emits_zero_bytes() {
         );
     }
 }
+
+#[test]
+fn reset_moves_cursor_to_last_row_inline() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 5);
+        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.render().unwrap();
+        screen.reset().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    // After "hi" lands at row 0, cur.pos.y == 0. reset must walk down
+    // to row 4 (last of 5-row inline surface). In inline / relative
+    // mode the planner emits CUD 4 (or 4× LF when cheaper).
+    assert!(
+        out.contains("\x1b[4B") || out.matches('\n').count() >= 4,
+        "expected reset to walk cursor down 4 rows, got {out:?}"
+    );
+}
+
+#[test]
+fn reset_moves_cursor_to_last_row_alt_screen() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 5);
+        screen.set_alt_screen(true).unwrap();
+        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.render().unwrap();
+        screen.reset().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    let leave = out.find("\x1b[?1049l").expect("alt-screen leave");
+    let head = &out[..leave];
+    // Alt-screen: emit the move before leaving so the renderer's
+    // tracked position matches the surface's last row. The actual
+    // bytes are planner-chosen; just assert *some* downward motion
+    // landed before the leave sequence.
+    assert!(
+        head.contains("\x1b[5;1H")
+            || head.contains("\x1b[5H")
+            || head.contains("\x1b[4B")
+            || head.matches('\n').count() >= 4,
+        "expected cursor move to last row before alt-screen leave, head={head:?}"
+    );
+}

@@ -16,6 +16,10 @@ impl<W: Write> Screen<W> {
     /// not mutate `self.state`, so a subsequent [`Screen::restore`]
     /// can re-apply the same modes verbatim.
     pub fn reset(&mut self) -> io::Result<()> {
+        if self.height > 0 {
+            self.renderer
+                .move_to(&mut self.buf, &self.front_buf, self.height - 1, 0)?;
+        }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.set(&mut self.buf)?;
         }
