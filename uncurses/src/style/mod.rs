@@ -87,6 +87,16 @@ impl Style {
         self
     }
 
+    pub fn blink(mut self) -> Self {
+        self.attrs |= AttrFlags::SLOW_BLINK;
+        self
+    }
+
+    pub fn rapid_blink(mut self) -> Self {
+        self.attrs |= AttrFlags::RAPID_BLINK;
+        self
+    }
+
     pub fn reverse(mut self) -> Self {
         self.attrs |= AttrFlags::REVERSE;
         self
