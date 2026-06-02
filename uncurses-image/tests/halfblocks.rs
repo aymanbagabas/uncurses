@@ -3,6 +3,7 @@
 use image::{Rgba, RgbaImage};
 use uncurses::Rect;
 use uncurses::screen::{Capabilities, Screen};
+use uncurses::terminal::Env;
 use uncurses_image::{Image, ImageLayer, ImageProtocol, Resize};
 
 fn make_test_image() -> Image {
@@ -24,7 +25,7 @@ fn make_test_image() -> Image {
 #[test]
 fn halfblocks_round_trip_writes_bytes() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
-    let caps = Capabilities::default();
+    let caps = Capabilities::from_env(&Env::empty());
     let mut layer = ImageLayer::new().with_protocol(ImageProtocol::HalfBlocks);
     assert_eq!(layer.protocol(&caps), ImageProtocol::HalfBlocks);
 
@@ -54,7 +55,7 @@ fn halfblocks_round_trip_writes_bytes() {
 
 #[test]
 fn auto_protocol_falls_back_without_caps() {
-    let caps = Capabilities::default();
+    let caps = Capabilities::from_env(&Env::empty());
     let layer = ImageLayer::new();
     // Default capabilities = no raster support → halfblocks.
     assert_eq!(layer.protocol(&caps), ImageProtocol::HalfBlocks);
@@ -63,7 +64,7 @@ fn auto_protocol_falls_back_without_caps() {
 #[test]
 fn unplace_queues_erasure_and_paint_clears() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
-    let caps = Capabilities::default();
+    let caps = Capabilities::from_env(&Env::empty());
     let mut layer = ImageLayer::new().with_protocol(ImageProtocol::HalfBlocks);
 
     let id = layer.add(make_test_image());
@@ -98,7 +99,7 @@ fn unplace_queues_erasure_and_paint_clears() {
 #[test]
 fn invalidate_forces_repaint() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
-    let caps = Capabilities::default();
+    let caps = Capabilities::from_env(&Env::empty());
     let mut layer = ImageLayer::new().with_protocol(ImageProtocol::HalfBlocks);
 
     let id = layer.add(make_test_image());
