@@ -5,7 +5,6 @@
 //! platform-specific [`Source`] that drives the decoder from a
 //! tty, and the key/mouse types that events carry.
 
-pub mod capabilities;
 pub mod decode;
 #[cfg(test)]
 mod decode_safety_tests;
@@ -18,7 +17,6 @@ pub mod source;
 #[cfg(windows)]
 pub mod source_windows;
 
-pub use capabilities::{Capabilities, Feature};
 pub use decode::*;
 pub use key::*;
 pub use mouse::*;
