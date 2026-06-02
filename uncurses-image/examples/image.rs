@@ -28,8 +28,11 @@ use std::time::Duration;
 use uncurses::Rect;
 use uncurses::SurfaceMut;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
+use uncurses::cell::Cell;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::screen::{Capabilities, Feature, Screen};
+use uncurses::style::Style;
 use uncurses::terminal::{
     Stdin, Stdout, disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout,
 };
@@ -250,6 +253,7 @@ fn redraw<W: Write>(
     path: &std::path::Path,
 ) -> std::io::Result<()> {
     screen.clear();
+    fill_backdrop(screen);
     let resolved = layer.protocol(caps);
     let header = format!(
         " {} — requested: {:?}, resolved: {:?} — q/Esc to quit ",
@@ -263,4 +267,18 @@ fn redraw<W: Write>(
     layer.render(caps, screen)?;
     screen.flush()?;
     Ok(())
+}
+
+/// Tile the screen below the info row with `╱` (U+2571) in dark
+/// grey. The image layer's `reserve` step blanks the placement area,
+/// so the backdrop only shows around the image.
+fn fill_backdrop<W: Write>(screen: &mut Screen<W>) {
+    let cell = Cell::new("\u{2571}", 1).with_style(Style::EMPTY.with_fg(Color::Indexed(8)));
+    let w = screen.width();
+    let h = screen.height();
+    for y in 1..h {
+        for x in 0..w {
+            screen.set_cell((x, y), &cell);
+        }
+    }
 }

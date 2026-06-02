@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["png", "jpeg"]
+default = ["png", "jpeg", "sixel"]
 png = ["image/png"]
 jpeg = ["image/jpeg"]
 gif = ["image/gif"]
