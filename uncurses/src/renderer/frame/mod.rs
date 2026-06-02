@@ -40,15 +40,9 @@ impl Renderer {
             return Ok(());
         }
 
-        #[cfg(debug_assertions)]
-        let frame_start = out.len();
-
         let resized = self.prepare_frame(out, new_buf, width, height)?;
         self.diff_frame(out, new_buf, width, height)?;
         self.finalize_frame(out, new_buf, resized, height)?;
-
-        #[cfg(debug_assertions)]
-        crate::trace::tee_output(&out[frame_start..]);
 
         Ok(())
     }
