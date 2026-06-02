@@ -352,6 +352,8 @@ impl<W: Write> Write for Screen<W> {
     /// Drain [`Screen::buf`] into the owned writer and flush it.
     fn flush(&mut self) -> io::Result<()> {
         if !self.buf.is_empty() {
+            #[cfg(debug_assertions)]
+            crate::trace::tee_output(&self.buf);
             self.writer.write_all(&self.buf)?;
             self.buf.clear();
         }

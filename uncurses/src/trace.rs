@@ -1,11 +1,14 @@
-//! Debug-only wire tracing for output (renderer → terminal) and input
+//! Debug-only wire tracing for output (screen → terminal) and input
 //! (terminal → parser) byte streams.
 //!
 //! Compiled in only when `debug_assertions` is enabled (i.e. non-release
 //! builds). Each tee is activated by setting the corresponding
 //! environment variable to a file path:
 //!
-//! - `UNCURSES_OUTPUT_TRACE` — receives one entry per rendered frame.
+//! - `UNCURSES_OUTPUT_TRACE` — receives one entry per `Screen::flush`
+//!   with the full staged buffer (text frames + control sequences +
+//!   any raw `Write` payloads such as raster image OSCs), in flush
+//!   order.
 //! - `UNCURSES_INPUT_TRACE`  — receives one entry per `parse` call.
 //!
 //! Entries are appended; ESC and other control bytes are escaped so the
@@ -60,7 +63,7 @@ pub(crate) fn tee_output(bytes: &[u8]) {
     let path = DEST.get_or_init(|| std::env::var_os("UNCURSES_OUTPUT_TRACE").map(PathBuf::from));
     let Some(path) = path.as_ref() else { return };
     let n = INDEX.fetch_add(1, Ordering::Relaxed);
-    append_entry(path, "frame", n, bytes);
+    append_entry(path, "flush", n, bytes);
 }
 
 pub(crate) fn tee_input(bytes: &[u8]) {
