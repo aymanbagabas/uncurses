@@ -11,6 +11,8 @@ use crate::resize::Resize;
 
 pub mod halfblocks;
 pub mod kitty;
+#[cfg(feature = "sixel")]
+pub mod sixel;
 
 /// Image rendering protocol.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -39,13 +41,13 @@ impl ImageProtocol {
     pub fn resolve(self, caps: &Capabilities) -> ImageProtocol {
         let has_pixels = caps.cell_pixel_size.is_some();
         let kitty = caps.kitty_graphics == Some(true);
-        let sixel = caps.sixel == Some(true);
+        let sixel_supported = caps.sixel == Some(true) && cfg!(feature = "sixel");
         let iterm2 = caps.iterm2_graphics == Some(true);
         let resolved = match self {
             Self::Auto => {
                 if kitty && has_pixels {
                     Self::Kitty
-                } else if sixel && has_pixels {
+                } else if sixel_supported && has_pixels {
                     Self::Sixel
                 } else if iterm2 && has_pixels {
                     Self::Iterm2
@@ -59,10 +61,18 @@ impl ImageProtocol {
         // Raster protocols need cell_pixel_size to compute output
         // dimensions. Without it, fall back to half-blocks rather
         // than emit something the terminal can't size.
-        match resolved {
+        let resolved = match resolved {
             Self::Kitty | Self::Sixel | Self::Iterm2 if !has_pixels => Self::HalfBlocks,
             other => other,
+        };
+
+        // If the sixel backend was explicitly requested but the
+        // crate was built without the `sixel` feature, fall back to
+        // half-blocks rather than no-op.
+        if !cfg!(feature = "sixel") && resolved == Self::Sixel {
+            return Self::HalfBlocks;
         }
+        resolved
     }
 }
 
@@ -241,9 +251,19 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "sixel")]
     fn auto_chooses_sixel_over_iterm2() {
         let caps = caps_with(false, true, Some(true), Some((10, 20)));
         assert_eq!(ImageProtocol::Auto.resolve(&caps), ImageProtocol::Sixel);
+    }
+
+    #[test]
+    #[cfg(not(feature = "sixel"))]
+    fn auto_chooses_iterm2_when_sixel_feature_off() {
+        // Without the sixel feature, sixel caps don't promote to Sixel;
+        // iTerm2 wins next.
+        let caps = caps_with(false, true, Some(true), Some((10, 20)));
+        assert_eq!(ImageProtocol::Auto.resolve(&caps), ImageProtocol::Iterm2);
     }
 
     #[test]
