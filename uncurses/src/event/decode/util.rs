@@ -3,7 +3,7 @@
 //! Pure functions only — no `Decoder` state. Anything that needs
 //! to look at decoder state stays in [`super`].
 
-use crate::event::{Key, KeyCode, KeyModifiers, decode::DecoderFlags};
+use crate::event::{Event, Key, KeyCode, KeyModifiers, decode::DecoderFlags};
 
 pub(super) use crate::ansi::params::Params;
 
@@ -121,6 +121,26 @@ pub(super) fn parse_kitty_options(s: &[u8]) -> Vec<(String, String)> {
 pub(super) fn csi_modifiers(params: Params<'_>) -> KeyModifiers {
     // Modifier param defaults to 1 (= no modifiers) per the xterm protocol.
     xterm_modifiers(params.get_or(1, 1) as u16)
+}
+
+/// Read the Kitty keyboard-protocol event-type sub-parameter from the
+/// modifiers group (`params[1]:1`). Defaults to 1 (press) when absent
+/// or when the host terminal isn't reporting event types.
+///
+/// Encoding: `1` = press, `2` = repeat, `3` = release.
+pub(super) fn csi_kitty_phase(params: Params<'_>) -> u32 {
+    params.group(1).and_then(|g| g.nth(1)).unwrap_or(1)
+}
+
+/// Wrap a [`Key`] into [`Event::KeyPress`], [`Event::KeyRepeat`], or
+/// [`Event::KeyRelease`] based on a Kitty event-type code (see
+/// [`csi_kitty_phase`]). Unknown phases collapse to press.
+pub(super) fn key_event_for_phase(key: Key, phase: u32) -> Event {
+    match phase {
+        2 => Event::KeyRepeat(key),
+        3 => Event::KeyRelease(key),
+        _ => Event::KeyPress(key),
+    }
 }
 
 /// Look up a legacy escape sequence (URxvt-style modifier suffixes, lowercase
