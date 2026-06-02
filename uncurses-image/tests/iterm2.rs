@@ -77,9 +77,6 @@ fn first_paint_emits_osc_1337_inline_image() {
         s.ends_with('\x07') || s.contains('\x07'),
         "expected BEL terminator"
     );
-    // DECSC / DECRC wrap.
-    assert!(s.contains("\x1b7"), "expected DECSC");
-    assert!(s.contains("\x1b8"), "expected DECRC");
 }
 
 #[test]

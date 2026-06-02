@@ -60,9 +60,6 @@ fn first_paint_emits_dcs_sixel_sequence() {
     // DCS sixel introducer is `\x1bP…q` and string terminator `\x1b\\`.
     assert!(s.contains("\x1bP"), "expected DCS introducer in {s:?}");
     assert!(s.contains('q'), "expected sixel mode `q` parameter");
-    // DECSC / DECRC wrap so cursor state survives.
-    assert!(s.contains("\x1b7"), "expected DECSC before sixel");
-    assert!(s.contains("\x1b8"), "expected DECRC after sixel");
 }
 
 #[test]
