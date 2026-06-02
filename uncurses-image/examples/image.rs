@@ -199,17 +199,25 @@ fn event_loop(
     }
 }
 
+/// Place the image centered inside the screen. The placement area is
+/// capped at a fixed maximum so the image stays clearly inside the
+/// terminal regardless of the window size — useful for the example
+/// where we want a deterministic visible result rather than the image
+/// stretching across the full terminal.
 fn place_centered<W: Write>(
     layer: &mut ImageLayer,
     id: uncurses_image::ImageId,
     screen: &Screen<W>,
 ) {
+    const MAX_W: u16 = 40;
+    const MAX_H: u16 = 20;
+
     let w = screen.width();
     let h = screen.height();
     // Reserve a row at the top for the status line.
     let avail_h = h.saturating_sub(2);
-    let cw = (w / 2).max(4).min(w);
-    let ch = (avail_h / 2).max(2).min(avail_h);
+    let cw = (w / 2).clamp(4, MAX_W).min(w);
+    let ch = (avail_h / 2).clamp(2, MAX_H).min(avail_h);
     let x = w.saturating_sub(cw) / 2;
     let y = 1 + avail_h.saturating_sub(ch) / 2;
     layer.place(

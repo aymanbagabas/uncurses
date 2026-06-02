@@ -49,6 +49,10 @@ struct CacheKey {
     content_hash: u64,
     /// Area in cells passed to the terminal as `width=` / `height=`.
     cells: (u16, u16),
+    /// Per-cell pixel size at encode time. Affects whether we emit
+    /// the size args in cells (`N`) or pixels (`Npx`); changing
+    /// invalidates the cached OSC payload.
+    cell_px: Option<(u16, u16)>,
     /// Resize policy fingerprint; affects `preserveAspectRatio` and
     /// whether we pre-resize the source pixels.
     resize: ResizeKind,
@@ -101,6 +105,7 @@ impl Backend for Iterm2 {
         let key = CacheKey {
             content_hash: ctx.image.content_hash(),
             cells: (area.width, area.height),
+            cell_px: ctx.caps.cell_pixel_size,
             resize: ctx.placement.resize.into(),
         };
 
@@ -147,12 +152,25 @@ fn build_sequence(ctx: &PaintCtx<'_>, area: Rect) -> std::io::Result<String> {
     let mut out = String::with_capacity(64 + (png_bytes.len() * 4 / 3) + 8);
     out.push_str("\x1b]1337;File=");
     out.push_str("inline=1;");
+    // Prefer pixel dimensions when the per-cell pixel size is known —
+    // bare cell counts are part of the protocol but some
+    // implementations (notably Rio) do not interpret them as cells
+    // and end up rendering the image at its native pixel size, which
+    // overflows the placement area. Pixel units are honored
+    // consistently across every implementer we target.
+    let (w_arg, h_arg) = match ctx.caps.cell_pixel_size {
+        Some((cw, ch)) => (
+            format!("{}px", (area.width as u32) * (cw.max(1) as u32)),
+            format!("{}px", (area.height as u32) * (ch.max(1) as u32)),
+        ),
+        None => (area.width.to_string(), area.height.to_string()),
+    };
     write!(
         out,
         "size={};width={};height={};preserveAspectRatio={}:",
         png_bytes.len(),
-        area.width,
-        area.height,
+        w_arg,
+        h_arg,
         match ctx.placement.resize {
             Resize::Scale(_) => 0,
             Resize::Fit(_) | Resize::Crop(_) => 1,
