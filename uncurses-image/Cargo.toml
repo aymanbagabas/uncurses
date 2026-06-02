@@ -12,12 +12,14 @@ png = ["image/png"]
 jpeg = ["image/jpeg"]
 gif = ["image/gif"]
 webp = ["image/webp"]
+sixel = ["dep:icy_sixel"]
 
 [dependencies]
 uncurses = { path = "../uncurses" }
 image = { version = "0.25", default-features = false }
 rustc-hash = { workspace = true }
 base64 = "0.22"
+icy_sixel = { version = "0.5", optional = true }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
