@@ -10,6 +10,7 @@ use crate::placement::{Erase, Placement};
 use crate::resize::Resize;
 
 pub mod halfblocks;
+pub mod iterm2;
 pub mod kitty;
 #[cfg(feature = "sixel")]
 pub mod sixel;
@@ -49,7 +50,7 @@ impl ImageProtocol {
                     Self::Kitty
                 } else if sixel_supported && has_pixels {
                     Self::Sixel
-                } else if iterm2 && has_pixels {
+                } else if iterm2 {
                     Self::Iterm2
                 } else {
                     Self::HalfBlocks
@@ -58,11 +59,11 @@ impl ImageProtocol {
             other => other,
         };
 
-        // Raster protocols need cell_pixel_size to compute output
-        // dimensions. Without it, fall back to half-blocks rather
-        // than emit something the terminal can't size.
+        // Raster protocols that need pixel sizing fall back when
+        // `cell_pixel_size` is unknown. iTerm2 does the scaling
+        // terminal-side from cell counts, so it's fine without.
         let resolved = match resolved {
-            Self::Kitty | Self::Sixel | Self::Iterm2 if !has_pixels => Self::HalfBlocks,
+            Self::Kitty | Self::Sixel if !has_pixels => Self::HalfBlocks,
             other => other,
         };
 
@@ -225,11 +226,20 @@ mod tests {
 
     #[test]
     fn auto_falls_back_to_halfblocks_without_cell_pixels() {
-        let caps = caps_with(true, true, Some(true), None);
+        // No iTerm2 either, so all raster paths drop to half-blocks.
+        let caps = caps_with(true, true, Some(false), None);
         assert_eq!(
             ImageProtocol::Auto.resolve(&caps),
             ImageProtocol::HalfBlocks
         );
+    }
+
+    #[test]
+    fn auto_picks_iterm2_without_cell_pixels() {
+        // iTerm2 inline-image scaling is cell-based, so it works
+        // even when `cell_pixel_size` is unknown.
+        let caps = caps_with(false, false, Some(true), None);
+        assert_eq!(ImageProtocol::Auto.resolve(&caps), ImageProtocol::Iterm2);
     }
 
     #[test]
