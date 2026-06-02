@@ -286,6 +286,18 @@ impl<W: Write> Screen<W> {
     pub fn invalidate(&mut self) {
         self.renderer.request_clear();
     }
+
+    /// Mark the renderer's tracked cursor position as no longer
+    /// matching the terminal. The next cursor move reasserts position
+    /// via the planner (CR + relative motions).
+    ///
+    /// Use this after emitting bytes that move the terminal cursor
+    /// outside the renderer's bookkeeping (e.g. raw escape sequences
+    /// or out-of-band protocol payloads) so the next render still
+    /// lands the cursor where it belongs.
+    pub fn invalidate_cursor(&mut self) {
+        self.renderer.invalidate_cursor();
+    }
 }
 
 impl<W: Write> Bounded for Screen<W> {
