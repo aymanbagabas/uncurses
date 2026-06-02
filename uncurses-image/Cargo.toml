@@ -1,0 +1,23 @@
+[package]
+name = "uncurses-image"
+description = "Image rendering addon for the uncurses terminal library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["png", "jpeg"]
+png = ["image/png"]
+jpeg = ["image/jpeg"]
+gif = ["image/gif"]
+webp = ["image/webp"]
+
+[dependencies]
+uncurses = { path = "../uncurses" }
+image = { version = "0.25", default-features = false }
+rustc-hash = { workspace = true }
+base64 = "0.22"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
