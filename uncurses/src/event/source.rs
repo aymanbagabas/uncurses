@@ -700,6 +700,11 @@ where
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "input closed"));
         }
         self.pending.advance_written(n);
+        #[cfg(debug_assertions)]
+        {
+            let s = self.pending.slice();
+            crate::trace::tee_input(&s[s.len() - n..]);
+        }
         self.drain_parser();
         Ok(())
     }
