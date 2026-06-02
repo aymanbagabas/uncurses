@@ -213,10 +213,13 @@ impl<W: Write> Screen<W> {
     /// top-left). The move bytes are appended to [`Screen::buf`] and
     /// reach the terminal on the next [`io::Write::flush`].
     ///
-    /// No-op when the renderer already reports the cursor at `(x, y)`.
+    /// No-op when the renderer already reports the cursor at `(x, y)`
+    /// **and** that tracked position is known to match the terminal
+    /// on both axes. After [`Self::invalidate_cursor`] the next call
+    /// always emits a move so the terminal cursor is reasserted.
     pub fn set_cursor_position(&mut self, x: u16, y: u16) -> io::Result<()> {
         let target = crate::Position::new(x, y);
-        if self.renderer.cursor_position() == target {
+        if self.renderer.cursor_known() && self.renderer.cursor_position() == target {
             return Ok(());
         }
         self.renderer
