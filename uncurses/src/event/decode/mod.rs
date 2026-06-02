@@ -255,9 +255,6 @@ impl Decoder {
 
     /// Feed bytes into the parser and extract all complete events.
     pub fn parse(&mut self, data: &[u8]) -> Vec<Event> {
-        #[cfg(debug_assertions)]
-        crate::trace::tee_input(data);
-
         self.buf.extend_from_slice(data);
         let mut events = Vec::new();
 
