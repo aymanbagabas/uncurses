@@ -1995,4 +1995,111 @@ mod tests {
             other => panic!("expected trailing Esc, got {other:?}"),
         }
     }
+
+    /// Kitty keyboard event-type sub-parameter (`params[1]:1`) must
+    /// be honoured for non-CSI-u keys (cursor keys, function keys
+    /// CSI P/Q/S, navigation keys CSI ~). Without it, key release and
+    /// repeat collapse to ordinary press, leading to duplicate
+    /// shortcut handling on the host application.
+    #[test]
+    fn kitty_event_type_release_for_csi_tilde_navigation_key() {
+        let mut p = Decoder::new();
+        // CSI 6;6:3~  =  PageDown, mods=Ctrl+Shift, event-type=release
+        let evs = p.parse(b"\x1b[6;6:3~");
+        match evs.as_slice() {
+            [Event::KeyRelease(k)] => {
+                assert_eq!(k.code, KeyCode::PageDown);
+                assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+            }
+            other => panic!("expected single KeyRelease, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kitty_event_type_repeat_for_csi_tilde_navigation_key() {
+        let mut p = Decoder::new();
+        // CSI 6;6:2~  =  PageDown, mods=Ctrl+Shift, event-type=repeat
+        let evs = p.parse(b"\x1b[6;6:2~");
+        match evs.as_slice() {
+            [Event::KeyRepeat(k)] => {
+                assert_eq!(k.code, KeyCode::PageDown);
+                assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+            }
+            other => panic!("expected single KeyRepeat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kitty_event_type_release_for_csi_cursor_key() {
+        let mut p = Decoder::new();
+        // CSI 1;6:3 A  =  Up, mods=Ctrl+Shift, event-type=release
+        let evs = p.parse(b"\x1b[1;6:3A");
+        match evs.as_slice() {
+            [Event::KeyRelease(k)] => {
+                assert_eq!(k.code, KeyCode::Up);
+                assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+            }
+            other => panic!("expected single KeyRelease, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kitty_event_type_repeat_for_csi_cursor_key() {
+        let mut p = Decoder::new();
+        // CSI 1;6:2 A  =  Up, mods=Ctrl+Shift, event-type=repeat
+        let evs = p.parse(b"\x1b[1;6:2A");
+        match evs.as_slice() {
+            [Event::KeyRepeat(k)] => {
+                assert_eq!(k.code, KeyCode::Up);
+                assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+            }
+            other => panic!("expected single KeyRepeat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kitty_event_type_release_for_csi_function_key() {
+        let mut p = Decoder::new();
+        // CSI 1;3:3 P  =  F1, mods=Alt, event-type=release
+        let evs = p.parse(b"\x1b[1;3:3P");
+        match evs.as_slice() {
+            [Event::KeyRelease(k)] => {
+                assert_eq!(k.code, KeyCode::F(1));
+                assert_eq!(k.modifiers, KeyModifiers::ALT);
+            }
+            other => panic!("expected single KeyRelease, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kitty_event_type_release_for_csi_z_backtab() {
+        let mut p = Decoder::new();
+        // CSI 1;2:3 Z  =  Shift+Tab (BackTab), event-type=release
+        let evs = p.parse(b"\x1b[1;2:3Z");
+        match evs.as_slice() {
+            [Event::KeyRelease(k)] => {
+                assert_eq!(k.code, KeyCode::BackTab);
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            other => panic!("expected single KeyRelease, got {other:?}"),
+        }
+    }
+
+    /// Default phase (no event-type sub-param): keys still decode as
+    /// press. Guards against the helper accidentally treating "absent"
+    /// as "release".
+    #[test]
+    fn kitty_event_type_absent_defaults_to_press() {
+        let mut p = Decoder::new();
+        // CSI 6;6~  =  PageDown, mods=Ctrl+Shift, no event-type
+        let k = press(p.parse(b"\x1b[6;6~"));
+        assert_eq!(k.code, KeyCode::PageDown);
+        assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+
+        // CSI 1;6 A  =  Up, mods=Ctrl+Shift, no event-type
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"\x1b[1;6A"));
+        assert_eq!(k.code, KeyCode::Up);
+        assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+    }
 }

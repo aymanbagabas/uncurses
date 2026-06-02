@@ -21,8 +21,8 @@ use super::DecoderFlags;
 use super::kitty;
 use super::result::ParseResult;
 use super::util::{
-    Params, csi_modifiers, intro_prefix_len, key_with_mods, lookup_legacy_key, remap_tilde,
-    tilde_code_to_keycode, xterm_modifiers,
+    Params, csi_kitty_phase, csi_modifiers, intro_prefix_len, key_event_for_phase, key_with_mods,
+    lookup_legacy_key, remap_tilde, tilde_code_to_keycode, xterm_modifiers,
 };
 use crate::event::mouse::{
     decode_sgr_mouse, decode_urxvt_mouse, decode_utf8_mouse, decode_x10_mouse,
@@ -367,13 +367,13 @@ fn recognize(
             _ => None,
         };
         if let Some(kc) = key_code {
-            return Some(Event::KeyPress(key_with_mods(kc, csi_modifiers(params))));
+            let key = key_with_mods(kc, csi_modifiers(params));
+            return Some(key_event_for_phase(key, csi_kitty_phase(params)));
         }
         match final_byte {
             b'Z' => {
-                return Some(Event::KeyPress(
-                    Key::new(KeyCode::BackTab).with_modifiers(KeyModifiers::SHIFT),
-                ));
+                let key = Key::new(KeyCode::BackTab).with_modifiers(KeyModifiers::SHIFT);
+                return Some(key_event_for_phase(key, csi_kitty_phase(params)));
             }
             b'~' => {
                 if let Some(ev) = recognize_tilde(params, flags) {
@@ -434,5 +434,8 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
         .and_then(tilde_code_to_keycode)
         .map(|kc| remap_tilde(code as u16, kc, flags))?;
 
-    Some(Event::KeyPress(key_with_mods(key_code, mods)))
+    Some(key_event_for_phase(
+        key_with_mods(key_code, mods),
+        csi_kitty_phase(params),
+    ))
 }

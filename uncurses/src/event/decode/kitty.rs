@@ -7,6 +7,7 @@
 //! Each semicolon-separated parameter may have colon-separated sub-parameters.
 
 use crate::ansi::params::{Group, Params};
+use crate::event::decode::util::{csi_kitty_phase, key_event_for_phase};
 use crate::event::{Event, Key, KeyCode, KeyModifiers};
 
 /// Decode a Kitty keyboard CSI u sequence into an [`Event`].
@@ -27,7 +28,7 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     let base = code_sub.nth(2).filter(|&c| c != 0);
 
     let modifiers = decode_kitty_modifiers(mod_sub.first().unwrap_or(1));
-    let phase = mod_sub.nth(1).unwrap_or(1);
+    let phase = csi_kitty_phase(params);
 
     let code = kitty_keycode_to_keycode(keycode)?;
 
@@ -49,11 +50,7 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
         base_key: base.and_then(char::from_u32),
     };
 
-    Some(match phase {
-        2 => Event::KeyRepeat(key),
-        3 => Event::KeyRelease(key),
-        _ => Event::KeyPress(key),
-    })
+    Some(key_event_for_phase(key, phase))
 }
 
 fn decode_kitty_modifiers(m: u32) -> KeyModifiers {
