@@ -131,7 +131,7 @@ impl Backend for Kitty {
         };
 
         if needs_transmit {
-            transmit(screen, kitty_id, &payload)?;
+            transmit(screen, kitty_id, &payload, cell_rect)?;
             self.images.insert(
                 ctx.id,
                 KittyImage {
@@ -311,10 +311,19 @@ fn clip_area<W: Write>(area: Rect, screen: &Screen<W>) -> Rect {
 }
 
 /// Emit the chunked transmit + virtual-placement APC sequence.
+///
+/// `cell_rect` is the placeholder grid the image should fill in
+/// cells; it is sent as `c=` / `r=` on the first chunk so the
+/// terminal scales the registered image to the grid dimensions
+/// instead of using its natural pixel-derived cell footprint.
+/// Without `c=` / `r=`, a placeholder grid larger than the image's
+/// natural cell size leaves the trailing rows/columns blank
+/// (visually a crop on the right and bottom edges).
 fn transmit<W: Write>(
     screen: &mut Screen<W>,
     kitty_id: u32,
     payload: &Payload,
+    cell_rect: Rect,
 ) -> std::io::Result<()> {
     let chunks: Vec<&[u8]> = payload.rgba.chunks(CHUNK_SIZE).collect();
     let chunk_count = chunks.len().max(1);
@@ -328,14 +337,17 @@ fn transmit<W: Write>(
             // First chunk carries the full control header. `a=T`
             // creates a virtual placement; `U=1` enables Unicode
             // placeholder support; `f=32` is RGBA; `t=d` marks the
-            // payload as direct (inline) data.
+            // payload as direct (inline) data. `c=` / `r=` declare
+            // the cell footprint the image scales to.
             use std::fmt::Write as _;
             write!(
                 buf,
-                "i={id},a=T,U=1,f=32,t=d,s={w},v={h},",
+                "i={id},a=T,U=1,f=32,t=d,s={w},v={h},c={c},r={r},",
                 id = kitty_id,
                 w = payload.width,
                 h = payload.height,
+                c = cell_rect.width,
+                r = cell_rect.height,
             )
             .expect("write to String");
         }
