@@ -270,6 +270,14 @@ impl Renderer {
         self.cur.pos
     }
 
+    /// Whether the renderer's tracked cursor position matches the
+    /// terminal on both axes. Returns false after
+    /// [`Renderer::invalidate_cursor`] until the next move asserts a
+    /// fresh position.
+    pub(crate) fn cursor_known(&self) -> bool {
+        !self.cur.x_unknown && !self.cur.y_unknown
+    }
+
     /// Surface dimensions captured at the most recent render. Returns
     /// `(0, 0)` before the first render. Differs from the
     /// [`Screen`](crate::Screen)'s live size when the terminal has
