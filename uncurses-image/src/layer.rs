@@ -203,11 +203,18 @@ impl ImageLayer {
             }
         }
 
-        // Wipe any erasure regions so the renderer's diff repaints
-        // those cells back to blanks.
-        for erase in &self.pending_erasures {
-            wipe_area(screen, erase.area);
-        }
+        // Per-backend `erase` handling (in `paint`) still receives
+        // these erasure regions for protocol-side cleanup
+        // (e.g. Kitty image delete). The cells themselves are owned
+        // by the host: the host's next frame is expected to fill the
+        // cells outside any current placement with whatever it wants
+        // there. Blanking them here would clobber that content (e.g.
+        // a backdrop the host drew immediately before render) without
+        // actually clearing terminal-side raster pixels — the
+        // renderer's diff only emits text where the front buffer
+        // changed, and `reserve` on the previous frame had already
+        // blanked these cells, so a blank→blank diff produces no
+        // output and any old raster pixels persist anyway.
 
         for (id, placement) in self.placements.iter() {
             let Some(image) = self.images.get(id) else {
@@ -330,10 +337,4 @@ fn fill_blanks<W: Write>(screen: &mut Screen<W>, area: Rect) {
             screen.set_cell((x, y), &Cell::BLANK);
         }
     }
-}
-
-/// Wipe a rect by stamping blanks; used by erasure handling so the
-/// renderer's diff repaints those cells with the default background.
-fn wipe_area<W: Write>(screen: &mut Screen<W>, area: Rect) {
-    fill_blanks(screen, area);
 }
