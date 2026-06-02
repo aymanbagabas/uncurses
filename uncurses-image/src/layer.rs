@@ -10,7 +10,9 @@ use crate::image_src::Image;
 use crate::placement::{Erase, ImageId, Placement};
 #[cfg(feature = "sixel")]
 use crate::protocol::sixel::Sixel;
-use crate::protocol::{Backend, ImageProtocol, PaintCtx, halfblocks::HalfBlocks, kitty::Kitty};
+use crate::protocol::{
+    Backend, ImageProtocol, PaintCtx, halfblocks::HalfBlocks, iterm2::Iterm2, kitty::Kitty,
+};
 use crate::resize::Resize;
 
 /// Image rendering addon for a [`uncurses::screen::Screen`].
@@ -46,6 +48,7 @@ pub struct ImageLayer<'a> {
     next_id: u64,
     halfblocks: HalfBlocks,
     kitty: Kitty,
+    iterm2: Iterm2,
     #[cfg(feature = "sixel")]
     sixel: Sixel,
 }
@@ -65,6 +68,7 @@ impl<'a> ImageLayer<'a> {
             next_id: 0,
             halfblocks: HalfBlocks,
             kitty: Kitty::new(),
+            iterm2: Iterm2::default(),
             #[cfg(feature = "sixel")]
             sixel: Sixel::default(),
         }
@@ -103,6 +107,7 @@ impl<'a> ImageLayer<'a> {
         if self.images.remove(&id).is_some() {
             self.halfblocks.on_image_removed(id);
             self.kitty.on_image_removed(id);
+            self.iterm2.on_image_removed(id);
             #[cfg(feature = "sixel")]
             self.sixel.on_image_removed(id);
             if let Some(p) = self.placements.remove(&id) {
@@ -211,6 +216,7 @@ impl<'a> ImageLayer<'a> {
             match resolved {
                 ImageProtocol::HalfBlocks => self.halfblocks.reserve(&ctx, screen)?,
                 ImageProtocol::Kitty => self.kitty.reserve(&ctx, screen)?,
+                ImageProtocol::Iterm2 => self.iterm2.reserve(&ctx, screen)?,
                 #[cfg(feature = "sixel")]
                 ImageProtocol::Sixel => self.sixel.reserve(&ctx, screen)?,
                 _ => fill_blanks(screen, placement.area),
@@ -231,6 +237,7 @@ impl<'a> ImageLayer<'a> {
             match resolved {
                 ImageProtocol::HalfBlocks => self.halfblocks.erase(&erase, screen)?,
                 ImageProtocol::Kitty => self.kitty.erase(&erase, screen)?,
+                ImageProtocol::Iterm2 => self.iterm2.erase(&erase, screen)?,
                 #[cfg(feature = "sixel")]
                 ImageProtocol::Sixel => self.sixel.erase(&erase, screen)?,
                 _ => {}
@@ -256,6 +263,7 @@ impl<'a> ImageLayer<'a> {
             match resolved {
                 ImageProtocol::HalfBlocks => self.halfblocks.paint(&ctx, screen)?,
                 ImageProtocol::Kitty => self.kitty.paint(&ctx, screen)?,
+                ImageProtocol::Iterm2 => self.iterm2.paint(&ctx, screen)?,
                 #[cfg(feature = "sixel")]
                 ImageProtocol::Sixel => self.sixel.paint(&ctx, screen)?,
                 _ => {}
@@ -267,6 +275,7 @@ impl<'a> ImageLayer<'a> {
         match resolved {
             ImageProtocol::HalfBlocks => self.halfblocks.finalize(screen)?,
             ImageProtocol::Kitty => self.kitty.finalize(screen)?,
+            ImageProtocol::Iterm2 => self.iterm2.finalize(screen)?,
             #[cfg(feature = "sixel")]
             ImageProtocol::Sixel => self.sixel.finalize(screen)?,
             _ => {}
@@ -289,6 +298,7 @@ impl<'a> ImageLayer<'a> {
     pub fn shutdown<W: Write>(&mut self, screen: &mut Screen<W>) -> io::Result<()> {
         self.halfblocks.shutdown(screen)?;
         self.kitty.shutdown(screen)?;
+        self.iterm2.shutdown(screen)?;
         #[cfg(feature = "sixel")]
         self.sixel.shutdown(screen)?;
         Ok(())
