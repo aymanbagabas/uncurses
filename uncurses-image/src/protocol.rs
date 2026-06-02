@@ -2,6 +2,7 @@
 
 use std::io::Write;
 
+#[cfg(feature = "sixel")]
 use uncurses::Position;
 use uncurses::Rect;
 use uncurses::screen::{Capabilities, Screen};
@@ -60,9 +61,11 @@ impl ImageProtocol {
             other => other,
         };
 
-        // Raster protocols that need pixel sizing fall back when
-        // `cell_pixel_size` is unknown. iTerm2 does the scaling
-        // terminal-side from cell counts, so it's fine without.
+        // Raster protocols that emit pixel-sized payloads need
+        // cell_pixel_size to compute their size args. iTerm2 stays
+        // selectable without it — the backend defers the actual paint
+        // until `cell_pixel_size` arrives so the first OSC 1337 burst
+        // is always emitted in the unambiguous pixel-units form.
         let resolved = match resolved {
             Self::Kitty | Self::Sixel if !has_pixels => Self::HalfBlocks,
             other => other,
@@ -162,6 +165,7 @@ pub(crate) trait Backend {
 /// Raster payloads (sixel, OSC 1337, …) commonly advance the terminal
 /// cursor by an opaque number of rows / columns; the invalidation is
 /// what keeps the next frame's cursor placement correct.
+#[cfg(feature = "sixel")]
 pub(crate) fn write_paint_at<W: Write>(
     screen: &mut Screen<W>,
     target: Position,

@@ -20,7 +20,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::ImageFormat;
 use rustc_hash::FxHashMap;
-use uncurses::Position;
 use uncurses::Rect;
 use uncurses::cell::Cell;
 use uncurses::screen::Screen;
@@ -28,7 +27,7 @@ use uncurses::screen::Screen;
 use crate::placement::{Erase, ImageId};
 use crate::resize::Resize;
 
-use super::{Backend, PaintCtx, write_paint_at};
+use super::{Backend, PaintCtx};
 
 #[derive(Debug, Default)]
 pub(crate) struct Iterm2 {
@@ -102,6 +101,17 @@ impl Backend for Iterm2 {
             return Ok(());
         }
 
+        // Defer painting until cell_pixel_size is known. The OSC 1337
+        // bare-cell width/height form is part of the spec but is
+        // accepted inconsistently across implementers; once a raster
+        // burst lands on the terminal canvas it stays there until the
+        // host explicitly clears the cells underneath. Emitting the
+        // pixel form (`Npx`) only after the probe reply means we paint
+        // exactly once, with the size args every implementer honors.
+        if ctx.caps.cell_pixel_size.is_none() {
+            return Ok(());
+        }
+
         let key = CacheKey {
             content_hash: ctx.image.content_hash(),
             cells: (area.width, area.height),
@@ -121,13 +131,21 @@ impl Backend for Iterm2 {
         }
         let entry = &self.cache[&ctx.id];
 
-        // Emit the OSC 1337 burst at the placement origin using
-        // relative cursor motion so this works in inline-mode screens.
-        write_paint_at(
-            screen,
-            Position::new(area.x, area.y),
-            entry.sequence.as_bytes(),
-        )?;
+        // Position the cursor at the placement origin (planner-aware,
+        // handles inline / fullscreen modes), emit the OSC 1337
+        // burst, then snap the cursor back to the origin via CUU so
+        // the renderer's tracked position stays in sync.
+        //
+        // The OSC includes `doNotMoveCursor=0`, which makes the
+        // terminal advance the cursor by `area.height` rows after
+        // rendering — emitting an explicit CUU by the same amount
+        // returns the cursor to the placement origin without needing
+        // to invalidate the renderer's bookkeeping.
+        screen.set_cursor_position(area.x, area.y)?;
+        screen.write_all(entry.sequence.as_bytes())?;
+        if area.height > 0 {
+            uncurses::ansi::cursor::write_cuu(screen, area.height)?;
+        }
         Ok(())
     }
 
@@ -143,34 +161,36 @@ impl Backend for Iterm2 {
 }
 
 /// Build the OSC 1337 sequence for one placement, including the
-/// base64-encoded PNG payload and the cell dimensions.
+/// base64-encoded PNG payload and the pixel dimensions. Caller has
+/// verified `caps.cell_pixel_size.is_some()`.
 fn build_sequence(ctx: &PaintCtx<'_>, area: Rect) -> std::io::Result<String> {
     let png_bytes = encode_png(ctx, area)?;
+    let (cw, ch) = ctx
+        .caps
+        .cell_pixel_size
+        .expect("paint() guarantees cell_pixel_size is Some");
+    let w_px = (area.width as u32) * (cw.max(1) as u32);
+    let h_px = (area.height as u32) * (ch.max(1) as u32);
 
     // Reserve a generous amount: header + base64(payload). base64
     // expands by ~4/3.
     let mut out = String::with_capacity(64 + (png_bytes.len() * 4 / 3) + 8);
     out.push_str("\x1b]1337;File=");
     out.push_str("inline=1;");
-    // Prefer pixel dimensions when the per-cell pixel size is known —
-    // bare cell counts are part of the protocol but some
-    // implementations (notably Rio) do not interpret them as cells
-    // and end up rendering the image at its native pixel size, which
-    // overflows the placement area. Pixel units are honored
-    // consistently across every implementer we target.
-    let (w_arg, h_arg) = match ctx.caps.cell_pixel_size {
-        Some((cw, ch)) => (
-            format!("{}px", (area.width as u32) * (cw.max(1) as u32)),
-            format!("{}px", (area.height as u32) * (ch.max(1) as u32)),
-        ),
-        None => (area.width.to_string(), area.height.to_string()),
-    };
+    // doNotMoveCursor=0 makes the terminal advance the cursor by
+    // `area.height` rows after rendering. Coupled with an explicit
+    // CUU after the burst this leaves the cursor exactly at the
+    // placement origin, in sync with the renderer's tracked
+    // position. (Some implementations honor this flag; on those
+    // that ignore it the explicit CUU still works because they
+    // also advance the cursor by the row count.)
+    out.push_str("doNotMoveCursor=0;");
     write!(
         out,
-        "size={};width={};height={};preserveAspectRatio={}:",
+        "size={};width={}px;height={}px;preserveAspectRatio={}:",
         png_bytes.len(),
-        w_arg,
-        h_arg,
+        w_px,
+        h_px,
         match ctx.placement.resize {
             Resize::Scale(_) => 0,
             Resize::Fit(_) | Resize::Crop(_) => 1,

@@ -164,9 +164,14 @@ fn event_loop(
         while let Some(ev) = events.try_read() {
             // Late capability replies (e.g. an XTVERSION that arrived
             // after the probe deadline) update the snapshot and force
-            // a redraw with the new resolved protocol.
+            // a redraw with the new resolved protocol. Invalidate the
+            // screen too: raster image bursts emitted before the new
+            // caps were known may have left pixels burned onto the
+            // terminal canvas that a normal cell-diff repaint won't
+            // wipe — a full clear-screen on the next render does.
             if caps.update(&ev) {
                 layer.invalidate();
+                screen.invalidate();
                 dirty = true;
                 continue;
             }
