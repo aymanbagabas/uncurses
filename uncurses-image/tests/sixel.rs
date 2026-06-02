@@ -30,15 +30,15 @@ fn caps_with_sixel() -> Capabilities {
 #[test]
 fn auto_resolves_to_sixel_when_supported() {
     let caps = caps_with_sixel();
-    let layer = ImageLayer::new(&caps);
-    assert_eq!(layer.protocol(), ImageProtocol::Sixel);
+    let layer = ImageLayer::new();
+    assert_eq!(layer.protocol(&caps), ImageProtocol::Sixel);
 }
 
 #[test]
 fn first_paint_emits_dcs_sixel_sequence() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = caps_with_sixel();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Sixel);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Sixel);
 
     let id = layer.add(solid_image(Rgba([200, 100, 50, 255]), 20, 20));
     layer.place(
@@ -52,7 +52,7 @@ fn first_paint_emits_dcs_sixel_sequence() {
         Resize::Scale(image::imageops::FilterType::Triangle),
     );
 
-    layer.render(&mut screen).expect("render");
+    layer.render(&caps, &mut screen).expect("render");
     screen.flush().unwrap();
     let bytes = screen.writer().clone();
     let s = String::from_utf8_lossy(&bytes);
@@ -69,7 +69,7 @@ fn first_paint_emits_dcs_sixel_sequence() {
 fn no_re_encode_for_unchanged_image() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = caps_with_sixel();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Sixel);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Sixel);
 
     let id = layer.add(solid_image(Rgba([0, 200, 0, 255]), 20, 20));
     layer.place(
@@ -83,12 +83,12 @@ fn no_re_encode_for_unchanged_image() {
         Resize::default(),
     );
 
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
     // Steady-state frame: no diff, no paint, no sixel re-emission.
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let s = String::from_utf8_lossy(screen.writer());
     assert!(
@@ -104,6 +104,6 @@ fn sixel_explicitly_falls_back_to_halfblocks_without_cell_pixels() {
         cell_pixel_size: None,
         ..Default::default()
     };
-    let layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Sixel);
-    assert_eq!(layer.protocol(), ImageProtocol::HalfBlocks);
+    let layer = ImageLayer::new().with_protocol(ImageProtocol::Sixel);
+    assert_eq!(layer.protocol(&caps), ImageProtocol::HalfBlocks);
 }

@@ -25,8 +25,8 @@ fn make_test_image() -> Image {
 fn halfblocks_round_trip_writes_bytes() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
     let caps = Capabilities::default();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::HalfBlocks);
-    assert_eq!(layer.protocol(), ImageProtocol::HalfBlocks);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::HalfBlocks);
+    assert_eq!(layer.protocol(&caps), ImageProtocol::HalfBlocks);
 
     let id = layer.add(make_test_image());
     layer.place(
@@ -40,7 +40,7 @@ fn halfblocks_round_trip_writes_bytes() {
         Resize::default(),
     );
 
-    layer.render(&mut screen).expect("render");
+    layer.render(&caps, &mut screen).expect("render");
     use std::io::Write;
     screen.flush().unwrap();
     let bytes = screen.writer().clone();
@@ -55,16 +55,16 @@ fn halfblocks_round_trip_writes_bytes() {
 #[test]
 fn auto_protocol_falls_back_without_caps() {
     let caps = Capabilities::default();
-    let layer = ImageLayer::new(&caps);
+    let layer = ImageLayer::new();
     // Default capabilities = no raster support → halfblocks.
-    assert_eq!(layer.protocol(), ImageProtocol::HalfBlocks);
+    assert_eq!(layer.protocol(&caps), ImageProtocol::HalfBlocks);
 }
 
 #[test]
 fn unplace_queues_erasure_and_paint_clears() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
     let caps = Capabilities::default();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::HalfBlocks);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::HalfBlocks);
 
     let id = layer.add(make_test_image());
     layer.place(
@@ -77,7 +77,7 @@ fn unplace_queues_erasure_and_paint_clears() {
         },
         Resize::default(),
     );
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     use std::io::Write;
     screen.flush().unwrap();
     screen.writer_mut().clear();
@@ -85,7 +85,7 @@ fn unplace_queues_erasure_and_paint_clears() {
     // Unplacing should queue an erasure; the next render wipes those
     // cells back to blanks.
     layer.unplace(id);
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let bytes = screen.writer().clone();
     let s = String::from_utf8_lossy(&bytes);
@@ -99,7 +99,7 @@ fn unplace_queues_erasure_and_paint_clears() {
 fn invalidate_forces_repaint() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
     let caps = Capabilities::default();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::HalfBlocks);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::HalfBlocks);
 
     let id = layer.add(make_test_image());
     layer.place(
@@ -113,20 +113,20 @@ fn invalidate_forces_repaint() {
         Resize::default(),
     );
 
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     use std::io::Write;
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
     // No state change → next render is a no-op.
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     assert!(screen.writer().is_empty(), "no-op frame should be empty");
 
     // After invalidate the placement re-paints.
     layer.invalidate();
     screen.invalidate();
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     assert!(
         !screen.writer().is_empty(),
