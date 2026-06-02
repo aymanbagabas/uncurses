@@ -711,3 +711,101 @@ fn test_inline_resize_sequence_round_trip() {
     );
     assert_eq!(r.cur.pos, Position { y: 5, x: 0 });
 }
+
+/// `clear_bottom` emits ED to wipe trailing rows on the wire when
+/// `new_buf` has more trailing-blank rows than `cur_buf`. After that
+/// erase, the next frame must repaint those rows when their content
+/// returns — the previously-buggy path skipped them because
+/// `transform_line` saw `cur_buf` still holding the old (now wiped
+/// off-screen) content and decided "unchanged".
+///
+/// Scenario: 10×8 surface. Frame 1 paints scrim across all 8 rows.
+/// Frame 2 clears and repaints only rows 0-3, so rows 4-7 collapse
+/// to trailing blanks (wiped by ED). Frame 3 paints scrim across all
+/// 8 rows again — rows 4-7 must reappear.
+#[test]
+fn test_clear_bottom_syncs_cur_buf_so_next_frame_repaints() {
+    use crate::color::{BasicColor, Color};
+    use crate::style::Style;
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(false);
+
+    let scrim = Cell::new(" ", 1).with_style(Style::EMPTY.with_bg(Color::Basic(BasicColor::Blue)));
+
+    // Frame 1: scrim across all 8 rows.
+    let mut rb1 = RenderBuffer::new(10, 8);
+    for y in 0..8 {
+        for x in 0..10 {
+            rb1.set_cell((x, y), &scrim);
+        }
+    }
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb1).unwrap();
+    sink.clear();
+
+    // Frame 2: only rows 0-3 have content, rows 4-7 are blank.
+    // `clear_bottom` should emit ED to wipe rows 4-7 from the wire.
+    let mut rb2 = RenderBuffer::new(10, 8);
+    for y in 0..4 {
+        for x in 0..10 {
+            rb2.set_cell((x, y), &scrim);
+        }
+    }
+    r.render(&mut sink, &mut rb2).unwrap();
+    sink.clear();
+
+    // Frame 3: scrim across all 8 rows again. Rows 4-7 were wiped
+    // off-screen by frame 2's ED — they must be repainted now.
+    let mut rb3 = RenderBuffer::new(10, 8);
+    for y in 0..8 {
+        for x in 0..10 {
+            rb3.set_cell((x, y), &scrim);
+        }
+    }
+    r.render(&mut sink, &mut rb3).unwrap();
+    let out = String::from_utf8_lossy(&sink).to_string();
+
+    // Rows 4-7 must be re-emitted: each produces an EL or explicit
+    // cell content. `\e[K` (EL) appears for every row painted from
+    // scratch in this scenario; require at least 4 occurrences so we
+    // know all four wiped rows came back.
+    let el_count = out.matches("\x1b[K").count();
+    assert!(
+        el_count >= 4,
+        "rows 4-7 must be repainted after prior ED wiped them: out={out:?}"
+    );
+}
+
+/// Regression: `clear_bottom` must NOT emit a redundant ED when
+/// `cur_buf` is already blank wherever `new_buf` has trailing blanks
+/// (e.g., the very first frame after init, or any frame following a
+/// force-clear that wiped `cur_buf`). The optimiser should only fire
+/// when there's stale content on screen to wipe; firing whenever
+/// `new_buf` has trailing blanks regardless of `cur_buf` state wastes
+/// bytes on a no-op ED.
+#[test]
+fn test_clear_bottom_skips_ed_when_cur_buf_already_blank() {
+    let mut r = Renderer::new();
+    r.set_fullscreen(false);
+
+    // First frame: cur_buf is freshly initialised (all blank). New
+    // frame has content rows 0-2 and trailing blanks rows 3-7.
+    let mut rb = RenderBuffer::new(10, 8);
+    let glyph = Cell::new("x", 1);
+    for y in 0..3 {
+        for x in 0..10 {
+            rb.set_cell((x, y), &glyph);
+        }
+    }
+
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    let out = String::from_utf8_lossy(&sink).to_string();
+
+    // No ED-below should fire — cur_buf was already blank in rows 3-7.
+    assert!(
+        !out.contains("\x1b[J") && !out.contains("\x1b[0J"),
+        "redundant ED-below emitted for cur_buf that was already blank: out={out:?}"
+    );
+}

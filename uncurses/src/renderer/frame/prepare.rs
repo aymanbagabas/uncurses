@@ -12,8 +12,6 @@ use rustc_hash::FxHasher;
 const SCROLL_OPTIMIZE_MIN_TOUCHED_LINES: usize = 2;
 const SCROLL_OPTIMIZE_TOUCHED_DIVISOR: usize = 8;
 
-use crate::Position;
-use crate::ansi::{self, cursor as ansi_cursor};
 use crate::cell::Cell;
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
@@ -81,19 +79,8 @@ impl Renderer {
 
         if inline_partial_clear && height > 0 && !self.force_clear {
             let last_row = height - 1;
-            self.move_to(out, new_buf, last_row, 0)?;
             self.reset_pen(out)?;
-            ansi::write_erase_below(out)?;
-            // The erase wipes the row at last_row too; blank cur_buf
-            // there so the upcoming transform pass repaints it from
-            // new_buf rather than skipping on a stale equality.
-            if let Some(ref mut cb) = self.cur_buf
-                && let Some(line) = cb.line_mut(last_row)
-            {
-                for cell in line.iter_mut() {
-                    *cell = Cell::BLANK;
-                }
-            }
+            self.clear_below(out, new_buf, last_row)?;
         }
 
         if self.force_clear {
@@ -126,51 +113,10 @@ impl Renderer {
     fn clear_update(&mut self, out: &mut Vec<u8>, new_buf: &mut RenderBuffer) -> io::Result<()> {
         if !self.fullscreen {
             // Inline: never wipe scrollback above the surface. Walk
-            // relatively back to (0,0) of the surface and erase from
-            // there down. The active pen IS what the recorded blank
-            // represents (current_blank is built from cur.style/link), so
-            // BCE paints the cleared region consistently without an
-            // explicit pen sync.
-            self.move_to(out, new_buf, 0, 0)?;
-            ansi::write_erase_below(out)?;
+            // back to (0,0) of the surface and erase from there down.
+            self.clear_below(out, new_buf, 0)?;
         } else {
-            ansi_cursor::write_cup(out, 0, 0)?;
-            ansi::write_erase_screen(out)?;
-            self.cur.pos = Position { y: 0, x: 0 };
-            self.cur.at_phantom = false;
-            // The CUP just emitted authoritatively places the tracked
-            // cursor at (0,0); mark both axes known so the next
-            // move_to can hit the same-position early-return instead
-            // of forcing a redundant absolute CUP.
-            self.cur.x_unknown = false;
-            self.cur.y_unknown = false;
-        }
-
-        // Sync cur_buf to the blank state we just left on the screen
-        // (so transform_line skips rows that are already blank in
-        // new_buf). When the pen is fully empty the blank is exactly
-        // Cell::BLANK — assigning it is a flat memcpy with no heap
-        // allocations, so fast-path that case past the styled-blank
-        // clone.
-        let pen_empty = self.cur.style().is_empty();
-        // Split-borrow: `self.cur` is disjoint from `self.cur_buf`, so
-        // the blank template ref stays live while the loop mutates
-        // cur_buf's lines.
-        let blank: &Cell = self.cur.current_blank();
-        if let Some(cb) = self.cur_buf.as_mut() {
-            for y in 0..cb.height() {
-                if let Some(line) = cb.line_mut(y) {
-                    if pen_empty {
-                        for cell in line.iter_mut() {
-                            *cell = Cell::BLANK;
-                        }
-                    } else {
-                        for cell in line.iter_mut() {
-                            *cell = blank.clone();
-                        }
-                    }
-                }
-            }
+            self.clear_screen(out)?;
         }
 
         // Force the post-clear transform pass to repaint every row.
