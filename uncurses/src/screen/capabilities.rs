@@ -489,7 +489,7 @@ fn decode_hex_ascii(s: &str) -> Option<String> {
 /// stable, distinctive product names.
 fn detect_iterm2_graphics_xtversion(xtversion: &str) -> bool {
     let lower = xtversion.to_ascii_lowercase();
-    ["iterm", "wezterm", "rio"]
+    ["iterm", "wezterm", "rio", "windows terminal"]
         .iter()
         .any(|needle| lower.contains(needle))
 }
@@ -498,7 +498,7 @@ fn detect_iterm2_graphics_xtversion(xtversion: &str) -> bool {
 /// variables, before any terminal round-trip. Mirrors the XTVERSION
 /// detection: matches the same set of implementers via the standard
 /// terminal-identifying env vars (`TERM_PROGRAM`, plus `LC_TERMINAL`
-/// for older iTerm releases).
+/// for older iTerm releases, and `WT_SESSION` for Windows Terminal).
 fn detect_iterm2_graphics_env(env: &Env) -> bool {
     let term_program = env
         .get("TERM_PROGRAM")
@@ -514,7 +514,12 @@ fn detect_iterm2_graphics_env(env: &Env) -> bool {
         .get("LC_TERMINAL")
         .unwrap_or_default()
         .to_ascii_lowercase();
-    lc_terminal.contains("iterm")
+    if lc_terminal.contains("iterm") {
+        return true;
+    }
+    // Windows Terminal advertises itself via WT_SESSION (a GUID set
+    // for every WT pane). Inline image support shipped in v1.22.
+    env.get("WT_SESSION").is_some_and(|v| !v.is_empty())
 }
 
 #[cfg(test)]
@@ -549,6 +554,27 @@ mod tests {
     fn new_infers_iterm2_graphics_from_lc_terminal() {
         let env = Env::from_pairs([("LC_TERMINAL", "iTerm2")]);
         assert_eq!(Capabilities::from_env(&env).iterm2_graphics, Some(true));
+    }
+
+    #[test]
+    fn new_infers_iterm2_graphics_from_wt_session() {
+        let env = Env::from_pairs([("WT_SESSION", "abc123-de45-67ff-89aa-bbccddeeff00")]);
+        assert_eq!(Capabilities::from_env(&env).iterm2_graphics, Some(true));
+    }
+
+    #[test]
+    fn new_does_not_infer_iterm2_graphics_for_empty_wt_session() {
+        let env = Env::from_pairs([("WT_SESSION", "")]);
+        assert_eq!(Capabilities::from_env(&env).iterm2_graphics, Some(false));
+    }
+
+    #[test]
+    fn xtversion_marks_iterm2_for_windows_terminal() {
+        let mut c = Capabilities::from_env(&Env::empty());
+        c.update(&Event::TerminalVersion(
+            "Microsoft Windows Terminal v1.22".into(),
+        ));
+        assert_eq!(c.iterm2_graphics, Some(true));
     }
 
     #[test]
