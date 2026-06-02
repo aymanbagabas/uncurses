@@ -29,7 +29,7 @@ fn make_caps() -> Capabilities {
 fn first_paint_emits_apc_transmit_and_placeholder_glyph() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = make_caps();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Kitty);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Kitty);
 
     let id = layer.add(solid_image(Rgba([255, 0, 0, 255]), 20, 20));
     layer.place(
@@ -43,7 +43,7 @@ fn first_paint_emits_apc_transmit_and_placeholder_glyph() {
         Resize::Scale(image::imageops::FilterType::Triangle),
     );
 
-    layer.render(&mut screen).expect("render");
+    layer.render(&caps, &mut screen).expect("render");
     screen.flush().unwrap();
     let bytes = screen.writer().clone();
     let s = String::from_utf8_lossy(&bytes);
@@ -66,15 +66,15 @@ fn first_paint_emits_apc_transmit_and_placeholder_glyph() {
 #[test]
 fn auto_protocol_resolves_to_kitty_when_supported() {
     let caps = make_caps();
-    let layer = ImageLayer::new(&caps);
-    assert_eq!(layer.protocol(), ImageProtocol::Kitty);
+    let layer = ImageLayer::new();
+    assert_eq!(layer.protocol(&caps), ImageProtocol::Kitty);
 }
 
 #[test]
 fn no_retransmit_for_unchanged_image() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = make_caps();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Kitty);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Kitty);
 
     let id = layer.add(solid_image(Rgba([0, 200, 0, 255]), 20, 20));
     layer.place(
@@ -88,12 +88,12 @@ fn no_retransmit_for_unchanged_image() {
         Resize::Scale(image::imageops::FilterType::Triangle),
     );
 
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
     // Steady-state frame: no transmit bytes.
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let s = String::from_utf8_lossy(screen.writer());
     assert!(
@@ -106,7 +106,7 @@ fn no_retransmit_for_unchanged_image() {
 fn remove_emits_terminal_side_delete() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = make_caps();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Kitty);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Kitty);
 
     let id = layer.add(solid_image(Rgba([0, 0, 255, 255]), 20, 20));
     layer.place(
@@ -119,12 +119,12 @@ fn remove_emits_terminal_side_delete() {
         },
         Resize::default(),
     );
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
     layer.remove(id);
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let s = String::from_utf8_lossy(screen.writer());
     assert!(
@@ -137,7 +137,7 @@ fn remove_emits_terminal_side_delete() {
 fn resize_change_triggers_retransmit_for_crop_mode() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 10);
     let caps = make_caps();
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Kitty);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Kitty);
 
     let id = layer.add(solid_image(Rgba([100, 100, 100, 255]), 50, 50));
     layer.place(
@@ -151,7 +151,7 @@ fn resize_change_triggers_retransmit_for_crop_mode() {
         Resize::Crop(uncurses_image::CropAnchor::Center),
     );
 
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
@@ -166,7 +166,7 @@ fn resize_change_triggers_retransmit_for_crop_mode() {
         },
         Resize::Crop(uncurses_image::CropAnchor::Center),
     );
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let s = String::from_utf8_lossy(screen.writer());
     assert!(

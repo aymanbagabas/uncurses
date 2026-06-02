@@ -19,23 +19,22 @@ use crate::resize::Resize;
 ///
 /// The layer is an addon, not a wrapper: each method takes a
 /// `&mut Screen<W>` so the host application keeps full control of
-/// the screen's lifecycle. The layer borrows a [`Capabilities`]
-/// snapshot for its lifetime; updating the underlying snapshot (e.g.
-/// after a probe reply or a window resize) is reflected on the next
-/// `paint` automatically — no setter needed.
+/// the screen's lifecycle. Capabilities are passed in per call to
+/// [`Self::reserve`] / [`Self::paint`] / [`Self::render`] so the
+/// host can mutate the snapshot between frames (e.g. after a late
+/// probe reply) and the next render picks up the new state.
 ///
 /// # Per-frame flow
 ///
 /// ```text
-/// layer.reserve(&mut screen);   // stamp blanks/halfblocks into the surface
-/// screen.render()?;             // renderer flushes text bytes
-/// layer.paint(&mut screen)?;    // raster protocols emit raw bytes
-/// screen.writer_mut().flush()?; // (caller's responsibility)
+/// layer.reserve(&caps, &mut screen);  // stamp blanks/halfblocks into the surface
+/// screen.render()?;                   // renderer flushes text bytes
+/// layer.paint(&caps, &mut screen)?;   // raster protocols emit raw bytes
+/// screen.writer_mut().flush()?;       // (caller's responsibility)
 /// ```
 ///
 /// [`Self::render`] is a convenience that performs all three.
-pub struct ImageLayer<'a> {
-    caps: &'a Capabilities,
+pub struct ImageLayer {
     protocol_choice: ImageProtocol,
     /// Resolved protocol that was used during the last paint.
     /// Tracking lets us detect a mid-session protocol switch (e.g.
@@ -53,13 +52,16 @@ pub struct ImageLayer<'a> {
     sixel: Sixel,
 }
 
-impl<'a> ImageLayer<'a> {
-    /// Create a new layer that reads its capability information from
-    /// the borrowed [`Capabilities`] snapshot. The borrow is held for
-    /// the layer's lifetime.
-    pub fn new(caps: &'a Capabilities) -> Self {
+impl Default for ImageLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ImageLayer {
+    /// Create a new layer with [`ImageProtocol::Auto`] resolution.
+    pub fn new() -> Self {
         Self {
-            caps,
             protocol_choice: ImageProtocol::Auto,
             last_resolved: None,
             images: FxHashMap::default(),
@@ -83,10 +85,10 @@ impl<'a> ImageLayer<'a> {
     }
 
     /// The protocol that the next [`Self::paint`] will use, given
-    /// the borrowed capabilities. For [`ImageProtocol::Auto`] this
-    /// is recomputed on each call.
-    pub fn protocol(&self) -> ImageProtocol {
-        self.protocol_choice.resolve(self.caps)
+    /// `caps`. For [`ImageProtocol::Auto`] this is recomputed on
+    /// each call.
+    pub fn protocol(&self, caps: &Capabilities) -> ImageProtocol {
+        self.protocol_choice.resolve(caps)
     }
 
     /// Register an image with the layer. The returned [`ImageId`] is
@@ -185,8 +187,12 @@ impl<'a> ImageLayer<'a> {
     /// Stamp cells for every active placement (and emit any pre-frame
     /// payload for protocols that need it) into `screen`. Must be
     /// called before [`Screen::render`].
-    pub fn reserve<W: Write>(&mut self, screen: &mut Screen<W>) -> io::Result<()> {
-        let resolved = self.protocol();
+    pub fn reserve<W: Write>(
+        &mut self,
+        caps: &Capabilities,
+        screen: &mut Screen<W>,
+    ) -> io::Result<()> {
+        let resolved = self.protocol(caps);
 
         // Detect a mid-session protocol switch and force a full
         // re-encode of every placement.
@@ -211,7 +217,7 @@ impl<'a> ImageLayer<'a> {
                 id: *id,
                 image,
                 placement,
-                caps: self.caps,
+                caps,
             };
             match resolved {
                 ImageProtocol::HalfBlocks => self.halfblocks.reserve(&ctx, screen)?,
@@ -228,9 +234,13 @@ impl<'a> ImageLayer<'a> {
     /// Emit any post-frame payload (sixel, iTerm2 inline) and any
     /// pending terminal-side cleanup. Must be called after
     /// [`Screen::render`].
-    pub fn paint<W: Write>(&mut self, screen: &mut Screen<W>) -> io::Result<()> {
-        let resolved = self.protocol();
-        let cell_px = self.caps.cell_pixel_size;
+    pub fn paint<W: Write>(
+        &mut self,
+        caps: &Capabilities,
+        screen: &mut Screen<W>,
+    ) -> io::Result<()> {
+        let resolved = self.protocol(caps);
+        let cell_px = caps.cell_pixel_size;
 
         // Backend-side cleanup for any pending erasures.
         for erase in self.pending_erasures.drain(..) {
@@ -258,7 +268,7 @@ impl<'a> ImageLayer<'a> {
                 id: *id,
                 image,
                 placement,
-                caps: self.caps,
+                caps,
             };
             match resolved {
                 ImageProtocol::HalfBlocks => self.halfblocks.paint(&ctx, screen)?,
@@ -287,10 +297,14 @@ impl<'a> ImageLayer<'a> {
 
     /// Convenience wrapper: `reserve` → `screen.render()` → `paint`.
     /// Returns whatever `screen.render()` and `paint` produce.
-    pub fn render<W: Write>(&mut self, screen: &mut Screen<W>) -> io::Result<()> {
-        self.reserve(screen)?;
+    pub fn render<W: Write>(
+        &mut self,
+        caps: &Capabilities,
+        screen: &mut Screen<W>,
+    ) -> io::Result<()> {
+        self.reserve(caps, screen)?;
         screen.render()?;
-        self.paint(screen)
+        self.paint(caps, screen)
     }
 
     /// Release any terminal-side resources owned by the layer (e.g.

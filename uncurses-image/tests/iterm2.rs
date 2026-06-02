@@ -28,8 +28,8 @@ fn caps_with_iterm2(cell_pixel_size: Option<(u16, u16)>) -> Capabilities {
 #[test]
 fn auto_resolves_to_iterm2_when_supported() {
     let caps = caps_with_iterm2(Some((10, 20)));
-    let layer = ImageLayer::new(&caps);
-    assert_eq!(layer.protocol(), ImageProtocol::Iterm2);
+    let layer = ImageLayer::new();
+    assert_eq!(layer.protocol(&caps), ImageProtocol::Iterm2);
 }
 
 #[test]
@@ -37,15 +37,15 @@ fn iterm2_works_without_cell_pixel_size() {
     // The terminal does cell-to-pixel scaling, so iTerm2 doesn't
     // need cell_pixel_size to be advertised.
     let caps = caps_with_iterm2(None);
-    let layer = ImageLayer::new(&caps);
-    assert_eq!(layer.protocol(), ImageProtocol::Iterm2);
+    let layer = ImageLayer::new();
+    assert_eq!(layer.protocol(&caps), ImageProtocol::Iterm2);
 }
 
 #[test]
 fn first_paint_emits_osc_1337_inline_image() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = caps_with_iterm2(Some((10, 20)));
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Iterm2);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Iterm2);
 
     let id = layer.add(solid_image(Rgba([0, 200, 100, 255]), 20, 20));
     layer.place(
@@ -59,7 +59,7 @@ fn first_paint_emits_osc_1337_inline_image() {
         Resize::Scale(image::imageops::FilterType::Triangle),
     );
 
-    layer.render(&mut screen).expect("render");
+    layer.render(&caps, &mut screen).expect("render");
     screen.flush().unwrap();
     let bytes = screen.writer().clone();
     let s = String::from_utf8_lossy(&bytes);
@@ -86,7 +86,7 @@ fn first_paint_emits_osc_1337_inline_image() {
 fn fit_uses_preserve_aspect_ratio_one() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = caps_with_iterm2(Some((10, 20)));
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Iterm2);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Iterm2);
 
     let id = layer.add(solid_image(Rgba([100, 100, 100, 255]), 50, 50));
     layer.place(
@@ -99,7 +99,7 @@ fn fit_uses_preserve_aspect_ratio_one() {
         },
         Resize::default(),
     );
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let s = String::from_utf8_lossy(screen.writer());
     assert!(
@@ -112,7 +112,7 @@ fn fit_uses_preserve_aspect_ratio_one() {
 fn no_re_encode_for_unchanged_placement() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(20, 5);
     let caps = caps_with_iterm2(Some((10, 20)));
-    let mut layer = ImageLayer::new(&caps).with_protocol(ImageProtocol::Iterm2);
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Iterm2);
 
     let id = layer.add(solid_image(Rgba([0, 0, 200, 255]), 20, 20));
     layer.place(
@@ -126,11 +126,11 @@ fn no_re_encode_for_unchanged_placement() {
         Resize::default(),
     );
 
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
-    layer.render(&mut screen).unwrap();
+    layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let s = String::from_utf8_lossy(screen.writer());
     assert!(

@@ -8,25 +8,35 @@
 //! `sixel`, or `iterm2`. `auto` picks the best match for the
 //! detected terminal capabilities.
 //!
+//! At startup the example writes a capability probe to the terminal,
+//! drains the reply events into a [`Capabilities`] snapshot, and only
+//! then constructs the image layer — so `auto` resolution sees the
+//! true terminal answer (e.g. iTerm2 graphics confirmed via XTVERSION
+//! rather than just env-detected). Late capability replies that
+//! arrive after the first frame are folded back into the snapshot
+//! and trigger a redraw.
+//!
 //! Press `q`, `Esc`, or `Ctrl-C` to quit. The image is centered and
 //! resized to fit half of the terminal area.
-//!
-//! ```text
-//! cargo run -p uncurses-image --example image --features sixel -- ferris.png sixel
-//! ```
 
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use uncurses::Rect;
 use uncurses::SurfaceMut;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
-use uncurses::screen::{Capabilities, Screen};
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::screen::{Capabilities, Feature, Screen};
+use uncurses::terminal::{
+    Stdin, Stdout, disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout,
+};
 use uncurses_image::{Image, ImageLayer, ImageProtocol, Resize};
+
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+const FRAME_POLL: Duration = Duration::from_millis(50);
 
 fn parse_protocol(s: &str) -> Option<ImageProtocol> {
     match s.to_ascii_lowercase().as_str() {
@@ -82,48 +92,115 @@ fn run(path: PathBuf, protocol: ImageProtocol) -> Result<(), Box<dyn std::error:
     screen.set_cursor_visible(false)?;
     screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr)?;
 
-    let caps = Capabilities::default();
-    let mut layer = ImageLayer::new(&caps).with_protocol(protocol);
+    let mut events = Source::new(stdin())?;
+    let mut caps = Capabilities::default();
+    probe_capabilities(&mut caps, &mut screen, &mut events)?;
 
-    let resolved = layer.protocol();
+    let mut layer = ImageLayer::new().with_protocol(protocol);
     let id = layer.add(image);
     place_centered(&mut layer, id, &screen);
 
-    redraw(&mut screen, &mut layer, resolved, &path)?;
+    redraw(&mut screen, &mut layer, &caps, protocol, &path)?;
 
-    let mut events = Source::new(stdin())?;
-    loop {
-        let ev = events.read()?;
-        match ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q') | KeyCode::Escape,
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => break,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => break,
-            Event::Resize(ws) => {
-                screen.resize(ws.col, ws.row);
-                layer.invalidate();
-                place_centered(&mut layer, id, &screen);
-                redraw(&mut screen, &mut layer, resolved, &path)?;
-            }
-            _ => {}
-        }
-    }
+    let result = event_loop(
+        &mut screen,
+        &mut layer,
+        &mut events,
+        &mut caps,
+        id,
+        protocol,
+        &path,
+    );
 
     layer.shutdown(&mut screen)?;
     screen.reset()?;
     screen.flush()?;
     disable_raw_mode(stdin(), stdout(), &state)?;
+    result
+}
+
+/// Send a capability probe and drain the replies into `caps`. The
+/// probe terminates either when DA1 (the natural probe terminator)
+/// arrives or when [`PROBE_TIMEOUT`] elapses.
+fn probe_capabilities(
+    caps: &mut Capabilities,
+    screen: &mut Screen<Stdout>,
+    events: &mut Source<Stdin>,
+) -> std::io::Result<()> {
+    Feature::default().write_probe(screen.writer_mut())?;
+    screen.writer_mut().flush()?;
+
+    let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if !events.poll(Some(remaining))? {
+            break;
+        }
+        while let Some(ev) = events.try_read() {
+            caps.update(&ev);
+            if matches!(ev, Event::PrimaryDeviceAttributes(_)) {
+                return Ok(());
+            }
+        }
+    }
     Ok(())
 }
 
-fn place_centered<W: std::io::Write>(
-    layer: &mut ImageLayer<'_>,
+fn event_loop(
+    screen: &mut Screen<Stdout>,
+    layer: &mut ImageLayer,
+    events: &mut Source<Stdin>,
+    caps: &mut Capabilities,
+    id: uncurses_image::ImageId,
+    requested: ImageProtocol,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        if !events.poll(Some(FRAME_POLL))? {
+            continue;
+        }
+        let mut dirty = false;
+        let mut quit = false;
+        while let Some(ev) = events.try_read() {
+            // Late capability replies (e.g. an XTVERSION that arrived
+            // after the probe deadline) update the snapshot and force
+            // a redraw with the new resolved protocol.
+            if caps.update(&ev) {
+                layer.invalidate();
+                dirty = true;
+                continue;
+            }
+            match ev {
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('q') | KeyCode::Escape,
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => quit = true,
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
+                Event::Resize(ws) => {
+                    screen.resize(ws.col, ws.row);
+                    layer.invalidate();
+                    place_centered(layer, id, screen);
+                    dirty = true;
+                }
+                _ => {}
+            }
+        }
+        if quit {
+            return Ok(());
+        }
+        if dirty {
+            redraw(screen, layer, caps, requested, path)?;
+        }
+    }
+}
+
+fn place_centered<W: Write>(
+    layer: &mut ImageLayer,
     id: uncurses_image::ImageId,
     screen: &Screen<W>,
 ) {
@@ -147,14 +224,15 @@ fn place_centered<W: std::io::Write>(
     );
 }
 
-fn redraw<W: std::io::Write>(
+fn redraw<W: Write>(
     screen: &mut Screen<W>,
-    layer: &mut ImageLayer<'_>,
+    layer: &mut ImageLayer,
+    caps: &Capabilities,
     requested: ImageProtocol,
     path: &std::path::Path,
 ) -> std::io::Result<()> {
     screen.clear();
-    let resolved = layer.protocol();
+    let resolved = layer.protocol(caps);
     let header = format!(
         " {} — requested: {:?}, resolved: {:?} — q/Esc to quit ",
         path.file_name()
@@ -164,7 +242,7 @@ fn redraw<W: std::io::Write>(
         resolved,
     );
     screen.set_str((0, 0), &header, uncurses::text::WrapMode::Truncate);
-    layer.render(screen)?;
+    layer.render(caps, screen)?;
     screen.flush()?;
     Ok(())
 }
