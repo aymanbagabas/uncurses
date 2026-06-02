@@ -163,16 +163,21 @@ fn event_loop(
         let mut quit = false;
         while let Some(ev) = events.try_read() {
             // Late capability replies (e.g. an XTVERSION that arrived
-            // after the probe deadline) update the snapshot and force
-            // a redraw with the new resolved protocol. Invalidate the
-            // screen too: raster image bursts emitted before the new
-            // caps were known may have left pixels burned onto the
-            // terminal canvas that a normal cell-diff repaint won't
-            // wipe — a full clear-screen on the next render does.
+            // after the probe deadline) update the snapshot. Only
+            // force a layer / screen invalidation when the cell pixel
+            // size actually changes — that's the cap that affects
+            // raster encoding. Re-invalidating on every unrelated
+            // reply (XTVERSION, DA1, …) would re-emit the inline OSC
+            // burst on each one; some terminals composite each burst
+            // as an additional raster on the canvas, leaving stacked
+            // images instead of replacing the previous one.
+            let prev_cell_px = caps.cell_pixel_size;
             if caps.update(&ev) {
-                layer.invalidate();
-                screen.invalidate();
-                dirty = true;
+                if caps.cell_pixel_size != prev_cell_px {
+                    layer.invalidate();
+                    screen.invalidate();
+                    dirty = true;
+                }
                 continue;
             }
             match ev {

@@ -7,9 +7,13 @@
 //! ESC ] 1337 ; File = inline=1 ; width=N ; height=M ; preserveAspectRatio=… : <base64-png> BEL
 //! ```
 //!
+//! When the encoded payload would exceed the per-OSC byte limit
+//! (1,048,576 bytes — the cap honored by both the terminal and tmux
+//! passthrough), the burst is split across `MultipartFile=` /
+//! `FilePart=` / `FileEnd` sequences instead.
+//!
 //! The placeholder cells are blanked during `reserve` so the
-//! renderer's diff wipes any text underneath; the OSC burst itself
-//! is wrapped in DECSC/DECRC so terminal-side cursor state survives.
+//! renderer's diff wipes any text underneath.
 //!
 //! Reference: <https://iterm2.com/documentation-images.html>
 
@@ -131,21 +135,25 @@ impl Backend for Iterm2 {
         }
         let entry = &self.cache[&ctx.id];
 
-        // Position the cursor at the placement origin (planner-aware,
-        // handles inline / fullscreen modes), emit the OSC 1337
-        // burst, then snap the cursor back to the origin via CUU so
-        // the renderer's tracked position stays in sync.
+        // Position the cursor at the placement origin, emit the OSC
+        // 1337 burst, then snap the cursor back via CUU. The
+        // surrounding `set_cursor_position` + `invalidate_cursor`
+        // pair means the renderer re-asserts the cursor on the next
+        // diff regardless of where the terminal actually leaves it.
         //
-        // The OSC includes `doNotMoveCursor=0`, which makes the
-        // terminal advance the cursor by `area.height` rows after
-        // rendering — emitting an explicit CUU by the same amount
-        // returns the cursor to the placement origin without needing
-        // to invalidate the renderer's bookkeeping.
+        // doNotMoveCursor=0 (set in `build_sequence`) forces the
+        // terminal to advance the cursor by `area.height` rows after
+        // rendering. The explicit CUU(area.height) returns the
+        // cursor to the placement origin in sync with the renderer's
+        // tracked position. We avoid `doNotMoveCursor=1` because it
+        // is iTerm2-specific and not honored by every terminal that
+        // implements the OSC 1337 inline-image protocol.
         screen.set_cursor_position(area.x, area.y)?;
         screen.write_all(entry.sequence.as_bytes())?;
         if area.height > 0 {
             uncurses::ansi::cursor::write_cuu(screen, area.height)?;
         }
+        screen.invalidate_cursor();
         Ok(())
     }
 
@@ -160,9 +168,22 @@ impl Backend for Iterm2 {
     }
 }
 
-/// Build the OSC 1337 sequence for one placement, including the
+/// Maximum size of a single OSC 1337 control sequence, as documented
+/// by the inline-image protocol. Sequences longer than this are
+/// rejected by the terminal and by tmux passthrough; encoders larger
+/// than this must be split using the `MultipartFile` / `FilePart` /
+/// `FileEnd` form.
+const MAX_OSC_BYTES: usize = 1_048_576;
+
+/// Build the OSC 1337 sequence(s) for one placement, including the
 /// base64-encoded PNG payload and the pixel dimensions. Caller has
 /// verified `caps.cell_pixel_size.is_some()`.
+///
+/// The return value is a single byte stream that may concatenate
+/// several OSC 1337 sequences when the encoded payload would exceed
+/// `MAX_OSC_BYTES` as a single sequence. In that case the multipart
+/// form is used: a `MultipartFile=` header, one or more `FilePart=`
+/// chunks, then a `FileEnd` terminator.
 fn build_sequence(ctx: &PaintCtx<'_>, area: Rect) -> std::io::Result<String> {
     let png_bytes = encode_png(ctx, area)?;
     let (cw, ch) = ctx
@@ -172,63 +193,121 @@ fn build_sequence(ctx: &PaintCtx<'_>, area: Rect) -> std::io::Result<String> {
     let w_px = (area.width as u32) * (cw.max(1) as u32);
     let h_px = (area.height as u32) * (ch.max(1) as u32);
 
-    // Reserve a generous amount: header + base64(payload). base64
-    // expands by ~4/3.
-    let mut out = String::with_capacity(64 + (png_bytes.len() * 4 / 3) + 8);
-    out.push_str("\x1b]1337;File=");
-    out.push_str("inline=1;");
-    // doNotMoveCursor=0 makes the terminal advance the cursor by
-    // `area.height` rows after rendering. Coupled with an explicit
-    // CUU after the burst this leaves the cursor exactly at the
-    // placement origin, in sync with the renderer's tracked
-    // position. (Some implementations honor this flag; on those
-    // that ignore it the explicit CUU still works because they
-    // also advance the cursor by the row count.)
-    out.push_str("doNotMoveCursor=0;");
+    // The argument list is identical between `File=` (single-shot)
+    // and `MultipartFile=` (chunked). Build it once and decide which
+    // framing to use after the base64 length is known.
+    //
+    // doNotMoveCursor=0 keeps the burst's cursor advancement
+    // consistent across terminals that don't recognize the flag —
+    // those move the cursor as part of normal text flow, which the
+    // surrounding CUU (in `paint`) then unwinds.
+    //
+    // preserveAspectRatio=0 is paired with exact cell-box pixel
+    // dimensions: the encoded image has already been resized (and
+    // padded/cropped where needed) to those exact dimensions on our
+    // side. Letting the terminal also apply aspect-ratio fitting
+    // produces inconsistent results across implementers.
+    let mut args = String::with_capacity(96);
+    args.push_str("inline=1;doNotMoveCursor=0;");
     write!(
-        out,
-        "size={};width={}px;height={}px;preserveAspectRatio={}:",
+        args,
+        "size={};width={}px;height={}px;preserveAspectRatio=0",
         png_bytes.len(),
         w_px,
         h_px,
-        match ctx.placement.resize {
-            Resize::Scale(_) => 0,
-            Resize::Fit(_) | Resize::Crop(_) => 1,
-        },
     )
     .expect("write to String");
-    STANDARD.encode_string(&png_bytes, &mut out);
-    // BEL terminator. iTerm2 also accepts ST (`ESC \`); BEL is
-    // shorter and what the iTerm2 docs use in their examples.
+
+    // base64 expands by ~4/3; pre-compute the encoded length so we
+    // can decide single-shot vs. multipart without growing twice.
+    let b64_len = STANDARD.encode(&png_bytes).len();
+    // Single-shot framing overhead:
+    //   "\x1b]1337;File=" + args + ":" + <base64> + "\x07"
+    let single_total = b"\x1b]1337;File=".len() + args.len() + 1 + b64_len + 1;
+
+    let mut out = String::with_capacity(single_total + 64);
+
+    if single_total <= MAX_OSC_BYTES {
+        out.push_str("\x1b]1337;File=");
+        out.push_str(&args);
+        out.push(':');
+        STANDARD.encode_string(&png_bytes, &mut out);
+        // BEL terminator. ST (`ESC \`) is also accepted; BEL matches
+        // the examples in the iTerm2 documentation.
+        out.push('\x07');
+        return Ok(out);
+    }
+
+    // Multipart form. Each sub-sequence (header, every part, the
+    // terminator) must fit within `MAX_OSC_BYTES` on its own.
+    out.push_str("\x1b]1337;MultipartFile=");
+    out.push_str(&args);
     out.push('\x07');
+
+    // Per-part overhead: "\x1b]1337;FilePart=" + chunk + "\x07".
+    const FILEPART_PREFIX: &str = "\x1b]1337;FilePart=";
+    const FILEPART_OVERHEAD: usize = FILEPART_PREFIX.len() + 1; // + BEL
+    let max_chunk = MAX_OSC_BYTES - FILEPART_OVERHEAD;
+
+    // Stream-encode the payload directly into `out` without
+    // materialising the full base64 string twice. Each chunk is a
+    // multiple of 4 base64 characters so the boundaries fall on
+    // whole input groups; that means we encode windows of `3 * (N/4)`
+    // input bytes per chunk.
+    let chunk_input = (max_chunk / 4) * 3;
+    let mut idx = 0;
+    while idx < png_bytes.len() {
+        let end = (idx + chunk_input).min(png_bytes.len());
+        out.push_str(FILEPART_PREFIX);
+        STANDARD.encode_string(&png_bytes[idx..end], &mut out);
+        out.push('\x07');
+        idx = end;
+    }
+
+    out.push_str("\x1b]1337;FileEnd\x07");
     Ok(out)
 }
 
-/// Encode the (possibly pre-resized) source image to PNG. For
-/// `Resize::Crop` the source is pre-resized via `resize_to_fill` so
-/// the rendered cell area is filled without distortion; for the
-/// other modes the terminal does the scaling.
+/// Encode the source image to PNG at exactly the cell-box pixel
+/// dimensions. Each `Resize` mode is implemented host-side so the
+/// terminal receives a raster that already matches the target box —
+/// the OSC then emits `preserveAspectRatio=0` and the terminal blits
+/// the bytes straight into the box.
 fn encode_png(ctx: &PaintCtx<'_>, area: Rect) -> std::io::Result<Vec<u8>> {
-    let cell_px = ctx.caps.cell_pixel_size;
+    let (cw, ch) = ctx
+        .caps
+        .cell_pixel_size
+        .expect("paint() guarantees cell_pixel_size is Some");
+    let target_w = ((area.width as u32) * (cw.max(1) as u32)).max(1);
+    let target_h = ((area.height as u32) * (ch.max(1) as u32)).max(1);
+
     let dyn_img = match ctx.placement.resize {
-        Resize::Crop(_) => match cell_px {
-            Some((cw, ch)) => {
-                let target_w = (area.width as u32) * (cw.max(1) as u32);
-                let target_h = (area.height as u32) * (ch.max(1) as u32);
-                image::DynamicImage::ImageRgba8(
-                    ctx.image
-                        .pixels()
-                        .resize_to_fill(
-                            target_w.max(1),
-                            target_h.max(1),
-                            image::imageops::FilterType::Triangle,
-                        )
-                        .to_rgba8(),
-                )
-            }
-            None => ctx.image.pixels().clone(),
-        },
-        Resize::Fit(_) | Resize::Scale(_) => ctx.image.pixels().clone(),
+        Resize::Crop(_) => image::DynamicImage::ImageRgba8(
+            ctx.image
+                .pixels()
+                .resize_to_fill(target_w, target_h, image::imageops::FilterType::Triangle)
+                .to_rgba8(),
+        ),
+        Resize::Scale(filter) => image::DynamicImage::ImageRgba8(
+            ctx.image
+                .pixels()
+                .resize_exact(target_w, target_h, filter)
+                .to_rgba8(),
+        ),
+        Resize::Fit(filter) => {
+            // Resize-to-fit maintains aspect ratio (image fits inside
+            // the box, may be smaller in one dimension). Composite
+            // onto a transparent canvas matching the box exactly so
+            // the OSC's pixel dimensions and the terminal's cell
+            // advance line up perfectly.
+            let resized = ctx.image.pixels().resize(target_w, target_h, filter);
+            let mut canvas =
+                image::RgbaImage::from_pixel(target_w, target_h, image::Rgba([0, 0, 0, 0]));
+            let off_x = (target_w.saturating_sub(resized.width())) / 2;
+            let off_y = (target_h.saturating_sub(resized.height())) / 2;
+            image::imageops::overlay(&mut canvas, &resized, off_x as i64, off_y as i64);
+            image::DynamicImage::ImageRgba8(canvas)
+        }
     };
 
     let mut bytes = Vec::with_capacity(64 * 1024);

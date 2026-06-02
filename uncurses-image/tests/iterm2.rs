@@ -101,9 +101,13 @@ fn fit_uses_preserve_aspect_ratio_one() {
     layer.render(&caps, &mut screen).unwrap();
     screen.flush().unwrap();
     let s = String::from_utf8_lossy(screen.writer());
+    // The image is fit (and padded) to the exact cell-box pixel
+    // dimensions on the host side, so the OSC always asks the
+    // terminal to blit at exactly those dimensions without applying
+    // its own aspect-ratio fitting on top.
     assert!(
-        s.contains("preserveAspectRatio=1"),
-        "Fit → preserveAspectRatio=1, got: {s:?}"
+        s.contains("preserveAspectRatio=0"),
+        "Fit → preserveAspectRatio=0, got: {s:?}"
     );
 }
 
@@ -136,4 +140,81 @@ fn no_re_encode_for_unchanged_placement() {
         !s.contains("\x1b]1337"),
         "steady-state frame should not re-emit, got: {s:?}"
     );
+}
+
+#[test]
+fn large_payload_uses_multipart_form() {
+    use image::imageops::FilterType;
+
+    // Build an image whose PNG encoding (+ base64) easily exceeds
+    // the 1 MiB per-OSC limit. A 1024x1024 RGBA image with
+    // pseudo-random pixel content compresses poorly; the resulting
+    // PNG is well over 1 MB.
+    let w = 1024;
+    let h = 1024;
+    let mut buf = RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let r = (x ^ y) as u8;
+            let g = (x.wrapping_mul(31) ^ y.wrapping_mul(17)) as u8;
+            let b = (x.wrapping_add(y.wrapping_mul(7))) as u8;
+            buf.put_pixel(x, y, Rgba([r, g, b, 255]));
+        }
+    }
+    let img = Image::from_dynamic(image::DynamicImage::ImageRgba8(buf));
+
+    let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(200, 60);
+    let caps = caps_with_iterm2(Some((10, 20)));
+    let mut layer = ImageLayer::new().with_protocol(ImageProtocol::Iterm2);
+
+    let id = layer.add(img);
+    layer.place(
+        id,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+        },
+        Resize::Scale(FilterType::Nearest),
+    );
+
+    layer.render(&caps, &mut screen).expect("render");
+    screen.flush().unwrap();
+    let bytes = screen.writer().clone();
+    let s = String::from_utf8_lossy(&bytes);
+
+    assert!(
+        s.contains("\x1b]1337;MultipartFile="),
+        "expected MultipartFile header in multipart burst"
+    );
+    assert!(
+        s.contains("\x1b]1337;FilePart="),
+        "expected at least one FilePart chunk"
+    );
+    assert!(
+        s.contains("\x1b]1337;FileEnd\x07"),
+        "expected FileEnd terminator"
+    );
+    // Single-shot `File=` must not appear when multipart is used.
+    assert!(
+        !s.contains("\x1b]1337;File="),
+        "single-shot File= must not appear in multipart burst"
+    );
+
+    // Every OSC 1337 sub-sequence must respect the documented
+    // 1 MiB per-control-sequence limit.
+    let mut idx = 0;
+    while let Some(start) = s[idx..].find("\x1b]1337;") {
+        let abs = idx + start;
+        let end = s[abs..]
+            .find('\x07')
+            .expect("OSC 1337 sequence is BEL-terminated");
+        let total = end + 1;
+        assert!(
+            total <= 1_048_576,
+            "OSC sub-sequence exceeds 1 MiB limit: {total} bytes"
+        );
+        idx = abs + total;
+    }
 }
