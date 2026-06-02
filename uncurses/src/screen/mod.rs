@@ -14,6 +14,7 @@ use crate::terminal::Env;
 
 use self::state::State;
 
+mod capabilities;
 mod lifecycle;
 mod modes;
 mod state;
@@ -21,6 +22,8 @@ mod text;
 
 #[cfg(test)]
 mod tests;
+
+pub use capabilities::{Capabilities, Feature};
 
 /// Cell-diff capability flags that control which escape sequences the
 /// screen's internal renderer is allowed to emit.

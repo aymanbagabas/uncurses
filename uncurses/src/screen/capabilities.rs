@@ -1,11 +1,13 @@
 //! Terminal capability snapshot.
 //!
 //! [`Capabilities`] aggregates feature support and identity
-//! information learned from reply events. Build one with
-//! [`Capabilities::new`] and feed every incoming [`Event`] through
-//! [`Capabilities::update`]; relevant replies populate the matching
-//! fields. Fields stay `None` until a positive or negative reply
-//! arrives — treat `None` as "do not enable".
+//! information learned from the environment and from reply events.
+//! Build one with [`Capabilities::from_env`] passing an [`Env`] (which
+//! seeds entries that can be inferred without a round-trip, like
+//! iTerm2 inline image protocol support), then feed every incoming
+//! [`Event`] through [`Capabilities::update`]; relevant replies
+//! populate the remaining fields. Fields stay `None` until a positive
+//! or negative reply arrives — treat `None` as "do not enable".
 
 use crate::ansi::kitty::KittyFlags;
 use crate::ansi::mode::{Mode, ModeSetting};
@@ -214,7 +216,7 @@ impl Default for Feature {
 
 /// Snapshot of terminal features and identity discovered from reply
 /// events. See module documentation for the intended workflow.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Capabilities {
     // --- Identity --------------------------------------------------------
     /// XTVERSION reply payload (typically `"name(version)"`).
@@ -243,6 +245,12 @@ pub struct Capabilities {
     /// arrives. There is no negative reply, so this stays `None` on
     /// terminals that don't support it.
     pub kitty_graphics: Option<bool>,
+    /// iTerm2 inline image protocol (OSC 1337 `File=`). There is no
+    /// standard probe; support is inferred from the XTVERSION reply
+    /// when the reported terminal name matches a known implementer
+    /// (iTerm2, WezTerm, rio). Stays `None` until an XTVERSION reply
+    /// arrives.
+    pub iterm2_graphics: Option<bool>,
 
     // --- DEC private modes (DECRQM replies) -----------------------------
     /// Synchronized output (DEC mode 2026).
@@ -288,9 +296,54 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
-    /// Build an empty snapshot.
-    pub fn new() -> Self {
-        Self::default()
+    /// Build a snapshot seeded from the environment.
+    ///
+    /// Entries that can be inferred without a terminal round-trip are
+    /// populated up front; everything else stays at its defaults until
+    /// a reply event is fed through [`Self::update`].
+    ///
+    /// Currently the only env-derived inference is iTerm2 inline image
+    /// protocol support: set to `Some(true)` when `TERM_PROGRAM` names
+    /// a known implementer (iTerm2, WezTerm, rio) or `LC_TERMINAL`
+    /// contains `iTerm`; otherwise `Some(false)`.
+    pub fn from_env(env: &Env) -> Self {
+        Self {
+            iterm2_graphics: Some(detect_iterm2_graphics_env(env)),
+            ..Self::blank()
+        }
+    }
+
+    /// Internal "all defaults" constructor used by [`Self::from_env`]
+    /// and by tests that want a deterministic starting point.
+    fn blank() -> Self {
+        Self {
+            name_version: None,
+            da1: Vec::new(),
+            da2: Vec::new(),
+            da3: None,
+            sixel: None,
+            regis: None,
+            kitty_keyboard: None,
+            modify_other_keys: None,
+            kitty_graphics: None,
+            iterm2_graphics: None,
+            synchronized_output: None,
+            unicode_core: None,
+            theme_reporting: None,
+            in_band_resize: None,
+            bracketed_paste: None,
+            focus_events: None,
+            mouse_sgr: None,
+            mouse_sgr_pixels: None,
+            styled_underline: None,
+            clipboard: None,
+            cell_pixel_size: None,
+            window_pixel_size: None,
+            foreground: None,
+            background: None,
+            cursor_color: None,
+            color_scheme: None,
+        }
     }
 
     /// Ingest one event. Returns `true` when `ev` was a known
@@ -313,6 +366,9 @@ impl Capabilities {
                 true
             }
             Event::TerminalVersion(s) => {
+                if detect_iterm2_graphics_xtversion(s) {
+                    self.iterm2_graphics = Some(true);
+                }
                 self.name_version = Some(s.clone());
                 true
             }
@@ -402,6 +458,13 @@ impl Capabilities {
     }
 }
 
+impl Default for Capabilities {
+    /// Equivalent to `Self::from_env(&Env::from_process())`.
+    fn default() -> Self {
+        Self::from_env(&Env::from_process())
+    }
+}
+
 /// Decode a hex-encoded ASCII string (XTGETTCAP name half).
 /// Returns `None` if the input is not an even number of ASCII hex
 /// digits.
@@ -418,22 +481,109 @@ fn decode_hex_ascii(s: &str) -> Option<String> {
     Some(out)
 }
 
+/// Infer iTerm2 inline image protocol support from an XTVERSION reply.
+/// XTVERSION payloads are typically of the form `name(version)` (e.g.
+/// `"iTerm2(3.5.0)"`, `"WezTerm 20240203-110809-5046fc22"`,
+/// `"rio 0.1.18"`). A case-insensitive substring match against the set
+/// of known implementers is sufficient — these terminals all advertise
+/// stable, distinctive product names.
+fn detect_iterm2_graphics_xtversion(xtversion: &str) -> bool {
+    let lower = xtversion.to_ascii_lowercase();
+    ["iterm", "wezterm", "rio"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+/// Infer iTerm2 inline image protocol support from environment
+/// variables, before any terminal round-trip. Mirrors the XTVERSION
+/// detection: matches the same set of implementers via the standard
+/// terminal-identifying env vars (`TERM_PROGRAM`, plus `LC_TERMINAL`
+/// for older iTerm releases).
+fn detect_iterm2_graphics_env(env: &Env) -> bool {
+    let term_program = env
+        .get("TERM_PROGRAM")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if ["iterm", "wezterm", "rio"]
+        .iter()
+        .any(|needle| term_program.contains(needle))
+    {
+        return true;
+    }
+    let lc_terminal = env
+        .get("LC_TERMINAL")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    lc_terminal.contains("iterm")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn new_is_all_none() {
-        let c = Capabilities::new();
+    fn new_with_empty_env_is_all_none_except_iterm2() {
+        let c = Capabilities::from_env(&Env::empty());
         assert!(c.sixel.is_none());
         assert!(c.bracketed_paste.is_none());
         assert!(c.kitty_keyboard.is_none());
         assert!(c.da1.is_empty());
+        // iterm2_graphics is the only field seeded from the env at
+        // construction time; with an empty env the answer is "no".
+        assert_eq!(c.iterm2_graphics, Some(false));
+    }
+
+    #[test]
+    fn new_infers_iterm2_graphics_from_term_program() {
+        for value in ["iTerm.app", "WezTerm", "rio"] {
+            let env = Env::from_pairs([("TERM_PROGRAM", value)]);
+            assert_eq!(
+                Capabilities::from_env(&env).iterm2_graphics,
+                Some(true),
+                "expected Some(true) for TERM_PROGRAM={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_infers_iterm2_graphics_from_lc_terminal() {
+        let env = Env::from_pairs([("LC_TERMINAL", "iTerm2")]);
+        assert_eq!(Capabilities::from_env(&env).iterm2_graphics, Some(true));
+    }
+
+    #[test]
+    fn new_does_not_infer_iterm2_graphics_for_other_terms() {
+        for value in ["Apple_Terminal", "Hyper", "ghostty", "kitty"] {
+            let env = Env::from_pairs([("TERM_PROGRAM", value)]);
+            assert_eq!(
+                Capabilities::from_env(&env).iterm2_graphics,
+                Some(false),
+                "expected Some(false) for TERM_PROGRAM={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn xtversion_does_not_downgrade_env_inferred_iterm2_graphics() {
+        let env = Env::from_pairs([("TERM_PROGRAM", "WezTerm")]);
+        let mut c = Capabilities::from_env(&env);
+        // An XTVERSION reply that doesn't mention WezTerm/iTerm/rio
+        // must not downgrade the env-positive signal.
+        c.update(&Event::TerminalVersion("xterm(395)".to_string()));
+        assert_eq!(c.iterm2_graphics, Some(true));
+    }
+
+    #[test]
+    fn xtversion_upgrades_iterm2_graphics_when_env_silent() {
+        let mut c = Capabilities::from_env(&Env::empty());
+        assert_eq!(c.iterm2_graphics, Some(false));
+        c.update(&Event::TerminalVersion("iTerm2(3.5.0)".to_string()));
+        assert_eq!(c.iterm2_graphics, Some(true));
     }
 
     #[test]
     fn da1_sets_sixel_and_regis() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         let ev = Event::PrimaryDeviceAttributes(vec![Some(64), Some(4), Some(22)]);
         assert!(c.update(&ev));
         assert_eq!(c.sixel, Some(true));
@@ -443,7 +593,7 @@ mod tests {
 
     #[test]
     fn da1_without_sixel_marks_false() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]));
         assert_eq!(c.sixel, Some(false));
         assert_eq!(c.regis, Some(false));
@@ -451,14 +601,45 @@ mod tests {
 
     #[test]
     fn xtversion_stores_raw_payload() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::TerminalVersion("xterm(395)".to_string()));
         assert_eq!(c.name_version.as_deref(), Some("xterm(395)"));
+        assert_eq!(c.iterm2_graphics, Some(false));
+    }
+
+    #[test]
+    fn xtversion_infers_iterm2_graphics_for_known_implementers() {
+        for name in [
+            "iTerm2(3.5.0)",
+            "WezTerm 20240203-110809-5046fc22",
+            "rio 0.1.18",
+        ] {
+            let mut c = Capabilities::from_env(&Env::empty());
+            c.update(&Event::TerminalVersion(name.to_string()));
+            assert_eq!(
+                c.iterm2_graphics,
+                Some(true),
+                "expected iterm2_graphics=Some(true) for {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn xtversion_infers_no_iterm2_graphics_for_others() {
+        for name in ["xterm(395)", "ghostty 1.0.0", "kitty 0.32.0", "foot 1.16"] {
+            let mut c = Capabilities::from_env(&Env::empty());
+            c.update(&Event::TerminalVersion(name.to_string()));
+            assert_eq!(
+                c.iterm2_graphics,
+                Some(false),
+                "expected iterm2_graphics=Some(false) for {name:?}"
+            );
+        }
     }
 
     #[test]
     fn keyboard_enhancements_unpacks_flags() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::KeyboardEnhancements { flags: 0b101 });
         assert_eq!(
             c.kitty_keyboard,
@@ -468,14 +649,14 @@ mod tests {
 
     #[test]
     fn modify_other_keys_stored() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::ModifyOtherKeys(ModifyOtherKeysMode::Mode2));
         assert_eq!(c.modify_other_keys, Some(ModifyOtherKeysMode::Mode2));
     }
 
     #[test]
     fn kitty_graphics_marks_supported() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::KittyGraphics {
             options: vec![],
             payload: vec![],
@@ -485,7 +666,7 @@ mod tests {
 
     #[test]
     fn mode_report_set_maps_to_supported() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::ModeReport {
             mode: Mode::SYNCHRONIZED_OUTPUT,
             setting: ModeSetting::Set,
@@ -495,7 +676,7 @@ mod tests {
 
     #[test]
     fn mode_report_not_recognized_maps_to_unsupported() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::ModeReport {
             mode: Mode::IN_BAND_RESIZE,
             setting: ModeSetting::NotRecognized,
@@ -505,7 +686,7 @@ mod tests {
 
     #[test]
     fn mode_report_reset_still_means_supported() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::ModeReport {
             mode: Mode::BRACKETED_PASTE,
             setting: ModeSetting::Reset,
@@ -515,7 +696,7 @@ mod tests {
 
     #[test]
     fn mode_report_unknown_mode_ignored() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         let updated = c.update(&Event::ModeReport {
             mode: Mode::Dec(9999),
             setting: ModeSetting::Set,
@@ -527,14 +708,14 @@ mod tests {
     fn termcap_smulx_marks_styled_underline_supported() {
         // "Smulx" -> hex "536D756C78"; value can be anything (we only
         // check for presence of '=').
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         assert!(c.update(&Event::Termcap("536D756C78=31".to_string())));
         assert_eq!(c.styled_underline, Some(true));
     }
 
     #[test]
     fn termcap_smulx_without_value_marks_unsupported() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::Termcap("536D756C78".to_string()));
         assert_eq!(c.styled_underline, Some(false));
     }
@@ -542,14 +723,14 @@ mod tests {
     #[test]
     fn termcap_ms_marks_clipboard() {
         // "Ms" -> "4d73"
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::Termcap("4d73=313b32".to_string()));
         assert_eq!(c.clipboard, Some(true));
     }
 
     #[test]
     fn cell_and_window_pixel_size_stored() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         c.update(&Event::CellPixelSize {
             width: 10,
             height: 20,
@@ -564,7 +745,7 @@ mod tests {
 
     #[test]
     fn unrelated_event_returns_false() {
-        let mut c = Capabilities::new();
+        let mut c = Capabilities::from_env(&Env::empty());
         let updated = c.update(&Event::FocusIn);
         assert!(!updated);
     }
