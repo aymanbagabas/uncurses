@@ -12,11 +12,11 @@
 //! DECSC / DECRC (`\x1b7` / `\x1b8`) so terminal-side cursor state
 //! returns to wherever the renderer last left it.
 
-use std::fmt::Write as _;
 use std::io::Write;
 
 use icy_sixel::{EncodeOptions, sixel_encode};
 use rustc_hash::FxHashMap;
+use uncurses::Position;
 use uncurses::Rect;
 use uncurses::cell::Cell;
 use uncurses::screen::Screen;
@@ -24,7 +24,7 @@ use uncurses::screen::Screen;
 use crate::placement::{Erase, ImageId};
 use crate::resize::Resize;
 
-use super::{Backend, PaintCtx};
+use super::{Backend, PaintCtx, write_paint_at};
 
 #[derive(Debug, Default)]
 pub(crate) struct Sixel {
@@ -96,13 +96,13 @@ impl Backend for Sixel {
         }
         let cache_entry = &self.cache[&ctx.id];
 
-        // DECSC, CUP to placement origin (1-based), payload, DECRC.
-        let mut buf = String::with_capacity(cache_entry.sequence.len() + 16);
-        buf.push_str("\x1b7");
-        write!(buf, "\x1b[{};{}H", area.y as u32 + 1, area.x as u32 + 1).expect("write to String");
-        buf.push_str(&cache_entry.sequence);
-        buf.push_str("\x1b8");
-        screen.write_all(buf.as_bytes())?;
+        // Emit the sixel burst at the placement origin using relative
+        // cursor motion so this works in inline-mode screens too.
+        write_paint_at(
+            screen,
+            Position::new(area.x, area.y),
+            cache_entry.sequence.as_bytes(),
+        )?;
         Ok(())
     }
 

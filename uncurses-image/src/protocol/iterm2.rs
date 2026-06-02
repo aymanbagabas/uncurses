@@ -20,6 +20,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::ImageFormat;
 use rustc_hash::FxHashMap;
+use uncurses::Position;
 use uncurses::Rect;
 use uncurses::cell::Cell;
 use uncurses::screen::Screen;
@@ -27,7 +28,7 @@ use uncurses::screen::Screen;
 use crate::placement::{Erase, ImageId};
 use crate::resize::Resize;
 
-use super::{Backend, PaintCtx};
+use super::{Backend, PaintCtx, write_paint_at};
 
 #[derive(Debug, Default)]
 pub(crate) struct Iterm2 {
@@ -115,13 +116,13 @@ impl Backend for Iterm2 {
         }
         let entry = &self.cache[&ctx.id];
 
-        // DECSC, CUP to placement origin (1-based), payload, DECRC.
-        let mut buf = String::with_capacity(entry.sequence.len() + 16);
-        buf.push_str("\x1b7");
-        write!(buf, "\x1b[{};{}H", area.y as u32 + 1, area.x as u32 + 1).expect("write to String");
-        buf.push_str(&entry.sequence);
-        buf.push_str("\x1b8");
-        screen.write_all(buf.as_bytes())?;
+        // Emit the OSC 1337 burst at the placement origin using
+        // relative cursor motion so this works in inline-mode screens.
+        write_paint_at(
+            screen,
+            Position::new(area.x, area.y),
+            entry.sequence.as_bytes(),
+        )?;
         Ok(())
     }
 
