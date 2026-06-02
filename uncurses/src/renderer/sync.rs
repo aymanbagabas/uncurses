@@ -40,15 +40,31 @@ impl Renderer {
             let Some(span) = front.touched(y) else {
                 continue;
             };
-            for x in span.first..=span.last {
+            let mut x = span.first;
+            while x <= span.last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
+                    x += 1;
                     continue;
                 };
+                // Skip continuation columns: their owning primary
+                // (written one or more columns to the left) already
+                // populated them via [`Buffer::set`]'s wide-cell
+                // bookkeeping. Visiting them directly would either be a
+                // no-op (continuation→continuation) or, worse, blank
+                // the primary we just mirrored.
+                if new_cell.is_continuation() {
+                    x += 1;
+                    continue;
+                }
                 // `RenderBuffer::set_cell` does a reference-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
                 self.back_buf.set_cell(pos, new_cell);
+                // Step over any continuation columns owned by the cell
+                // we just wrote so we don't try to re-copy them.
+                let step = (new_cell.width() as u16).max(1);
+                x = x.saturating_add(step);
             }
         }
         front.clear_touched();
@@ -174,5 +190,29 @@ mod tests {
         r.force_clear = true;
         let mut front = RenderBuffer::new(10, 3);
         assert!(r.sync_front(&mut front));
+    }
+
+    /// Regression: sync_front used to step by 1 column even on wide
+    /// cells, which re-visited the continuation column and overwrote
+    /// the wide primary in back_buf with a blank. With the width-
+    /// aware step the primary survives and the continuation is
+    /// skipped.
+    #[test]
+    fn sync_advances_by_wide_cell_width_and_skips_continuation() {
+        let mut r = Renderer::new();
+        let mut front = RenderBuffer::new(10, 1);
+        // Wide CJK cell at col 0; col 1 is its continuation.
+        let wide = Cell::new("漢", 2);
+        front.set_cell((0, 0), &wide);
+        front.set_cell((3, 0), &cell("a"));
+        r.sync_front(&mut front);
+
+        assert_eq!(r.back_buf.cell((0, 0).into()).unwrap().content(), "漢");
+        assert_eq!(r.back_buf.cell((0, 0).into()).unwrap().width(), 2);
+        assert!(
+            r.back_buf.cell((1, 0).into()).unwrap().is_continuation(),
+            "col 1 must remain the wide cell's continuation, not be blanked"
+        );
+        assert_eq!(r.back_buf.cell((3, 0).into()).unwrap().content(), "a");
     }
 }
