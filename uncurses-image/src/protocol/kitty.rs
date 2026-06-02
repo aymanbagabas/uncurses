@@ -68,6 +68,14 @@ struct TransmitSignature {
     /// pre-resizes the image, e.g. for `Resize::Crop`). `None` means
     /// "transmitted at source resolution".
     pre_resized_to: Option<(u32, u32)>,
+    /// Cell-rect dimensions at the time of the last transmit. The
+    /// terminal scales the registered image to fill the placeholder
+    /// cell rect, so changing the cell rect (e.g. on a window
+    /// resize) requires re-transmitting; otherwise the previous
+    /// virtual placement stays anchored at its old dimensions and
+    /// the old image-area shading lingers behind the new
+    /// placeholder cells.
+    cell_rect: (u16, u16),
 }
 
 impl Kitty {
@@ -107,6 +115,7 @@ impl Backend for Kitty {
         let signature = TransmitSignature {
             content_hash: ctx.image.content_hash(),
             pre_resized_to: payload.pre_resized_to,
+            cell_rect: (cell_rect.width, cell_rect.height),
         };
 
         // Look up or create the image registration. Retransmit when
@@ -133,9 +142,9 @@ impl Backend for Kitty {
         }
 
         // Stamp placeholder cells. Cells outside `cell_rect` but
-        // inside `area` are blanked so the renderer wipes any
-        // previous content under the placement.
-        stamp_blanks_outside(screen, area, cell_rect);
+        // inside `area` are intentionally left untouched — those
+        // cells are owned by the host and may contain content
+        // (e.g. a backdrop) that the layer should not clobber.
         stamp_placeholders(screen, cell_rect, kitty_id);
 
         Ok(())
@@ -368,26 +377,6 @@ fn placeholder_grapheme(row: u16, col: u16, id_extra: u8) -> String {
     s.push(col_d);
     s.push(id_d);
     s
-}
-
-/// Stamp blank cells in the strip of `outer` not covered by `inner`.
-/// Used for `Resize::Fit` to wipe the area around the centered image
-/// so any prior content there is cleaned up.
-fn stamp_blanks_outside<W: Write>(screen: &mut Screen<W>, outer: Rect, inner: Rect) {
-    if outer == inner {
-        return;
-    }
-    for y in outer.y..outer.y.saturating_add(outer.height) {
-        for x in outer.x..outer.x.saturating_add(outer.width) {
-            let in_inner = x >= inner.x
-                && x < inner.x.saturating_add(inner.width)
-                && y >= inner.y
-                && y < inner.y.saturating_add(inner.height);
-            if !in_inner {
-                screen.set_cell((x, y), &Cell::BLANK);
-            }
-        }
-    }
 }
 
 const MAX_DIACRITIC: u16 = 296;
