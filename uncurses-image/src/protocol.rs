@@ -2,7 +2,11 @@
 
 use std::io::Write;
 
+use uncurses::Position;
 use uncurses::Rect;
+use uncurses::ansi::cursor::{
+    write_cub, write_cud, write_cuf, write_cuu, write_restore_cursor, write_save_cursor,
+};
 use uncurses::screen::{Capabilities, Screen};
 
 use crate::image_src::Image;
@@ -149,6 +153,35 @@ pub(crate) trait Backend {
         let _ = screen;
         Ok(())
     }
+}
+
+/// Emit a raster paint payload anchored at `target` (screen-relative)
+/// without disturbing the renderer's tracked cursor.
+///
+/// Wraps the burst in DECSC / DECRC and uses **relative** cursor
+/// motions (CUU / CUD / CUF / CUB) computed against the renderer's
+/// last known cursor position. Relative motion keeps inline screens
+/// working — the screen origin in inline mode is not the terminal
+/// origin, so absolute positioning would land outside the screen.
+pub(crate) fn write_paint_at<W: Write>(
+    screen: &mut Screen<W>,
+    target: Position,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    let cur = screen.cursor_position();
+    write_save_cursor(screen)?;
+    if target.y > cur.y {
+        write_cud(screen, target.y - cur.y)?;
+    } else if target.y < cur.y {
+        write_cuu(screen, cur.y - target.y)?;
+    }
+    if target.x > cur.x {
+        write_cuf(screen, target.x - cur.x)?;
+    } else if target.x < cur.x {
+        write_cub(screen, cur.x - target.x)?;
+    }
+    screen.write_all(payload)?;
+    write_restore_cursor(screen)
 }
 
 /// Compute the pixel dimensions the source image should be resized
