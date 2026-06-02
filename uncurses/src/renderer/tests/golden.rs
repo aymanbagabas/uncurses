@@ -58,7 +58,7 @@ fn golden_single_cell_change_at_origin() {
 
     assert_golden(
         actual,
-        b"\r\n\x1b[J\x1b[AX\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+        b"\rX\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
     );
 }
 
@@ -73,7 +73,7 @@ fn golden_single_cell_change_at_middle() {
 
     assert_golden(
         actual,
-        b"\r\n\n\n\n\n\n\n\n\n\n\n\n\n\x1b[J\x1bM\x1b[40CX\r\n\n\n\n\n\n\n\n\n\n\n",
+        b"\r\n\n\n\n\n\n\n\n\n\n\n\n\x1b[40CX\r\n\n\n\n\n\n\n\n\n\n\n",
     );
 }
 
@@ -139,6 +139,6 @@ fn golden_relative_cursor_mode() {
 
     assert_golden(
         actual,
-        b"\r\n\n\n\n\n\n\x1b[J\x1bMX\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+        b"\r\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
     );
 }
