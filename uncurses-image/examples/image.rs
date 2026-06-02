@@ -17,7 +17,8 @@
 //! and trigger a redraw.
 //!
 //! Press `q`, `Esc`, or `Ctrl-C` to quit. The image is centered and
-//! resized to fit half of the terminal area.
+//! sized to roughly 35% of the screen while preserving its source
+//! aspect ratio.
 
 use std::env;
 use std::io::Write;
@@ -100,8 +101,9 @@ fn run(path: PathBuf, protocol: ImageProtocol) -> Result<(), Box<dyn std::error:
     probe_capabilities(&mut caps, &mut screen, &mut events)?;
 
     let mut layer = ImageLayer::new().with_protocol(protocol);
+    let dims = image.dimensions();
     let id = layer.add(image);
-    place_centered(&mut layer, id, &screen);
+    place_centered(&mut layer, id, &screen, &caps, dims);
 
     redraw(&mut screen, &mut layer, &caps, protocol, &path)?;
 
@@ -113,6 +115,7 @@ fn run(path: PathBuf, protocol: ImageProtocol) -> Result<(), Box<dyn std::error:
         id,
         protocol,
         &path,
+        dims,
     );
 
     layer.shutdown(&mut screen)?;
@@ -149,6 +152,7 @@ fn probe_capabilities(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn event_loop(
     screen: &mut Screen<Stdout>,
     layer: &mut ImageLayer,
@@ -157,6 +161,7 @@ fn event_loop(
     id: uncurses_image::ImageId,
     requested: ImageProtocol,
     path: &std::path::Path,
+    dims: (u32, u32),
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if !events.poll(Some(FRAME_POLL))? {
@@ -179,6 +184,7 @@ fn event_loop(
                 if caps.cell_pixel_size != prev_cell_px {
                     layer.invalidate();
                     screen.invalidate();
+                    place_centered(layer, id, screen, caps, dims);
                     dirty = true;
                 }
                 continue;
@@ -197,7 +203,7 @@ fn event_loop(
                 Event::Resize(ws) => {
                     screen.resize(ws.col, ws.row);
                     layer.invalidate();
-                    place_centered(layer, id, screen);
+                    place_centered(layer, id, screen, caps, dims);
                     dirty = true;
                 }
                 _ => {}
@@ -212,27 +218,63 @@ fn event_loop(
     }
 }
 
-/// Place the image centered inside the screen. The placement area is
-/// capped at a fixed maximum so the image stays clearly inside the
-/// terminal regardless of the window size — useful for the example
-/// where we want a deterministic visible result rather than the image
-/// stretching across the full terminal.
+/// Place the image so its area covers roughly 35% of the screen
+/// while preserving the source aspect ratio, centered horizontally
+/// and vertically. The placement is clamped to the screen dimensions
+/// so a small or oddly-shaped window doesn't overflow either axis.
 fn place_centered<W: Write>(
     layer: &mut ImageLayer,
     id: uncurses_image::ImageId,
     screen: &Screen<W>,
+    caps: &Capabilities,
+    dims: (u32, u32),
 ) {
-    const MAX_W: u16 = 40;
-    const MAX_H: u16 = 20;
+    let cols = screen.width();
+    let rows = screen.height();
+    if cols == 0 || rows == 0 || dims.0 == 0 || dims.1 == 0 {
+        layer.place(
+            id,
+            Rect {
+                x: 0,
+                y: 0,
+                width: cols,
+                height: rows,
+            },
+            Resize::default(),
+        );
+        return;
+    }
 
-    let w = screen.width();
-    let h = screen.height();
-    // Reserve a row at the top for the status line.
-    let avail_h = h.saturating_sub(2);
-    let cw = (w / 2).clamp(4, MAX_W).min(w);
-    let ch = (avail_h / 2).clamp(2, MAX_H).min(avail_h);
-    let x = w.saturating_sub(cw) / 2;
-    let y = 1 + avail_h.saturating_sub(ch) / 2;
+    let (cw_px, ch_px) = caps.cell_pixel_size.unwrap_or((1, 2));
+    let cw_px = cw_px.max(1) as f64;
+    let ch_px = ch_px.max(1) as f64;
+    let img_cells_w = dims.0 as f64 / cw_px;
+    let img_cells_h = dims.1 as f64 / ch_px;
+
+    // Size the placement to occupy roughly TARGET_AREA of the screen
+    // by cell count, keeping the image's source aspect ratio.
+    // Clamp to the screen dimensions so a tall/narrow window doesn't
+    // overflow either axis.
+    const TARGET_AREA: f64 = 0.35;
+    let target_cells = (cols as f64) * (rows as f64) * TARGET_AREA;
+    let aspect = img_cells_w / img_cells_h;
+    let mut w = (target_cells * aspect).sqrt();
+    let mut h = (target_cells / aspect).sqrt();
+    if w > cols as f64 {
+        let scale = cols as f64 / w;
+        w *= scale;
+        h *= scale;
+    }
+    if h > rows as f64 {
+        let scale = rows as f64 / h;
+        w *= scale;
+        h *= scale;
+    }
+
+    let cw = (w.round() as u16).max(1).min(cols);
+    let ch = (h.round() as u16).max(1).min(rows);
+    let x = cols.saturating_sub(cw) / 2;
+    let y = rows.saturating_sub(ch) / 2;
     layer.place(
         id,
         Rect {
