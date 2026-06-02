@@ -6,13 +6,13 @@ pub use diff::*;
 pub use parse::*;
 pub use sgr::*;
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use bitflags::bitflags;
 
 use crate::color::Color;
 
-/// Hyperlink target carried by a [`Style`]. Stored behind an [`Rc`]
+/// Hyperlink target carried by a [`Style`]. Stored behind an [`Arc`]
 /// so cells in a hyperlink span share a single allocation. Private
 /// to the style module — public callers interact with hyperlinks
 /// through [`Style::with_link`] and [`Style::link`].
@@ -61,7 +61,7 @@ pub struct Style {
     pub(crate) underline_color: Option<Color>,
     pub(crate) underline: UnderlineStyle,
     pub(crate) attrs: AttrFlags,
-    pub(crate) link: Option<Rc<LinkData>>,
+    pub(crate) link: Option<Arc<LinkData>>,
 }
 
 impl PartialEq for Style {
@@ -73,7 +73,7 @@ impl PartialEq for Style {
             && self.attrs == other.attrs
             && match (&self.link, &other.link) {
                 (None, None) => true,
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b) || **a == **b,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b) || **a == **b,
                 _ => false,
             }
     }
@@ -207,7 +207,7 @@ impl Style {
         if url.is_empty() {
             self.link = None;
         } else {
-            self.link = Some(Rc::new(LinkData {
+            self.link = Some(Arc::new(LinkData {
                 url,
                 params: params.into(),
             }));
