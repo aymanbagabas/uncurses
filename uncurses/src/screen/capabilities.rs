@@ -9,6 +9,8 @@
 //! populate the remaining fields. Fields stay `None` until a positive
 //! or negative reply arrives — treat `None` as "do not enable".
 
+use std::io::{self, Write};
+
 use crate::ansi::kitty::KittyFlags;
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
@@ -18,12 +20,12 @@ use crate::terminal::Env;
 use bitflags::bitflags;
 
 bitflags! {
-    /// Features that [`Feature::probe`] knows how to query.
+    /// Features that [`Feature::write_probe`] knows how to query.
     ///
     /// Each bit corresponds to a single capability or identity reply
     /// the terminal can produce. Callers compose a set based on what
-    /// they want to ask about, write the bytes returned by
-    /// [`Feature::probe`] to the terminal, and feed the resulting
+    /// they want to ask about, hand it to [`Feature::write_probe`]
+    /// along with their terminal output stream, and feed the resulting
     /// reply events through [`Capabilities::update`].
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct Feature: u32 {
@@ -82,22 +84,21 @@ bitflags! {
 }
 
 impl Feature {
-    /// Build the byte sequence that queries every feature in `self`.
+    /// Write the byte sequence that queries every feature in `self`
+    /// to `w`.
     ///
-    /// The bytes are written in a deterministic order: DECRQM mode
+    /// The bytes are emitted in a deterministic order: DECRQM mode
     /// queries first (they share a uniform request shape and reply
     /// shape), then device attributes, identity, keyboard, graphics,
-    /// geometry, termcap, and color queries last.
+    /// geometry, termcap, and color queries last; DA1 is emitted last
+    /// so its reply naturally terminates the probe round-trip.
     ///
-    /// This is a pure function — it does not touch state or perform
-    /// I/O. Callers write the returned bytes to their terminal output
-    /// stream themselves.
-    pub fn probe(self) -> Vec<u8> {
+    /// Errors propagate from `w` directly. Tests can pass any
+    /// `Vec<u8>` since `Vec<u8>` implements [`Write`].
+    pub fn write_probe<W: Write>(self, w: &mut W) -> io::Result<()> {
         use crate::ansi::{
             background, ctrl, graphics, kitty, mode as mode_helpers, termcap, winop, xterm,
         };
-
-        let mut out = Vec::new();
 
         // --- DECRQM mode queries -------------------------------------
         let modes: &[(Self, Mode)] = &[
@@ -112,43 +113,42 @@ impl Feature {
         ];
         for (bit, m) in modes {
             if self.contains(*bit) {
-                mode_helpers::write_request_mode(&mut out, *m).unwrap();
+                mode_helpers::write_request_mode(w, *m)?;
             }
         }
 
         // --- Device attributes + identity ---------------------------
         if self.contains(Self::DA2) {
-            out.extend_from_slice(ctrl::REQUEST_SECONDARY_DA);
+            w.write_all(ctrl::REQUEST_SECONDARY_DA)?;
         }
         if self.contains(Self::DA3) {
-            out.extend_from_slice(ctrl::REQUEST_TERTIARY_DA);
+            w.write_all(ctrl::REQUEST_TERTIARY_DA)?;
         }
         if self.contains(Self::XTVERSION) {
-            out.extend_from_slice(ctrl::REQUEST_XTVERSION);
+            w.write_all(ctrl::REQUEST_XTVERSION)?;
         }
 
         // --- Keyboard ------------------------------------------------
         if self.contains(Self::KITTY_KEYBOARD) {
-            out.extend_from_slice(kitty::REQUEST_KITTY_KEYBOARD);
+            w.write_all(kitty::REQUEST_KITTY_KEYBOARD)?;
         }
         if self.contains(Self::MODIFY_OTHER_KEYS) {
-            out.extend_from_slice(xterm::QUERY_MODIFY_OTHER_KEYS);
+            w.write_all(xterm::QUERY_MODIFY_OTHER_KEYS)?;
         }
 
         // --- Graphics ------------------------------------------------
         if self.contains(Self::KITTY_GRAPHICS) {
             // Standard probe: query a 1x1 in-memory image. Terminals
             // that don't support the protocol stay silent.
-            graphics::write_kitty_graphics(&mut out, &["a=q", "t=d", "i=1", "s=1", "v=1"], &[])
-                .unwrap();
+            graphics::write_kitty_graphics(w, &["a=q", "t=d", "i=1", "s=1", "v=1"], &[])?;
         }
 
         // --- Geometry ------------------------------------------------
         if self.contains(Self::CELL_PIXEL_SIZE) {
-            winop::write_window_op(&mut out, winop::op::REQUEST_CELL_SIZE, &[]).unwrap();
+            winop::write_window_op(w, winop::op::REQUEST_CELL_SIZE, &[])?;
         }
         if self.contains(Self::WINDOW_PIXEL_SIZE) {
-            winop::write_window_op(&mut out, winop::op::REQUEST_WINDOW_SIZE, &[]).unwrap();
+            winop::write_window_op(w, winop::op::REQUEST_WINDOW_SIZE, &[])?;
         }
 
         // --- Termcap (single XTGETTCAP with all requested names) ----
@@ -160,26 +160,26 @@ impl Feature {
             caps.push("Ms");
         }
         if !caps.is_empty() {
-            termcap::write_xtgettcap(&mut out, &caps).unwrap();
+            termcap::write_xtgettcap(w, &caps)?;
         }
 
         // --- Color queries ------------------------------------------
         if self.contains(Self::FOREGROUND_COLOR) {
-            out.extend_from_slice(background::REQUEST_FOREGROUND_COLOR);
+            w.write_all(background::REQUEST_FOREGROUND_COLOR)?;
         }
         if self.contains(Self::BACKGROUND_COLOR) {
-            out.extend_from_slice(background::REQUEST_BACKGROUND_COLOR);
+            w.write_all(background::REQUEST_BACKGROUND_COLOR)?;
         }
         if self.contains(Self::CURSOR_COLOR) {
-            out.extend_from_slice(background::REQUEST_CURSOR_COLOR);
+            w.write_all(background::REQUEST_CURSOR_COLOR)?;
         }
 
         // --- DA1 last (acts as a natural probe terminator) ----------
         if self.contains(Self::DA1) {
-            out.extend_from_slice(ctrl::REQUEST_PRIMARY_DA);
+            w.write_all(ctrl::REQUEST_PRIMARY_DA)?;
         }
 
-        out
+        Ok(())
     }
 
     /// Build a recommended probe set from environment hints.
@@ -752,23 +752,28 @@ mod tests {
 
     // -- Feature::probe --------------------------------------------------
 
+    /// Helper: collect the bytes `Feature::write_probe` would emit
+    /// into a `Vec<u8>` so existing test assertions stay readable.
+    fn probe(f: Feature) -> Vec<u8> {
+        let mut buf = Vec::new();
+        f.write_probe(&mut buf).unwrap();
+        buf
+    }
+
     #[test]
     fn probe_empty_is_empty() {
-        assert!(Feature::empty().probe().is_empty());
+        assert!(probe(Feature::empty()).is_empty());
     }
 
     #[test]
     fn probe_da1_emits_request() {
-        let bytes = Feature::DA1.probe();
+        let bytes = probe(Feature::DA1);
         assert_eq!(bytes, b"\x1b[c");
     }
 
     #[test]
     fn probe_da1_is_last_when_combined() {
-        let bytes = Feature::DA1
-            .union(Feature::DA2)
-            .union(Feature::BRACKETED_PASTE)
-            .probe();
+        let bytes = probe(Feature::DA1 | Feature::DA2 | Feature::BRACKETED_PASTE);
         // DA1 (b"\x1b[c") must end the buffer so it acts as the
         // probe terminator.
         assert!(bytes.ends_with(b"\x1b[c"));
@@ -780,33 +785,33 @@ mod tests {
 
     #[test]
     fn probe_modes_use_decrqm_shape() {
-        let bytes = Feature::BRACKETED_PASTE.probe();
+        let bytes = probe(Feature::BRACKETED_PASTE);
         assert_eq!(bytes, b"\x1b[?2004$p");
     }
 
     #[test]
     fn probe_kitty_keyboard() {
-        let bytes = Feature::KITTY_KEYBOARD.probe();
+        let bytes = probe(Feature::KITTY_KEYBOARD);
         assert_eq!(bytes, b"\x1b[?u");
     }
 
     #[test]
     fn probe_termcap_groups_caps_into_one_xtgettcap() {
-        let bytes = (Feature::STYLED_UNDERLINE | Feature::CLIPBOARD).probe();
+        let bytes = probe(Feature::STYLED_UNDERLINE | Feature::CLIPBOARD);
         // "Smulx" -> "536D756C78", "Ms" -> "4D73", joined by ';'.
         assert_eq!(bytes, b"\x1bP+q536D756C78;4D73\x1b\\");
     }
 
     #[test]
     fn probe_pixel_size_uses_window_ops() {
-        let bytes = (Feature::CELL_PIXEL_SIZE | Feature::WINDOW_PIXEL_SIZE).probe();
+        let bytes = probe(Feature::CELL_PIXEL_SIZE | Feature::WINDOW_PIXEL_SIZE);
         // CSI 16 t (cell) then CSI 14 t (window) in declared order.
         assert_eq!(bytes, b"\x1b[16t\x1b[14t");
     }
 
     #[test]
     fn probe_kitty_graphics_uses_apc_query() {
-        let bytes = Feature::KITTY_GRAPHICS.probe();
+        let bytes = probe(Feature::KITTY_GRAPHICS);
         assert!(bytes.starts_with(b"\x1b_G"));
         assert!(bytes.ends_with(b"\x1b\\"));
         assert!(bytes.windows(3).any(|w| w == b"a=q"));
@@ -815,7 +820,7 @@ mod tests {
     #[test]
     fn probe_color_queries() {
         let bytes =
-            (Feature::FOREGROUND_COLOR | Feature::BACKGROUND_COLOR | Feature::CURSOR_COLOR).probe();
+            probe(Feature::FOREGROUND_COLOR | Feature::BACKGROUND_COLOR | Feature::CURSOR_COLOR);
         assert_eq!(bytes, b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07");
     }
 
