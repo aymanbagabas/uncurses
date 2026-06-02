@@ -67,8 +67,10 @@ fn first_paint_emits_osc_1337_inline_image() {
     // OSC 1337 introducer + File= key.
     assert!(s.contains("\x1b]1337;File="), "expected OSC 1337 in {s:?}");
     assert!(s.contains("inline=1"), "expected inline=1 flag");
-    assert!(s.contains("width=4"), "expected width=4 cells");
-    assert!(s.contains("height=2"), "expected height=2 cells");
+    // With cell_pixel_size=(10, 20) and a 4x2 cell area we should
+    // see `width=40px;height=40px`.
+    assert!(s.contains("width=40px"), "expected width=40px");
+    assert!(s.contains("height=40px"), "expected height=40px");
     assert!(
         s.contains("preserveAspectRatio=0"),
         "Scale → preserveAspectRatio=0"
