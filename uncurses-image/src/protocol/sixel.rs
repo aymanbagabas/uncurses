@@ -51,13 +51,23 @@ impl Backend for Sixel {
         ctx: &PaintCtx<'_>,
         screen: &mut Screen<W>,
     ) -> std::io::Result<()> {
-        // Stamp blanks so the renderer's diff wipes any text in the
-        // placement region. The actual sixel payload goes out in
-        // `paint`, after the renderer has flushed.
+        // Blank only the cells the painted sixel will actually cover.
+        // For `Resize::Fit`, the rendered image may be smaller than
+        // the placement rect (aspect-ratio preserving): blanking the
+        // full rect would hide whatever the host has drawn in the
+        // surrounding cells (e.g. a backdrop) behind the renderer's
+        // default-bg fill, leaving a visible band wherever the
+        // sixel doesn't reach.
         let area = clip_area(ctx.placement.area, screen);
-        for y in 0..area.height {
-            for x in 0..area.width {
-                screen.set_cell((area.x + x, area.y + y), &Cell::BLANK);
+        let covered = match ctx.caps.cell_pixel_size {
+            Some(cell_px) => {
+                covered_cells(area, cell_px, ctx.image.dimensions(), ctx.placement.resize)
+            }
+            None => area,
+        };
+        for y in 0..covered.height {
+            for x in 0..covered.width {
+                screen.set_cell((covered.x + x, covered.y + y), &Cell::BLANK);
             }
         }
         Ok(())
@@ -122,6 +132,25 @@ mod io {
     /// with kind `Other`. Used to bridge `icy_sixel`'s error type.
     pub(super) fn other<E: std::fmt::Display>(err: E) -> std::io::Error {
         std::io::Error::other(err.to_string())
+    }
+}
+
+/// Cell-aligned sub-rect of `area` that the painted image will
+/// actually cover at `cell_px`. With `Resize::Fit` the painted
+/// pixels may not fill the full placement rect, so the image-covered
+/// cell box is smaller than `area`; for `Scale` and `Crop` it
+/// matches `area` exactly.
+fn covered_cells(area: Rect, cell_px: (u16, u16), src: (u32, u32), resize: Resize) -> Rect {
+    let (img_w, img_h) = target_pixels(area, cell_px, src, resize);
+    let cw = cell_px.0.max(1) as u32;
+    let ch = cell_px.1.max(1) as u32;
+    let cells_w = img_w.div_ceil(cw).min(area.width as u32) as u16;
+    let cells_h = img_h.div_ceil(ch).min(area.height as u32) as u16;
+    Rect {
+        x: area.x,
+        y: area.y,
+        width: cells_w,
+        height: cells_h,
     }
 }
 
