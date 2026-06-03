@@ -58,9 +58,20 @@ pub struct Screen<W: Write> {
     buf: Vec<u8>,
     /// Terminal state.
     state: State,
-    /// Screen dimensions.
+    /// Surface dimensions, in cells. Set by [`Self::resize`] /
+    /// [`Self::with_size`]. Independent of [`Self::window_size`] —
+    /// the host may render into a sub-region of the terminal window.
     width: u16,
     height: u16,
+    /// Last known terminal window size (cells + pixels). Updated by
+    /// [`Self::update_window_size`] from `Event::Resize`,
+    /// `WindowCellSize`, and `WindowPixelSize` events. Distinct from
+    /// the surface dimensions above.
+    winsize: crate::terminal::Winsize,
+    /// Last known per-cell pixel size, when reported separately by
+    /// `Event::CellPixelSize`. Takes precedence over the value
+    /// derived from `winsize` in [`Self::cell_pixel_size`].
+    cell_pixel_size: Option<(u16, u16)>,
     /// East-Asian Ambiguous policy used when measuring strings: when
     /// `true`, code points whose East-Asian-Width property is
     /// `Ambiguous` are measured as 2 cells instead of 1. Terminals
@@ -102,6 +113,13 @@ impl<W: Write> Screen<W> {
             state,
             width: 0,
             height: 0,
+            winsize: crate::terminal::Winsize {
+                row: 0,
+                col: 0,
+                xpixel: 0,
+                ypixel: 0,
+            },
+            cell_pixel_size: None,
             eaw_wide: false,
         }
     }
@@ -347,6 +365,83 @@ impl<W: Write> Screen<W> {
         self.height
     }
 
+    /// Last known terminal window size, as updated by
+    /// [`Self::update_window_size`] (or set explicitly via
+    /// [`Self::set_window_size`]). The fields default to zero until
+    /// the host feeds a size event in. Distinct from the surface
+    /// dimensions returned by [`Self::width`] / [`Self::height`] —
+    /// the host may render into only a sub-region of the terminal
+    /// window.
+    pub fn window_size(&self) -> crate::terminal::Winsize {
+        self.winsize
+    }
+
+    /// Replace the cached terminal window size. Useful when the host
+    /// already has a [`crate::terminal::Winsize`] from
+    /// [`crate::terminal::get_window_size`] and wants to seed the
+    /// cache before the first event arrives.
+    pub fn set_window_size(&mut self, ws: crate::terminal::Winsize) {
+        self.winsize = ws;
+    }
+
+    /// Fold a terminal event into the cached window size. Returns
+    /// `true` when the event updated the cache.
+    ///
+    /// Recognised events:
+    /// - [`crate::event::Event::Resize`] — full
+    ///   [`crate::terminal::Winsize`] update.
+    /// - [`crate::event::Event::WindowCellSize`] — cell columns and
+    ///   rows only.
+    /// - [`crate::event::Event::WindowPixelSize`] — window pixel
+    ///   dimensions only.
+    /// - [`crate::event::Event::CellPixelSize`] — per-cell pixel
+    ///   size, stored separately and returned by
+    ///   [`Self::cell_pixel_size`] in preference to the value derived
+    ///   from the cached window size.
+    ///
+    /// All other events are ignored.
+    pub fn update_window_size(&mut self, event: &crate::event::Event) -> bool {
+        use crate::event::Event;
+        match *event {
+            Event::Resize(ws) => {
+                self.winsize = ws;
+                true
+            }
+            Event::WindowCellSize { width, height } => {
+                self.winsize.col = width;
+                self.winsize.row = height;
+                true
+            }
+            Event::WindowPixelSize { width, height } => {
+                self.winsize.xpixel = width;
+                self.winsize.ypixel = height;
+                true
+            }
+            Event::CellPixelSize { width, height } => {
+                self.cell_pixel_size = Some((width, height));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Pixel dimensions of one terminal cell. Returns the value
+    /// reported by the most recent
+    /// [`crate::event::Event::CellPixelSize`] when available;
+    /// otherwise derives it from [`Self::window_size`] by dividing
+    /// the window pixel dimensions by the cell-grid dimensions.
+    /// Returns `None` when neither path can produce a non-zero size.
+    pub fn cell_pixel_size(&self) -> Option<(u16, u16)> {
+        if let Some(size) = self.cell_pixel_size {
+            return Some(size);
+        }
+        let ws = self.winsize;
+        if ws.col == 0 || ws.row == 0 || ws.xpixel == 0 || ws.ypixel == 0 {
+            return None;
+        }
+        Some((ws.xpixel / ws.col, ws.ypixel / ws.row))
+    }
+
     /// Borrow the underlying writer immutably. Useful for inspecting
     /// buffered output in tests / benches when the writer is a
     /// `Vec<u8>` or similar in-memory sink.
@@ -408,6 +503,17 @@ impl<W: Write> Screen<W> {
     /// The renderer's last tracked cursor position as a [`crate::Position`].
     pub fn cursor_position(&self) -> crate::Position {
         self.renderer.cursor_position()
+    }
+
+    /// Mark the renderer's tracked cursor position as no longer
+    /// matching the terminal. The next [`Self::set_cursor_position`]
+    /// reasserts position via an explicit move sequence.
+    ///
+    /// Use this after writing raw byte payloads through
+    /// [`Self::writer_mut`] that leave the terminal cursor at an
+    /// implementation-defined location (e.g. raster image escapes).
+    pub fn invalidate_cursor(&mut self) {
+        self.renderer.invalidate_cursor();
     }
 
     /// Write the cell-diff sequences (wrapped in cursor-hide and, when
