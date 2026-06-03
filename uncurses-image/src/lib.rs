@@ -39,9 +39,13 @@
 mod halfblocks;
 mod kitty;
 mod resize;
+#[cfg(feature = "sixel")]
+mod sixel;
 
 pub use halfblocks::Halfblocks;
 pub use image::DynamicImage;
 pub use image::imageops::FilterType;
 pub use kitty::Kitty;
 pub use resize::{CropAnchor, Resize};
+#[cfg(feature = "sixel")]
+pub use sixel::Sixel;
