@@ -40,6 +40,7 @@ use uncurses::screen::Screen;
 use uncurses::style::Style;
 
 use crate::hash::pixel_hash;
+use crate::painter::{ImageId, Painter};
 use crate::resize::Resize;
 
 /// Unicode placeholder code-point.
@@ -86,25 +87,37 @@ impl Kitty {
         Self::default()
     }
 
+    fn assign_kitty_id(&mut self) -> u32 {
+        // Kitty image id 0 is reserved by the protocol; skip it.
+        loop {
+            self.next_kitty_id = self.next_kitty_id.wrapping_add(1);
+            if self.next_kitty_id != 0 {
+                return self.next_kitty_id;
+            }
+        }
+    }
+}
+
+impl Painter for Kitty {
     /// Stamp `image` into `area` of `screen`, transmitting it first
     /// if this is the first paint of these pixels or if the cell
     /// footprint has changed since the last paint.
     ///
     /// Returns the pixel-content id, which the caller can later
-    /// pass to [`Self::forget`] to drop the terminal-side
+    /// pass to [`Painter::forget`] to drop the terminal-side
     /// registration. Returns I/O errors from writing the
     /// transmission to `screen`. Cell stamping is infallible.
-    pub fn paint<W: Write>(
+    fn paint<W: Write>(
         &mut self,
         screen: &mut Screen<W>,
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
-    ) -> io::Result<u64> {
+    ) -> io::Result<ImageId> {
         let id = pixel_hash(image);
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 {
-            return Ok(id);
+            return Ok(ImageId(id));
         }
 
         let cell_px = screen.cell_pixel_size();
@@ -132,15 +145,15 @@ impl Kitty {
         }
 
         stamp_placeholders(screen, cell_rect, kitty_id);
-        Ok(id)
+        Ok(ImageId(id))
     }
 
     /// Drop the terminal-side registration for `id`, where `id` is
-    /// the value returned by a prior [`Self::paint`]. Emits a
+    /// the value returned by a prior [`Painter::paint`]. Emits a
     /// kitty-graphics delete sequence for the registered image.
     /// Has no effect if `id` is unknown.
-    pub fn forget<W: Write>(&mut self, screen: &mut Screen<W>, id: u64) -> io::Result<()> {
-        let Some(entry) = self.images.remove(&id) else {
+    fn forget<W: Write>(&mut self, screen: &mut Screen<W>, id: ImageId) -> io::Result<()> {
+        let Some(entry) = self.images.remove(&id.0) else {
             return Ok(());
         };
         // a=d,d=I deletes the image and all of its placements
@@ -152,16 +165,6 @@ impl Kitty {
             &["a=d", "d=I", id_opt.as_str(), "q=2"],
             &[],
         )
-    }
-
-    fn assign_kitty_id(&mut self) -> u32 {
-        // Kitty image id 0 is reserved by the protocol; skip it.
-        loop {
-            self.next_kitty_id = self.next_kitty_id.wrapping_add(1);
-            if self.next_kitty_id != 0 {
-                return self.next_kitty_id;
-            }
-        }
     }
 }
 

@@ -10,10 +10,10 @@
 //! advertise pixel dimensions, only half-blocks will produce
 //! output.
 //!
-//! Demonstrates the unified [`Protocol`] surface: a single value
-//! holds whichever backend is active, `paint` returns an id, and
-//! `forget` drops cached state when the host stops drawing or
-//! exits.
+//! Demonstrates how a host implements runtime backend selection
+//! against the [`Painter`] trait. The crate ships no built-in
+//! dispatch wrapper; the local `Backend` enum below is the host's
+//! own.
 
 use std::io::Write;
 
@@ -26,13 +26,46 @@ use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
-use uncurses_image::{Halfblocks, Kitty, Protocol, Resize, Sixel};
+use uncurses_image::{Halfblocks, ImageId, Kitty, Painter, Resize, Sixel};
 
-fn label(p: &Protocol) -> &'static str {
-    match p {
-        Protocol::Halfblocks(_) => "half-blocks",
-        Protocol::Sixel(_) => "sixel",
-        Protocol::Kitty(_) => "kitty",
+/// Runtime-selectable backend. Each variant owns its concrete
+/// painter; the host dispatches manually because the crate does not
+/// ship an enum.
+enum Backend {
+    Halfblocks(Halfblocks),
+    Sixel(Sixel),
+    Kitty(Kitty),
+}
+
+impl Backend {
+    fn label(&self) -> &'static str {
+        match self {
+            Backend::Halfblocks(_) => "half-blocks",
+            Backend::Sixel(_) => "sixel",
+            Backend::Kitty(_) => "kitty",
+        }
+    }
+
+    fn paint<W: Write>(
+        &mut self,
+        screen: &mut Screen<W>,
+        area: uncurses::Rect,
+        image: &DynamicImage,
+        resize: Resize,
+    ) -> std::io::Result<ImageId> {
+        match self {
+            Backend::Halfblocks(p) => p.paint(screen, area, image, resize),
+            Backend::Sixel(p) => p.paint(screen, area, image, resize),
+            Backend::Kitty(p) => p.paint(screen, area, image, resize),
+        }
+    }
+
+    fn forget<W: Write>(&mut self, screen: &mut Screen<W>, id: ImageId) -> std::io::Result<()> {
+        match self {
+            Backend::Halfblocks(p) => p.forget(screen, id),
+            Backend::Sixel(p) => p.forget(screen, id),
+            Backend::Kitty(p) => p.forget(screen, id),
+        }
     }
 }
 
@@ -56,10 +89,10 @@ fn main() -> std::io::Result<()> {
     screen.set_cursor_visible(false)?;
     screen.set_mouse_mode(MouseMode::None, MouseEncoding::Sgr)?;
 
-    let mut backend = Protocol::Halfblocks(Halfblocks::new());
-    // Id of the most recent paint. Recorded so the host can
-    // forget the cached state when leaving the active backend.
-    let mut last_id: u64;
+    let mut backend = Backend::Halfblocks(Halfblocks::new());
+    // Id of the most recent paint. Recorded so the host can forget
+    // the cached state when leaving the active backend.
+    let mut last_id;
     let mut quit = false;
 
     last_id = redraw(&mut screen, &image, &mut backend)?;
@@ -70,7 +103,7 @@ fn main() -> std::io::Result<()> {
     while !quit {
         let ev = events.read()?;
         screen.update_window_size(&ev);
-        let mut switch_to: Option<Protocol> = None;
+        let mut switch_to: Option<Backend> = None;
         let mut dirty = false;
         match ev {
             Event::KeyPress(Key {
@@ -86,15 +119,15 @@ fn main() -> std::io::Result<()> {
             Event::KeyPress(Key {
                 code: KeyCode::Char('1'),
                 ..
-            }) => switch_to = Some(Protocol::Halfblocks(Halfblocks::new())),
+            }) => switch_to = Some(Backend::Halfblocks(Halfblocks::new())),
             Event::KeyPress(Key {
                 code: KeyCode::Char('2'),
                 ..
-            }) => switch_to = Some(Protocol::Sixel(Sixel::new())),
+            }) => switch_to = Some(Backend::Sixel(Sixel::new())),
             Event::KeyPress(Key {
                 code: KeyCode::Char('3'),
                 ..
-            }) => switch_to = Some(Protocol::Kitty(Kitty::new())),
+            }) => switch_to = Some(Backend::Kitty(Kitty::new())),
             Event::Resize(ws) => {
                 screen.resize(ws.col, ws.row);
                 dirty = true;
@@ -107,7 +140,7 @@ fn main() -> std::io::Result<()> {
         if let Some(next) = switch_to {
             backend.forget(&mut screen, last_id)?;
             backend = next;
-            last_id = 0;
+            last_id = ImageId::NONE;
             dirty = true;
         }
         if dirty && !quit {
@@ -127,18 +160,18 @@ fn main() -> std::io::Result<()> {
 fn redraw<W: Write>(
     screen: &mut Screen<W>,
     image: &DynamicImage,
-    backend: &mut Protocol,
-) -> std::io::Result<u64> {
+    backend: &mut Backend,
+) -> std::io::Result<ImageId> {
     screen.clear();
     let w = screen.width();
     let h = screen.height();
     if w < 4 || h < 4 {
-        return Ok(0);
+        return Ok(ImageId::NONE);
     }
 
     let header = format!(
         "[1] half-blocks  [2] sixel  [3] kitty   active: {}   q: quit",
-        label(backend)
+        backend.label()
     );
     screen.set_str_with(
         (0, 0),
@@ -154,7 +187,7 @@ fn redraw<W: Write>(
         height: h.saturating_sub(3),
     };
     if area.width == 0 || area.height == 0 {
-        return Ok(0);
+        return Ok(ImageId::NONE);
     }
 
     backend.paint(screen, area, image, Resize::default())

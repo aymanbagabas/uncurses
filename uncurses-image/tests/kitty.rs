@@ -5,7 +5,7 @@ use std::io::Write;
 use image::{DynamicImage, Rgba, RgbaImage};
 use uncurses::Rect;
 use uncurses::screen::Screen;
-use uncurses_image::{Kitty, Resize};
+use uncurses_image::{Kitty, Painter, Resize};
 
 fn make_test_image() -> DynamicImage {
     let mut buf = RgbaImage::new(8, 8);

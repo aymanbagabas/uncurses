@@ -9,7 +9,7 @@ use std::io::Write as _;
 use image::{DynamicImage, Rgba, RgbaImage};
 use uncurses::Rect;
 use uncurses::screen::Screen;
-use uncurses_image::{Resize, Sixel};
+use uncurses_image::{Painter, Resize, Sixel};
 
 fn make_test_image() -> DynamicImage {
     let mut buf = RgbaImage::new(8, 8);
@@ -164,7 +164,7 @@ fn forget_drops_cache_and_re_encodes() {
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
-    painter.forget(id);
+    painter.forget(&mut screen, id).unwrap();
     // Stamp a different image so the diff actually changes; without
     // a different anchor payload the renderer wouldn't re-emit even
     // though the cache was dropped.
