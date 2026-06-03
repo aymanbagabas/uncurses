@@ -1,7 +1,7 @@
 pub use image::imageops::FilterType;
 
 /// Strategy for fitting an image into a placement [`uncurses::Rect`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Resize {
     /// Scale down to fit inside the rect while preserving aspect ratio.
     /// The image is never enlarged beyond its source size.
@@ -19,7 +19,7 @@ impl Default for Resize {
 }
 
 /// Anchor used by [`Resize::Crop`] when cropping the scaled image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CropAnchor {
     #[default]
     Center,
