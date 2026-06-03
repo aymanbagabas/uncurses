@@ -40,8 +40,6 @@ impl Backend {
     }
 }
 
-const HOST_ID: u64 = 1;
-
 fn main() -> std::io::Result<()> {
     let path = std::env::args().nth(1).unwrap_or_else(|| {
         eprintln!("usage: image_demo <path-to-image>");
@@ -192,10 +190,10 @@ fn redraw<W: Write>(
             halfblocks.paint(screen, area, image, Resize::default());
         }
         Backend::Sixel => {
-            sixel.paint(screen, area, image, Resize::default(), HOST_ID)?;
+            sixel.paint(screen, area, image, Resize::default())?;
         }
         Backend::Kitty => {
-            kitty.paint(screen, area, image, Resize::default(), HOST_ID)?;
+            kitty.paint(screen, area, image, Resize::default())?;
         }
     }
     Ok(())

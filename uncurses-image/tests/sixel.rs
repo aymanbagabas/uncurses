@@ -47,13 +47,7 @@ fn paint_emits_dcs_sequence_at_anchor() {
     let mut painter = Sixel::new();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -76,13 +70,7 @@ fn paint_no_op_when_cell_pixel_size_unknown() {
     let mut painter = Sixel::new();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -101,13 +89,7 @@ fn repeat_paint_reuses_cache() {
     let mut painter = Sixel::new();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -115,13 +97,7 @@ fn repeat_paint_reuses_cache() {
     screen.writer_mut().clear();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -146,19 +122,13 @@ fn forget_drops_cache_and_re_encodes() {
     let mut painter = Sixel::new();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
-    painter.forget(1);
+    painter.forget(&make_test_image());
     // Stamp a different image so the diff actually changes; without
     // a different anchor payload the renderer wouldn't re-emit even
     // though the cache was dropped.
@@ -174,7 +144,6 @@ fn forget_drops_cache_and_re_encodes() {
             area(),
             &DynamicImage::ImageRgba8(alt),
             Resize::default(),
-            1,
         )
         .unwrap();
     screen.render().unwrap();

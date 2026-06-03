@@ -8,20 +8,22 @@
 //! kitty id. The terminal binds those cells to the virtual placement
 //! and draws the image where the placeholders appear.
 //!
-//! ## Host-id / kitty-id mapping
+//! ## Cache identity
 //!
-//! The host supplies a `u64` id at paint time. The backend maps that
-//! to a 32-bit kitty-side id and remembers the cell footprint last
-//! transmitted. Re-painting with the same host id and the same cell
-//! footprint reuses the previous transmission. Re-painting with a
-//! different cell footprint forces a re-transmit (the registered
-//! placement scales to the c=/r= grid sent on transmit, so changing
-//! the cell rect without re-sending leaves the old image dimensions
-//! anchored).
+//! [`Self::paint`] hashes the source pixel data to recognize "same
+//! image as last paint" — the host does not supply an identity.
+//! The painter maps the pixel hash to a 32-bit kitty-side id and
+//! remembers the cell footprint last transmitted. Re-painting the
+//! same image with the same footprint reuses the previous
+//! transmission. A different cell footprint forces a re-transmit
+//! (the registered placement scales to the c=/r= grid sent on
+//! transmit, so changing the cell rect without re-sending leaves
+//! the old image dimensions anchored).
 //!
 //! When the host stops drawing an image, it calls [`Kitty::forget`]
-//! to schedule a delete; pending deletes are flushed by
-//! [`Kitty::flush_deletes`] (or [`Kitty::shutdown`] at teardown).
+//! (passing the same `&DynamicImage`) to schedule a terminal-side
+//! delete; pending deletes are flushed by [`Kitty::flush_deletes`]
+//! (or [`Kitty::shutdown`] at teardown).
 //!
 //! References:
 //! * <https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>
@@ -38,6 +40,7 @@ use uncurses::color::Color;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 
+use crate::hash::pixel_hash;
 use crate::resize::Resize;
 
 /// Unicode placeholder code-point.
@@ -52,17 +55,17 @@ const CHUNK_SIZE: usize = (CHARS_PER_CHUNK / 4) * 3;
 
 /// Kitty-graphics painter, Unicode placeholder mode.
 ///
-/// Caches a per-host-id transmission record so repeated
-/// [`Self::paint`] calls with the same host id and cell footprint
-/// reuse the existing virtual placement and only re-stamp the
-/// placeholder cells.
+/// Caches a per-image transmission record so repeated [`Self::paint`]
+/// calls with the same pixel data and cell footprint reuse the
+/// existing virtual placement and only re-stamp the placeholder
+/// cells.
 #[derive(Debug, Default)]
 pub struct Kitty {
-    /// Per-host-id state for images currently registered with the
-    /// terminal.
+    /// Per-pixel-hash state for images currently registered with
+    /// the terminal.
     images: FxHashMap<u64, Entry>,
-    /// Kitty-side ids the terminal still has registered for host
-    /// ids the host has called [`Kitty::forget`] on. Drained by
+    /// Kitty-side ids the terminal still has registered for images
+    /// the host has called [`Kitty::forget`] on. Drained by
     /// [`Kitty::flush_deletes`] / [`Kitty::shutdown`].
     pending_deletes: Vec<u32>,
     /// Counter for next kitty-side id; id 0 is reserved.
@@ -89,23 +92,17 @@ impl Kitty {
     }
 
     /// Stamp `image` into `area` of `screen`, transmitting it first
-    /// if this is the first paint for `host_id` or if the cell
+    /// if this is the first paint of these pixels or if the cell
     /// footprint has changed since the last paint.
     ///
     /// Returns I/O errors from writing the transmission to `screen`.
     /// Cell stamping is infallible.
-    ///
-    /// `host_id` is opaque: the painter only checks for equality,
-    /// not ordering. The host must use a fresh id (or call
-    /// [`Self::forget`] first) when the image's pixels change for a
-    /// previously-painted id.
     pub fn paint<W: Write>(
         &mut self,
         screen: &mut Screen<W>,
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
-        host_id: u64,
     ) -> io::Result<()> {
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 {
@@ -114,13 +111,14 @@ impl Kitty {
 
         let cell_px = screen.cell_pixel_size();
         let (cell_rect, payload) = prepare_payload(image, resize, area, cell_px);
+        let hash = pixel_hash(image);
 
-        let needs_transmit = match self.images.get(&host_id) {
+        let needs_transmit = match self.images.get(&hash) {
             Some(existing) => existing.cell_rect != (cell_rect.width, cell_rect.height),
             None => true,
         };
 
-        let kitty_id = match self.images.get(&host_id) {
+        let kitty_id = match self.images.get(&hash) {
             Some(existing) => existing.kitty_id,
             None => self.assign_kitty_id(),
         };
@@ -128,7 +126,7 @@ impl Kitty {
         if needs_transmit {
             transmit(screen, kitty_id, &payload, cell_rect)?;
             self.images.insert(
-                host_id,
+                hash,
                 Entry {
                     kitty_id,
                     cell_rect: (cell_rect.width, cell_rect.height),
@@ -140,10 +138,11 @@ impl Kitty {
         Ok(())
     }
 
-    /// Forget the host-side mapping for `host_id` and schedule a
+    /// Forget the host-side mapping for `image` and schedule a
     /// terminal-side delete on the next [`Self::flush_deletes`].
-    pub fn forget(&mut self, host_id: u64) {
-        if let Some(entry) = self.images.remove(&host_id) {
+    pub fn forget(&mut self, image: &DynamicImage) {
+        let hash = pixel_hash(image);
+        if let Some(entry) = self.images.remove(&hash) {
             self.pending_deletes.push(entry.kitty_id);
         }
     }
