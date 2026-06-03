@@ -73,25 +73,29 @@ impl Sixel {
     /// the cached encoding. A change to any of those inputs forces
     /// a re-encode because the resulting DCS bytes differ.
     ///
-    /// Returns I/O errors from sequence assembly. When the screen's
-    /// cell pixel size is unknown, this is a no-op (returns `Ok`).
+    /// Returns the pixel-content id, which the caller can later
+    /// pass to [`Self::forget`] to drop every cached encoding for
+    /// these pixels. Returns I/O errors from sequence assembly.
+    /// When the screen's cell pixel size is unknown, this still
+    /// returns the id but does not stamp anything.
     pub fn paint<W: Write>(
         &mut self,
         screen: &mut Screen<W>,
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
-    ) -> io::Result<()> {
+    ) -> io::Result<u64> {
+        let id = pixel_hash(image);
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 {
-            return Ok(());
+            return Ok(id);
         }
         let Some((cw, ch)) = screen.cell_pixel_size() else {
-            return Ok(());
+            return Ok(id);
         };
 
         let key = CacheKey {
-            pixel_hash: pixel_hash(image),
+            pixel_hash: id,
             cell_rect: (area.width, area.height),
             cell_px: (cw, ch),
             resize,
@@ -105,14 +109,13 @@ impl Sixel {
         };
 
         stamp(screen, area, sequence);
-        Ok(())
+        Ok(id)
     }
 
-    /// Drop every cached entry for `image`. The next paint of the
-    /// same pixels re-encodes from scratch.
-    pub fn forget(&mut self, image: &DynamicImage) {
-        let h = pixel_hash(image);
-        self.cache.retain(|key, _| key.pixel_hash != h);
+    /// Drop every cached entry whose pixel-content id matches `id`.
+    /// `id` is the value returned by a prior [`Self::paint`].
+    pub fn forget(&mut self, id: u64) {
+        self.cache.retain(|key, _| key.pixel_hash != id);
     }
 
     /// Drop every cached entry. Equivalent to constructing a fresh

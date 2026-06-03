@@ -21,9 +21,8 @@
 //! the old image dimensions anchored).
 //!
 //! When the host stops drawing an image, it calls [`Kitty::forget`]
-//! (passing the same `&DynamicImage`) to schedule a terminal-side
-//! delete; pending deletes are flushed by [`Kitty::flush_deletes`]
-//! (or [`Kitty::shutdown`] at teardown).
+//! with the id returned by the prior paint; the painter writes the
+//! terminal-side delete sequence inline.
 //!
 //! References:
 //! * <https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders>
@@ -64,10 +63,6 @@ pub struct Kitty {
     /// Per-pixel-hash state for images currently registered with
     /// the terminal.
     images: FxHashMap<u64, Entry>,
-    /// Kitty-side ids the terminal still has registered for images
-    /// the host has called [`Kitty::forget`] on. Drained by
-    /// [`Kitty::flush_deletes`] / [`Kitty::shutdown`].
-    pending_deletes: Vec<u32>,
     /// Counter for next kitty-side id; id 0 is reserved.
     next_kitty_id: u32,
 }
@@ -95,30 +90,32 @@ impl Kitty {
     /// if this is the first paint of these pixels or if the cell
     /// footprint has changed since the last paint.
     ///
-    /// Returns I/O errors from writing the transmission to `screen`.
-    /// Cell stamping is infallible.
+    /// Returns the pixel-content id, which the caller can later
+    /// pass to [`Self::forget`] to drop the terminal-side
+    /// registration. Returns I/O errors from writing the
+    /// transmission to `screen`. Cell stamping is infallible.
     pub fn paint<W: Write>(
         &mut self,
         screen: &mut Screen<W>,
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
-    ) -> io::Result<()> {
+    ) -> io::Result<u64> {
+        let id = pixel_hash(image);
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 {
-            return Ok(());
+            return Ok(id);
         }
 
         let cell_px = screen.cell_pixel_size();
         let (cell_rect, payload) = prepare_payload(image, resize, area, cell_px);
-        let hash = pixel_hash(image);
 
-        let needs_transmit = match self.images.get(&hash) {
+        let needs_transmit = match self.images.get(&id) {
             Some(existing) => existing.cell_rect != (cell_rect.width, cell_rect.height),
             None => true,
         };
 
-        let kitty_id = match self.images.get(&hash) {
+        let kitty_id = match self.images.get(&id) {
             Some(existing) => existing.kitty_id,
             None => self.assign_kitty_id(),
         };
@@ -126,7 +123,7 @@ impl Kitty {
         if needs_transmit {
             transmit(screen, kitty_id, &payload, cell_rect)?;
             self.images.insert(
-                hash,
+                id,
                 Entry {
                     kitty_id,
                     cell_rect: (cell_rect.width, cell_rect.height),
@@ -135,43 +132,26 @@ impl Kitty {
         }
 
         stamp_placeholders(screen, cell_rect, kitty_id);
-        Ok(())
+        Ok(id)
     }
 
-    /// Forget the host-side mapping for `image` and schedule a
-    /// terminal-side delete on the next [`Self::flush_deletes`].
-    pub fn forget(&mut self, image: &DynamicImage) {
-        let hash = pixel_hash(image);
-        if let Some(entry) = self.images.remove(&hash) {
-            self.pending_deletes.push(entry.kitty_id);
-        }
-    }
-
-    /// Emit any deferred image-delete commands. Call this at the
-    /// end of a frame, after the renderer has flushed.
-    pub fn flush_deletes<W: Write>(&mut self, screen: &mut Screen<W>) -> io::Result<()> {
-        for kitty_id in self.pending_deletes.drain(..) {
-            // a=d,d=I deletes the image and all of its placements
-            // from the terminal-side registry. q=2 quiets the
-            // protocol response.
-            let id_opt = format!("i={kitty_id}");
-            uncurses::ansi::graphics::write_kitty_graphics(
-                screen,
-                &["a=d", "d=I", id_opt.as_str(), "q=2"],
-                &[],
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Forget every registered host id and emit deletes for all of
-    /// them. Call at host teardown.
-    pub fn shutdown<W: Write>(&mut self, screen: &mut Screen<W>) -> io::Result<()> {
-        for entry in self.images.values() {
-            self.pending_deletes.push(entry.kitty_id);
-        }
-        self.images.clear();
-        self.flush_deletes(screen)
+    /// Drop the terminal-side registration for `id`, where `id` is
+    /// the value returned by a prior [`Self::paint`]. Emits a
+    /// kitty-graphics delete sequence for the registered image.
+    /// Has no effect if `id` is unknown.
+    pub fn forget<W: Write>(&mut self, screen: &mut Screen<W>, id: u64) -> io::Result<()> {
+        let Some(entry) = self.images.remove(&id) else {
+            return Ok(());
+        };
+        // a=d,d=I deletes the image and all of its placements
+        // from the terminal-side registry. q=2 quiets the
+        // protocol response.
+        let id_opt = format!("i={}", entry.kitty_id);
+        uncurses::ansi::graphics::write_kitty_graphics(
+            screen,
+            &["a=d", "d=I", id_opt.as_str(), "q=2"],
+            &[],
+        )
     }
 
     fn assign_kitty_id(&mut self) -> u32 {

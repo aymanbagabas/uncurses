@@ -2,29 +2,27 @@
 //!
 //! Drop-in helpers that stamp images into a
 //! [`uncurses::screen::Screen`] without modifying the renderer or
-//! the cell type. Two protocol backends ship in this stage:
+//! the cell type. Three protocol backends ship today:
 //!
 //! - [`Halfblocks`] — uses the `▀` glyph with foreground / background
 //!   colors to pack two image rows per terminal row. Works on any
-//!   color-capable terminal.
+//!   color-capable terminal. Stateless.
+//! - [`Sixel`] — DCS-encoded sixel sequence anchored at a single
+//!   cell. Caches encoded bytes per `(pixel content, cell rect, cell
+//!   pixel size, resize)`.
 //! - [`Kitty`] — Unicode-placeholder mode of the kitty graphics
-//!   protocol. Transmits the image once per host-id and stamps
+//!   protocol. Transmits each unique image once and stamps
 //!   placeholder cells that bind to the registered virtual placement.
 //!
-//! Each backend is a small struct. Halfblocks is stateless. Kitty
-//! retains a per-host-id table so re-painting the same image without
-//! changes incurs zero re-transmits.
+//! Backends that cache derive image identity from the source pixel
+//! data; callers do not supply identities. Each [`Sixel::paint`] /
+//! [`Kitty::paint`] returns the pixel-content id so the host can
+//! later drop the cached state with [`Sixel::forget`] /
+//! [`Kitty::forget`].
 //!
-//! ## Host id contract
-//!
-//! Backends that cache (currently [`Kitty`]) key their cache by a
-//! `u64` host id supplied at paint time. The host must:
-//!
-//! - Use the same id while the image's pixels are unchanged.
-//! - Use a fresh id (or call [`Kitty::forget`]) when the pixels
-//!   change.
-//!
-//! Re-using an id with different pixels keeps the stale registration.
+//! For code that selects a backend at runtime, [`Protocol`] wraps
+//! the three painters behind a uniform [`Protocol::paint`] /
+//! [`Protocol::forget`] surface.
 //!
 //! ## Per-cell pixel size
 //!
@@ -39,6 +37,7 @@
 mod halfblocks;
 mod hash;
 mod kitty;
+mod protocol;
 mod resize;
 #[cfg(feature = "sixel")]
 mod sixel;
@@ -47,6 +46,7 @@ pub use halfblocks::Halfblocks;
 pub use image::DynamicImage;
 pub use image::imageops::FilterType;
 pub use kitty::Kitty;
+pub use protocol::Protocol;
 pub use resize::{CropAnchor, Resize};
 #[cfg(feature = "sixel")]
 pub use sixel::Sixel;
