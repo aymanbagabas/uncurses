@@ -150,7 +150,7 @@ impl Buffer {
                         let end = (i + w).min(width);
                         line[i + 1..end].fill(Cell::BLANK);
                     }
-                    line[i] = Cell::new("", 0);
+                    line[i] = Cell::continuation();
                 }
             }
 

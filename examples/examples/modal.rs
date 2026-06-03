@@ -129,7 +129,7 @@ fn paint_status<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
         .with_bg(BasicColor::BrightWhite.into());
     screen.fill_rect(
         Rect::new(0, y, screen.width(), 1),
-        &Cell::new(" ", 1).with_style(status.clone()),
+        &Cell::narrow(" ").with_style(status.clone()),
     );
     let label = if modal_open {
         " modal: open    space/m: toggle    q: quit "
@@ -164,7 +164,7 @@ fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
         .with_italic();
 
     // Solid fill so background text never bleeds through the modal.
-    screen.fill_rect(rect, &Cell::new(" ", 1).with_style(body.clone()));
+    screen.fill_rect(rect, &Cell::narrow(" ").with_style(body.clone()));
 
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;

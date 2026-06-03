@@ -121,5 +121,9 @@ pub(crate) fn cell_from_ratatui(rc: &ratatui::buffer::Cell) -> CzCell {
     let style = to_uncurses_style(style);
     let symbol = rc.symbol();
     let width = str_cell_width(symbol).max(1).min(u8::MAX as u16) as u8;
-    CzCell::new(symbol, width).with_style(style)
+    let cell = match width {
+        2 => CzCell::wide(symbol),
+        _ => CzCell::narrow(symbol),
+    };
+    cell.with_style(style)
 }

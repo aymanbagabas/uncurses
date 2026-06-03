@@ -398,18 +398,18 @@ mod tests {
     use crate::buffer::Buffer;
 
     fn wide(s: &str) -> Cell {
-        Cell::new(s, 2)
+        Cell::wide(s)
     }
 
     fn cont() -> Cell {
-        Cell::new("", 0)
+        Cell::continuation()
     }
 
     #[test]
     fn draw_copies_normal_cells() {
         let mut src = Buffer::new(2, 1);
-        src.set((0, 0), &Cell::new("A", 1));
-        src.set((1, 0), &Cell::new("B", 1));
+        src.set((0, 0), &Cell::narrow("A"));
+        src.set((1, 0), &Cell::narrow("B"));
         let mut dst = Buffer::new(4, 1);
         src.draw(&mut dst, Position::new(1, 0));
         assert_eq!(dst.cell(Position::new(0, 0)).unwrap().content(), " ");
@@ -438,13 +438,13 @@ mod tests {
         // slice. The default must not propagate the orphan.
         let mut src = Buffer::new(2, 1);
         src.set((0, 0), &cont());
-        src.set((1, 0), &Cell::new("X", 1));
+        src.set((1, 0), &Cell::narrow("X"));
 
         let mut dst = Buffer::new(2, 1);
         // Pre-seed target with an unrelated wide cell to make sure
         // we'd notice a corruption.
-        dst.set((0, 0), &Cell::new("Y", 1));
-        dst.set((1, 0), &Cell::new("Z", 1));
+        dst.set((0, 0), &Cell::narrow("Y"));
+        dst.set((1, 0), &Cell::narrow("Z"));
 
         src.draw(&mut dst, Position::new(0, 0));
 
@@ -484,7 +484,7 @@ mod tests {
             for (x, ch) in row.chars().enumerate() {
                 win.set_cell(
                     Position::new(x as u16, y as u16),
-                    &Cell::new(ch.to_string(), 1),
+                    &Cell::narrow(ch.to_string()),
                 );
             }
         }
@@ -541,9 +541,9 @@ mod tests {
         // 世's new primary would be at col 2, continuation at col 3.
         // That still fits (col 3 < right=4). So 世 is preserved.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
+        win.set_cell(Position::new(0, 0), &Cell::narrow("A"));
         win.set_cell(Position::new(1, 0), &wide("世"));
-        win.set_cell(Position::new(3, 0), &Cell::new("B", 1));
+        win.set_cell(Position::new(3, 0), &Cell::narrow("B"));
         SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
 
         assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
@@ -558,8 +558,8 @@ mod tests {
         // 世 would move from col 2 to col 3, continuation to col 4 (out).
         // So 世 must be dropped, leaving a blank at col 3.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
-        win.set_cell(Position::new(1, 0), &Cell::new("B", 1));
+        win.set_cell(Position::new(0, 0), &Cell::narrow("A"));
+        win.set_cell(Position::new(1, 0), &Cell::narrow("B"));
         win.set_cell(Position::new(2, 0), &wide("世"));
         SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
 
@@ -574,9 +574,9 @@ mod tests {
         // Row: A 世(prim) 世(cont) B, delete 2 at col 1 with right=4.
         // 世's primary falls inside [1, 3) → dropped entirely.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
+        win.set_cell(Position::new(0, 0), &Cell::narrow("A"));
         win.set_cell(Position::new(1, 0), &wide("世"));
-        win.set_cell(Position::new(3, 0), &Cell::new("B", 1));
+        win.set_cell(Position::new(3, 0), &Cell::narrow("B"));
         SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 4, &Cell::BLANK);
 
         assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");

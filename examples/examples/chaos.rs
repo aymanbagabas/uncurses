@@ -60,7 +60,7 @@ fn build_pattern(width: u16, height: u16, rng: &mut Rng) -> Vec<Cell> {
             Attr::Italic => style.with_italic(),
             Attr::Reverse => style.with_reverse(),
         };
-        cells.push(Cell::new(glyph, 1).with_style(style));
+        cells.push(Cell::narrow(glyph).with_style(style));
     }
     cells
 }
