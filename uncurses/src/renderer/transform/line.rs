@@ -307,6 +307,14 @@ impl Renderer {
                 self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, n as usize)?;
             }
 
+            // ICH / DCH would physically insert or delete cells on
+            // the row, displacing any rect-anchored payload's column
+            // positioning. Fall back to a plain put_range + EL when
+            // either the old or new row carries a rect cell.
+            let row_has_rect = cur_slice
+                .is_some_and(crate::renderer::frame::prepare::line_contains_rect)
+                || crate::renderer::frame::prepare::line_contains_rect(new_line);
+
             if o_lc < n_lc {
                 // Insertion: new row has more non-blank cells than old.
                 let m = n_last_nonblank.max(o_last_nonblank);
@@ -347,8 +355,13 @@ impl Renderer {
                 // than just emitting the m-n cells. Otherwise insert via
                 // ICH or IRM depending on terminal support.
                 if self.opts.contains(Optimizations::ICH)
+                    && !row_has_rect
                     && ((n_lc as usize) < n_last_nonblank || ich_cost > span)
                 {
+                    self.put_range(out, new_buf, cur_slice, new_line, y, (n + 1) as usize, m)?;
+                } else if row_has_rect {
+                    // Defensive: rows with rect cells must never go
+                    // through the ICH path. Fall back to plain emit.
                     self.put_range(out, new_buf, cur_slice, new_line, y, (n + 1) as usize, m)?;
                 } else {
                     self.insert_cells_op(out, &new_line[(n + 1) as usize..], ich_count)?;
@@ -360,7 +373,10 @@ impl Renderer {
                 let dch_cost = ansi::cost::dch_cost(dch_count as u16) as isize;
                 let el_cost = ansi::cost::el_cost(0) as isize;
                 let tail = n_last_nonblank as isize - (n + 1);
-                if !self.opts.contains(Optimizations::DCH) || dch_cost > el_cost + tail {
+                if !self.opts.contains(Optimizations::DCH)
+                    || row_has_rect
+                    || dch_cost > el_cost + tail
+                {
                     // (n+1) may exceed n_last_nonblank when the
                     // walk-back left n_lc at n_last_nonblank; the
                     // reference relies on Go's signed arithmetic so

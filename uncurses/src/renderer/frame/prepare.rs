@@ -22,12 +22,34 @@ use crate::renderer::scroll;
 /// Uses a non-cryptographic hasher because the only consequence of an
 /// unlucky collision is a missed scroll opportunity — the affected
 /// rows fall through to direct redraw, never visual corruption.
+///
+/// Rect cells additionally hash their owning rectangle's coordinates
+/// so a row of opaque rect bodies never collides with a blank row or
+/// with the body of a different rect at the same position.
 pub(crate) fn hash_line(line: &[Cell]) -> u64 {
     let mut hasher = FxHasher::default();
     for cell in line {
         cell.content().hash(&mut hasher);
+        if let Some(rect) = cell.rect() {
+            // Tag with a sentinel to avoid colliding with content
+            // that happens to hash like a rect's tuple.
+            "rect".hash(&mut hasher);
+            rect.x.hash(&mut hasher);
+            rect.y.hash(&mut hasher);
+            rect.width.hash(&mut hasher);
+            rect.height.hash(&mut hasher);
+        }
     }
     hasher.finish()
+}
+
+/// Whether `line` contains any cell that belongs to a rich-content
+/// rectangle. Rows that match this predicate must not participate in
+/// scroll detection or in horizontal insert/delete operations — both
+/// would physically displace the addon-managed payload anchored to
+/// `rect.origin`.
+pub(crate) fn line_contains_rect(line: &[Cell]) -> bool {
+    line.iter().any(|c| c.is_rect())
 }
 
 impl Renderer {
@@ -155,11 +177,21 @@ impl Renderer {
             if cached && new_buf.touched(y as u16).is_none() {
                 continue;
             }
-            if let Some(line) = cur_buf.line(y as u16) {
-                self.old_hashes[y] = hash_line(line);
+            let old_line = cur_buf.line(y as u16);
+            let new_line = new_buf.line(y as u16);
+            // Rows that contain rect cells in either buffer must
+            // never be scrolled — the addon-managed payload is
+            // anchored to its absolute row, and most terminals can't
+            // physically move a raster image with the line. Zero
+            // both hashes so the linear-probe scroll detector treats
+            // the row as a sentinel "skip" slot.
+            let row_has_rect = old_line.is_some_and(line_contains_rect)
+                || new_line.is_some_and(line_contains_rect);
+            if let Some(line) = old_line {
+                self.old_hashes[y] = if row_has_rect { 0 } else { hash_line(line) };
             }
-            if let Some(line) = new_buf.line(y as u16) {
-                self.new_hashes[y] = hash_line(line);
+            if let Some(line) = new_line {
+                self.new_hashes[y] = if row_has_rect { 0 } else { hash_line(line) };
             }
         }
     }

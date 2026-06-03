@@ -875,3 +875,40 @@ fn rect_unchanged_across_frames_emits_nothing() {
         String::from_utf8_lossy(&out)
     );
 }
+
+#[test]
+fn rect_row_is_excluded_from_scroll_detection() {
+    use crate::layout::Rect;
+    use crate::renderer::frame::prepare::{hash_line, line_contains_rect};
+
+    let rect = Rect {
+        x: 0,
+        y: 2,
+        width: 4,
+        height: 1,
+    };
+    let mut rb = RenderBuffer::new(8, 4);
+    rb.set_cell((0, 2), &Cell::rect_anchor(rect, "\x1bPx\x1b\\"));
+    rb.set_cell((1, 2), &Cell::rect_body(rect));
+    rb.set_cell((2, 2), &Cell::rect_body(rect));
+    rb.set_cell((3, 2), &Cell::rect_body(rect));
+
+    let line = rb.line(2).unwrap();
+    assert!(line_contains_rect(line));
+    // hash_line for a rect line still computes a hash, but
+    // compute_hashes zeroes it; verify the helper itself includes
+    // rect identity so a different rect at the same position would
+    // hash differently.
+    let other_rect = Rect {
+        x: 0,
+        y: 2,
+        width: 4,
+        height: 2,
+    };
+    let mut rb2 = RenderBuffer::new(8, 4);
+    rb2.set_cell((0, 2), &Cell::rect_anchor(other_rect, "\x1bPy\x1b\\"));
+    rb2.set_cell((1, 2), &Cell::rect_body(other_rect));
+    rb2.set_cell((2, 2), &Cell::rect_body(other_rect));
+    rb2.set_cell((3, 2), &Cell::rect_body(other_rect));
+    assert_ne!(hash_line(line), hash_line(rb2.line(2).unwrap()));
+}
