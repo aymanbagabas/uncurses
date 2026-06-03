@@ -1705,3 +1705,111 @@ fn update_window_size_folds_size_events_into_the_cache() {
     assert!(!screen.update_window_size(&key));
     assert_eq!(screen.cell_pixel_size(), Some((7, 14)));
 }
+
+#[test]
+fn set_rect_payload_stamps_anchor_and_body_cells() {
+    let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
+    let rect = crate::Rect {
+        x: 2,
+        y: 1,
+        width: 3,
+        height: 2,
+    };
+    screen.set_rect_payload(rect, "PAYLOAD", crate::style::Style::EMPTY);
+
+    let anchor = screen.front_buf.cell(crate::Position::new(2, 1)).unwrap();
+    assert!(anchor.is_rect_anchor_at(2, 1));
+    assert_eq!(anchor.content(), "PAYLOAD");
+
+    for (x, y) in [(3, 1), (4, 1), (2, 2), (3, 2), (4, 2)] {
+        let c = screen.front_buf.cell(crate::Position::new(x, y)).unwrap();
+        assert!(c.is_rect_body_at(x, y));
+        assert_eq!(c.content(), "");
+    }
+
+    // Cells outside the rectangle remain blank.
+    assert!(
+        screen
+            .front_buf
+            .cell(crate::Position::new(1, 1))
+            .unwrap()
+            .is_blank()
+    );
+}
+
+#[test]
+fn set_rect_payload_clears_overlapping_old_rect() {
+    let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
+    let big = crate::Rect {
+        x: 0,
+        y: 0,
+        width: 6,
+        height: 3,
+    };
+    screen.set_rect_payload(big, "OLD", crate::style::Style::EMPTY);
+
+    // A new, smaller rect inside the old one's footprint. The old
+    // rect's cells outside the new rectangle must become blank.
+    let small = crate::Rect {
+        x: 1,
+        y: 1,
+        width: 2,
+        height: 1,
+    };
+    screen.set_rect_payload(small, "NEW", crate::style::Style::EMPTY);
+
+    // Old rect cells that fall outside `small` should be blank.
+    for (x, y) in [(0, 0), (5, 0), (0, 2), (5, 2), (3, 1), (4, 1)] {
+        let c = screen.front_buf.cell(crate::Position::new(x, y)).unwrap();
+        assert!(
+            c.is_blank(),
+            "cell ({x}, {y}) should be blank after old rect cleared, got {c:?}"
+        );
+    }
+
+    // New rect anchor + body intact.
+    let anchor = screen.front_buf.cell(crate::Position::new(1, 1)).unwrap();
+    assert_eq!(anchor.content(), "NEW");
+    assert!(anchor.is_rect_anchor_at(1, 1));
+    let body = screen.front_buf.cell(crate::Position::new(2, 1)).unwrap();
+    assert!(body.is_rect_body_at(2, 1));
+}
+
+#[test]
+fn set_rect_payload_clears_straddling_wide_cell() {
+    let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
+    let wide = crate::cell::Cell::wide("漢");
+    screen.set_cell((1, 0), &wide);
+    // Sanity: the wide cell occupies (1, 0) and (2, 0).
+    assert_eq!(
+        screen
+            .front_buf
+            .cell(crate::Position::new(1, 0))
+            .unwrap()
+            .width(),
+        2
+    );
+    assert!(
+        screen
+            .front_buf
+            .cell(crate::Position::new(2, 0))
+            .unwrap()
+            .is_continuation()
+    );
+
+    // Stamp a rect whose left edge lands on the wide cell's
+    // continuation column. The straddling wide cell must be cleared.
+    let rect = crate::Rect {
+        x: 2,
+        y: 0,
+        width: 3,
+        height: 1,
+    };
+    screen.set_rect_payload(rect, "X", crate::style::Style::EMPTY);
+
+    let prev = screen.front_buf.cell(crate::Position::new(1, 0)).unwrap();
+    assert!(
+        prev.is_blank(),
+        "wide-cell primary should be blanked when its continuation is overwritten, got {prev:?}"
+    );
+}

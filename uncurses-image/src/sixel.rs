@@ -28,7 +28,6 @@ use image::DynamicImage;
 use rustc_hash::FxHashMap;
 use uncurses::Rect;
 use uncurses::ansi::graphics::write_sixel;
-use uncurses::cell::Cell;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 
@@ -176,17 +175,7 @@ fn strip_dcs_frame(dcs: &str) -> &[u8] {
 }
 
 fn stamp<W: Write>(screen: &mut Screen<W>, area: Rect, sequence: String) {
-    let anchor = Cell::rect_anchor(area, sequence).with_style(Style::EMPTY);
-    screen.set_cell((area.x, area.y), &anchor);
-    let body = Cell::rect_body(area);
-    for cy in 0..area.height {
-        for cx in 0..area.width {
-            if cx == 0 && cy == 0 {
-                continue;
-            }
-            screen.set_cell((area.x + cx, area.y + cy), &body);
-        }
-    }
+    screen.set_rect_payload(area, sequence, Style::EMPTY);
 }
 
 #[cfg(test)]
