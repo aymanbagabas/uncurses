@@ -6,7 +6,7 @@
 //! rows into one terminal row and works on any color-capable
 //! terminal — no probing, no per-cell pixel size.
 
-use std::io::Write;
+use std::io::{self, Write};
 
 use image::{DynamicImage, GenericImageView, Pixel, Rgba, imageops};
 
@@ -16,6 +16,7 @@ use uncurses::color::Color;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 
+use crate::painter::{ImageId, Painter};
 use crate::resize::{CropAnchor, Resize};
 
 /// `▀` — Unicode U+2580 UPPER HALF BLOCK.
@@ -23,7 +24,7 @@ const UPPER_HALF: &str = "\u{2580}";
 
 /// Stateless half-block image painter.
 ///
-/// Each call to [`Self::paint`] stamps the cells in `area` from
+/// Each call to [`Painter::paint`] stamps the cells in `area` from
 /// `image`, scaling per `resize`. Cells outside `area` are
 /// untouched. The rendered cells are pure narrow text cells, so the
 /// renderer's diff handles them like any other content.
@@ -35,21 +36,24 @@ impl Halfblocks {
     pub fn new() -> Self {
         Self
     }
+}
 
+impl Painter for Halfblocks {
     /// Stamp `image` into `area` of `screen` using half-block cells.
     ///
     /// `area` is clipped to the screen surface. If the clipped area
-    /// is empty, this is a no-op.
-    pub fn paint<W: Write>(
-        &self,
+    /// is empty, this is a no-op. Halfblocks holds no cached state,
+    /// so the returned id is always [`ImageId::NONE`].
+    fn paint<W: Write>(
+        &mut self,
         screen: &mut Screen<W>,
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
-    ) {
+    ) -> io::Result<ImageId> {
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 {
-            return;
+            return Ok(ImageId::NONE);
         }
 
         let resized = resize_to_cells(image, area, resize);
@@ -66,6 +70,12 @@ impl Halfblocks {
                 screen.set_cell((area.x + cx, area.y + cy), &cell);
             }
         }
+        Ok(ImageId::NONE)
+    }
+
+    /// No-op. Halfblocks holds no cached state.
+    fn forget<W: Write>(&mut self, _screen: &mut Screen<W>, _id: ImageId) -> io::Result<()> {
+        Ok(())
     }
 }
 

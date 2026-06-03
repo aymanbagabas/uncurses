@@ -15,14 +15,14 @@
 //!   placeholder cells that bind to the registered virtual placement.
 //!
 //! Backends that cache derive image identity from the source pixel
-//! data; callers do not supply identities. Each [`Sixel::paint`] /
-//! [`Kitty::paint`] returns the pixel-content id so the host can
-//! later drop the cached state with [`Sixel::forget`] /
-//! [`Kitty::forget`].
+//! data; callers do not supply identities. Each [`Painter::paint`]
+//! returns an [`ImageId`] the host can later pass to
+//! [`Painter::forget`] to drop the cached state.
 //!
-//! For code that selects a backend at runtime, [`Protocol`] wraps
-//! the three painters behind a uniform [`Protocol::paint`] /
-//! [`Protocol::forget`] surface.
+//! Every backend implements the [`Painter`] trait. Hosts that select
+//! a backend at runtime wrap the concrete painters in their own
+//! enum or generic; this crate does not ship a built-in dispatch
+//! wrapper.
 //!
 //! ## Per-cell pixel size
 //!
@@ -37,7 +37,7 @@
 mod halfblocks;
 mod hash;
 mod kitty;
-mod protocol;
+mod painter;
 mod resize;
 #[cfg(feature = "sixel")]
 mod sixel;
@@ -46,7 +46,7 @@ pub use halfblocks::Halfblocks;
 pub use image::DynamicImage;
 pub use image::imageops::FilterType;
 pub use kitty::Kitty;
-pub use protocol::Protocol;
+pub use painter::{ImageId, Painter};
 pub use resize::{CropAnchor, Resize};
 #[cfg(feature = "sixel")]
 pub use sixel::Sixel;

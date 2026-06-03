@@ -5,7 +5,7 @@ use std::io::Write;
 use image::{DynamicImage, Rgba, RgbaImage};
 use uncurses::Rect;
 use uncurses::screen::Screen;
-use uncurses_image::{Halfblocks, Resize};
+use uncurses_image::{Halfblocks, Painter, Resize};
 
 fn make_test_image() -> DynamicImage {
     let mut buf = RgbaImage::new(4, 4);
@@ -34,9 +34,11 @@ fn area() -> Rect {
 #[test]
 fn paint_writes_upper_half_glyph() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
-    let painter = Halfblocks::new();
+    let mut painter = Halfblocks::new();
 
-    painter.paint(&mut screen, area(), &make_test_image(), Resize::default());
+    painter
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
+        .unwrap();
 
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -51,16 +53,20 @@ fn paint_writes_upper_half_glyph() {
 #[test]
 fn second_render_with_no_changes_is_a_no_op() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
-    let painter = Halfblocks::new();
+    let mut painter = Halfblocks::new();
 
-    painter.paint(&mut screen, area(), &make_test_image(), Resize::default());
+    painter
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
+        .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
     // Stamping the same cells with the same content is a no-op for
     // the differ.
-    painter.paint(&mut screen, area(), &make_test_image(), Resize::default());
+    painter
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
+        .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
     assert!(screen.writer().is_empty(), "no-op frame should be empty");
@@ -69,7 +75,7 @@ fn second_render_with_no_changes_is_a_no_op() {
 #[test]
 fn out_of_bounds_area_is_clipped_silently() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(4, 4);
-    let painter = Halfblocks::new();
+    let mut painter = Halfblocks::new();
 
     let area = Rect {
         x: 100,
@@ -77,7 +83,9 @@ fn out_of_bounds_area_is_clipped_silently() {
         width: 50,
         height: 50,
     };
-    painter.paint(&mut screen, area, &make_test_image(), Resize::default());
+    painter
+        .paint(&mut screen, area, &make_test_image(), Resize::default())
+        .unwrap();
 
     screen.render().unwrap();
     screen.flush().unwrap();

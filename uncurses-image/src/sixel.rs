@@ -33,6 +33,7 @@ use uncurses::screen::Screen;
 use uncurses::style::Style;
 
 use crate::hash::pixel_hash;
+use crate::painter::{ImageId, Painter};
 use crate::resize::Resize;
 
 /// Sixel painter.
@@ -63,6 +64,14 @@ impl Sixel {
         Self::default()
     }
 
+    /// Drop every cached entry. Equivalent to constructing a fresh
+    /// painter, but keeps the allocated table for reuse.
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+}
+
+impl Painter for Sixel {
     /// Stamp `image` into `area` of `screen`, encoding the image as
     /// a sixel DCS sequence and storing it as a single rect-anchored
     /// cell at `(area.x, area.y)`.
@@ -74,24 +83,24 @@ impl Sixel {
     /// a re-encode because the resulting DCS bytes differ.
     ///
     /// Returns the pixel-content id, which the caller can later
-    /// pass to [`Self::forget`] to drop every cached encoding for
-    /// these pixels. Returns I/O errors from sequence assembly.
+    /// pass to [`Painter::forget`] to drop every cached encoding
+    /// for these pixels. Returns I/O errors from sequence assembly.
     /// When the screen's cell pixel size is unknown, this still
     /// returns the id but does not stamp anything.
-    pub fn paint<W: Write>(
+    fn paint<W: Write>(
         &mut self,
         screen: &mut Screen<W>,
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
-    ) -> io::Result<u64> {
+    ) -> io::Result<ImageId> {
         let id = pixel_hash(image);
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 {
-            return Ok(id);
+            return Ok(ImageId(id));
         }
         let Some((cw, ch)) = screen.cell_pixel_size() else {
-            return Ok(id);
+            return Ok(ImageId(id));
         };
 
         let key = CacheKey {
@@ -109,19 +118,17 @@ impl Sixel {
         };
 
         stamp(screen, area, sequence);
-        Ok(id)
+        Ok(ImageId(id))
     }
 
     /// Drop every cached entry whose pixel-content id matches `id`.
-    /// `id` is the value returned by a prior [`Self::paint`].
-    pub fn forget(&mut self, id: u64) {
+    /// `id` is the value returned by a prior [`Painter::paint`].
+    /// Sixel has no terminal-side state to release, so `screen` is
+    /// unused.
+    fn forget<W: Write>(&mut self, _screen: &mut Screen<W>, id: ImageId) -> io::Result<()> {
+        let id = id.0;
         self.cache.retain(|key, _| key.pixel_hash != id);
-    }
-
-    /// Drop every cached entry. Equivalent to constructing a fresh
-    /// painter, but keeps the allocated table for reuse.
-    pub fn clear(&mut self) {
-        self.cache.clear();
+        Ok(())
     }
 }
 
