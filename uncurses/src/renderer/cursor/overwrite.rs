@@ -69,7 +69,7 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, should_panic)]
     fn out_of_bounds_range_refuses_candidate() {
-        let line = vec![Cell::new("a", 1); 4];
+        let line = vec![Cell::narrow("a"); 4];
         let style = Style::default();
         let mut out = Vec::new();
         let accepted = collect_overwrite_bytes(&mut out, &line, &style, 0, 8);
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn in_bounds_pen_match_writes_bytes() {
-        let line = vec![Cell::new("x", 1); 3];
+        let line = vec![Cell::narrow("x"); 3];
         let style = Style::default();
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(&mut out, &line, &style, 0, 3));

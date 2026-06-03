@@ -15,7 +15,7 @@ fn test_new_buffer() {
 #[test]
 fn test_set_get() {
     let mut buf = Buffer::new(10, 5);
-    let cell = Cell::new("X", 1);
+    let cell = Cell::narrow("X");
     buf.set((3, 2), &cell.clone());
     assert_eq!(buf.cell(Position::new(3, 2)).unwrap().content(), "X");
 }
@@ -23,7 +23,7 @@ fn test_set_get() {
 #[test]
 fn test_wide_char_set() {
     let mut buf = Buffer::new(10, 1);
-    let cell = Cell::new("中", 2);
+    let cell = Cell::wide("中");
     buf.set((3, 0), &cell);
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "中");
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().width(), 2);
@@ -33,9 +33,9 @@ fn test_wide_char_set() {
 #[test]
 fn test_overwrite_wide_char() {
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2));
+    buf.set((3, 0), &Cell::wide("中"));
     // Overwrite continuation cell
-    buf.set((4, 0), &Cell::new("A", 1));
+    buf.set((4, 0), &Cell::narrow("A"));
     // Primary cell should be blanked
     assert!(buf.cell(Position::new(3, 0)).unwrap().is_blank());
     assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "A");
@@ -49,9 +49,9 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
     // continuation produced by the previous set(). That second write must
     // not blank the wide primary we just placed.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2));
+    buf.set((3, 0), &Cell::wide("中"));
     // Now write a continuation into col 4 (where one already lives).
-    let cont = Cell::new("", 0);
+    let cont = Cell::continuation();
     buf.set((4, 0), &cont);
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "中");
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().width(), 2);
@@ -61,7 +61,7 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
 #[test]
 fn test_resize() {
     let mut buf = Buffer::new(10, 5);
-    buf.set((0, 0), &Cell::new("X", 1));
+    buf.set((0, 0), &Cell::narrow("X"));
     buf.resize(20, 10);
     assert_eq!(buf.width(), 20);
     assert_eq!(buf.height(), 10);
@@ -71,7 +71,7 @@ fn test_resize() {
 fn fill_with_marker(buf: &mut Buffer) {
     for y in 0..buf.height() {
         for x in 0..buf.width() {
-            buf.set((x, y), &Cell::new(format!("{x},{y}"), 1));
+            buf.set((x, y), &Cell::narrow(format!("{x},{y}")));
         }
     }
 }
@@ -191,7 +191,7 @@ fn test_view() {
     let mut buf = RenderBuffer::new(20, 10);
     {
         let mut v = View::new(&mut buf, (5, 2, 10, 5));
-        v.set_cell(Position::new(5, 2), &Cell::new("W", 1));
+        v.set_cell(Position::new(5, 2), &Cell::narrow("W"));
         assert_eq!(v.cell(Position::new(5, 2)).unwrap().content(), "W");
     }
     assert_eq!(buf.cell(Position::new(5, 2)).unwrap().content(), "W");

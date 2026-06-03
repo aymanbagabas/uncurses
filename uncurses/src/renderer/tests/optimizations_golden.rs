@@ -45,13 +45,13 @@ fn assert_golden(actual: Vec<u8>, expected: &[u8]) {
 
 fn set_text(buf: &mut RenderBuffer, y: u16, text: &str) {
     for (x, ch) in text.chars().enumerate() {
-        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1));
+        buf.set_cell((x as u16, y), &Cell::narrow(ch.to_string()));
     }
 }
 
 fn fill_row(buf: &mut RenderBuffer, y: u16, ch: &str) {
     for x in 0..buf.width() {
-        buf.set_cell((x, y), &Cell::new(ch.to_string(), 1));
+        buf.set_cell((x, y), &Cell::narrow(ch.to_string()));
     }
 }
 
@@ -60,7 +60,7 @@ fn fill_alpha_rows(buf: &mut RenderBuffer) {
         for x in 0..buf.width() {
             buf.set_cell(
                 (x, y),
-                &Cell::new(char::from(b'A' + y as u8).to_string(), 1),
+                &Cell::narrow(char::from(b'A' + y as u8).to_string()),
             );
         }
     }
@@ -78,7 +78,7 @@ fn rep_on_collapses_run_of_same_glyph() {
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(20, 1);
     for x in 0..15u16 {
-        buf.set_cell((x, 0), &Cell::new("A", 1));
+        buf.set_cell((x, 0), &Cell::narrow("A"));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\rA\x1b[14b\r");
@@ -90,7 +90,7 @@ fn rep_off_emits_literal_repeats() {
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(20, 1);
     for x in 0..15u16 {
-        buf.set_cell((x, 0), &Cell::new("A", 1));
+        buf.set_cell((x, 0), &Cell::narrow("A"));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\rAAAAAAAAAAAAAAA\r");
@@ -103,8 +103,8 @@ fn tabs_on_advances_with_tab_character() {
     let opts = Optimizations::none().union(Optimizations::TABS);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(40, 1);
-    buf.set_cell((8, 0), &Cell::new("X", 1));
-    buf.set_cell((16, 0), &Cell::new("Y", 1));
+    buf.set_cell((8, 0), &Cell::narrow("X"));
+    buf.set_cell((16, 0), &Cell::narrow("Y"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\r\tX\tY\r");
 }
@@ -114,8 +114,8 @@ fn tabs_off_advances_with_cuf_and_overwrite() {
     let opts = Optimizations::none().difference(Optimizations::TABS);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(40, 1);
-    buf.set_cell((8, 0), &Cell::new("X", 1));
-    buf.set_cell((16, 0), &Cell::new("Y", 1));
+    buf.set_cell((8, 0), &Cell::narrow("X"));
+    buf.set_cell((16, 0), &Cell::narrow("Y"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\r\x1b[8CX\x1b[7CY\r");
 }
@@ -161,7 +161,7 @@ fn cha_enabled_jump_to_col_50_still_uses_cr_plus_cuf() {
         .difference(Optimizations::TABS | Optimizations::HPA);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(80, 1);
-    buf.set_cell((50, 0), &Cell::new("X", 1));
+    buf.set_cell((50, 0), &Cell::narrow("X"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\r\x1b[50CX\r");
 }
@@ -173,7 +173,7 @@ fn hpa_enabled_jump_to_col_50_still_uses_cr_plus_cuf() {
         .difference(Optimizations::CHA | Optimizations::TABS);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(80, 1);
-    buf.set_cell((50, 0), &Cell::new("X", 1));
+    buf.set_cell((50, 0), &Cell::narrow("X"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\r\x1b[50CX\r");
 }
@@ -184,7 +184,7 @@ fn no_cha_no_hpa_jump_to_col_50_uses_cr_plus_cuf() {
         .difference(Optimizations::CHA | Optimizations::HPA | Optimizations::TABS);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(80, 1);
-    buf.set_cell((50, 0), &Cell::new("X", 1));
+    buf.set_cell((50, 0), &Cell::narrow("X"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\r\x1b[50CX\r");
 }
@@ -198,7 +198,7 @@ fn vpa_enabled_jump_to_row_10_uses_cud_chain_anyway() {
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(10, 20);
     let _ = render_to_vec(&mut r, &mut buf);
-    buf.set_cell((0, 10), &Cell::new("X", 1));
+    buf.set_cell((0, 10), &Cell::narrow("X"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\r\n\n\n\n\n\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n");
 }
@@ -209,7 +209,7 @@ fn vpa_disabled_jump_to_row_10_uses_cud_chain() {
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(10, 20);
     let _ = render_to_vec(&mut r, &mut buf);
-    buf.set_cell((0, 10), &Cell::new("X", 1));
+    buf.set_cell((0, 10), &Cell::narrow("X"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\r\n\n\n\n\n\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n");
 }
@@ -224,7 +224,7 @@ fn bs_step_overwrite_uses_cuf_because_cursor_parked_at_col_0() {
     let mut buf = RenderBuffer::new(10, 1);
     set_text(&mut buf, 0, "ABCDE");
     let _ = render_to_vec(&mut r, &mut buf);
-    buf.set_cell((4, 0), &Cell::new("Z", 1));
+    buf.set_cell((4, 0), &Cell::narrow("Z"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\x1b[4CZ");
 
@@ -233,7 +233,7 @@ fn bs_step_overwrite_uses_cuf_because_cursor_parked_at_col_0() {
     let mut buf = RenderBuffer::new(10, 1);
     set_text(&mut buf, 0, "ABCDE");
     let _ = render_to_vec(&mut r, &mut buf);
-    buf.set_cell((4, 0), &Cell::new("Z", 1));
+    buf.set_cell((4, 0), &Cell::narrow("Z"));
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\x1b[4CZ");
 }
@@ -251,7 +251,7 @@ fn ech_clears_trailing_blanks_with_el_when_row_shrinks() {
     let _ = render_to_vec(&mut r, &mut buf);
     set_text(&mut buf, 0, "HELLO");
     for x in 5..15u16 {
-        buf.set_cell((x, 0), &Cell::new(" ", 1));
+        buf.set_cell((x, 0), &Cell::narrow(" "));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\x1b[A\x1b[6C\x1b[K");
@@ -276,7 +276,7 @@ fn scroll_up_by_one_in_fullscreen_uses_lf_with_rep_terminator() {
         for x in 0..10u16 {
             buf.set_cell(
                 (x, y),
-                &Cell::new(char::from(b'B' + y as u8).to_string(), 1),
+                &Cell::narrow(char::from(b'B' + y as u8).to_string()),
             );
         }
     }
@@ -299,7 +299,7 @@ fn scroll_up_by_one_in_fullscreen_without_su_sd_falls_back_to_lf() {
         for x in 0..10u16 {
             buf.set_cell(
                 (x, y),
-                &Cell::new(char::from(b'B' + y as u8).to_string(), 1),
+                &Cell::narrow(char::from(b'B' + y as u8).to_string()),
             );
         }
     }
@@ -344,7 +344,7 @@ fn bce_on_with_colored_blanks_paints_explicit_run() {
     };
     set_text(&mut buf, 0, "HELLO");
     for x in 5..15u16 {
-        buf.set_cell((x, 0), &Cell::new(" ", 1).with_style(red_bg.clone()));
+        buf.set_cell((x, 0), &Cell::narrow(" ").with_style(red_bg.clone()));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\x1b[5C\x1b[48;5;1m          \x1b[m");
@@ -363,7 +363,7 @@ fn bce_off_with_colored_blanks_paints_explicit_run() {
     };
     set_text(&mut buf, 0, "HELLO");
     for x in 5..15u16 {
-        buf.set_cell((x, 0), &Cell::new(" ", 1).with_style(red_bg.clone()));
+        buf.set_cell((x, 0), &Cell::narrow(" ").with_style(red_bg.clone()));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\x1b[5C\x1b[48;5;1m          \x1b[m");
@@ -383,7 +383,7 @@ fn scenario_paragraph_edit(r: &mut Renderer) -> Vec<u8> {
 
     set_text(&mut buf, 0, "hello, world!");
     for x in 0..8u16 {
-        buf.set_cell((x, 2), &Cell::new(if x < 2 { "a" } else { " " }, 1));
+        buf.set_cell((x, 2), &Cell::narrow(if x < 2 { "a" } else { " " }));
     }
     set_text(&mut buf, 4, "middle");
 
@@ -442,7 +442,7 @@ fn preset_none_paragraph_edit() {
 fn scenario_long_run(r: &mut Renderer) -> Vec<u8> {
     let mut buf = RenderBuffer::new(40, 1);
     for x in 0..30u16 {
-        buf.set_cell((x, 0), &Cell::new("=", 1));
+        buf.set_cell((x, 0), &Cell::narrow("="));
     }
     render_to_vec(r, &mut buf)
 }
@@ -490,10 +490,10 @@ fn preset_vt100_long_run_falls_back_to_literal() {
 /// the advance is CUF.
 fn scenario_sparse_glyphs(r: &mut Renderer) -> Vec<u8> {
     let mut buf = RenderBuffer::new(40, 1);
-    buf.set_cell((8, 0), &Cell::new("A", 1));
-    buf.set_cell((16, 0), &Cell::new("B", 1));
-    buf.set_cell((24, 0), &Cell::new("C", 1));
-    buf.set_cell((32, 0), &Cell::new("D", 1));
+    buf.set_cell((8, 0), &Cell::narrow("A"));
+    buf.set_cell((16, 0), &Cell::narrow("B"));
+    buf.set_cell((24, 0), &Cell::narrow("C"));
+    buf.set_cell((32, 0), &Cell::narrow("D"));
     render_to_vec(r, &mut buf)
 }
 

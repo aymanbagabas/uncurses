@@ -242,10 +242,12 @@ fn flush_pending<S: SurfaceMut + ?Sized>(
     if let Some((px, py, content, w)) = pending.take()
         && clip.contains(Position::new(px, py))
     {
-        target.set_cell(
-            Position::new(px, py),
-            &Cell::new(&*content, w).with_style(style.clone()),
-        );
+        let cell = match w {
+            2 => Cell::wide(&*content),
+            _ => Cell::narrow(&*content),
+        }
+        .with_style(style.clone());
+        target.set_cell(Position::new(px, py), &cell);
     }
 }
 

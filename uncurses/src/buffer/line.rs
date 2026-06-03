@@ -22,7 +22,7 @@ pub fn fill_line_into(slot: &mut [Cell], fill: &Cell) {
     while x + step <= width {
         slot[x] = fill.clone();
         for i in 1..step {
-            slot[x + i] = Cell::new("", 0);
+            slot[x + i] = Cell::continuation();
         }
         x += step;
     }
