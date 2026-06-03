@@ -39,8 +39,8 @@ pub mod xterm;
 pub use cursor::*;
 pub use hyperlink::*;
 pub use kitty::{
-    KittyFlags, KittyKeyboardMode, write_disable_kitty_keyboard, write_pop_kitty_keyboard,
-    write_push_kitty_keyboard, write_request_kitty_keyboard, write_set_kitty_keyboard,
+    KittyKeyboardFlags, KittyKeyboardMode, write_pop_kitty_keyboard, write_push_kitty_keyboard,
+    write_request_kitty_keyboard, write_set_kitty_keyboard,
 };
 pub use mode::*;
 pub use screen::*;

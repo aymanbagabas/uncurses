@@ -259,12 +259,13 @@ fn recognize(
         return Some(Event::ModeReport { mode, setting });
     }
 
-    // Keyboard enhancements report: CSI ? flags u. No intermediate,
-    // exactly 1 param.
+    // Kitty keyboard protocol active-enhancements report: CSI ? flags u.
+    // No intermediate, exactly 1 param.
     if final_byte == b'u' && view.private == Some(b'?') && no_intermediate && params.len() == 1 {
-        return Some(Event::KeyboardEnhancements {
-            flags: params.get_or(0, 0) as u8,
-        });
+        let bits = params.get_or(0, 0) as u8;
+        return Some(Event::KittyKeyboardEnhancements(
+            crate::ansi::KittyKeyboardFlags::from_bits_truncate(bits),
+        ));
     }
 
     // Window size in pixels: CSI 4 ; height ; width t. No private, no
