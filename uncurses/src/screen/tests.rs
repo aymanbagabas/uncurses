@@ -1657,3 +1657,51 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
         "alt set missing: tail={tail:?}"
     );
 }
+
+#[test]
+fn update_window_size_folds_size_events_into_the_cache() {
+    use crate::event::Event;
+    use crate::terminal::Winsize;
+
+    let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(80, 24);
+
+    // Resize folds in cells + pixels.
+    let ws = Winsize {
+        row: 24,
+        col: 80,
+        xpixel: 800,
+        ypixel: 480,
+    };
+    assert!(screen.update_window_size(&Event::Resize(ws)));
+    assert_eq!(screen.window_size(), ws);
+    assert_eq!(screen.cell_pixel_size(), Some((10, 20)));
+
+    // WindowCellSize updates only the cell dims.
+    assert!(screen.update_window_size(&Event::WindowCellSize {
+        width: 100,
+        height: 30,
+    }));
+    assert_eq!(screen.window_size().col, 100);
+    assert_eq!(screen.window_size().row, 30);
+
+    // WindowPixelSize updates only the pixel dims.
+    assert!(screen.update_window_size(&Event::WindowPixelSize {
+        width: 1000,
+        height: 600,
+    }));
+    assert_eq!(screen.window_size().xpixel, 1000);
+    assert_eq!(screen.window_size().ypixel, 600);
+    assert_eq!(screen.cell_pixel_size(), Some((10, 20)));
+
+    // CellPixelSize takes precedence over the derived value.
+    assert!(screen.update_window_size(&Event::CellPixelSize {
+        width: 7,
+        height: 14,
+    }));
+    assert_eq!(screen.cell_pixel_size(), Some((7, 14)));
+
+    // Non-size events return false and don't disturb the cache.
+    let key = Event::KeyPress(crate::event::Key::new(crate::event::KeyCode::Char('a')));
+    assert!(!screen.update_window_size(&key));
+    assert_eq!(screen.cell_pixel_size(), Some((7, 14)));
+}
