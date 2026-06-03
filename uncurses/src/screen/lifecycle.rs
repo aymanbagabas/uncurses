@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 
-use crate::ansi::{self, cursor, mode};
+use crate::ansi::{self, background, cursor, kitty, mode};
 
 use super::Screen;
 
@@ -53,15 +53,42 @@ impl<W: Write> Screen<W> {
                 self.state.mouse_encoding,
             )?;
         }
+        // Clear the alt screen's kitty keyboard frame *before* leaving
+        // the alt screen — the stack is per-screen-buffer, so the
+        // clear must be issued while alt is still active.
+        if self.state.alt_screen && !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.buf,
+                kitty::KittyKeyboardFlags::NONE,
+                kitty::KittyKeyboardMode::Set,
+            )?;
+        }
         if self.state.alt_screen {
             mode::Mode::ALT_SCREEN_SAVE_CURSOR.reset(&mut self.buf)?;
             self.renderer.restore_cursor();
+        }
+        // Now on the main screen — clear its frame too.
+        if !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.buf,
+                kitty::KittyKeyboardFlags::NONE,
+                kitty::KittyKeyboardMode::Set,
+            )?;
         }
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.reset(&mut self.buf)?;
         }
         if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.reset(&mut self.buf)?;
+        }
+        if self.state.foreground_color.is_some() {
+            self.buf.write_all(background::RESET_FOREGROUND_COLOR)?;
+        }
+        if self.state.background_color.is_some() {
+            self.buf.write_all(background::RESET_BACKGROUND_COLOR)?;
+        }
+        if self.state.cursor_color.is_some() {
+            self.buf.write_all(background::RESET_CURSOR_COLOR)?;
         }
         if self.state.title.is_some() {
             ansi::write_window_title(&mut self.buf, "")?;
@@ -75,9 +102,29 @@ impl<W: Write> Screen<W> {
     /// does not mutate `self.state`. Call [`Screen::invalidate`]
     /// afterwards if the screen contents also need to be repainted.
     pub fn restore(&mut self) -> io::Result<()> {
+        // Re-apply the desired kitty keyboard flags on the main
+        // screen *before* entering the alt screen — the stack is
+        // per-buffer, so a set targeting main must happen while main
+        // is active.
+        if !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.buf,
+                self.state.kitty_keyboard,
+                kitty::KittyKeyboardMode::Set,
+            )?;
+        }
         if self.state.alt_screen {
             self.renderer.save_cursor();
             mode::Mode::ALT_SCREEN_SAVE_CURSOR.set(&mut self.buf)?;
+        }
+        // Now on the alt screen (if alt was active) — re-apply on
+        // the alt buffer too, since its stack is independent.
+        if self.state.alt_screen && !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.buf,
+                self.state.kitty_keyboard,
+                kitty::KittyKeyboardMode::Set,
+            )?;
         }
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.set(&mut self.buf)?;
@@ -103,6 +150,24 @@ impl<W: Write> Screen<W> {
                 self.state.mouse_mode,
                 self.state.mouse_encoding,
             )?;
+        }
+        if let Some(c) = self.state.foreground_color {
+            let (r, g, b) = c.to_rgb();
+            background::write_set_foreground_color(
+                &mut self.buf,
+                &background::xparse_rgb(r, g, b),
+            )?;
+        }
+        if let Some(c) = self.state.background_color {
+            let (r, g, b) = c.to_rgb();
+            background::write_set_background_color(
+                &mut self.buf,
+                &background::xparse_rgb(r, g, b),
+            )?;
+        }
+        if let Some(c) = self.state.cursor_color {
+            let (r, g, b) = c.to_rgb();
+            background::write_set_cursor_color(&mut self.buf, &background::xparse_rgb(r, g, b))?;
         }
         if let Some(ref title) = self.state.title {
             ansi::write_window_title(&mut self.buf, title)?;

@@ -250,45 +250,93 @@ impl<W: Write> Screen<W> {
     /// to assign a value (converted to 24-bit RGB via
     /// [`crate::color::Color::to_rgb`] and emitted as
     /// `rgb:RRRR/GGGG/BBBB`); pass `None` to restore the terminal
-    /// default (`OSC 110`).
+    /// default (`OSC 110`). The choice is recorded in the screen's
+    /// state so [`Screen::reset`] can return the terminal to its
+    /// built-in defaults and [`Screen::restore`] can re-apply it.
     pub fn set_foreground_color(&mut self, color: Option<crate::color::Color>) -> io::Result<()> {
-        match color {
-            Some(c) => {
-                let (r, g, b) = c.to_rgb();
-                background::write_set_foreground_color(
-                    &mut self.buf,
-                    &background::xparse_rgb(r, g, b),
-                )
+        if self.state.foreground_color != color {
+            match color {
+                Some(c) => {
+                    let (r, g, b) = c.to_rgb();
+                    background::write_set_foreground_color(
+                        &mut self.buf,
+                        &background::xparse_rgb(r, g, b),
+                    )?;
+                }
+                None => self.buf.write_all(background::RESET_FOREGROUND_COLOR)?,
             }
-            None => self.buf.write_all(background::RESET_FOREGROUND_COLOR),
+            self.state.foreground_color = color;
         }
+        Ok(())
     }
 
     /// Set the default background color (`OSC 11`), or restore the
-    /// terminal default (`OSC 111`) when `color` is `None`.
+    /// terminal default (`OSC 111`) when `color` is `None`. See
+    /// [`Screen::set_foreground_color`] for state-tracking semantics.
     pub fn set_background_color(&mut self, color: Option<crate::color::Color>) -> io::Result<()> {
-        match color {
-            Some(c) => {
-                let (r, g, b) = c.to_rgb();
-                background::write_set_background_color(
-                    &mut self.buf,
-                    &background::xparse_rgb(r, g, b),
-                )
+        if self.state.background_color != color {
+            match color {
+                Some(c) => {
+                    let (r, g, b) = c.to_rgb();
+                    background::write_set_background_color(
+                        &mut self.buf,
+                        &background::xparse_rgb(r, g, b),
+                    )?;
+                }
+                None => self.buf.write_all(background::RESET_BACKGROUND_COLOR)?,
             }
-            None => self.buf.write_all(background::RESET_BACKGROUND_COLOR),
+            self.state.background_color = color;
         }
+        Ok(())
     }
 
     /// Set the cursor color (`OSC 12`), or restore the terminal
-    /// default (`OSC 112`) when `color` is `None`.
+    /// default (`OSC 112`) when `color` is `None`. See
+    /// [`Screen::set_foreground_color`] for state-tracking semantics.
     pub fn set_cursor_color(&mut self, color: Option<crate::color::Color>) -> io::Result<()> {
-        match color {
-            Some(c) => {
-                let (r, g, b) = c.to_rgb();
-                background::write_set_cursor_color(&mut self.buf, &background::xparse_rgb(r, g, b))
+        if self.state.cursor_color != color {
+            match color {
+                Some(c) => {
+                    let (r, g, b) = c.to_rgb();
+                    background::write_set_cursor_color(
+                        &mut self.buf,
+                        &background::xparse_rgb(r, g, b),
+                    )?;
+                }
+                None => self.buf.write_all(background::RESET_CURSOR_COLOR)?,
             }
-            None => self.buf.write_all(background::RESET_CURSOR_COLOR),
+            self.state.cursor_color = color;
         }
+        Ok(())
+    }
+
+    // --- Kitty keyboard --------------------------------------------------
+
+    /// Set the active Kitty keyboard enhancement flags. Emits
+    /// `CSI = <flags> ; 1 u` (set-and-replace) targeting the
+    /// currently-active screen buffer's top stack frame, and remembers
+    /// the desired flag set so it can be re-emitted onto whichever
+    /// buffer becomes active afterwards.
+    ///
+    /// The kitty keyboard stack is per-screen-buffer in the terminal.
+    /// Rather than expose that detail, the screen treats its tracked
+    /// flag set as the single source of truth and re-applies it on
+    /// every alt-screen toggle, on [`Screen::restore`], and clears it
+    /// on [`Screen::reset`]. Pass [`crate::ansi::KittyKeyboardFlags::NONE`]
+    /// (the empty set) to clear every enhancement.
+    pub fn set_kitty_keyboard_flags(
+        &mut self,
+        flags: crate::ansi::KittyKeyboardFlags,
+    ) -> io::Result<()> {
+        if self.state.kitty_keyboard != flags {
+            kitty::write_set_kitty_keyboard(
+                &mut self.buf,
+                flags,
+                crate::ansi::KittyKeyboardMode::Set,
+            )?;
+            self.state.kitty_keyboard = flags;
+        }
+        Ok(())
     }
 
     pub fn width(&self) -> u16 {

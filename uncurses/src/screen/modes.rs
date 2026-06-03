@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 
-use crate::ansi::{self, cursor, mode};
+use crate::ansi::{self, cursor, kitty, mode};
 
 use super::Screen;
 
@@ -29,6 +29,16 @@ impl<W: Write> Screen<W> {
             self.renderer.set_fullscreen(false);
             self.renderer.set_relative_cursor(true);
             self.renderer.restore_cursor();
+        }
+        // The kitty keyboard stack is per-screen-buffer; re-apply the
+        // tracked flags onto the buffer we just switched into so the
+        // user-facing flag set is screen-agnostic.
+        if !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.buf,
+                self.state.kitty_keyboard,
+                kitty::KittyKeyboardMode::Set,
+            )?;
         }
         Ok(())
     }

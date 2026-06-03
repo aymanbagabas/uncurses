@@ -6,8 +6,12 @@ use std::io::{self, Write};
 
 bitflags::bitflags! {
     /// Kitty keyboard enhancement flags.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct KittyKeyboardFlags: u8 {
+        /// Empty flag set. Equivalent to disabling every enhancement
+        /// when passed to a setter — terminals interpret a zero-bit
+        /// push as "no enhancements active for this stack frame".
+        const NONE                        = 0;
         const DISAMBIGUATE_ESCAPE_CODES   = 0b0000_0001;
         const REPORT_EVENT_TYPES          = 0b0000_0010;
         const REPORT_ALTERNATE_KEYS       = 0b0000_0100;
