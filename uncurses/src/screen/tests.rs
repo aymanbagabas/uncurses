@@ -1457,3 +1457,203 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
         "reset targeted live height instead of front-buf height: head={head:?}"
     );
 }
+
+// --- foreground/background/cursor color setters ---
+
+#[test]
+fn set_foreground_color_emits_osc_10_and_is_idempotent() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        screen
+            .set_foreground_color(Some(crate::color::Color::Rgb(255, 128, 0)))
+            .unwrap();
+        // Idempotent: same color does not re-emit.
+        screen
+            .set_foreground_color(Some(crate::color::Color::Rgb(255, 128, 0)))
+            .unwrap();
+        screen.set_foreground_color(None).unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    assert_eq!(out.matches("\x1b]10;").count(), 1);
+    assert!(out.contains("\x1b]110\x07"));
+}
+
+#[test]
+fn set_background_color_emits_osc_11_and_reset() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        screen
+            .set_background_color(Some(crate::color::Color::Rgb(0, 0, 255)))
+            .unwrap();
+        screen.set_background_color(None).unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains("\x1b]11;"));
+    assert!(out.contains("\x1b]111\x07"));
+}
+
+#[test]
+fn set_cursor_color_emits_osc_12_and_reset() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        screen
+            .set_cursor_color(Some(crate::color::Color::Rgb(0, 255, 0)))
+            .unwrap();
+        screen.set_cursor_color(None).unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains("\x1b]12;"));
+    assert!(out.contains("\x1b]112\x07"));
+}
+
+#[test]
+fn reset_clears_color_state_and_restore_reapplies() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        screen
+            .set_foreground_color(Some(crate::color::Color::Rgb(10, 20, 30)))
+            .unwrap();
+        screen
+            .set_background_color(Some(crate::color::Color::Rgb(40, 50, 60)))
+            .unwrap();
+        screen
+            .set_cursor_color(Some(crate::color::Color::Rgb(70, 80, 90)))
+            .unwrap();
+        screen.reset().unwrap();
+        // State preserved across reset.
+        assert!(screen.state.foreground_color.is_some());
+        assert!(screen.state.background_color.is_some());
+        assert!(screen.state.cursor_color.is_some());
+        screen.restore().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    // Reset emits the three OSC reset sequences.
+    assert!(out.contains("\x1b]110\x07"));
+    assert!(out.contains("\x1b]111\x07"));
+    assert!(out.contains("\x1b]112\x07"));
+    // Restore re-emits each set sequence (so the count is 2: initial + restore).
+    assert_eq!(out.matches("\x1b]10;").count(), 2);
+    assert_eq!(out.matches("\x1b]11;").count(), 2);
+    assert_eq!(out.matches("\x1b]12;").count(), 2);
+}
+
+// --- kitty keyboard setter ---
+
+#[test]
+fn set_kitty_keyboard_flags_emits_set_and_is_idempotent() {
+    use crate::ansi::KittyKeyboardFlags;
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        screen
+            .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+            .unwrap();
+        // Idempotent.
+        screen
+            .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+            .unwrap();
+        screen
+            .set_kitty_keyboard_flags(KittyKeyboardFlags::NONE)
+            .unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
+    assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 1);
+    assert!(out.contains("\x1b[=0;1u"));
+}
+
+#[test]
+fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
+    use crate::ansi::KittyKeyboardFlags;
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        screen
+            .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+            .unwrap();
+        screen.set_alt_screen(true).unwrap();
+        screen.set_alt_screen(false).unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
+    // Initial set + alt-enter re-apply + alt-leave re-apply = 3 emissions.
+    assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 3);
+}
+
+#[test]
+fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
+    use crate::ansi::KittyKeyboardFlags;
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        screen
+            .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+            .unwrap();
+        screen.set_alt_screen(true).unwrap();
+        screen.reset().unwrap();
+        // State preserved across reset for restore to use.
+        assert_eq!(
+            screen.state.kitty_keyboard,
+            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+        );
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    let leave = out.find("\x1b[?1049l").expect("alt-screen leave");
+    let head = &out[..leave];
+    let tail = &out[leave..];
+    // A clear targets the alt buffer before leaving, and another
+    // clear targets the main buffer afterwards.
+    assert!(
+        head.contains("\x1b[=0;1u"),
+        "alt clear missing: head={head:?}"
+    );
+    assert!(
+        tail.contains("\x1b[=0;1u"),
+        "main clear missing: tail={tail:?}"
+    );
+}
+
+#[test]
+fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
+    use crate::ansi::KittyKeyboardFlags;
+    let mut setup: Vec<u8> = Vec::new();
+    let mut restore_buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut setup).with_size(20, 1);
+        screen
+            .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+            .unwrap();
+        screen.set_alt_screen(true).unwrap();
+        screen.reset().unwrap();
+        // Swap writers so only restore-side bytes land in restore_buf.
+        let _ = std::mem::replace(&mut screen.writer, &mut restore_buf);
+        screen.restore().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&restore_buf);
+    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
+    let enter = out.find("\x1b[?1049h").expect("alt-screen enter");
+    let head = &out[..enter];
+    let tail = &out[enter..];
+    // Set on main first (before the alt-screen enter), then on alt
+    // (after entering).
+    assert!(
+        head.contains(&format!("\x1b[={bits};1u")),
+        "main set missing: head={head:?}"
+    );
+    assert!(
+        tail.contains(&format!("\x1b[={bits};1u")),
+        "alt set missing: tail={tail:?}"
+    );
+}
