@@ -89,19 +89,18 @@ fn repeat_paint_with_same_id_does_not_retransmit() {
 }
 
 #[test]
-fn forget_then_flush_emits_delete() {
+fn forget_emits_delete_inline() {
     let mut screen = screen_with_pixels();
     let mut painter = Kitty::new();
 
-    painter
+    let id = painter
         .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
-    painter.forget(&make_test_image());
-    painter.flush_deletes(&mut screen).unwrap();
+    painter.forget(&mut screen, id).unwrap();
     screen.flush().unwrap();
     let bytes = screen.writer().clone();
     let s = String::from_utf8_lossy(&bytes);

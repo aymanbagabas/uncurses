@@ -157,14 +157,14 @@ fn forget_drops_cache_and_re_encodes() {
     let mut screen = screen_with_pixels();
     let mut painter = Sixel::new();
 
-    painter
+    let id = painter
         .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
-    painter.forget(&make_test_image());
+    painter.forget(id);
     // Stamp a different image so the diff actually changes; without
     // a different anchor payload the renderer wouldn't re-emit even
     // though the cache was dropped.
