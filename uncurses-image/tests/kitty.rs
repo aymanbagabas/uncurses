@@ -44,13 +44,7 @@ fn paint_emits_transmit_and_placeholder() {
     let mut painter = Kitty::new();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -73,13 +67,7 @@ fn repeat_paint_with_same_id_does_not_retransmit() {
     let mut painter = Kitty::new();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -88,13 +76,7 @@ fn repeat_paint_with_same_id_does_not_retransmit() {
     // Same host id, same cell rect → no new APC transmit (stamping
     // the same placeholder cells is a differ no-op too).
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
@@ -112,19 +94,13 @@ fn forget_then_flush_emits_delete() {
     let mut painter = Kitty::new();
 
     painter
-        .paint(
-            &mut screen,
-            area(),
-            &make_test_image(),
-            Resize::default(),
-            1,
-        )
+        .paint(&mut screen, area(), &make_test_image(), Resize::default())
         .unwrap();
     screen.render().unwrap();
     screen.flush().unwrap();
     screen.writer_mut().clear();
 
-    painter.forget(1);
+    painter.forget(&make_test_image());
     painter.flush_deletes(&mut screen).unwrap();
     screen.flush().unwrap();
     let bytes = screen.writer().clone();

@@ -5,13 +5,14 @@
 //! verbatim and skips every body cell, so the painted region never
 //! interferes with surrounding text the differ owns.
 //!
-//! ## Host id contract
+//! ## Cache identity
 //!
-//! Each [`Self::paint`] call is keyed by a `u64` host id plus the
-//! cell rectangle dimensions. While the id and footprint are
-//! unchanged the encoded sequence is reused from cache; changing
-//! either re-encodes. The host must use a fresh id (or call
-//! [`Self::forget`]) when the source pixels change.
+//! [`Self::paint`] hashes the source pixel data to recognize "same
+//! image as last paint" — the host does not supply an identity.
+//! The cache is keyed on `(pixel_hash, cell_rect)`, so painting the
+//! same image into the same cell footprint reuses the previously
+//! encoded bytes; changing either the pixels or the footprint
+//! re-encodes.
 //!
 //! ## Per-cell pixel size
 //!
@@ -31,13 +32,15 @@ use uncurses::ansi::graphics::write_sixel;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 
+use crate::hash::pixel_hash;
 use crate::resize::Resize;
 
 /// Sixel painter.
 ///
-/// Caches the encoded sixel sequence per `(host_id, cell_rect)` so
-/// repeated paints with the same id and footprint reuse the
-/// previously encoded bytes. Stateless beyond the cache.
+/// Caches the encoded sixel sequence per `(pixel_hash, cell_rect)`
+/// so repeated paints of the same image into the same cell
+/// footprint reuse the previously encoded bytes. Stateless beyond
+/// the cache.
 #[derive(Debug, Default)]
 pub struct Sixel {
     cache: FxHashMap<(u64, (u16, u16)), String>,
@@ -53,6 +56,10 @@ impl Sixel {
     /// a sixel DCS sequence and storing it as a single rect-anchored
     /// cell at `(area.x, area.y)`.
     ///
+    /// On first paint of a given `(image pixels, cell footprint)`
+    /// combination the painter encodes; subsequent paints with the
+    /// same combination reuse the cached encoding.
+    ///
     /// Returns I/O errors from sequence assembly. When the screen's
     /// cell pixel size is unknown, this is a no-op (returns `Ok`).
     pub fn paint<W: Write>(
@@ -61,7 +68,6 @@ impl Sixel {
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
-        host_id: u64,
     ) -> io::Result<()> {
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 {
@@ -71,7 +77,7 @@ impl Sixel {
             return Ok(());
         };
 
-        let key = (host_id, (area.width, area.height));
+        let key = (pixel_hash(image), (area.width, area.height));
         let sequence = match self.cache.get(&key) {
             Some(s) => s.clone(),
             None => {
@@ -84,10 +90,17 @@ impl Sixel {
         Ok(())
     }
 
-    /// Drop every cached entry for `host_id`. The next paint with
-    /// that id re-encodes from source pixels.
-    pub fn forget(&mut self, host_id: u64) {
-        self.cache.retain(|(id, _), _| *id != host_id);
+    /// Drop every cached entry for `image`. The next paint of the
+    /// same pixels re-encodes from scratch.
+    pub fn forget(&mut self, image: &DynamicImage) {
+        let h = pixel_hash(image);
+        self.cache.retain(|(hash, _), _| *hash != h);
+    }
+
+    /// Drop every cached entry. Equivalent to constructing a fresh
+    /// painter, but keeps the allocated table for reuse.
+    pub fn clear(&mut self) {
+        self.cache.clear();
     }
 }
 

@@ -37,6 +37,7 @@
 #![forbid(unsafe_code)]
 
 mod halfblocks;
+mod hash;
 mod kitty;
 mod resize;
 #[cfg(feature = "sixel")]
