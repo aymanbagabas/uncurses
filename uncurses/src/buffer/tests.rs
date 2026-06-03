@@ -290,3 +290,41 @@ fn write_string_with_link() {
         Some(("https://example.com", ""))
     );
 }
+
+#[test]
+fn overwriting_rect_cell_with_non_rect_clears_owning_rect() {
+    let mut buf = Buffer::new(8, 4);
+    let rect = Rect::new(1, 1, 3, 2);
+    buf.set(Position::new(1, 1), &Cell::rect_anchor(rect, "PAYLOAD"));
+    for (x, y) in [(2, 1), (3, 1), (1, 2), (2, 2), (3, 2)] {
+        buf.set(Position::new(x, y), &Cell::rect_body(rect));
+    }
+    assert!(buf.cell(Position::new(2, 2)).unwrap().is_rect_body_at(2, 2));
+
+    // Overwrite a body cell with a plain text cell. The entire rect
+    // must be cleared so no stale body cells remain.
+    buf.set(Position::new(2, 2), &Cell::narrow("X"));
+    assert_eq!(buf.cell(Position::new(2, 2)).unwrap().content(), "X");
+    for (x, y) in [(1, 1), (2, 1), (3, 1), (1, 2), (3, 2)] {
+        let c = buf.cell(Position::new(x, y)).unwrap();
+        assert!(
+            c.is_blank() && c.rect().is_none(),
+            "stale rect cell at ({x}, {y}): {c:?}"
+        );
+    }
+}
+
+#[test]
+fn overwriting_rect_cell_with_same_rect_keeps_other_cells() {
+    let mut buf = Buffer::new(8, 4);
+    let rect = Rect::new(1, 1, 3, 2);
+    buf.set(Position::new(1, 1), &Cell::rect_anchor(rect, "PAYLOAD"));
+    buf.set(Position::new(2, 1), &Cell::rect_body(rect));
+    buf.set(Position::new(3, 1), &Cell::rect_body(rect));
+
+    // Re-stamp the same body cell — no other cells should be
+    // disturbed because the new cell belongs to the same rect.
+    buf.set(Position::new(2, 1), &Cell::rect_body(rect));
+    assert_eq!(buf.cell(Position::new(1, 1)).unwrap().content(), "PAYLOAD");
+    assert!(buf.cell(Position::new(3, 1)).unwrap().is_rect_body_at(3, 1));
+}

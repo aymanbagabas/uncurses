@@ -105,6 +105,25 @@ impl Buffer {
             return;
         }
 
+        // If we're overwriting a rect-typed cell with a cell that
+        // does *not* belong to the same rect, blank every cell of
+        // the existing rect first. This prevents body cells of the
+        // old rect from outliving the anchor and turning into stale
+        // payload references for the differ.
+        let existing_rect = self.cells[y * width + x].rect();
+        if let Some(old) = existing_rect
+            && cell.rect() != Some(old)
+        {
+            let bounds = Rect::new(0, 0, self.width, self.height);
+            let clipped = bounds.intersection(old);
+            for ry in clipped.top()..clipped.bottom() {
+                let row_start = (ry as usize) * width;
+                for rx in clipped.left()..clipped.right() {
+                    self.cells[row_start + rx as usize] = Cell::BLANK;
+                }
+            }
+        }
+
         let line = &mut self.cells[y * width..(y + 1) * width];
 
         // If we're overwriting a wide cell's continuation, blank the primary
