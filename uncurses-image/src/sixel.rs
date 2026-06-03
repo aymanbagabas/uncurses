@@ -25,10 +25,9 @@
 use std::io::{self, Write};
 
 use icy_sixel::SixelImage;
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use rustc_hash::FxHashMap;
 use uncurses::Rect;
-use uncurses::ansi::graphics::write_sixel;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 
@@ -147,72 +146,62 @@ fn clip_area<W: Write>(area: Rect, screen: &Screen<W>) -> Rect {
     }
 }
 
-/// Resize `image` to fit the cell-pixel rectangle implied by `area`
-/// + `cell_px`, encode it to sixel, then re-emit the inner payload
-///   through [`write_sixel`] so the framing comes from the ansi
-///   helpers.
+/// Resize `image` to the target pixel dimensions implied by `area`,
+/// `cell_px`, and `resize`, then encode it to sixel. The returned
+/// string is the complete DCS sequence (`\x1bPq…\x1b\\`) emitted by
+/// the encoder; callers stamp it verbatim.
 fn encode(
     image: &DynamicImage,
     area: Rect,
     cell_px: (u16, u16),
     resize: Resize,
 ) -> io::Result<String> {
-    let cw = cell_px.0.max(1) as u32;
-    let ch = cell_px.1.max(1) as u32;
-    let target_w = (area.width as u32) * cw;
-    let target_h = (area.height as u32) * ch;
+    let (target_w, target_h) = target_pixels(image.dimensions(), area, cell_px, resize);
     if target_w == 0 || target_h == 0 {
         return Ok(String::new());
     }
 
+    let filter = match resize {
+        Resize::Scale(f) | Resize::Fit(f) => f,
+        Resize::Crop(_) => image::imageops::FilterType::Triangle,
+    };
     let resized = match resize {
-        Resize::Scale(filter) => image.resize_exact(target_w, target_h, filter).to_rgba8(),
-        Resize::Fit(filter) => {
-            let fit = image.resize(target_w, target_h, filter).to_rgba8();
-            let mut canvas = image::RgbaImage::new(target_w, target_h);
-            let dx = (target_w.saturating_sub(fit.width())) / 2;
-            let dy = (target_h.saturating_sub(fit.height())) / 2;
-            image::imageops::overlay(&mut canvas, &fit, dx as i64, dy as i64);
-            canvas
+        Resize::Crop(_) => image.resize_to_fill(target_w, target_h, filter).to_rgba8(),
+        Resize::Fit(_) | Resize::Scale(_) => {
+            image.resize_exact(target_w, target_h, filter).to_rgba8()
         }
-        Resize::Crop(_) => image
-            .resize_to_fill(target_w, target_h, image::imageops::FilterType::Triangle)
-            .to_rgba8(),
     };
 
     let (w, h) = (resized.width() as usize, resized.height() as usize);
     let raw = resized.into_raw();
     let sixel = SixelImage::from_rgba(raw, w, h);
-    let dcs = sixel
-        .encode()
-        .map_err(|e| io::Error::other(e.to_string()))?;
-
-    let payload = strip_dcs_frame(&dcs);
-    let mut out = Vec::with_capacity(payload.len() + 8);
-    write_sixel(&mut out, -1, 1, 0, payload)?;
-    String::from_utf8(out).map_err(|e| io::Error::other(e.to_string()))
+    sixel.encode().map_err(|e| io::Error::other(e.to_string()))
 }
 
-/// Extract the inner sixel payload from a complete `\x1bP…q…\x1b\\`
-/// sequence. Returns the input unchanged (as bytes) when framing
-/// markers are missing — callers re-wrap unconditionally so a
-/// missing frame would only produce a malformed output, not unsafe
-/// behavior.
-fn strip_dcs_frame(dcs: &str) -> &[u8] {
-    let bytes = dcs.as_bytes();
-    let start = match bytes.iter().position(|&b| b == b'q') {
-        Some(p) => p + 1,
-        None => return bytes,
-    };
-    let end = if bytes.ends_with(b"\x1b\\") {
-        bytes.len() - 2
-    } else {
-        bytes.len()
-    };
-    if end < start {
-        return bytes;
+/// Compute the pixel dimensions the source image should be resized
+/// to in order to fill `area` according to `resize`, given a per-cell
+/// pixel size. For `Fit` this preserves aspect ratio (the resulting
+/// image may be smaller than the area in one dimension), avoiding
+/// the need for transparent padding which sixel cannot represent.
+fn target_pixels(src: (u32, u32), area: Rect, cell_px: (u16, u16), resize: Resize) -> (u32, u32) {
+    let cw = cell_px.0.max(1) as u32;
+    let ch = cell_px.1.max(1) as u32;
+    let area_w = (area.width as u32) * cw;
+    let area_h = (area.height as u32) * ch;
+    if area_w == 0 || area_h == 0 || src.0 == 0 || src.1 == 0 {
+        return (area_w, area_h);
     }
-    &bytes[start..end]
+    match resize {
+        Resize::Scale(_) | Resize::Crop(_) => (area_w, area_h),
+        Resize::Fit(_) => {
+            let sx = area_w as f64 / src.0 as f64;
+            let sy = area_h as f64 / src.1 as f64;
+            let s = sx.min(sy).min(1.0);
+            let w = ((src.0 as f64) * s).round().max(1.0) as u32;
+            let h = ((src.1 as f64) * s).round().max(1.0) as u32;
+            (w, h)
+        }
+    }
 }
 
 fn stamp<W: Write>(screen: &mut Screen<W>, area: Rect, sequence: String) {
@@ -224,20 +213,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strip_dcs_frame_removes_intro_and_terminator() {
-        let dcs = "\x1bP0;1;0qPAYLOAD\x1b\\";
-        assert_eq!(strip_dcs_frame(dcs), b"PAYLOAD");
+    fn target_pixels_scale_uses_full_area() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 2,
+        };
+        let px = target_pixels(
+            (100, 100),
+            area,
+            (10, 20),
+            Resize::Scale(image::imageops::FilterType::Triangle),
+        );
+        assert_eq!(px, (40, 40));
     }
 
     #[test]
-    fn strip_dcs_frame_handles_missing_terminator() {
-        let dcs = "\x1bP0;1;0qPAYLOAD";
-        assert_eq!(strip_dcs_frame(dcs), b"PAYLOAD");
-    }
-
-    #[test]
-    fn strip_dcs_frame_falls_back_when_q_missing() {
-        let dcs = "no markers here";
-        assert_eq!(strip_dcs_frame(dcs), dcs.as_bytes());
+    fn target_pixels_fit_preserves_aspect() {
+        // 200x100 src into 40x40 px area → scale 0.2 → 40x20.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 2,
+        };
+        let px = target_pixels(
+            (200, 100),
+            area,
+            (10, 20),
+            Resize::Fit(image::imageops::FilterType::Triangle),
+        );
+        assert_eq!(px, (40, 20));
     }
 }
