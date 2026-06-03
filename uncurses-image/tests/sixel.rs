@@ -117,6 +117,42 @@ fn repeat_paint_reuses_cache() {
 }
 
 #[test]
+fn paint_with_different_resize_re_encodes() {
+    use image::imageops::FilterType;
+
+    let mut screen = screen_with_pixels();
+    let mut painter = Sixel::new();
+
+    painter
+        .paint(
+            &mut screen,
+            area(),
+            &make_test_image(),
+            Resize::Fit(FilterType::Triangle),
+        )
+        .unwrap();
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    painter
+        .paint(
+            &mut screen,
+            area(),
+            &make_test_image(),
+            Resize::Scale(FilterType::Nearest),
+        )
+        .unwrap();
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    let bytes = screen.writer().clone();
+    assert!(
+        bytes.windows(2).any(|w| w == b"\x1bP"),
+        "switching Resize variant must produce a fresh DCS"
+    );
+}
+
+#[test]
 fn forget_drops_cache_and_re_encodes() {
     let mut screen = screen_with_pixels();
     let mut painter = Sixel::new();

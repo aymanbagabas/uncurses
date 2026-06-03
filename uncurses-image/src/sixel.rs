@@ -37,13 +37,24 @@ use crate::resize::Resize;
 
 /// Sixel painter.
 ///
-/// Caches the encoded sixel sequence per `(pixel_hash, cell_rect)`
-/// so repeated paints of the same image into the same cell
-/// footprint reuse the previously encoded bytes. Stateless beyond
-/// the cache.
+/// Caches the encoded sixel sequence per
+/// `(pixel_hash, cell_rect, cell_pixel_size, resize)` so repeated
+/// paints whose encoded bytes would be identical reuse the
+/// previously encoded sequence. Stateless beyond the cache.
 #[derive(Debug, Default)]
 pub struct Sixel {
-    cache: FxHashMap<(u64, (u16, u16)), String>,
+    cache: FxHashMap<CacheKey, String>,
+}
+
+/// Inputs that fully determine the encoded DCS bytes for a sixel
+/// paint. Two paints whose [`CacheKey`] compare equal produce
+/// byte-identical sequences and can share a cache entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct CacheKey {
+    pixel_hash: u64,
+    cell_rect: (u16, u16),
+    cell_px: (u16, u16),
+    resize: Resize,
 }
 
 impl Sixel {
@@ -56,9 +67,11 @@ impl Sixel {
     /// a sixel DCS sequence and storing it as a single rect-anchored
     /// cell at `(area.x, area.y)`.
     ///
-    /// On first paint of a given `(image pixels, cell footprint)`
-    /// combination the painter encodes; subsequent paints with the
-    /// same combination reuse the cached encoding.
+    /// On first paint of a given `(image pixels, cell footprint,
+    /// cell pixel size, resize strategy)` combination the painter
+    /// encodes; subsequent paints with the same combination reuse
+    /// the cached encoding. A change to any of those inputs forces
+    /// a re-encode because the resulting DCS bytes differ.
     ///
     /// Returns I/O errors from sequence assembly. When the screen's
     /// cell pixel size is unknown, this is a no-op (returns `Ok`).
@@ -77,7 +90,12 @@ impl Sixel {
             return Ok(());
         };
 
-        let key = (pixel_hash(image), (area.width, area.height));
+        let key = CacheKey {
+            pixel_hash: pixel_hash(image),
+            cell_rect: (area.width, area.height),
+            cell_px: (cw, ch),
+            resize,
+        };
         let sequence = match self.cache.get(&key) {
             Some(s) => s.clone(),
             None => {
@@ -94,7 +112,7 @@ impl Sixel {
     /// same pixels re-encodes from scratch.
     pub fn forget(&mut self, image: &DynamicImage) {
         let h = pixel_hash(image);
-        self.cache.retain(|(hash, _), _| *hash != h);
+        self.cache.retain(|key, _| key.pixel_hash != h);
     }
 
     /// Drop every cached entry. Equivalent to constructing a fresh
