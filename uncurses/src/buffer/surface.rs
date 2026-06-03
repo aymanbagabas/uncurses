@@ -97,6 +97,18 @@ pub trait Surface: Bounded {
 
                 let w = (cell.width() as u16).max(1);
 
+                // Rect cells encode absolute screen coordinates in
+                // their kind. Copying them with a translation would
+                // leave the rect pointing at coordinates that no
+                // longer match its position, so substitute a blank
+                // and let the host re-paint the rectangle via the
+                // owning addon at the destination.
+                if cell.is_rect() {
+                    target.set_cell(dst, &Cell::BLANK);
+                    dx += 1;
+                    continue;
+                }
+
                 // Wide primary that won't fit — either source's right
                 // edge sliced through its continuation, or target's
                 // right edge cuts it off. Emit a blank instead.
@@ -415,6 +427,31 @@ mod tests {
         assert_eq!(dst.cell(Position::new(0, 0)).unwrap().content(), " ");
         assert_eq!(dst.cell(Position::new(1, 0)).unwrap().content(), "A");
         assert_eq!(dst.cell(Position::new(2, 0)).unwrap().content(), "B");
+    }
+
+    #[test]
+    fn draw_blanks_rect_cells() {
+        let mut src = Buffer::new(3, 2);
+        let rect = Rect::new(0, 0, 3, 2);
+        src.set((0, 0), &Cell::rect_anchor(rect, "PAYLOAD"));
+        src.set((1, 0), &Cell::rect_body(rect));
+        src.set((2, 0), &Cell::rect_body(rect));
+        src.set((0, 1), &Cell::rect_body(rect));
+        src.set((1, 1), &Cell::rect_body(rect));
+        src.set((2, 1), &Cell::rect_body(rect));
+
+        let mut dst = Buffer::new(3, 2);
+        src.draw(&mut dst, Position::new(0, 0));
+
+        for y in 0..2 {
+            for x in 0..3 {
+                let c = dst.cell(Position::new(x, y)).unwrap();
+                assert!(
+                    c.is_blank() && c.rect().is_none(),
+                    "rect cell propagated through draw at ({x}, {y}): {c:?}"
+                );
+            }
+        }
     }
 
     #[test]
