@@ -809,3 +809,69 @@ fn test_clear_bottom_skips_ed_when_cur_buf_already_blank() {
         "redundant ED-below emitted for cur_buf that was already blank: out={out:?}"
     );
 }
+
+#[test]
+fn rect_anchor_emits_content_verbatim_and_body_cells_emit_nothing() {
+    use crate::layout::Rect;
+    let mut r = Renderer::new();
+    let mut rb = RenderBuffer::new(10, 3);
+    let rect = Rect {
+        x: 1,
+        y: 1,
+        width: 4,
+        height: 1,
+    };
+    let payload = "\x1bPpayload\x1b\\";
+    rb.set_cell((1, 1), &Cell::rect_anchor(rect, payload));
+    rb.set_cell((2, 1), &Cell::rect_body(rect));
+    rb.set_cell((3, 1), &Cell::rect_body(rect));
+    rb.set_cell((4, 1), &Cell::rect_body(rect));
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8_lossy(&out);
+    assert!(
+        s.contains(payload),
+        "expected anchor payload verbatim, got: {s:?}"
+    );
+    // Body cells must not emit padding spaces over the payload area.
+    // The post-anchor text should contain no glyph for the body cells
+    // beyond what the SGR / move sequences naturally produce.
+    let after = s.split(payload).nth(1).unwrap_or("");
+    for ch in after.chars() {
+        assert!(
+            ch != ' ',
+            "body cells must not emit literal spaces after anchor; saw {after:?}"
+        );
+    }
+}
+
+#[test]
+fn rect_unchanged_across_frames_emits_nothing() {
+    use crate::layout::Rect;
+    let mut r = Renderer::new();
+    let mut rb = RenderBuffer::new(10, 3);
+    let rect = Rect {
+        x: 0,
+        y: 0,
+        width: 3,
+        height: 1,
+    };
+    rb.set_cell((0, 0), &Cell::rect_anchor(rect, "\x1bPx\x1b\\"));
+    rb.set_cell((1, 0), &Cell::rect_body(rect));
+    rb.set_cell((2, 0), &Cell::rect_body(rect));
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    assert!(!out.is_empty());
+
+    // Re-render with no changes — differ should produce no output.
+    out.clear();
+    rb.set_cell((0, 0), &Cell::rect_anchor(rect, "\x1bPx\x1b\\"));
+    rb.set_cell((1, 0), &Cell::rect_body(rect));
+    rb.set_cell((2, 0), &Cell::rect_body(rect));
+    r.render(&mut out, &mut rb).unwrap();
+    assert!(
+        out.is_empty(),
+        "expected no output on unchanged rect frame, got: {:?}",
+        String::from_utf8_lossy(&out)
+    );
+}

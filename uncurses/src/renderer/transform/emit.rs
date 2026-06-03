@@ -2,7 +2,7 @@
 //! plain/ECH/REP), `emit_cell` (single grapheme), `put_range`
 //! (consecutive run), and `insert_cells_op` (ICH).
 
-use std::io;
+use std::io::{self, Write};
 
 use super::predicates::{can_clear_with, is_rep_ascii};
 use crate::ansi;
@@ -45,7 +45,12 @@ impl Renderer {
             let mut x = first;
             while x <= last {
                 let cell = &line[x];
-                if cell.is_continuation() {
+                if cell.is_continuation() || cell.is_rect_body_at(x as u16, self.cur.pos.y) {
+                    x += 1;
+                    continue;
+                }
+                if cell.is_rect_anchor_at(x as u16, self.cur.pos.y) {
+                    self.emit_rect_anchor(out, cell)?;
                     x += 1;
                     continue;
                 }
@@ -61,6 +66,20 @@ impl Renderer {
             // and never participate in an equal-run since they don't
             // compare equal to the cell that produced them.
             if line[x].is_continuation() {
+                x += 1;
+                continue;
+            }
+            // Rect body cells are opaque to the differ — they exist
+            // only to mark the area as owned by an anchor's payload.
+            // Skip them without emitting anything.
+            if line[x].is_rect_body_at(x as u16, self.cur.pos.y) {
+                x += 1;
+                continue;
+            }
+            // Rect anchor cells emit their payload bytes verbatim and
+            // do not participate in equal-run / ECH / REP grouping.
+            if line[x].is_rect_anchor_at(x as u16, self.cur.pos.y) {
+                self.emit_rect_anchor(out, &line[x])?;
                 x += 1;
                 continue;
             }
@@ -185,6 +204,16 @@ impl Renderer {
         if cell.is_continuation() {
             return Ok(());
         }
+        // Rect body cells own no glyph; their existence is a marker
+        // for the differ. Anchors carry payload bytes that do not go
+        // through put_glyph_bytes — emit_range handles them via
+        // emit_rect_anchor before they reach this path.
+        if cell.is_rect() {
+            if cell.is_rect_anchor_at(self.cur.pos.x, self.cur.pos.y) {
+                return self.emit_rect_anchor(out, cell);
+            }
+            return Ok(());
+        }
         self.update_pen(out, Some(cell))?;
         if cell.content().is_empty() {
             self.put_glyph_bytes(out, b" ", 1, surface_width, surface_height)
@@ -197,6 +226,19 @@ impl Renderer {
                 surface_height,
             )
         }
+    }
+
+    /// Emit a rect anchor's payload verbatim to the wire.
+    ///
+    /// The payload is an opaque escape sequence (e.g. a sixel DCS
+    /// or an iTerm2 OSC 1337) whose effect on the terminal cursor
+    /// is undefined across implementations. We therefore invalidate
+    /// the tracked cursor position; the next emission must reassert
+    /// position via [`Renderer::move_to`].
+    pub(super) fn emit_rect_anchor(&mut self, out: &mut Vec<u8>, cell: &Cell) -> io::Result<()> {
+        out.write_all(cell.content().as_bytes())?;
+        self.invalidate_cursor();
+        Ok(())
     }
     /// Emit cells in `new_line[start..=end]`, looking for runs of cells
     /// that already match the old line and skipping over them with a
@@ -324,6 +366,13 @@ impl Renderer {
         for i in 0..count {
             match line.get(i) {
                 Some(cell) if cell.is_continuation() => continue,
+                // Rect cells must never be inserted via ICH — that
+                // would shift the addon-managed payload's column
+                // positioning. Higher-level gating (transform/line)
+                // prevents this op from being chosen on rows
+                // containing rects, but defensively no-op here in
+                // case the gate is ever weakened.
+                Some(cell) if cell.is_rect() => continue,
                 Some(cell) => {
                     self.update_pen(out, Some(cell))?;
                     self.put_glyph_bytes(

@@ -18,6 +18,12 @@ use crate::style::{AttrFlags, UnderlineStyle};
 /// The cell must always be a plain space, with no link, no underline,
 /// and only "invisible-on-blank" attributes (bold/faint/italic/blink).
 pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
+    if cell.is_rect() {
+        // Rect cells are opaque to the differ; never replace them
+        // with a generic erase, even if the cell's style happens
+        // to look blank.
+        return false;
+    }
     if cell.width() != 1 || cell.content() != " " || !cell.style().is_link_empty() {
         return false;
     }
@@ -43,6 +49,12 @@ pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
 /// cell straddling into the row means the row is non-blank.
 pub(super) fn cells_equal_blank(cell: &Cell, blank: &Cell) -> bool {
     if cell.is_continuation() {
+        return false;
+    }
+    if cell.is_rect() {
+        // A rect cell is opaque content the addon is responsible
+        // for clearing; it must never compare equal to a generic
+        // blank for the purpose of EL/ED reuse.
         return false;
     }
     cell.width() == blank.width()
