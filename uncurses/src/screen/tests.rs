@@ -297,11 +297,11 @@ fn inline_hello_world_emits_exact_byte_stream() {
         screen.render().unwrap();
         screen.flush().unwrap();
     }
-    // Inline mode in a 24-row surface: hide cursor, CR + ED,
-    // descend to the bottom of the surface to anchor, ED again,
-    // CUU back to row 0, print, then pad with trailing blank rows.
-    // Total `\n` after the initial CR is 23.
-    let mut expected = String::from("\x1b[?25l\r\x1b[J\n\x1b[J\x1b[AHello, World!\r");
+    // Inline mode in a 24-row surface: hide cursor, CR + ED-below to
+    // wipe any prior content from the cursor downward, print, then
+    // pad with trailing blank rows. Total `\n` after the initial CR
+    // is 23.
+    let mut expected = String::from("\x1b[?25l\r\x1b[JHello, World!\r");
     for _ in 0..23 {
         expected.push('\n');
     }
