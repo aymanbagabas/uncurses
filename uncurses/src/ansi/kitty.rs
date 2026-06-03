@@ -7,7 +7,7 @@ use std::io::{self, Write};
 bitflags::bitflags! {
     /// Kitty keyboard enhancement flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct KittyFlags: u8 {
+    pub struct KittyKeyboardFlags: u8 {
         const DISAMBIGUATE_ESCAPE_CODES   = 0b0000_0001;
         const REPORT_EVENT_TYPES          = 0b0000_0010;
         const REPORT_ALTERNATE_KEYS       = 0b0000_0100;
@@ -25,17 +25,8 @@ bitflags::bitflags! {
 /// (`CSI ? u`). The terminal responds with `CSI ? <flags> u`.
 pub const REQUEST_KITTY_KEYBOARD: &[u8] = b"\x1b[?u";
 
-/// Disable the Kitty keyboard protocol (`CSI > u`).
-///
-/// Equivalent to [`write_push_kitty_keyboard`] with an empty flag set.
-pub const DISABLE_KITTY_KEYBOARD: &[u8] = b"\x1b[>u";
-
 pub fn write_request_kitty_keyboard<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_KITTY_KEYBOARD)
-}
-
-pub fn write_disable_kitty_keyboard<W: Write>(w: &mut W) -> io::Result<()> {
-    w.write_all(DISABLE_KITTY_KEYBOARD)
 }
 
 /// Modes for [`write_set_kitty_keyboard`].
@@ -53,19 +44,15 @@ pub enum KittyKeyboardMode {
 /// Set Kitty keyboard flags (`CSI = flags ; mode u`).
 pub fn write_set_kitty_keyboard<W: Write>(
     w: &mut W,
-    flags: KittyFlags,
+    flags: KittyKeyboardFlags,
     mode: KittyKeyboardMode,
 ) -> io::Result<()> {
     write!(w, "\x1b[={};{}u", flags.bits(), mode as u8)
 }
 
 /// Push Kitty keyboard enhancement flags onto the stack (`CSI > flags u`).
-pub fn write_push_kitty_keyboard<W: Write>(w: &mut W, flags: KittyFlags) -> io::Result<()> {
-    if flags.is_empty() {
-        w.write_all(DISABLE_KITTY_KEYBOARD)
-    } else {
-        write!(w, "\x1b[>{}u", flags.bits())
-    }
+pub fn write_push_kitty_keyboard<W: Write>(w: &mut W, flags: KittyKeyboardFlags) -> io::Result<()> {
+    write!(w, "\x1b[>{}u", flags.bits())
 }
 
 /// Pop `count` levels off the Kitty keyboard stack (`CSI < count u`).
@@ -84,7 +71,8 @@ mod tests {
     #[test]
     fn test_push() {
         let mut buf = Vec::new();
-        let flags = KittyFlags::DISAMBIGUATE_ESCAPE_CODES | KittyFlags::REPORT_EVENT_TYPES;
+        let flags =
+            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES | KittyKeyboardFlags::REPORT_EVENT_TYPES;
         write_push_kitty_keyboard(&mut buf, flags).unwrap();
         assert_eq!(buf, b"\x1b[>3u");
     }
@@ -99,7 +87,7 @@ mod tests {
     #[test]
     fn test_set() {
         let mut buf = Vec::new();
-        let flags = KittyFlags::DISAMBIGUATE_ESCAPE_CODES;
+        let flags = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
         write_set_kitty_keyboard(&mut buf, flags, KittyKeyboardMode::Add).unwrap();
         assert_eq!(buf, b"\x1b[=1;2u");
     }

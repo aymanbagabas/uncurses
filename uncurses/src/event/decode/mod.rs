@@ -1020,12 +1020,18 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_keyboard_enhancements() {
+    fn test_parse_kitty_keyboard_enhancements() {
         let mut parser = Decoder::new();
         // CSI ? 5 u (DISAMBIGUATE | REPORT_ALT_KEYS)
         let events = parser.parse(b"\x1b[?5u");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0], Event::KeyboardEnhancements { flags: 5 });
+        assert_eq!(
+            events[0],
+            Event::KittyKeyboardEnhancements(
+                crate::ansi::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | crate::ansi::KittyKeyboardFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
     }
 
     #[test]

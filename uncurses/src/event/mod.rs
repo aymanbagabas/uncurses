@@ -136,8 +136,10 @@ pub enum Event {
     ModeReport { mode: Mode, setting: ModeSetting },
     /// modifyOtherKeys report.
     ModifyOtherKeys(ModifyOtherKeysMode),
-    /// Keyboard enhancements flags report (Kitty `CSI ? n u`).
-    KeyboardEnhancements { flags: u8 },
+    /// Kitty keyboard protocol active-enhancements report
+    /// (`CSI ? <flags> u`). The payload is the parsed
+    /// [`crate::ansi::KittyKeyboardFlags`] bitset.
+    KittyKeyboardEnhancements(crate::ansi::KittyKeyboardFlags),
     /// XTWINOPS reply (window operation).
     WindowOp { op: u32, args: Vec<Option<u32>> },
     /// XTGETTCAP / termcap capability reply.
