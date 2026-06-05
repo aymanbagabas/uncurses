@@ -35,17 +35,35 @@ pub struct Key {
 }
 
 impl Key {
+    /// Construct a key with default modifiers and no associated text.
+    ///
+    /// When `code` is a printable `KeyCode::Char`, `text` is
+    /// pre-populated with the codepoint so callers reading typed
+    /// input don't have to fall back to inspecting `code`. Control
+    /// codepoints leave `text` as `None`.
     pub fn new(code: KeyCode) -> Self {
+        let text = printable_text(code, KeyModifiers::empty());
         Self {
             code,
             modifiers: KeyModifiers::empty(),
-            text: None,
+            text,
             shifted_key: None,
             base_key: None,
         }
     }
 
+    /// Replace the active modifiers. If `text` was the codepoint
+    /// auto-populated by [`Self::new`] and the new modifiers make
+    /// the key non-printable (anything beyond Shift), `text` is
+    /// cleared. Modifier sets that still yield typed input (none,
+    /// Shift) keep the existing text untouched. An explicitly set
+    /// `text` (via [`Self::with_text`]) is never overwritten here.
     pub fn with_modifiers(mut self, mods: KeyModifiers) -> Self {
+        if self.text.as_deref() == printable_text(self.code, KeyModifiers::empty()).as_deref()
+            && printable_text(self.code, mods).is_none()
+        {
+            self.text = None;
+        }
         self.modifiers = mods;
         self
     }
@@ -62,6 +80,24 @@ impl Key {
         } else {
             None
         }
+    }
+}
+
+/// Codepoint-as-string for a printable `KeyCode::Char` with a
+/// modifier set that doesn't override the typed glyph (none / Shift);
+/// `None` for control codepoints or modifier sets that make the key
+/// non-printable (Ctrl, Alt, …).
+fn printable_text(code: KeyCode, mods: KeyModifiers) -> Option<String> {
+    const ALLOWED: KeyModifiers = KeyModifiers::SHIFT
+        .union(KeyModifiers::CAPS_LOCK)
+        .union(KeyModifiers::NUM_LOCK);
+    if let KeyCode::Char(c) = code
+        && !c.is_control()
+        && (mods - ALLOWED).is_empty()
+    {
+        Some(c.to_string())
+    } else {
+        None
     }
 }
 
