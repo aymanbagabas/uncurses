@@ -171,6 +171,14 @@ impl RenderBuffer {
         (v >= 0).then_some(v as u16)
     }
 
+    /// True when any row in the buffer contains at least one
+    /// [`Cell::skip`]. O(rows). Used by the scroll-optimization
+    /// gate: scrolling rows that contain skip placeholders would
+    /// move external paint pixels out from under their footprint.
+    pub fn has_any_skip(&self) -> bool {
+        self.last_skip_col.iter().any(|v| *v >= 0)
+    }
+
     /// Recount the rightmost-skip column for row `y` from the
     /// underlying buffer. Used after bulk paths that rewrite a row
     /// without going through [`Self::set_cell`].

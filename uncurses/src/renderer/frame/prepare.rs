@@ -86,13 +86,19 @@ impl Renderer {
         if self.force_clear {
             self.clear_update(out, new_buf)?;
             self.force_clear = false;
-        } else if self.scroll_optimize && self.fullscreen {
+        } else if self.scroll_optimize && self.fullscreen && !new_buf.has_any_skip() {
             let touched_lines = new_buf.touched_lines().count();
             let sparse_threshold = SCROLL_OPTIMIZE_MIN_TOUCHED_LINES
                 .max(height as usize / SCROLL_OPTIMIZE_TOUCHED_DIVISOR);
             // Sparse updates are cheaper to redraw directly; scroll detection
             // needs row hashing and matching work that only pays off once enough
             // rows changed to make moving regions competitive.
+            //
+            // Skip placeholders disable scroll optimization entirely:
+            // moving a row that contains a placeholder would drag the
+            // external paint pixels out from under their footprint,
+            // and the renderer has no protocol-level way to translate
+            // those pixels with the row.
             if touched_lines > sparse_threshold {
                 self.compute_hashes(new_buf);
                 self.update_hashmap(new_buf, height as usize);
