@@ -3,7 +3,7 @@
 
 use std::io::{self, Write};
 
-use super::predicates::can_clear_with;
+use super::predicates::{can_clear_with, cells_eq_diff};
 use crate::ansi;
 use crate::cell::Cell;
 use crate::renderer::caps::Optimizations;
@@ -140,7 +140,7 @@ impl Renderer {
                 while first_cell < width {
                     let new_c = &new_line[first_cell];
                     let old_c = cur_line.as_deref().and_then(|c| c.get(first_cell));
-                    if old_c.is_none_or(|o| o != new_c) {
+                    if old_c.is_none_or(|o| !cells_eq_diff(o, new_c)) {
                         break;
                     }
                     first_cell += 1;
@@ -200,7 +200,7 @@ impl Renderer {
             while first_cell < width {
                 let new_c = &new_line[first_cell];
                 let old_c = cur_line.as_deref().and_then(|c| c.get(first_cell));
-                if old_c.is_none_or(|o| o != new_c) {
+                if old_c.is_none_or(|o| !cells_eq_diff(o, new_c)) {
                     break;
                 }
                 first_cell += 1;
@@ -228,7 +228,7 @@ impl Renderer {
             while n_last > first_cell {
                 let new_c = &new_line[n_last];
                 let old_c = cur_slice.and_then(|c| c.get(n_last));
-                if old_c.is_some_and(|o| o == new_c) {
+                if old_c.is_some_and(|o| cells_eq_diff(o, new_c)) {
                     n_last -= 1;
                 } else {
                     break;
@@ -265,7 +265,10 @@ impl Renderer {
                 self.emit_range(out, new_buf, new_line, first_cell, first_cell)?;
             }
             self.clear_to_end(out, cur_slice, blank, width, false)?;
-        } else if n_last != o_last && new_line.get(n_last) != cur_slice.and_then(|c| c.get(o_last))
+        } else if n_last != o_last
+            && !cur_slice
+                .and_then(|c| c.get(o_last))
+                .is_some_and(|c| new_line.get(n_last).is_some_and(|n| cells_eq_diff(c, n)))
         {
             // === Step 4b: last non-blank cells differ in both
             // position and value — overwrite a range, optionally
@@ -304,7 +307,7 @@ impl Renderer {
             // break at At(-1) instead of decrementing both indices to
             // -1.
             fn cells_eq(a: Option<&Cell>, b: Option<&Cell>) -> bool {
-                matches!((a, b), (Some(x), Some(y)) if x == y)
+                matches!((a, b), (Some(x), Some(y)) if cells_eq_diff(x, y))
             }
             while cells_eq(cell_at_isize(new_line, n_lc), cur_at_isize(o_lc)) {
                 if !cells_eq(cell_at_isize(new_line, n_lc - 1), cur_at_isize(o_lc - 1)) {

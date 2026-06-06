@@ -4,7 +4,7 @@
 
 use std::io;
 
-use super::predicates::{can_clear_with, is_rep_ascii};
+use super::predicates::{can_clear_with, cells_eq_diff, is_rep_ascii};
 use crate::ansi;
 use crate::cell::Cell;
 use crate::renderer::caps::Optimizations;
@@ -158,6 +158,11 @@ impl Renderer {
                 // glyph bytes. Equal-run detection already excluded
                 // continuation cells, so cell0 is always a printable
                 // primary cell here.
+                //
+                // Placeholder cells render as a literal space here so
+                // any prior glyph at the column is cleared; the
+                // external paint layer redraws over the space on the
+                // same frame.
                 self.update_pen(out, Some(cell0))?;
                 let (bytes, glyph_width) = if cell0.content().is_empty() {
                     (b" ".as_slice(), 1u16)
@@ -175,6 +180,9 @@ impl Renderer {
     }
     /// Emit one cell to the output, substituting a literal space for
     /// blank cells with no glyph content so the cursor still advances.
+    /// Placeholder cells render as a literal space — the external
+    /// paint layer redraws over the space on the same frame, so
+    /// prior glyph content at the column is cleared.
     pub(super) fn emit_cell(
         &mut self,
         out: &mut Vec<u8>,
@@ -255,7 +263,7 @@ impl Renderer {
                     j += 1;
                     continue;
                 }
-                let equal = old_cell.is_some_and(|o| o == new_cell);
+                let equal = old_cell.is_some_and(|o| cells_eq_diff(o, new_cell));
                 if equal {
                     same += 1;
                 } else {
