@@ -9,8 +9,10 @@ publish = false
 
 [dependencies]
 uncurses = { path = "../uncurses" }
+uncurses-image = { path = "../uncurses-image" }
 uncurses-ratatui = { path = "../uncurses-ratatui" }
 ratatui = { version = "0.30", features = ["underline-color"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
