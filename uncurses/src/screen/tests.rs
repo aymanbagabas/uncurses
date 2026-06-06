@@ -1657,3 +1657,247 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
         "alt set missing: tail={tail:?}"
     );
 }
+
+// ---------- regions API ----------
+
+mod regions_api {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::Rect;
+    use crate::buffer::Surface;
+
+    fn payload(s: &str) -> Arc<[u8]> {
+        Arc::from(s.as_bytes().to_vec().into_boxed_slice())
+    }
+
+    #[test]
+    fn set_region_stamps_skip_cells_over_area() {
+        let mut screen = Screen::new(Vec::new()).with_size(10, 4);
+        let area = Rect::new(2, 1, 3, 2);
+        screen.set_region(RegionId(1), area, payload("payload"));
+        for y in 1..3 {
+            for x in 2..5 {
+                let c = screen
+                    .cell((x as u16, y as u16).into())
+                    .expect("in-bounds cell");
+                assert!(c.is_skip(), "cell ({x},{y}) should be skip");
+            }
+        }
+    }
+
+    #[test]
+    fn distinct_ids_keep_independent_footprints() {
+        // Painting the same payload at two ids registers two
+        // regions: clearing one does not affect the other.
+        let mut screen = Screen::new(Vec::new()).with_size(20, 4);
+        let a = Rect::new(0, 0, 4, 2);
+        let b = Rect::new(10, 0, 4, 2);
+        screen.set_region(RegionId(1), a, payload("A"));
+        screen.set_region(RegionId(2), b, payload("B"));
+        screen.clear_region(RegionId(1));
+        // A's cells released to blank.
+        for y in 0..2 {
+            for x in 0..4 {
+                let c = screen.cell((x as u16, y as u16).into()).unwrap();
+                assert!(!c.is_skip(), "A cell ({x},{y}) should be released");
+            }
+        }
+        // B's cells still skip.
+        for y in 0..2 {
+            for x in 10..14 {
+                let c = screen.cell((x as u16, y as u16).into()).unwrap();
+                assert!(c.is_skip(), "B cell ({x},{y}) still skip");
+            }
+        }
+    }
+
+    #[test]
+    fn overlap_blanks_only_non_shared_cells_on_clear() {
+        // Two regions overlap; clearing one leaves the cells covered
+        // by the other as skip placeholders.
+        let mut screen = Screen::new(Vec::new()).with_size(10, 4);
+        let a = Rect::new(0, 0, 4, 2);
+        let b = Rect::new(2, 0, 4, 2); // overlaps a on cols 2..4
+        screen.set_region(RegionId(1), a, payload("A"));
+        screen.set_region(RegionId(2), b, payload("B"));
+        screen.clear_region(RegionId(1));
+        // Cells 0,1 (only in A) blanked.
+        for x in 0..2 {
+            assert!(!screen.cell((x as u16, 0).into()).unwrap().is_skip());
+        }
+        // Cells 2,3 (overlap) still skip — covered by B.
+        for x in 2..4 {
+            assert!(screen.cell((x as u16, 0).into()).unwrap().is_skip());
+        }
+        // Cells 4,5 (only in B) still skip.
+        for x in 4..6 {
+            assert!(screen.cell((x as u16, 0).into()).unwrap().is_skip());
+        }
+    }
+
+    #[test]
+    fn move_releases_only_non_shared_old_cells() {
+        // Moving a region updates the registration: cells in the
+        // old footprint that aren't in the new one and aren't
+        // covered by another region are released.
+        let mut screen = Screen::new(Vec::new()).with_size(20, 4);
+        let id = RegionId(1);
+        screen.set_region(id, Rect::new(0, 0, 4, 1), payload("p"));
+        // Move two columns right; old cells 0,1 release.
+        screen.set_region(id, Rect::new(2, 0, 4, 1), payload("p"));
+        for x in 0..2 {
+            assert!(
+                !screen.cell((x as u16, 0).into()).unwrap().is_skip(),
+                "old-only cell {x} released"
+            );
+        }
+        for x in 2..6 {
+            assert!(
+                screen.cell((x as u16, 0).into()).unwrap().is_skip(),
+                "new cell {x} skip"
+            );
+        }
+    }
+
+    #[test]
+    fn render_emits_payloads_in_registration_order() {
+        // Two regions register in order; the render output writes
+        // payload A's bytes before payload B's.
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(20, 4);
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let pre = screen.writer.len();
+
+        screen.set_region(RegionId(1), Rect::new(0, 0, 2, 1), payload("ALPHA"));
+        screen.set_region(RegionId(2), Rect::new(10, 0, 2, 1), payload("BRAVO"));
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let out = String::from_utf8_lossy(&screen.writer[pre..]).into_owned();
+        let a = out.find("ALPHA").expect("ALPHA emitted");
+        let b = out.find("BRAVO").expect("BRAVO emitted");
+        assert!(a < b, "ALPHA must precede BRAVO in registration order");
+    }
+
+    #[test]
+    fn clear_regions_releases_all_skip_cells() {
+        let mut screen = Screen::new(Vec::new()).with_size(20, 4);
+        screen.set_region(RegionId(1), Rect::new(0, 0, 4, 1), payload("a"));
+        screen.set_region(RegionId(2), Rect::new(5, 0, 4, 1), payload("b"));
+        screen.clear_regions();
+        for x in 0..9 {
+            assert!(
+                !screen.cell((x as u16, 0).into()).unwrap().is_skip(),
+                "cell {x} cleared"
+            );
+        }
+    }
+
+    #[test]
+    fn render_no_op_when_idle() {
+        // Second render after the initial frame writes zero bytes
+        // when no cells changed and no regions are registered.
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(10, 2);
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let len_before = screen.writer.len();
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        assert_eq!(
+            screen.writer.len(),
+            len_before,
+            "idle render must add zero bytes"
+        );
+    }
+
+    #[test]
+    fn set_region_forces_render_emission_even_without_cell_changes() {
+        // Registering a region must reach the terminal even when no
+        // text cells are dirty in the same frame.
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(10, 2);
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let len_before = screen.writer.len();
+        screen.set_region(RegionId(1), Rect::new(0, 0, 2, 1), payload("HELLO"));
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let out = String::from_utf8_lossy(&screen.writer[len_before..]).into_owned();
+        assert!(
+            out.contains("HELLO"),
+            "region payload reached writer: {out:?}"
+        );
+    }
+}
+
+mod regions_resize_and_alt {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::Rect;
+    use crate::buffer::Surface;
+
+    fn payload(s: &str) -> Arc<[u8]> {
+        Arc::from(s.as_bytes().to_vec().into_boxed_slice())
+    }
+
+    #[test]
+    fn resize_drops_regions_outside_new_bounds() {
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(20, 4);
+        screen.set_region(RegionId(1), Rect::new(15, 0, 4, 2), payload("FAR"));
+        // Shrink so the region's area is fully outside the new bounds.
+        screen.resize(10, 4);
+        // The dropped region's payload must not be emitted.
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let out = String::from_utf8_lossy(&screen.writer).into_owned();
+        assert!(
+            !out.contains("FAR"),
+            "dropped region must not emit: {out:?}"
+        );
+    }
+
+    #[test]
+    fn resize_clips_partial_region_and_restamps_skip() {
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(20, 4);
+        screen.set_region(RegionId(1), Rect::new(8, 0, 8, 1), payload("X"));
+        // Shrink so only cols 8..12 remain in bounds.
+        screen.resize(12, 4);
+        for x in 8..12 {
+            assert!(
+                screen.cell((x as u16, 0).into()).unwrap().is_skip(),
+                "clipped cell {x} re-stamped"
+            );
+        }
+    }
+
+    #[test]
+    fn set_region_outside_bounds_is_clear_region() {
+        // Calling set_region with an area entirely off-screen must
+        // not register anything (treated as clear_region).
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(10, 4);
+        screen.set_region(RegionId(1), Rect::new(50, 50, 4, 4), payload("OFF"));
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let out = String::from_utf8_lossy(&screen.writer).into_owned();
+        assert!(!out.contains("OFF"));
+    }
+
+    #[test]
+    fn alt_screen_toggle_marks_regions_dirty() {
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(10, 2);
+        screen.set_region(RegionId(1), Rect::new(0, 0, 2, 1), payload("ALT"));
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let pre = screen.writer.len();
+        // Toggle alt screen — the region must re-emit on the next
+        // render so the new buffer shows the external paint.
+        screen.set_alt_screen(true).unwrap();
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let out = String::from_utf8_lossy(&screen.writer[pre..]).into_owned();
+        assert!(
+            out.contains("ALT"),
+            "alt-screen enter re-emits region: {out:?}"
+        );
+    }
+}

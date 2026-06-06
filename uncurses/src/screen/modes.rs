@@ -30,6 +30,11 @@ impl<W: Write> Screen<W> {
             self.renderer.set_relative_cursor(true);
             self.renderer.restore_cursor();
         }
+        // External paint regions live on the screen and follow the
+        // active terminal buffer. Mark them dirty so the next render
+        // re-asserts every registered region on the buffer we just
+        // switched into.
+        self.regions_dirty = true;
         // The kitty keyboard stack is per-screen-buffer; re-apply the
         // tracked flags onto the buffer we just switched into so the
         // user-facing flag set is screen-agnostic.

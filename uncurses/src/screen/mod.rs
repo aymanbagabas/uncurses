@@ -4,7 +4,9 @@
 //! diffing), and the underlying writer.
 
 use std::io::{self, Write};
+use std::sync::Arc;
 
+use crate::Rect;
 use crate::ansi::mode::{self, Mode};
 use crate::ansi::{background, ctrl, graphics, kitty, termcap, winop, xterm};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
@@ -17,8 +19,11 @@ use self::state::State;
 
 mod lifecycle;
 mod modes;
+mod regions;
 mod state;
 mod text;
+
+pub use regions::RegionId;
 
 #[cfg(test)]
 mod tests;
@@ -67,6 +72,16 @@ pub struct Screen<W: Write> {
     /// configured for CJK locales typically want `true`. See
     /// [`crate::text::char_width`].
     eaw_wide: bool,
+    /// Registered external paint regions. Each entry holds an
+    /// area and the byte sequence to re-assert the external paint
+    /// every frame. Skip placeholders in the front buffer keep the
+    /// cell-diff renderer from disturbing the painted cells.
+    regions: regions::Regions,
+    /// Whether `regions` was modified since the last frame emission.
+    /// Forces [`Self::render`] to run a frame even when no cells
+    /// changed, so newly-added or just-cleared regions reach the
+    /// terminal.
+    regions_dirty: bool,
 }
 
 impl<W: Write> Screen<W> {
@@ -103,6 +118,8 @@ impl<W: Write> Screen<W> {
             width: 0,
             height: 0,
             eaw_wide: false,
+            regions: regions::Regions::default(),
+            regions_dirty: false,
         }
     }
 
@@ -425,7 +442,8 @@ impl<W: Write> Screen<W> {
     /// Only writes — never flushes. Call [`std::io::Write::flush`] on
     /// the writer when the frame should reach the terminal.
     pub fn render(&mut self) -> io::Result<()> {
-        if !self.renderer.sync_front(&mut self.front_buf) {
+        let cells_dirty = self.renderer.sync_front(&mut self.front_buf);
+        if !cells_dirty && !self.regions_dirty {
             return Ok(());
         }
 
@@ -435,8 +453,9 @@ impl<W: Write> Screen<W> {
     /// Stage a single rendered frame into [`Screen::buf`]:
     /// synchronized-output begin, cursor hide (so the cursor doesn't
     /// dance across cells during the diff), the renderer's cell diff,
-    /// cursor show, synchronized-output end. Assumes
-    /// [`Renderer::sync_front`] returned true.
+    /// any external paint regions, cursor show, synchronized-output
+    /// end. Assumes either [`Renderer::sync_front`] returned true or
+    /// at least one external paint region is registered.
     ///
     /// The cursor hide/show wrap is emitted inside the sync-output wrap
     /// so terminals that support DECSET 2026 treat the whole frame as
@@ -451,6 +470,7 @@ impl<W: Write> Screen<W> {
         }
 
         self.renderer.render_back(&mut self.buf)?;
+        self.write_regions()?;
 
         if self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.set(&mut self.buf)?;
@@ -461,17 +481,180 @@ impl<W: Write> Screen<W> {
         Ok(())
     }
 
+    /// Emit each registered paint region in registration order:
+    /// queue a cursor move to the region's origin via the planner,
+    /// then write the payload bytes raw.
+    ///
+    /// Payloads are responsible for cursor state — the typical
+    /// pattern is to wrap with `\x1b7…\x1b8` (DECSC/DECRC) so the
+    /// cursor returns to the anchor and stays in sync with the
+    /// renderer's tracked cursor.
+    fn write_regions(&mut self) -> io::Result<()> {
+        if self.regions.is_empty() {
+            self.regions_dirty = false;
+            return Ok(());
+        }
+        let entries: Vec<(crate::Position, Arc<[u8]>)> = self
+            .regions
+            .iter()
+            .map(|(_, r)| (r.area.position(), Arc::clone(&r.payload)))
+            .collect();
+        for (origin, payload) in entries {
+            self.renderer
+                .move_to(&mut self.buf, &self.front_buf, origin.y, origin.x)?;
+            self.buf.extend_from_slice(&payload);
+        }
+        self.regions_dirty = false;
+        Ok(())
+    }
+
     /// Resize the screen.
+    ///
+    /// Registered external paint regions are reconciled against
+    /// the new bounds: each region's area is clipped to the new
+    /// surface, regions whose clipped area becomes empty are
+    /// dropped, and the placeholder cells of every surviving
+    /// region are re-stamped (the cell-buffer resize may have
+    /// truncated rows or columns the region used to own). The
+    /// next render will re-emit every surviving region.
     pub fn resize(&mut self, width: u16, height: u16) {
         self.width = width;
         self.height = height;
         self.front_buf.resize(width, height);
         self.renderer.request_clear();
+
+        let bounds = Rect::new(0, 0, width, height);
+        let mut surviving: Vec<(RegionId, regions::Region)> = Vec::new();
+        for (id, region) in self.regions.drain() {
+            let clipped = region.area.intersection(bounds);
+            if clipped.is_empty() {
+                continue;
+            }
+            self.front_buf.fill_rect(clipped, &Cell::skip());
+            surviving.push((
+                id,
+                regions::Region {
+                    area: clipped,
+                    payload: region.payload,
+                },
+            ));
+        }
+        if !surviving.is_empty() {
+            for (id, region) in surviving {
+                self.regions.insert(id, region);
+            }
+            self.regions_dirty = true;
+        }
     }
 
     /// Force a full redraw on next render.
     pub fn invalidate(&mut self) {
         self.renderer.request_clear();
+    }
+
+    /// Register or update an external paint region.
+    ///
+    /// `id` is a caller-allocated [`RegionId`]: distinct paint
+    /// instances must use distinct ids — even when they paint the
+    /// same pixels at different positions. Calling this with an
+    /// id that's already registered replaces that region's area
+    /// and payload; cells in `prev_area \ area` are released back
+    /// to blank if they're still placeholders and not covered by
+    /// another region.
+    ///
+    /// `area` is the cell rectangle the external paint owns. The
+    /// front buffer is filled with [`Cell::skip`] over `area`, so
+    /// the cell-diff renderer treats them as blanks and refuses
+    /// cell-shifting optimizations on their rows. Cells inside
+    /// `area` that the host wrote to before this call are
+    /// overwritten — the region owns them.
+    ///
+    /// `payload` is the byte sequence emitted on every frame after
+    /// the cell diff to (re)assert the external paint. The
+    /// renderer queues a cursor move to `area`'s origin before
+    /// writing the payload; the payload is responsible for cursor
+    /// state during emission. The typical pattern is to wrap with
+    /// `\x1b7…\x1b8` (DECSC/DECRC) so the cursor returns to the
+    /// anchor and stays in sync with the renderer's tracked
+    /// cursor.
+    pub fn set_region(&mut self, id: RegionId, area: Rect, payload: Arc<[u8]>) {
+        let bounds = Rect::new(0, 0, self.width, self.height);
+        let area = area.intersection(bounds);
+        if area.is_empty() {
+            self.clear_region(id);
+            return;
+        }
+        let prev = self.regions.insert(id, regions::Region { area, payload });
+
+        // Release cells from the previous footprint that aren't in
+        // the new one and aren't covered by another region. Only
+        // cells that are still placeholders we stamped get blanked
+        // — anything else is host-owned content we must preserve.
+        if let Some(prev) = prev {
+            for y in prev.area.top()..prev.area.bottom() {
+                for x in prev.area.left()..prev.area.right() {
+                    if area.contains((x, y)) {
+                        continue;
+                    }
+                    if self.regions.any_other_covers(id, x, y) {
+                        continue;
+                    }
+                    let pos = crate::Position::new(x, y);
+                    if matches!(self.front_buf.cell(pos), Some(c) if c.is_skip()) {
+                        self.front_buf.set_cell(pos, &Cell::BLANK);
+                    }
+                }
+            }
+        }
+
+        // Stamp placeholders over the new area.
+        self.front_buf.fill_rect(area, &Cell::skip());
+        self.regions_dirty = true;
+    }
+
+    /// Drop the region registered under `id`. No-op when `id`
+    /// isn't registered.
+    ///
+    /// Cells inside the region's stored area that are still
+    /// placeholders and not covered by another region are released
+    /// back to blank in the front buffer. Pixel residue from the
+    /// external paint is *not* cleared — that's protocol-specific
+    /// and is the caller's responsibility (e.g. emit a final
+    /// transparent payload, or call [`Self::invalidate`] to force a
+    /// full redraw).
+    pub fn clear_region(&mut self, id: RegionId) {
+        let Some(prev) = self.regions.remove(id) else {
+            return;
+        };
+        for y in prev.area.top()..prev.area.bottom() {
+            for x in prev.area.left()..prev.area.right() {
+                if self.regions.any_covers(x, y) {
+                    continue;
+                }
+                let pos = crate::Position::new(x, y);
+                if matches!(self.front_buf.cell(pos), Some(c) if c.is_skip()) {
+                    self.front_buf.set_cell(pos, &Cell::BLANK);
+                }
+            }
+        }
+        self.regions_dirty = true;
+    }
+
+    /// Drop every registered region. Cells that were placeholders
+    /// for some region are released back to blank.
+    pub fn clear_regions(&mut self) {
+        let drained = self.regions.drain();
+        for (_, region) in drained {
+            for y in region.area.top()..region.area.bottom() {
+                for x in region.area.left()..region.area.right() {
+                    let pos = crate::Position::new(x, y);
+                    if matches!(self.front_buf.cell(pos), Some(c) if c.is_skip()) {
+                        self.front_buf.set_cell(pos, &Cell::BLANK);
+                    }
+                }
+            }
+        }
+        self.regions_dirty = true;
     }
 }
 
