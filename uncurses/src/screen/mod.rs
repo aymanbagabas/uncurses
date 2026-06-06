@@ -239,6 +239,11 @@ impl<W: Write> Screen<W> {
         winop::write_window_op(&mut self.buf, winop::op::REQUEST_WINDOW_SIZE, &[])
     }
 
+    /// Request the text area size in cells (`CSI 18 t`).
+    pub fn request_text_area_size(&mut self) -> io::Result<()> {
+        winop::write_window_op(&mut self.buf, winop::op::REQUEST_TEXT_AREA_SIZE, &[])
+    }
+
     /// Request termcap entries by short name (`DCS + q ... ST`).
     pub fn request_termcap(&mut self, names: &[&str]) -> io::Result<()> {
         termcap::write_xtgettcap(&mut self.buf, names)
