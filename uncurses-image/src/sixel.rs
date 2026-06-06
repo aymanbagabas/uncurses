@@ -1,63 +1,48 @@
 //! Sixel backend.
 //!
-//! Encodes an image to a DCS sixel sequence and stamps
-//! [`uncurses::cell::Cell::skip`] placeholders over its cell
-//! footprint. The renderer emits the placeholders as blank spaces
-//! and refuses cell-shifting optimizations on rows that contain
-//! them, so the painted region stays anchored to the columns the
-//! painter chose.
+//! Encodes an image to a DCS sixel sequence and registers an
+//! external paint region with the screen. The screen stamps
+//! [`uncurses::cell::Cell::skip`] placeholders over the cell
+//! footprint and emits the sequence on every render after the
+//! cell diff, so the image bytes paint over the diff's blanks.
 //!
 //! ## Cache identity
 //!
-//! [`Self::paint`] hashes the source pixel data to recognize "same
-//! image as last paint" — the host does not supply an identity.
-//! The cache is keyed on `(pixel_hash, cell_rect, cell_px,
-//! resize)`, so a paint whose inputs would re-encode to the same
-//! bytes reuses the cached encoding.
+//! [`Self::paint`] hashes the source pixel data to dedupe encode
+//! work. The cache is keyed on `(pixel_hash, cell_rect, cell_px,
+//! resize)` so a paint whose inputs would produce byte-identical
+//! DCS bytes reuses the cached encoding. Caching is decoupled
+//! from [`RegionId`]: the same image painted at two ids shares
+//! the same cache entry.
 //!
 //! ## Per-cell pixel size
 //!
 //! Sixel images are sized in pixels. The host passes the
 //! terminal's cell pixel size to [`Self::paint`]; with `cell_px ==
-//! (0, 0)` the painter stamps no footprint and queues no bytes.
+//! (0, 0)` the painter does nothing — sixel has no meaningful
+//! fallback in cell space.
 
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use icy_sixel::SixelImage;
 use image::{DynamicImage, GenericImageView};
 use rustc_hash::FxHashMap;
 use uncurses::Rect;
-use uncurses::buffer::{Surface, SurfaceMut};
-use uncurses::cell::Cell;
-use uncurses::screen::Screen;
+use uncurses::screen::{RegionId, Screen};
 
 use crate::hash::pixel_hash;
-use crate::painter::{ImageId, Painter};
+use crate::painter::Painter;
 use crate::resize::Resize;
 
 /// Sixel painter.
 ///
-/// Caches the encoded sixel sequence per
-/// `(pixel_hash, cell_rect, cell_px, resize)` so repeated paints
-/// whose encoded bytes would be identical reuse the cached
-/// sequence. Tracks the most recent cell footprint per image so
-/// the next paint can release the cells it previously owned —
-/// only cells that are still the placeholder we stamped are
-/// cleared, so any glyph the host wrote on top of the image is
-/// preserved across paints.
+/// Caches the encoded sixel sequence per `(pixel_hash, cell_rect,
+/// cell_px, resize)` so repeated paints whose encoded bytes would
+/// be identical reuse the cached sequence.
 #[derive(Debug, Default)]
 pub struct Sixel {
-    cache: FxHashMap<CacheKey, String>,
-    /// Most recent cell footprint per image hash. The painter
-    /// clears the placeholder cells inside this rectangle that are
-    /// not covered by the new footprint at the next [`Self::paint`].
-    last_footprint: FxHashMap<u64, Rect>,
-    /// Sequences queued by [`Self::paint`] and drained by
-    /// [`Self::draw`]. Each entry is a self-contained sequence:
-    /// save cursor, move to footprint origin, emit DCS, restore
-    /// cursor — so the renderer's tracked cursor stays aligned
-    /// with the terminal's after the bytes are emitted.
-    pending: Vec<u8>,
+    cache: FxHashMap<CacheKey, Arc<[u8]>>,
 }
 
 /// Inputs that fully determine the encoded DCS bytes for a sixel
@@ -81,128 +66,71 @@ impl Sixel {
     /// painter, but keeps the allocated table for reuse.
     pub fn clear(&mut self) {
         self.cache.clear();
-        self.last_footprint.clear();
     }
 }
 
 impl Painter for Sixel {
-    /// Stamp Skip cells over the image footprint and queue the
-    /// encoded sixel sequence for emission.
+    /// Encode `image` and register the resulting payload as a
+    /// paint region on `screen` under `id`. The screen stamps
+    /// Skip placeholders over the footprint and re-emits the
+    /// payload after the cell diff each frame.
     ///
-    /// On first paint of a given `(image pixels, cell footprint,
-    /// cell pixel size, resize strategy)` combination the painter
-    /// encodes; subsequent paints with the same combination reuse
-    /// the cached encoding. A change to any of those inputs forces
-    /// a re-encode because the resulting DCS bytes differ.
-    ///
-    /// Returns the pixel-content id, which the caller can later
-    /// pass to [`Painter::forget`] to drop every cached encoding
-    /// for these pixels. When `cell_px == (0, 0)` the painter
-    /// stamps nothing and queues nothing — sixel has no meaningful
-    /// fallback in cell space.
+    /// Repeat paints with the same `(image pixels, footprint,
+    /// cell_px, resize)` reuse the cached encoding. Repeat paints
+    /// with the same `id` replace the previous registration;
+    /// distinct paint instances must use distinct ids.
     fn paint<W: Write>(
         &mut self,
         screen: &mut Screen<W>,
+        id: RegionId,
         area: Rect,
         image: &DynamicImage,
         resize: Resize,
         cell_px: (u16, u16),
-    ) -> io::Result<ImageId> {
-        let id = pixel_hash(image);
+    ) -> io::Result<()> {
         let area = clip_area(area, screen);
         if area.width == 0 || area.height == 0 || cell_px.0 == 0 || cell_px.1 == 0 {
-            return Ok(ImageId(id));
+            screen.clear_region(id);
+            return Ok(());
         }
 
         let (target_w, target_h) = target_pixels(image.dimensions(), area, cell_px, resize);
         if target_w == 0 || target_h == 0 {
-            return Ok(ImageId(id));
+            screen.clear_region(id);
+            return Ok(());
         }
 
-        // Cell footprint of the encoded image, centered inside the
-        // requested `area`.
         let footprint = footprint(area, cell_px, (target_w, target_h));
         if footprint.width == 0 || footprint.height == 0 {
-            return Ok(ImageId(id));
+            screen.clear_region(id);
+            return Ok(());
         }
 
         let key = CacheKey {
-            pixel_hash: id,
+            pixel_hash: pixel_hash(image),
             cell_rect: (footprint.width, footprint.height),
             cell_px,
             resize,
         };
-        let dcs = match self.cache.get(&key) {
-            Some(s) => s.clone(),
+        let payload = match self.cache.get(&key) {
+            Some(p) => Arc::clone(p),
             None => {
-                let encoded = encode(image, (target_w, target_h), resize)?;
-                self.cache.entry(key).or_insert(encoded).clone()
+                let bytes = encode_payload(image, (target_w, target_h), resize)?;
+                let arc: Arc<[u8]> = bytes.into();
+                self.cache.entry(key).or_insert_with(|| Arc::clone(&arc));
+                arc
             }
         };
 
-        // Release the previous footprint's placeholder cells that
-        // aren't covered by the new one. Cells the host overwrote
-        // are no longer placeholders, so they stay as-is — only the
-        // cells we still own get blanked.
-        if let Some(prev) = self.last_footprint.get(&id).copied() {
-            release_unused_placeholders(screen, prev, footprint);
-        }
-
-        // Stamp placeholders over the new footprint. The image owns
-        // these cells: any prior glyph at one of these columns is
-        // cleared by the renderer's diff on the next render(), and
-        // the sixel bytes redraw the pixels in the same frame.
-        screen.fill_rect(footprint, &Cell::skip());
-        self.last_footprint.insert(id, footprint);
-
-        // Save cursor, move to footprint origin, emit DCS, restore
-        // cursor. Terminal rows/columns are 1-based.
-        let row = footprint.y.saturating_add(1);
-        let col = footprint.x.saturating_add(1);
-        write!(self.pending, "\x1b7\x1b[{row};{col}H{dcs}\x1b8")?;
-        Ok(ImageId(id))
-    }
-
-    /// Drain queued sixel bytes into the screen's output buffer.
-    fn draw<W: Write>(&mut self, screen: &mut Screen<W>) -> io::Result<()> {
-        if self.pending.is_empty() {
-            return Ok(());
-        }
-        screen.write_all(&self.pending)?;
-        self.pending.clear();
+        screen.set_region(id, footprint, payload);
         Ok(())
     }
 
-    /// Drop every cached entry whose pixel-content id matches `id`.
-    /// `id` is the value returned by a prior [`Painter::paint`].
-    /// Sixel has no terminal-side state to release, so `screen` is
-    /// unused.
-    fn forget<W: Write>(&mut self, _screen: &mut Screen<W>, id: ImageId) -> io::Result<()> {
-        let id = id.0;
-        self.cache.retain(|key, _| key.pixel_hash != id);
-        self.last_footprint.remove(&id);
+    /// Drop the screen-side region registration for `id`.
+    /// Idempotent and a no-op for unknown ids.
+    fn forget<W: Write>(&mut self, screen: &mut Screen<W>, id: RegionId) -> io::Result<()> {
+        screen.clear_region(id);
         Ok(())
-    }
-}
-
-/// Blank every cell inside `prev` that isn't inside `keep` and is
-/// still the placeholder we stamped. Cells the host overwrote with
-/// real glyphs are no longer placeholders and stay untouched.
-fn release_unused_placeholders<W: Write>(screen: &mut Screen<W>, prev: Rect, keep: Rect) {
-    let bx0 = prev.left();
-    let by0 = prev.top();
-    let bx1 = prev.right();
-    let by1 = prev.bottom();
-    for y in by0..by1 {
-        for x in bx0..bx1 {
-            if x >= keep.left() && x < keep.right() && y >= keep.top() && y < keep.bottom() {
-                continue;
-            }
-            let pos = (x, y).into();
-            if matches!(screen.cell(pos), Some(c) if c.is_skip()) {
-                screen.set_cell(pos, &Cell::BLANK);
-            }
-        }
     }
 }
 
@@ -219,6 +147,22 @@ fn clip_area<W: Write>(area: Rect, screen: &Screen<W>) -> Rect {
         width,
         height,
     }
+}
+
+/// Encode the DCS sixel sequence wrapped in DECSC/DECRC so the
+/// cursor returns to the region anchor after emission.
+///
+/// The screen positions the cursor at the region's origin before
+/// writing the payload, so DECSC saves the anchor and DECRC
+/// restores it. The renderer's tracked cursor stays at the
+/// anchor, in sync with the terminal.
+fn encode_payload(image: &DynamicImage, target: (u32, u32), resize: Resize) -> io::Result<Vec<u8>> {
+    let dcs = encode(image, target, resize)?;
+    let mut out = Vec::with_capacity(dcs.len() + 4);
+    out.extend_from_slice(b"\x1b7");
+    out.extend_from_slice(dcs.as_bytes());
+    out.extend_from_slice(b"\x1b8");
+    Ok(out)
 }
 
 /// Encode `image` resized to `target` pixels, using `resize` to

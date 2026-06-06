@@ -21,7 +21,7 @@ use uncurses::style::Style;
 use uncurses::terminal::size::Winsize;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
-use uncurses_image::{ImageId, Painter, Resize, Sixel};
+use uncurses_image::{Painter, RegionId, Resize, Sixel};
 
 const IMG_W: u16 = 8;
 const IMG_H: u16 = 4;
@@ -87,10 +87,18 @@ fn main() -> std::io::Result<()> {
     let mut cy: u16 = HEADER_ROWS;
     let mut quit = false;
 
-    let mut last_id = redraw(&mut screen, &image, &mut painter, img_x, img_y, cell_px)?;
+    let image_id = RegionId(1);
+    redraw(
+        &mut screen,
+        &image,
+        &mut painter,
+        image_id,
+        img_x,
+        img_y,
+        cell_px,
+    )?;
     screen.set_cursor_position(cx, cy)?;
     screen.render()?;
-    painter.draw(&mut screen)?;
     screen.flush()?;
 
     let mut events = Source::new(stdin())?;
@@ -224,17 +232,24 @@ fn main() -> std::io::Result<()> {
             _ => {}
         }
         if dirty && !quit {
-            last_id = redraw(&mut screen, &image, &mut painter, img_x, img_y, cell_px)?;
+            redraw(
+                &mut screen,
+                &image,
+                &mut painter,
+                image_id,
+                img_x,
+                img_y,
+                cell_px,
+            )?;
         }
         if !quit {
             screen.render()?;
-            painter.draw(&mut screen)?;
             screen.set_cursor_position(cx, cy)?;
             screen.flush()?;
         }
     }
 
-    painter.forget(&mut screen, last_id)?;
+    painter.forget(&mut screen, image_id)?;
     screen.reset()?;
     screen.flush()?;
     disable_raw_mode(stdin(), stdout(), &state)?;
@@ -245,10 +260,11 @@ fn redraw<W: Write>(
     screen: &mut Screen<W>,
     image: &DynamicImage,
     painter: &mut Sixel,
+    id: RegionId,
     img_x: u16,
     img_y: u16,
     cell_px: (u16, u16),
-) -> std::io::Result<ImageId> {
+) -> std::io::Result<()> {
     let header = format!(
         "arrows: move image | click: place cursor | type to write | C-c: quit | cell_px {}x{}",
         cell_px.0, cell_px.1
@@ -262,5 +278,5 @@ fn redraw<W: Write>(
         width: IMG_W,
         height: IMG_H,
     };
-    painter.paint(screen, area, image, Resize::default(), cell_px)
+    painter.paint(screen, id, area, image, Resize::default(), cell_px)
 }
