@@ -41,8 +41,11 @@ pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
 /// match the cell ED would produce with the current pen. Continuation
 /// cells (the second half of a wide grapheme) are not blank — a wide
 /// cell straddling into the row means the row is non-blank.
+/// Skip placeholders are never blank: they mark cells whose visible
+/// content is owned by an external paint layer, so the trailing-blank
+/// trim must not exclude their rows from the diff pass.
 pub(super) fn cells_equal_blank(cell: &Cell, blank: &Cell) -> bool {
-    if cell.is_continuation() {
+    if cell.is_continuation() || cell.is_skip() {
         return false;
     }
     cell.width() == blank.width()
@@ -50,6 +53,25 @@ pub(super) fn cells_equal_blank(cell: &Cell, blank: &Cell) -> bool {
             || (cell.content().is_empty() && blank.content() == " ")
             || (cell.content() == " " && blank.content().is_empty()))
         && cell.style() == blank.style()
+}
+
+/// Equality used by the line-diff scans (first-diff, last-non-blank,
+/// trailing-uncolorable walk-back, the step-4c lockstep walk, and
+/// `put_range`'s matching-run). Returns `false` only when exactly
+/// one side is an externally-painted placeholder: that transition
+/// is the renderer's chance to reassert a blank under the cell so
+/// either the prior paint is cleared (skip → text) or the new paint
+/// lands on a known-blank substrate (text → skip). When both sides
+/// are placeholders the cell is unchanged and the diff must skip
+/// it — otherwise an unrelated cell change on the row would
+/// repaint every placeholder column with blanks and clobber the
+/// external paint.
+pub(super) fn cells_eq_diff(a: &Cell, b: &Cell) -> bool {
+    match (a.is_skip(), b.is_skip()) {
+        (true, true) => true,
+        (true, false) | (false, true) => false,
+        (false, false) => a == b,
+    }
 }
 
 /// Whether `bytes` is safe to repeat with the REP escape.

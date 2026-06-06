@@ -469,3 +469,31 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
         std::str::from_utf8(&out)
     );
 }
+
+#[test]
+fn clear_bottom_does_not_trim_rows_with_skip_cells() {
+    // Skip placeholders mark cells whose visible content is owned
+    // by an external paint layer. clear_bottom must not treat
+    // their rows as blank-trimmable — doing so excludes the row
+    // from the per-row diff and suppresses the clearing bytes
+    // that should fire when the placeholder moves elsewhere.
+    let width = 10;
+    let height = 6;
+    let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
+
+    // Cur frame: skip at (3, 5) (last row, surrounded by blanks).
+    let mut cur = RenderBuffer::new(width, height);
+    cur.set_cell((3, 5), &Cell::skip());
+    cur.clear_touched();
+    renderer.cur_buf = Some(cur);
+
+    // New frame: no skip anywhere — the placeholder was cleared.
+    let new_buf = RenderBuffer::new(width, height);
+
+    let mut out = Vec::new();
+    let top = renderer.clear_bottom(&mut out, &new_buf).unwrap();
+    assert_eq!(
+        top, height as usize,
+        "rows with a skip placeholder must remain in the diff scope"
+    );
+}
