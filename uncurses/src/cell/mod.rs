@@ -9,19 +9,19 @@ use crate::style::Style;
 /// Structural kind of a cell within the grid.
 ///
 /// Encodes wide-cell invariants in the type system: a wide grapheme
-/// occupies a [`CellKind::Wide`] primary cell followed immediately by
-/// a [`CellKind::Continuation`] placeholder in the column to the
+/// occupies a [`Kind::Wide`] primary cell followed immediately by
+/// a [`Kind::Continuation`] placeholder in the column to the
 /// right. The previous magic-number `width: u8` field is replaced by
 /// this enum so callers don't have to translate between `0`, `1`, and
 /// `2` to reason about cell roles.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum CellKind {
+pub enum Kind {
     /// Single-column glyph cell.
     Narrow,
     /// Primary cell of a two-column grapheme. The cell at `column + 1`
-    /// carries [`CellKind::Continuation`].
+    /// carries [`Kind::Continuation`].
     Wide,
-    /// Right-half placeholder of a [`CellKind::Wide`] primary at the
+    /// Right-half placeholder of a [`Kind::Wide`] primary at the
     /// column to the left. Carries no content of its own.
     Continuation,
 }
@@ -38,7 +38,7 @@ pub struct Cell {
     /// without per-cell deep clones.
     style: Style,
     /// Structural kind: narrow, wide primary, or wide continuation.
-    kind: CellKind,
+    kind: Kind,
 }
 
 impl PartialEq for Cell {
@@ -61,7 +61,7 @@ impl Cell {
     pub const BLANK: Cell = Cell {
         content: CompactString::const_new(" "),
         style: Style::EMPTY,
-        kind: CellKind::Narrow,
+        kind: Kind::Narrow,
     };
 
     /// Create a single-column cell with the given grapheme-cluster
@@ -70,20 +70,20 @@ impl Cell {
         Cell {
             content: content.into(),
             style: Style::EMPTY,
-            kind: CellKind::Narrow,
+            kind: Kind::Narrow,
         }
     }
 
     /// Create the primary cell of a two-column grapheme.
     ///
     /// When a wide cell is written into a buffer the slot at
-    /// `column + 1` is filled with a [`CellKind::Continuation`]
+    /// `column + 1` is filled with a [`Kind::Continuation`]
     /// placeholder automatically by the buffer layer.
     pub fn wide(content: impl Into<CompactString>) -> Self {
         Cell {
             content: content.into(),
             style: Style::EMPTY,
-            kind: CellKind::Wide,
+            kind: Kind::Wide,
         }
     }
 
@@ -95,32 +95,32 @@ impl Cell {
         Cell {
             content: CompactString::default(),
             style: Style::EMPTY,
-            kind: CellKind::Continuation,
+            kind: Kind::Continuation,
         }
     }
 
     /// The cell's structural kind.
     #[inline]
-    pub fn kind(&self) -> CellKind {
+    pub fn kind(&self) -> Kind {
         self.kind
     }
 
     /// Whether this cell is a single-column glyph cell.
     #[inline]
     pub fn is_narrow(&self) -> bool {
-        matches!(self.kind, CellKind::Narrow)
+        matches!(self.kind, Kind::Narrow)
     }
 
     /// Whether this cell is the primary of a two-column grapheme.
     #[inline]
     pub fn is_wide(&self) -> bool {
-        matches!(self.kind, CellKind::Wide)
+        matches!(self.kind, Kind::Wide)
     }
 
     /// Whether this cell is a wide-character continuation placeholder.
     #[inline]
     pub fn is_continuation(&self) -> bool {
-        matches!(self.kind, CellKind::Continuation)
+        matches!(self.kind, Kind::Continuation)
     }
 
     /// Whether this cell is a blank/space.
@@ -143,9 +143,9 @@ impl Cell {
     #[inline]
     pub fn width(&self) -> u8 {
         match self.kind {
-            CellKind::Narrow => 1,
-            CellKind::Wide => 2,
-            CellKind::Continuation => 0,
+            Kind::Narrow => 1,
+            Kind::Wide => 2,
+            Kind::Continuation => 0,
         }
     }
 
