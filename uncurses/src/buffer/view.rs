@@ -84,8 +84,8 @@ mod tests {
             v.set_cell(Position::new(5, 1), &Cell::narrow("C")); // right of view
         }
         assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "A");
-        assert!(buf.cell(Position::new(0, 0)).unwrap().is_blank());
-        assert!(buf.cell(Position::new(5, 1)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(0, 0)).unwrap() == &Cell::BLANK);
+        assert!(buf.cell(Position::new(5, 1)).unwrap() == &Cell::BLANK);
     }
 
     #[test]

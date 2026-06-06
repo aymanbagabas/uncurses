@@ -95,6 +95,13 @@ fn main() -> std::io::Result<()> {
     let mut last_id;
     let mut quit = false;
 
+    // Ask the terminal for its pixel dimensions. Some platforms
+    // (notably Windows) don't fill xpixel/ypixel via the local
+    // size syscall; the response arrives as a CellPixelSize /
+    // WindowPixelSize event, which triggers a redraw below.
+    screen.request_cell_pixel_size()?;
+    screen.request_window_pixel_size()?;
+
     last_id = redraw(&mut screen, &image, &mut backend)?;
     screen.render()?;
     screen.flush()?;

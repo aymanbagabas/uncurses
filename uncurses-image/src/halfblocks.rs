@@ -167,14 +167,21 @@ fn sample(img: &image::RgbaImage, x: u32, y: u32, w: u32, h: u32) -> Rgba<u8> {
 }
 
 fn make_cell(upper: Rgba<u8>, lower: Rgba<u8>) -> Cell {
+    let upper_opaque = upper.0[3] > 0;
+    let lower_opaque = lower.0[3] > 0;
     let mut style = Style::EMPTY;
-    if upper.0[3] > 0 {
-        let [r, g, b, _] = upper.channels().try_into().unwrap_or([0, 0, 0, 0]);
-        style = style.with_fg(Color::Rgb(r, g, b));
-    }
-    if lower.0[3] > 0 {
+    if lower_opaque {
         let [r, g, b, _] = lower.channels().try_into().unwrap_or([0, 0, 0, 0]);
         style = style.with_bg(Color::Rgb(r, g, b));
     }
-    Cell::narrow(UPPER_HALF).with_style(style)
+    if upper_opaque {
+        let [r, g, b, _] = upper.channels().try_into().unwrap_or([0, 0, 0, 0]);
+        style = style.with_fg(Color::Rgb(r, g, b));
+        Cell::narrow(UPPER_HALF).with_style(style)
+    } else {
+        // Upper half is transparent: draw a blank so no glyph
+        // is painted. The lower half (if any) lives in the
+        // background colour.
+        Cell::narrow(" ").with_style(style)
+    }
 }

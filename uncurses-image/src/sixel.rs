@@ -102,21 +102,30 @@ impl Painter for Sixel {
             return Ok(ImageId(id));
         };
 
+        let (target_w, target_h) = target_pixels(image.dimensions(), area, (cw, ch), resize);
+        if target_w == 0 || target_h == 0 {
+            return Ok(ImageId(id));
+        }
+
+        // Cell footprint of the encoded image and its centered
+        // position inside the requested `area`.
+        let footprint = footprint(area, (cw, ch), (target_w, target_h));
+
         let key = CacheKey {
             pixel_hash: id,
-            cell_rect: (area.width, area.height),
+            cell_rect: (footprint.width, footprint.height),
             cell_px: (cw, ch),
             resize,
         };
         let sequence = match self.cache.get(&key) {
             Some(s) => s.clone(),
             None => {
-                let encoded = encode(image, area, (cw, ch), resize)?;
+                let encoded = encode(image, (target_w, target_h), footprint.width, resize)?;
                 self.cache.entry(key).or_insert(encoded).clone()
             }
         };
 
-        stamp(screen, area, sequence);
+        stamp(screen, footprint, sequence);
         Ok(ImageId(id))
     }
 
@@ -146,18 +155,30 @@ fn clip_area<W: Write>(area: Rect, screen: &Screen<W>) -> Rect {
     }
 }
 
-/// Resize `image` to the target pixel dimensions implied by `area`,
-/// `cell_px`, and `resize`, then encode it to sixel. The returned
-/// string is the complete DCS sequence (`\x1bPq…\x1b\\`) emitted by
-/// the encoder; callers stamp it verbatim.
+/// Resize `image` to `(target_w, target_h)` pixels, encode it to
+/// sixel, and bracket the DCS so the cursor leaves the rect at its
+/// top-right column.
+///
+/// Wire format produced (for an `area.width == n` rect):
+///
+/// ```text
+/// \x1b7   <DCS sixel … ST>   \x1b8   \x1b[{n}C
+/// ```
+///
+/// `\x1b7` (DECSC) saves the cursor at the rect's top-left, the
+/// terminal rasterizes the sixel image relative to that saved
+/// cursor, `\x1b8` (DECRC) restores the cursor to the top-left, and
+/// CUF advances `n` columns so the renderer's tracked cursor lines
+/// up with the physical cursor at `(area.x + n, area.y)` — the
+/// anchor behaves like a wide primary spanning the rect's width.
 fn encode(
     image: &DynamicImage,
-    area: Rect,
-    cell_px: (u16, u16),
+    target: (u32, u32),
+    cells_w: u16,
     resize: Resize,
 ) -> io::Result<String> {
-    let (target_w, target_h) = target_pixels(image.dimensions(), area, cell_px, resize);
-    if target_w == 0 || target_h == 0 {
+    let (target_w, target_h) = target;
+    if target_w == 0 || target_h == 0 || cells_w == 0 {
         return Ok(String::new());
     }
 
@@ -175,14 +196,16 @@ fn encode(
     let (w, h) = (resized.width() as usize, resized.height() as usize);
     let raw = resized.into_raw();
     let sixel = SixelImage::from_rgba(raw, w, h);
-    sixel.encode().map_err(|e| io::Error::other(e.to_string()))
+    let dcs = sixel
+        .encode()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    Ok(format!("\x1b7{dcs}\x1b8\x1b[{cells_w}C"))
 }
 
 /// Compute the pixel dimensions the source image should be resized
 /// to in order to fill `area` according to `resize`, given a per-cell
-/// pixel size. For `Fit` this preserves aspect ratio (the resulting
-/// image may be smaller than the area in one dimension), avoiding
-/// the need for transparent padding which sixel cannot represent.
+/// pixel size. For `Fit` this preserves aspect ratio and may scale
+/// the image up or down so it touches the area on at least one edge.
 fn target_pixels(src: (u32, u32), area: Rect, cell_px: (u16, u16), resize: Resize) -> (u32, u32) {
     let cw = cell_px.0.max(1) as u32;
     let ch = cell_px.1.max(1) as u32;
@@ -196,7 +219,7 @@ fn target_pixels(src: (u32, u32), area: Rect, cell_px: (u16, u16), resize: Resiz
         Resize::Fit(_) => {
             let sx = area_w as f64 / src.0 as f64;
             let sy = area_h as f64 / src.1 as f64;
-            let s = sx.min(sy).min(1.0);
+            let s = sx.min(sy);
             let w = ((src.0 as f64) * s).round().max(1.0) as u32;
             let h = ((src.1 as f64) * s).round().max(1.0) as u32;
             (w, h)
@@ -204,8 +227,30 @@ fn target_pixels(src: (u32, u32), area: Rect, cell_px: (u16, u16), resize: Resiz
     }
 }
 
+/// Cell footprint of an encoded image of `(target_w, target_h)`
+/// pixels, centered inside `area`. Width/height round up to whole
+/// cells; the position shifts so the footprint sits in the middle
+/// of `area`.
+fn footprint(area: Rect, cell_px: (u16, u16), target: (u32, u32)) -> Rect {
+    let cw = cell_px.0.max(1) as u32;
+    let ch = cell_px.1.max(1) as u32;
+    let cells_w = target.0.div_ceil(cw).min(area.width as u32) as u16;
+    let cells_h = target.1.div_ceil(ch).min(area.height as u32) as u16;
+    let dx = (area.width - cells_w) / 2;
+    let dy = (area.height - cells_h) / 2;
+    Rect {
+        x: area.x + dx,
+        y: area.y + dy,
+        width: cells_w,
+        height: cells_h,
+    }
+}
+
 fn stamp<W: Write>(screen: &mut Screen<W>, area: Rect, sequence: String) {
-    screen.set_rect_payload(area, sequence, Style::EMPTY);
+    screen.set_cell(
+        (area.x, area.y),
+        &uncurses::cell::Cell::rect(area, sequence, Style::EMPTY),
+    );
 }
 
 #[cfg(test)]

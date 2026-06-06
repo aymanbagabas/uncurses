@@ -24,7 +24,7 @@ fn fill_range(buf: &mut Buffer, y: u16, lo: u16, hi: u16, fill: &Cell) {
     if lo >= hi {
         return;
     }
-    let step = fill.width().max(1) as u16;
+    let step = fill.width().max(1);
     let mut x = lo;
     while x + step <= hi {
         buf.set((x, y), fill);
@@ -214,8 +214,8 @@ mod tests {
 
         buf.insert_lines(1, 2, 5, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
-        assert!(buf.cell(Position::new(0, 1)).unwrap().is_blank());
-        assert!(buf.cell(Position::new(0, 2)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(0, 1)).unwrap() == &Cell::BLANK);
+        assert!(buf.cell(Position::new(0, 2)).unwrap() == &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 3)).unwrap().content(), "B");
         assert_eq!(buf.cell(Position::new(0, 4)).unwrap().content(), "C");
     }
@@ -231,7 +231,7 @@ mod tests {
         buf.delete_lines(1, 2, 5, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
         assert_eq!(buf.cell(Position::new(0, 1)).unwrap().content(), "D");
-        assert!(buf.cell(Position::new(0, 2)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(0, 2)).unwrap() == &Cell::BLANK);
     }
 
     #[test]
@@ -243,8 +243,8 @@ mod tests {
 
         buf.insert_cells((1, 0), 2, 10, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
-        assert!(buf.cell(Position::new(1, 0)).unwrap().is_blank());
-        assert!(buf.cell(Position::new(2, 0)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(1, 0)).unwrap() == &Cell::BLANK);
+        assert!(buf.cell(Position::new(2, 0)).unwrap() == &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "B");
         assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "C");
     }
@@ -260,7 +260,7 @@ mod tests {
         buf.delete_cells((1, 0), 2, 10, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
         assert_eq!(buf.cell(Position::new(1, 0)).unwrap().content(), "D");
-        assert!(buf.cell(Position::new(2, 0)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(2, 0)).unwrap() == &Cell::BLANK);
     }
 
     #[test]
@@ -279,7 +279,7 @@ mod tests {
         // primary with no continuation room — set() truncates it to BLANK.
         buf.insert_cells((1, 0), 1, 6, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
-        assert!(buf.cell(Position::new(1, 0)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(1, 0)).unwrap() == &Cell::BLANK);
         // The wide cell's continuation that used to be at col 5 must not
         // remain as a stale marker.
         assert!(!buf.cell(Position::new(5, 0)).unwrap().is_continuation());
@@ -306,7 +306,7 @@ mod tests {
         // Last column must be a clean blank, not a stray continuation.
         let last = buf.cell(Position::new(5, 0)).unwrap();
         assert!(!last.is_continuation());
-        assert!(last.is_blank());
+        assert!(last == &Cell::BLANK);
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
         assert!(buf.cell(Position::new(1, 0)).unwrap().is_continuation());
         assert_eq!(buf.cell(Position::new(2, 0)).unwrap().width(), 2);
         assert!(buf.cell(Position::new(3, 0)).unwrap().is_continuation());
-        assert!(buf.cell(Position::new(4, 0)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(4, 0)).unwrap() == &Cell::BLANK);
         assert!(!buf.cell(Position::new(4, 0)).unwrap().is_continuation());
     }
 }

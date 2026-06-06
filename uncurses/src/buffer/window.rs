@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(dst.cell(Position::new(5, 1)).unwrap().content(), "A");
         assert_eq!(dst.cell(Position::new(7, 2)).unwrap().content(), "B");
         // Outside the window's footprint stays blank.
-        assert!(dst.cell(Position::new(0, 0)).unwrap().is_blank());
+        assert!(dst.cell(Position::new(0, 0)).unwrap() == &Cell::BLANK);
     }
 
     #[test]
@@ -120,6 +120,6 @@ mod tests {
         assert_eq!(dst.cell(Position::new(8, 2)).unwrap().content(), "X");
         assert_eq!(dst.cell(Position::new(9, 2)).unwrap().content(), "X");
         // Below target bottom — never written.
-        assert!(dst.cell(Position::new(8, 0)).unwrap().is_blank());
+        assert!(dst.cell(Position::new(8, 0)).unwrap() == &Cell::BLANK);
     }
 }

@@ -113,13 +113,7 @@ fn write_string_widths_follow_current_mode() {
             .content(),
         "e\u{0301}"
     );
-    assert!(
-        screen
-            .front_buf
-            .cell(crate::Position::new(1, 0))
-            .unwrap()
-            .is_blank()
-    );
+    assert!(screen.front_buf.cell(crate::Position::new(1, 0)).unwrap() == &Cell::BLANK);
 
     screen.set_grapheme_clusters(true).unwrap();
     screen.clear();
@@ -1707,7 +1701,7 @@ fn update_window_size_folds_size_events_into_the_cache() {
 }
 
 #[test]
-fn set_rect_payload_stamps_anchor_and_body_cells() {
+fn set_cell_with_rect_stamps_anchor_and_body_cells() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
     let rect = crate::Rect {
         x: 2,
@@ -1715,30 +1709,27 @@ fn set_rect_payload_stamps_anchor_and_body_cells() {
         width: 3,
         height: 2,
     };
-    screen.set_rect_payload(rect, "PAYLOAD", crate::style::Style::EMPTY);
+    screen.set_cell(
+        (rect.x, rect.y),
+        &crate::cell::Cell::rect(rect, "PAYLOAD", crate::style::Style::EMPTY),
+    );
 
     let anchor = screen.front_buf.cell(crate::Position::new(2, 1)).unwrap();
-    assert!(anchor.is_rect_anchor_at(2, 1));
+    assert!(matches!(anchor.kind(), crate::cell::CellKind::Rect(r) if r.x == 2 && r.y == 1));
     assert_eq!(anchor.content(), "PAYLOAD");
 
     for (x, y) in [(3, 1), (4, 1), (2, 2), (3, 2), (4, 2)] {
         let c = screen.front_buf.cell(crate::Position::new(x, y)).unwrap();
-        assert!(c.is_rect_body_at(x, y));
+        assert!(c.is_rect());
         assert_eq!(c.content(), "");
     }
 
     // Cells outside the rectangle remain blank.
-    assert!(
-        screen
-            .front_buf
-            .cell(crate::Position::new(1, 1))
-            .unwrap()
-            .is_blank()
-    );
+    assert!(screen.front_buf.cell(crate::Position::new(1, 1)).unwrap() == &Cell::BLANK);
 }
 
 #[test]
-fn set_rect_payload_clears_overlapping_old_rect() {
+fn set_cell_with_rect_clears_overlapping_old_rect() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
     let big = crate::Rect {
         x: 0,
@@ -1746,7 +1737,10 @@ fn set_rect_payload_clears_overlapping_old_rect() {
         width: 6,
         height: 3,
     };
-    screen.set_rect_payload(big, "OLD", crate::style::Style::EMPTY);
+    screen.set_cell(
+        (big.x, big.y),
+        &crate::cell::Cell::rect(big, "OLD", crate::style::Style::EMPTY),
+    );
 
     // A new, smaller rect inside the old one's footprint. The old
     // rect's cells outside the new rectangle must become blank.
@@ -1756,13 +1750,16 @@ fn set_rect_payload_clears_overlapping_old_rect() {
         width: 2,
         height: 1,
     };
-    screen.set_rect_payload(small, "NEW", crate::style::Style::EMPTY);
+    screen.set_cell(
+        (small.x, small.y),
+        &crate::cell::Cell::rect(small, "NEW", crate::style::Style::EMPTY),
+    );
 
     // Old rect cells that fall outside `small` should be blank.
     for (x, y) in [(0, 0), (5, 0), (0, 2), (5, 2), (3, 1), (4, 1)] {
         let c = screen.front_buf.cell(crate::Position::new(x, y)).unwrap();
         assert!(
-            c.is_blank(),
+            c == &Cell::BLANK,
             "cell ({x}, {y}) should be blank after old rect cleared, got {c:?}"
         );
     }
@@ -1770,13 +1767,13 @@ fn set_rect_payload_clears_overlapping_old_rect() {
     // New rect anchor + body intact.
     let anchor = screen.front_buf.cell(crate::Position::new(1, 1)).unwrap();
     assert_eq!(anchor.content(), "NEW");
-    assert!(anchor.is_rect_anchor_at(1, 1));
+    assert!(matches!(anchor.kind(), crate::cell::CellKind::Rect(r) if r.x == 1 && r.y == 1));
     let body = screen.front_buf.cell(crate::Position::new(2, 1)).unwrap();
-    assert!(body.is_rect_body_at(2, 1));
+    assert!(body.is_rect());
 }
 
 #[test]
-fn set_rect_payload_clears_straddling_wide_cell() {
+fn set_cell_with_rect_clears_straddling_wide_cell() {
     let mut screen: Screen<Vec<u8>> = Screen::new(Vec::new()).with_size(10, 5);
     let wide = crate::cell::Cell::wide("漢");
     screen.set_cell((1, 0), &wide);
@@ -1805,11 +1802,14 @@ fn set_rect_payload_clears_straddling_wide_cell() {
         width: 3,
         height: 1,
     };
-    screen.set_rect_payload(rect, "X", crate::style::Style::EMPTY);
+    screen.set_cell(
+        (rect.x, rect.y),
+        &crate::cell::Cell::rect(rect, "X", crate::style::Style::EMPTY),
+    );
 
     let prev = screen.front_buf.cell(crate::Position::new(1, 0)).unwrap();
     assert!(
-        prev.is_blank(),
+        prev == &Cell::BLANK,
         "wide-cell primary should be blanked when its continuation is overwritten, got {prev:?}"
     );
 }

@@ -29,6 +29,9 @@ fn screen_with_pixels() -> Screen<Vec<u8>> {
         xpixel: 200,
         ypixel: 200,
     });
+    // Rect anchors are only emitted in fullscreen mode (inline mode
+    // would scroll the opaque payload off-position via LF).
+    s.set_alt_screen(true).unwrap();
     s
 }
 

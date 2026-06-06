@@ -260,6 +260,13 @@ pub fn overwrite_cost(
     let mut cost = 0usize;
     while i < to {
         let cell = &line[i];
+        if cell.is_rect() {
+            // Rect cells carry an opaque payload that may only be
+            // emitted at the anchor position. Replaying it through
+            // an overwrite walk would print a DCS sequence at the
+            // wrong cursor location and corrupt the screen.
+            return None;
+        }
         if cell.width() > 0 {
             if cell.style() != style {
                 return None;

@@ -2,6 +2,7 @@
 //! glyph emission helpers in the frame submodule.
 
 use crate::Position;
+use crate::buffer::{Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::renderer::RenderBuffer;
 use crate::renderer::Renderer;
@@ -811,104 +812,363 @@ fn test_clear_bottom_skips_ed_when_cur_buf_already_blank() {
 }
 
 #[test]
-fn rect_anchor_emits_content_verbatim_and_body_cells_emit_nothing() {
+fn rect_anchor_emits_payload_at_anchor() {
     use crate::layout::Rect;
+    use crate::style::Style;
+
     let mut r = Renderer::new();
-    let mut rb = RenderBuffer::new(10, 3);
-    let rect = Rect {
-        x: 1,
-        y: 1,
-        width: 4,
-        height: 1,
-    };
-    let payload = "\x1bPpayload\x1b\\";
-    rb.set_cell((1, 1), &Cell::rect_anchor(rect, payload));
-    rb.set_cell((2, 1), &Cell::rect_body(rect));
-    rb.set_cell((3, 1), &Cell::rect_body(rect));
-    rb.set_cell((4, 1), &Cell::rect_body(rect));
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+
+    let mut rb = RenderBuffer::new(20, 10);
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    let area = Rect::new(5, 3, 4, 2);
+    rb.set_cell((5, 3), &Cell::rect(area, "PAY", Style::EMPTY));
+
     let mut out = Vec::new();
     r.render(&mut out, &mut rb).unwrap();
-    let s = String::from_utf8_lossy(&out);
+    let s = String::from_utf8(out).unwrap();
+
+    assert!(s.contains("PAY"), "payload missing: {s:?}");
+
+    // CUP placing the cursor at the anchor before the payload:
+    // \e[4;6H (1-based row 4, col 6 == 0-based (3,5)).
+    let cup_anchor = "\x1b[4;6H";
+    let pay_idx = s.find("PAY").expect("payload not found");
+    let cup_anchor_idx = s.find(cup_anchor).expect("anchor CUP missing");
+    assert!(cup_anchor_idx < pay_idx, "anchor CUP must precede payload");
+}
+
+#[test]
+fn rect_anchor_skips_re_emit_on_unchanged_subsequent_frame() {
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+    let mut rb = RenderBuffer::new(20, 10);
+
+    let area = Rect::new(2, 2, 5, 3);
+    rb.set_cell((2, 2), &Cell::rect(area, "DCS", Style::EMPTY));
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    // Re-touch the anchor with the same value — RenderBuffer::set_cell
+    // is a no-op when the cell hasn't changed, so simulate a "redraw"
+    // by touching a far-off cell so render() runs but the rect is
+    // unchanged.
+    rb.set_cell((19, 9), &Cell::narrow("."));
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8(out).unwrap();
+
     assert!(
-        s.contains(payload),
-        "expected anchor payload verbatim, got: {s:?}"
+        !s.contains("DCS"),
+        "payload re-emitted on unchanged frame: {s:?}"
     );
-    // Body cells must not emit padding spaces over the payload area.
-    // The post-anchor text should contain no glyph for the body cells
-    // beyond what the SGR / move sequences naturally produce.
-    let after = s.split(payload).nth(1).unwrap_or("");
-    for ch in after.chars() {
-        assert!(
-            ch != ' ',
-            "body cells must not emit literal spaces after anchor; saw {after:?}"
-        );
+}
+
+#[test]
+fn rect_anchor_in_inline_mode_emits_payload() {
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    // With the lean-differ design, the painter (not the renderer)
+    // owns cursor management around the payload — the rect anchor
+    // is emitted as a normal cell whose width equals the rect's
+    // column footprint and whose content is the bracketed payload.
+    // No absolute CUP is required, so inline rendering works the
+    // same as fullscreen.
+    let mut r = Renderer::new();
+    r.set_fullscreen(false);
+    r.set_relative_cursor(true);
+    let mut rb = RenderBuffer::new(20, 10);
+
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    let area = Rect::new(2, 2, 4, 2);
+    rb.set_cell((2, 2), &Cell::rect(area, "DCS", Style::EMPTY));
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8(out).unwrap();
+
+    assert!(
+        s.contains("DCS"),
+        "rect payload missing in inline mode: {s:?}"
+    );
+}
+
+#[test]
+fn emit_cell_handles_rect_anchor_and_body_correctly() {
+    // With the lean-differ design, rect anchors flow through the
+    // per-cell emit path: their payload bytes are emitted verbatim
+    // (the painter's bracketing keeps the physical cursor in
+    // sync). Rect body cells carry empty content and produce no
+    // output — the tracked cursor advances over them via the
+    // anchor's `width` (the rect's column footprint).
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+
+    let mut rb = RenderBuffer::new(20, 10);
+    let area = Rect::new(2, 2, 4, 2);
+    rb.set_cell((2, 2), &Cell::rect(area, "DCS_PAYLOAD", Style::EMPTY));
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+
+    // Tamper with cur_buf so the body cell at (4,3) looks blank — the
+    // next render's per-row diff will see a body-cell mismatch but
+    // must not re-emit the payload (the body has empty content).
+    if let Some(cb) = r.cur_buf.as_mut()
+        && let Some(line) = cb.line_mut(3)
+    {
+        line[4] = Cell::BLANK;
+    }
+    rb.touch_line(3, 0, 19);
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8(out).unwrap();
+    assert!(
+        !s.contains("DCS_PAYLOAD"),
+        "rect body cell re-emitted anchor payload: {s:?}"
+    );
+}
+
+#[test]
+fn rect_move_emits_new_anchor_payload() {
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+    let mut rb = RenderBuffer::new(20, 10);
+
+    let area1 = Rect::new(2, 2, 4, 2);
+    rb.set_cell((2, 2), &Cell::rect(area1, "PAY1", Style::EMPTY));
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    // Frame 2: blank the old footprint, stamp a new rect anchor at
+    // a fresh position. Painters typically clear the old area then
+    // paint the new anchor — we mirror that here.
+    rb.fill_rect(area1, &Cell::BLANK);
+    let area2 = Rect::new(8, 4, 4, 2);
+    rb.set_cell((8, 4), &Cell::rect(area2, "PAY2", Style::EMPTY));
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8(out).unwrap();
+
+    assert!(s.contains("PAY2"), "new payload missing: {s:?}");
+    assert!(!s.contains("PAY1"), "old payload re-emitted: {s:?}");
+}
+
+#[test]
+fn char_over_rect_anchor_orphans_body_but_emits_char() {
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+    let mut rb = RenderBuffer::new(20, 10);
+
+    let area = Rect::new(3, 3, 5, 3);
+    rb.set_cell((3, 3), &Cell::rect(area, "IMG", Style::EMPTY));
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    // Punch a char through the anchor cell.
+    rb.set_cell((3, 3), &Cell::narrow("X"));
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8(out).unwrap();
+
+    assert!(s.contains('X'), "char missing: {s:?}");
+    // Old payload must NOT be re-emitted.
+    assert!(!s.contains("IMG"), "old payload re-emitted: {s:?}");
+
+    // Body cells of the old rect remain orphaned (still kind=Rect).
+    let cb = r.cur_buf.as_ref().unwrap();
+    let anchor_cell = cb.cell(Position::new(3, 3)).unwrap();
+    assert!(
+        !anchor_cell.is_rect(),
+        "anchor still rect after char overwrite"
+    );
+    let body = cb.cell(Position::new(4, 3)).unwrap();
+    assert!(body.is_rect(), "body cells must orphan");
+}
+
+#[test]
+fn char_over_rect_body_punches_through_keeps_rest() {
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+    let mut rb = RenderBuffer::new(20, 10);
+
+    let area = Rect::new(3, 3, 5, 3);
+    rb.set_cell((3, 3), &Cell::rect(area, "IMG", Style::EMPTY));
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    rb.set_cell((5, 4), &Cell::narrow("Z"));
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8(out).unwrap();
+
+    assert!(s.contains('Z'), "char missing: {s:?}");
+    assert!(!s.contains("IMG"), "old payload re-emitted: {s:?}");
+
+    let cb = r.cur_buf.as_ref().unwrap();
+    let anchor_cell = cb.cell(Position::new(3, 3)).unwrap();
+    assert!(anchor_cell.is_rect(), "anchor cleared by body overwrite");
+    let punched = cb.cell(Position::new(5, 4)).unwrap();
+    assert!(!punched.is_rect());
+    assert_eq!(punched.content(), "Z");
+}
+
+#[test]
+fn bulk_fill_clears_entire_rect_footprint() {
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+    let mut rb = RenderBuffer::new(20, 10);
+
+    let area = Rect::new(4, 4, 6, 3);
+    rb.set_cell((4, 4), &Cell::rect(area, "BIG", Style::EMPTY));
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    // Bulk-fill a small region overlapping just one corner of the rect.
+    rb.fill_rect(Rect::new(0, 0, 5, 5), &Cell::BLANK);
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut rb).unwrap();
+    let s = String::from_utf8(out).unwrap();
+    assert!(!s.contains("BIG"), "old payload re-emitted: {s:?}");
+
+    let cb = r.cur_buf.as_ref().unwrap();
+    for y in 4..7u16 {
+        for x in 4..10u16 {
+            let c = cb.cell(Position::new(x, y)).unwrap();
+            assert!(!c.is_rect(), "rect survived bulk fill at ({x},{y})");
+        }
     }
 }
 
 #[test]
-fn rect_unchanged_across_frames_emits_nothing() {
+fn replacing_glyph_region_with_rect_clears_old_glyphs() {
     use crate::layout::Rect;
+    use crate::style::Style;
+
     let mut r = Renderer::new();
-    let mut rb = RenderBuffer::new(10, 3);
-    let rect = Rect {
-        x: 0,
-        y: 0,
-        width: 3,
-        height: 1,
-    };
-    rb.set_cell((0, 0), &Cell::rect_anchor(rect, "\x1bPx\x1b\\"));
-    rb.set_cell((1, 0), &Cell::rect_body(rect));
-    rb.set_cell((2, 0), &Cell::rect_body(rect));
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+    let mut rb = RenderBuffer::new(20, 10);
+
+    // Frame 1: paint a 6x3 block of glyphs at (4, 4) — the
+    // halfblocks-style scenario. Surrounding cells stay blank.
+    let area = Rect::new(4, 4, 6, 3);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            rb.set_cell((x, y), &Cell::narrow("#"));
+        }
+    }
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    // Frame 2: clear the glyph region and stamp a rect anchor over
+    // the same footprint — the sixel-switch scenario.
+    rb.fill_rect(area, &Cell::BLANK);
+    rb.set_cell((area.x, area.y), &Cell::rect(area, "PAYLOAD", Style::EMPTY));
     let mut out = Vec::new();
     r.render(&mut out, &mut rb).unwrap();
-    assert!(!out.is_empty());
 
-    // Re-render with no changes — differ should produce no output.
-    out.clear();
-    rb.set_cell((0, 0), &Cell::rect_anchor(rect, "\x1bPx\x1b\\"));
-    rb.set_cell((1, 0), &Cell::rect_body(rect));
-    rb.set_cell((2, 0), &Cell::rect_body(rect));
-    r.render(&mut out, &mut rb).unwrap();
-    assert!(
-        out.is_empty(),
-        "expected no output on unchanged rect frame, got: {:?}",
-        String::from_utf8_lossy(&out)
-    );
+    let s = String::from_utf8_lossy(&out).into_owned();
+    assert!(s.contains("PAYLOAD"), "payload missing: {s:?}");
+    // No `#` should remain anywhere in cur_buf.
+    let cb = r.cur_buf.as_ref().unwrap();
+    for y in 0..10u16 {
+        for x in 0..20u16 {
+            let c = cb.cell(Position::new(x, y)).unwrap();
+            assert_ne!(c.content(), "#", "old glyph at ({x},{y})");
+        }
+    }
 }
 
 #[test]
-fn rect_row_is_excluded_from_scroll_detection() {
+fn halfblocks_to_rect_switch_in_full_screen_layout_clears_glyphs() {
     use crate::layout::Rect;
-    use crate::renderer::frame::prepare::{hash_line, line_contains_rect};
+    use crate::style::Style;
 
-    let rect = Rect {
-        x: 0,
-        y: 2,
-        width: 4,
-        height: 1,
-    };
-    let mut rb = RenderBuffer::new(8, 4);
-    rb.set_cell((0, 2), &Cell::rect_anchor(rect, "\x1bPx\x1b\\"));
-    rb.set_cell((1, 2), &Cell::rect_body(rect));
-    rb.set_cell((2, 2), &Cell::rect_body(rect));
-    rb.set_cell((3, 2), &Cell::rect_body(rect));
+    let width: u16 = 30;
+    let height: u16 = 10;
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_relative_cursor(false);
+    let mut rb = RenderBuffer::new(width, height);
 
-    let line = rb.line(2).unwrap();
-    assert!(line_contains_rect(line));
-    // hash_line for a rect line still computes a hash, but
-    // compute_hashes zeroes it; verify the helper itself includes
-    // rect identity so a different rect at the same position would
-    // hash differently.
-    let other_rect = Rect {
-        x: 0,
-        y: 2,
-        width: 4,
-        height: 2,
-    };
-    let mut rb2 = RenderBuffer::new(8, 4);
-    rb2.set_cell((0, 2), &Cell::rect_anchor(other_rect, "\x1bPy\x1b\\"));
-    rb2.set_cell((1, 2), &Cell::rect_body(other_rect));
-    rb2.set_cell((2, 2), &Cell::rect_body(other_rect));
-    rb2.set_cell((3, 2), &Cell::rect_body(other_rect));
-    assert_ne!(hash_line(line), hash_line(rb2.line(2).unwrap()));
+    let header = "header";
+    for (i, ch) in header.chars().enumerate() {
+        rb.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
+    }
+    let area = Rect::new(1, 2, 28, 7);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            rb.set_cell((x, y), &Cell::narrow("▀"));
+        }
+    }
+    let mut sink = Vec::new();
+    r.render(&mut sink, &mut rb).unwrap();
+    sink.clear();
+
+    let mut new_buf = RenderBuffer::new(width, height);
+    for (i, ch) in header.chars().enumerate() {
+        new_buf.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
+    }
+    new_buf.set_cell((area.x, area.y), &Cell::rect(area, "PAYLOAD", Style::EMPTY));
+
+    let mut out = Vec::new();
+    r.render(&mut out, &mut new_buf).unwrap();
+    let s = String::from_utf8_lossy(&out).into_owned();
+    assert!(s.contains("PAYLOAD"), "payload missing: {s:?}");
+
+    let cb = r.cur_buf.as_ref().unwrap();
+    for y in 0..height {
+        for x in 0..width {
+            let c = cb.cell(Position::new(x, y)).unwrap();
+            assert_ne!(
+                c.content(),
+                "▀",
+                "old halfblock survived at ({x},{y}): {c:?}\nout={s:?}"
+            );
+        }
+    }
 }

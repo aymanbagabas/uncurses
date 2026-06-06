@@ -37,7 +37,7 @@ fn test_overwrite_wide_char() {
     // Overwrite continuation cell
     buf.set((4, 0), &Cell::narrow("A"));
     // Primary cell should be blanked
-    assert!(buf.cell(Position::new(3, 0)).unwrap().is_blank());
+    assert!(buf.cell(Position::new(3, 0)).unwrap() == &Cell::BLANK);
     assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "A");
 }
 
@@ -96,10 +96,10 @@ fn resize_grow_width_grow_height_preserves_topleft_blanks_rest() {
         }
     }
     for x in 4..7 {
-        assert!(buf.cell(Position::new(x, 0)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(x, 0)).unwrap() == &Cell::BLANK);
     }
     for x in 0..7 {
-        assert!(buf.cell(Position::new(x, 4)).unwrap().is_blank());
+        assert!(buf.cell(Position::new(x, 4)).unwrap() == &Cell::BLANK);
     }
 }
 
@@ -116,7 +116,7 @@ fn resize_shrink_width_grow_height_compacts_rows_and_blanks_new_rows() {
     }
     for y in 2..4 {
         for x in 0..3 {
-            assert!(buf.cell(Position::new(x, y)).unwrap().is_blank());
+            assert!(buf.cell(Position::new(x, y)).unwrap() == &Cell::BLANK);
         }
     }
 }
@@ -132,7 +132,7 @@ fn resize_grow_width_shrink_height_pads_rows_and_drops_bottom() {
             assert_marker(&buf, x, y);
         }
         for x in 3..6 {
-            assert!(buf.cell(Position::new(x, y)).unwrap().is_blank());
+            assert!(buf.cell(Position::new(x, y)).unwrap() == &Cell::BLANK);
         }
     }
 }
@@ -162,7 +162,7 @@ fn resize_same_width_height_only() {
     }
     for y in 3..5 {
         for x in 0..4 {
-            assert!(buf.cell(Position::new(x, y)).unwrap().is_blank());
+            assert!(buf.cell(Position::new(x, y)).unwrap() == &Cell::BLANK);
         }
     }
 
@@ -292,39 +292,129 @@ fn write_string_with_link() {
 }
 
 #[test]
-fn overwriting_rect_cell_with_non_rect_clears_owning_rect() {
-    let mut buf = Buffer::new(8, 4);
-    let rect = Rect::new(1, 1, 3, 2);
-    buf.set(Position::new(1, 1), &Cell::rect_anchor(rect, "PAYLOAD"));
-    for (x, y) in [(2, 1), (3, 1), (1, 2), (2, 2), (3, 2)] {
-        buf.set(Position::new(x, y), &Cell::rect_body(rect));
-    }
-    assert!(buf.cell(Position::new(2, 2)).unwrap().is_rect_body_at(2, 2));
+fn rect_anchor_stamps_body_cells() {
+    let mut buf = Buffer::new(10, 5);
+    let area = Rect::new(2, 1, 3, 2);
+    buf.set((2, 1), &Cell::rect(area, "PAYLOAD", Style::EMPTY));
 
-    // Overwrite a body cell with a plain text cell. The entire rect
-    // must be cleared so no stale body cells remain.
-    buf.set(Position::new(2, 2), &Cell::narrow("X"));
-    assert_eq!(buf.cell(Position::new(2, 2)).unwrap().content(), "X");
-    for (x, y) in [(1, 1), (2, 1), (3, 1), (1, 2), (3, 2)] {
-        let c = buf.cell(Position::new(x, y)).unwrap();
-        assert!(
-            c.is_blank() && c.rect().is_none(),
-            "stale rect cell at ({x}, {y}): {c:?}"
-        );
+    // Anchor carries payload + matching kind.
+    let anchor = buf.cell(Position::new(2, 1)).unwrap();
+    assert_eq!(anchor.kind(), CellKind::Rect(area));
+    assert_eq!(anchor.content(), "PAYLOAD");
+
+    // Every other cell inside the rect is a body placeholder with the
+    // same area but empty content.
+    for y in 1..3 {
+        for x in 2..5 {
+            let c = buf.cell(Position::new(x, y)).unwrap();
+            assert_eq!(c.kind(), CellKind::Rect(area));
+            if x == 2 && y == 1 {
+                continue;
+            }
+            assert_eq!(c.content(), "");
+        }
+    }
+
+    // Cells outside the rect are untouched.
+    assert!(buf.cell(Position::new(0, 0)).unwrap() == &Cell::BLANK);
+    assert!(buf.cell(Position::new(5, 1)).unwrap() == &Cell::BLANK);
+}
+
+#[test]
+fn rect_anchor_propagation_clips_to_buffer_bounds() {
+    let mut buf = Buffer::new(4, 3);
+    let area = Rect::new(2, 1, 5, 5);
+    buf.set((2, 1), &Cell::rect(area, "X", Style::EMPTY));
+
+    // In-bounds cells get stamped; the rest is simply absent.
+    for y in 1..3 {
+        for x in 2..4 {
+            let c = buf.cell(Position::new(x, y)).unwrap();
+            assert_eq!(c.kind(), CellKind::Rect(area));
+        }
     }
 }
 
 #[test]
-fn overwriting_rect_cell_with_same_rect_keeps_other_cells() {
-    let mut buf = Buffer::new(8, 4);
-    let rect = Rect::new(1, 1, 3, 2);
-    buf.set(Position::new(1, 1), &Cell::rect_anchor(rect, "PAYLOAD"));
-    buf.set(Position::new(2, 1), &Cell::rect_body(rect));
-    buf.set(Position::new(3, 1), &Cell::rect_body(rect));
+fn char_over_rect_body_leaves_rest_of_rect_intact() {
+    let mut buf = Buffer::new(10, 3);
+    let area = Rect::new(0, 0, 4, 2);
+    buf.set((0, 0), &Cell::rect(area, "DCS", Style::EMPTY));
 
-    // Re-stamp the same body cell — no other cells should be
-    // disturbed because the new cell belongs to the same rect.
-    buf.set(Position::new(2, 1), &Cell::rect_body(rect));
-    assert_eq!(buf.cell(Position::new(1, 1)).unwrap().content(), "PAYLOAD");
-    assert!(buf.cell(Position::new(3, 1)).unwrap().is_rect_body_at(3, 1));
+    // Punch a character through one body cell.
+    buf.set((2, 1), &Cell::narrow("A"));
+
+    assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "A");
+    assert!(!buf.cell(Position::new(2, 1)).unwrap().is_rect());
+
+    // Anchor + remaining body cells still belong to the rect.
+    let anchor = buf.cell(Position::new(0, 0)).unwrap();
+    assert_eq!(anchor.kind(), CellKind::Rect(area));
+    let other = buf.cell(Position::new(3, 1)).unwrap();
+    assert_eq!(other.kind(), CellKind::Rect(area));
+}
+
+#[test]
+fn new_rect_over_different_rect_blanks_old_rect_first() {
+    let mut buf = Buffer::new(10, 4);
+    let old = Rect::new(0, 0, 4, 2);
+    let new = Rect::new(2, 1, 3, 2);
+
+    buf.set((0, 0), &Cell::rect(old, "OLD", Style::EMPTY));
+    buf.set((2, 1), &Cell::rect(new, "NEW", Style::EMPTY));
+
+    // Cells inside the new rect carry the new identity.
+    for y in 1..3 {
+        for x in 2..5 {
+            let c = buf.cell(Position::new(x, y)).unwrap();
+            assert_eq!(c.kind(), CellKind::Rect(new));
+        }
+    }
+
+    // Cells that were inside the OLD rect but not the new one were
+    // blanked, not orphaned with the old identity.
+    let old_only = buf.cell(Position::new(0, 0)).unwrap();
+    assert!(!old_only.is_rect());
+    assert!(old_only == &Cell::BLANK);
+    let old_only2 = buf.cell(Position::new(1, 1)).unwrap();
+    assert!(!old_only2.is_rect());
+}
+
+#[test]
+fn same_rect_anchor_rewrite_is_idempotent() {
+    let mut buf = Buffer::new(10, 3);
+    let area = Rect::new(0, 0, 4, 2);
+    buf.set((0, 0), &Cell::rect(area, "X", Style::EMPTY));
+    buf.set((0, 0), &Cell::rect(area, "Y", Style::EMPTY));
+
+    assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "Y");
+    for y in 0..2 {
+        for x in 0..4 {
+            let c = buf.cell(Position::new(x, y)).unwrap();
+            assert_eq!(c.kind(), CellKind::Rect(area));
+        }
+    }
+}
+
+#[test]
+fn fill_rect_fully_blanks_intersecting_rect() {
+    use crate::buffer::SurfaceMut;
+    let mut buf = Buffer::new(10, 5);
+    let area = Rect::new(2, 1, 4, 3);
+    buf.set((2, 1), &Cell::rect(area, "DCS", Style::EMPTY));
+
+    // Fill a small region that touches only the corner of the rect.
+    buf.fill_rect(Rect::new(0, 0, 3, 2), &Cell::narrow("."));
+
+    // The entire rect footprint should be blanked, even rows the
+    // fill itself never visited.
+    for y in 1..4 {
+        for x in 2..6 {
+            let c = buf.cell(Position::new(x, y)).unwrap();
+            assert!(!c.is_rect(), "({x},{y}) still carries rect identity");
+        }
+    }
+    // Cell that's both inside the fill and inside the rect carries the fill.
+    let c = buf.cell(Position::new(2, 1)).unwrap();
+    assert_eq!(c.content(), ".");
 }
