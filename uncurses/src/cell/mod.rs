@@ -99,23 +99,6 @@ impl Cell {
         }
     }
 
-    /// Create a cell with the given grapheme-cluster `content` and
-    /// display `width`.
-    ///
-    /// `width` is the cell count the content occupies on screen: 1
-    /// for narrow, 2 for wide (CJK / wide emoji), 0 for the
-    /// placeholder continuation that follows a wide cell (use `""`
-    /// as content). Callers that already know the role at the call
-    /// site should prefer the explicit [`Cell::narrow`],
-    /// [`Cell::wide`], and [`Cell::continuation`] constructors.
-    pub fn new(content: impl Into<CompactString>, width: u8) -> Self {
-        match width {
-            0 => Self::continuation(),
-            2 => Self::wide(content),
-            _ => Self::narrow(content),
-        }
-    }
-
     /// The cell's structural kind.
     #[inline]
     pub fn kind(&self) -> CellKind {
@@ -214,13 +197,6 @@ mod tests {
         let c = Cell::continuation();
         assert!(c.is_continuation());
         assert_eq!(c.width(), 0);
-    }
-
-    #[test]
-    fn test_new_dispatches_by_width() {
-        assert!(Cell::new("A", 1).is_narrow());
-        assert!(Cell::new("中", 2).is_wide());
-        assert!(Cell::new("", 0).is_continuation());
     }
 
     #[test]
