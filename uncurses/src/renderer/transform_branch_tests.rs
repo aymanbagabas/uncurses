@@ -214,6 +214,78 @@ fn transform_dch_for_deleted_cell() {
 }
 
 #[test]
+fn transform_ich_skipped_when_row_has_skip_cell() {
+    // ICH would slide the row's columns right; placeholder cells
+    // for an externally-painted region must stay anchored, so the
+    // renderer falls back to a plain overwrite.
+    let width = 12;
+    let mut renderer = renderer(width, 1, opts_with(|o| o.insert(Optimizations::ICH)));
+    renderer.cur_buf = Some(buffer_with_text(width, 1, 0, "ABCDEF"));
+
+    let mut new_buf = RenderBuffer::new(width, 1);
+    set_text(&mut new_buf, 0, "AXBCDEF");
+    new_buf.set_cell((9, 0), &Cell::skip());
+
+    let out = transform_output(&mut renderer, &new_buf);
+    assert!(
+        !out.windows(b"\x1b[1@".len()).any(|w| w == b"\x1b[1@"),
+        "ICH must not be emitted on a row carrying a skip cell, got {out:?}"
+    );
+}
+
+#[test]
+fn transform_dch_skipped_when_row_has_skip_cell() {
+    // DCH would slide the row's columns left; placeholder cells
+    // for an externally-painted region must stay anchored, so the
+    // renderer falls back to a plain overwrite + EL.
+    let width = 12;
+    let mut renderer = renderer(width, 1, opts_with(|o| o.insert(Optimizations::DCH)));
+    let mut cur = buffer_with_text(width, 1, 0, "AXBCDEFG");
+    cur.set_cell((10, 0), &Cell::skip());
+    cur.clear_touched();
+    renderer.cur_buf = Some(cur);
+
+    let mut new_buf = RenderBuffer::new(width, 1);
+    set_text(&mut new_buf, 0, "ABCDEFG");
+    new_buf.set_cell((10, 0), &Cell::skip());
+
+    let out = transform_output(&mut renderer, &new_buf);
+    assert!(
+        !out.windows(b"\x1b[1P".len()).any(|w| w == b"\x1b[1P"),
+        "DCH must not be emitted on a row carrying a skip cell, got {out:?}"
+    );
+}
+
+#[test]
+fn transform_dch_still_emitted_when_skip_is_left_of_shift() {
+    // Placeholder is at column 0; the deletion happens at column
+    // 1. The shift only moves cells strictly to the right of the
+    // placeholder, so the placeholder's anchor is safe and DCH
+    // stays eligible.
+    let width = 12;
+    let mut renderer = renderer(width, 1, opts_with(|o| o.insert(Optimizations::DCH)));
+    let mut cur = RenderBuffer::new(width, 1);
+    cur.set_cell((0, 0), &Cell::skip());
+    for (i, ch) in "XBCDEFG".chars().enumerate() {
+        cur.set_cell(((i + 1) as u16, 0), &Cell::narrow(ch.to_string()));
+    }
+    cur.clear_touched();
+    renderer.cur_buf = Some(cur);
+
+    let mut new_buf = RenderBuffer::new(width, 1);
+    new_buf.set_cell((0, 0), &Cell::skip());
+    for (i, ch) in "BCDEFG".chars().enumerate() {
+        new_buf.set_cell(((i + 1) as u16, 0), &Cell::narrow(ch.to_string()));
+    }
+
+    let out = transform_output(&mut renderer, &new_buf);
+    assert!(
+        out.windows(b"\x1b[P".len()).any(|w| w == b"\x1b[P"),
+        "DCH expected past the rightmost skip column, got {out:?}"
+    );
+}
+
+#[test]
 fn transform_step4c_walkback() {
     let width = 10;
     let mut renderer = renderer(width, 1, Optimizations::none());

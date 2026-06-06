@@ -12,11 +12,31 @@ pub struct TouchedSpan {
     pub last: u16,
 }
 
+/// Sentinel value stored in [`RenderBuffer::last_skip_col`] to mark
+/// a row that carries no [`Cell::skip`] placeholder.
+const NO_SKIP: i16 = -1;
+
 /// A buffer that tracks which lines/cells have been modified since last render.
 #[derive(Debug, Clone)]
 pub struct RenderBuffer {
     pub buffer: Buffer,
     touched: Vec<Option<TouchedSpan>>,
+    /// Per-row column of the rightmost [`Cell::skip`] placeholder,
+    /// or [`NO_SKIP`] (`-1`) if the row has none. Maintained in
+    /// O(1) for adds and for removes that aren't the recorded
+    /// rightmost; only removing the rightmost skip in a row
+    /// triggers a bounded rescan to locate the new rightmost.
+    ///
+    /// The renderer uses this to refuse cell-shifting optimizations
+    /// (ICH/DCH) only when the shift's left edge is at or before
+    /// the rightmost skip — operations strictly to the right of
+    /// every skip on the row stay eligible.
+    ///
+    /// The signed `i16` representation lets us encode "no skip"
+    /// without an `Option` discriminant, halving the per-row
+    /// footprint. Cell columns max out at `u16` widths well below
+    /// `i16::MAX`, so the sign is free.
+    last_skip_col: Vec<i16>,
 }
 
 impl RenderBuffer {
@@ -24,6 +44,7 @@ impl RenderBuffer {
         Self {
             buffer: Buffer::new(width, height),
             touched: vec![None; height as usize],
+            last_skip_col: vec![NO_SKIP; height as usize],
         }
     }
 
@@ -91,13 +112,112 @@ impl RenderBuffer {
             let new_width = cell.width().max(1) as u16;
             let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
             let width = new_width.max(prev_width);
+            let prev_skip = existing.is_some_and(Cell::is_skip);
+            let new_skip = cell.is_skip();
             self.buffer.set(pos, cell);
             // Touch the range of columns this cell occupies, extending
             // to cover any wider cell being overwritten so the touched
             // span includes the orphaned continuation column(s).
             let end_col = pos.x + width - 1;
             self.touch_line(pos.y, pos.x, end_col);
+            if prev_skip != new_skip {
+                self.update_last_skip_for_toggle(pos, prev_skip, new_skip);
+            }
         }
+    }
+
+    /// Update the per-row rightmost-skip-column slot after a single
+    /// cell at `pos` toggled its skip kind.
+    fn update_last_skip_for_toggle(&mut self, pos: Position, prev_skip: bool, new_skip: bool) {
+        let y = pos.y as usize;
+        if y >= self.last_skip_col.len() {
+            return;
+        }
+        if new_skip {
+            // Adding a skip: extend the rightmost only when this
+            // column is past the current one.
+            let col = pos.x as i16;
+            if self.last_skip_col[y] < col {
+                self.last_skip_col[y] = col;
+            }
+        } else if prev_skip && self.last_skip_col[y] == pos.x as i16 {
+            // Removing the recorded rightmost: rescan the columns
+            // strictly to its left for the new rightmost. Removals
+            // of any other skip leave the rightmost unchanged.
+            self.last_skip_col[y] = self.find_last_skip_before(pos.y, pos.x);
+        }
+    }
+
+    /// Scan row `y` for the rightmost [`Cell::skip`] whose column
+    /// is strictly less than `before_col`, returning its column or
+    /// [`NO_SKIP`].
+    fn find_last_skip_before(&self, y: u16, before_col: u16) -> i16 {
+        let Some(line) = self.buffer.line(y) else {
+            return NO_SKIP;
+        };
+        let upper = (before_col as usize).min(line.len());
+        line[..upper]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, c)| c.is_skip().then_some(i as i16))
+            .unwrap_or(NO_SKIP)
+    }
+
+    /// Column of the rightmost [`Cell::skip`] on row `y`, or `None`
+    /// when the row has none. O(1).
+    pub fn last_skip_col(&self, y: u16) -> Option<u16> {
+        let v = *self.last_skip_col.get(y as usize)?;
+        (v >= 0).then_some(v as u16)
+    }
+
+    /// Recount the rightmost-skip column for row `y` from the
+    /// underlying buffer. Used after bulk paths that rewrite a row
+    /// without going through [`Self::set_cell`].
+    fn recount_skip_row(&mut self, y: u16) {
+        let last = self
+            .buffer
+            .line(y)
+            .and_then(|cells| {
+                cells
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(i, c)| c.is_skip().then_some(i as i16))
+            })
+            .unwrap_or(NO_SKIP);
+        if let Some(slot) = self.last_skip_col.get_mut(y as usize) {
+            *slot = last;
+        }
+    }
+
+    /// Update the per-row rightmost-skip slot for row `y` after a
+    /// bulk fill of columns `[left, last_col]` with a cell whose
+    /// skip kind is `fill_skip`.
+    ///
+    /// The fast path covers the common case where the fill cell
+    /// isn't a skip and the existing rightmost skip lies outside
+    /// the filled range — the recorded rightmost can't have moved,
+    /// so no scan is needed. Only filling over the recorded
+    /// rightmost with a non-skip forces a bounded rescan.
+    fn update_last_skip_for_fill(&mut self, y: u16, left: u16, last_col: u16, fill_skip: bool) {
+        let cur = match self.last_skip_col.get(y as usize) {
+            Some(&v) => v,
+            None => return,
+        };
+        let new = if fill_skip {
+            // Filling with skip cells cannot shrink the rightmost;
+            // it can only push it to the right edge of the fill.
+            cur.max(last_col as i16)
+        } else if cur < left as i16 || cur > last_col as i16 {
+            // Rightmost sits outside the filled range — unchanged.
+            return;
+        } else {
+            // Rightmost was overwritten with non-skip cells; the
+            // new rightmost (if any) lives to the left of the fill.
+            self.find_last_skip_before(y, left)
+        };
+        self.last_skip_col[y as usize] = new;
     }
 
     /// Get the touched span for a line, if any. `y` is the 0-based row.
@@ -135,6 +255,10 @@ impl RenderBuffer {
     pub fn resize(&mut self, width: u16, height: u16) {
         self.buffer.resize(width, height);
         self.touched.resize(height as usize, None);
+        self.last_skip_col.resize(height as usize, NO_SKIP);
+        for y in 0..height {
+            self.recount_skip_row(y);
+        }
         self.touch_all();
     }
 
@@ -199,6 +323,7 @@ impl RenderBuffer {
         let last_col = self.width() - 1;
         for row in y..bottom {
             self.touch_line(row, 0, last_col);
+            self.recount_skip_row(row);
         }
     }
 
@@ -214,6 +339,7 @@ impl RenderBuffer {
         let last_col = self.width() - 1;
         for row in y..bottom {
             self.touch_line(row, 0, last_col);
+            self.recount_skip_row(row);
         }
     }
 
@@ -235,6 +361,7 @@ impl RenderBuffer {
             pos.x,
             bounds_right.min(self.width()).saturating_sub(1),
         );
+        self.recount_skip_row(pos.y);
     }
 
     /// Delete `n` cells at `pos`, touching the line. Delegates to
@@ -255,6 +382,7 @@ impl RenderBuffer {
             pos.x,
             bounds_right.min(self.width()).saturating_sub(1),
         );
+        self.recount_skip_row(pos.y);
     }
 }
 
@@ -292,8 +420,23 @@ impl SurfaceMut for RenderBuffer {
         }
         self.buffer.fill_rect(rect, cell);
         let last_col = clipped.right().saturating_sub(1);
+        let left = clipped.left();
+        let fill_skip = cell.is_skip();
         for y in clipped.top()..clipped.bottom() {
-            self.touch_line(y, clipped.left(), last_col);
+            self.touch_line(y, left, last_col);
+        }
+        // Full-row fills cover every column, so every existing
+        // rightmost-skip column falls inside the fill — collapse
+        // the per-row update into a single `slice::fill` (memset).
+        if left == 0 && last_col + 1 == self.width() {
+            let top = clipped.top() as usize;
+            let bottom = clipped.bottom() as usize;
+            let value = if fill_skip { last_col as i16 } else { NO_SKIP };
+            self.last_skip_col[top..bottom].fill(value);
+        } else {
+            for y in clipped.top()..clipped.bottom() {
+                self.update_last_skip_for_fill(y, left, last_col, fill_skip);
+            }
         }
     }
 

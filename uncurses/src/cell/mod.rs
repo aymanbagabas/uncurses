@@ -24,6 +24,11 @@ pub enum Kind {
     /// Right-half placeholder of a [`Kind::Wide`] primary at the
     /// column to the left. Carries no content of its own.
     Continuation,
+    /// Cell whose visual content is owned by an external paint
+    /// layer (e.g. an inline graphics overlay). The renderer emits
+    /// it as a blank space and refuses cell-shifting optimizations
+    /// (ICH/DCH) on any row that contains one.
+    Skip,
 }
 
 /// A single terminal cell.
@@ -99,6 +104,22 @@ impl Cell {
         }
     }
 
+    /// Create a single-column placeholder cell whose visual content
+    /// is owned by an external paint layer (e.g. an inline graphics
+    /// overlay).
+    ///
+    /// The renderer emits a blank space for the cell and refuses
+    /// cell-shifting optimizations (ICH/DCH) on any row that
+    /// contains one, so the external paint layer can rely on the
+    /// pixel footprint staying anchored to the column it stamped.
+    pub fn skip() -> Self {
+        Cell {
+            content: CompactString::default(),
+            style: Style::EMPTY,
+            kind: Kind::Skip,
+        }
+    }
+
     /// The cell's structural kind.
     #[inline]
     pub fn kind(&self) -> Kind {
@@ -123,6 +144,13 @@ impl Cell {
         matches!(self.kind, Kind::Continuation)
     }
 
+    /// Whether this cell is an externally-owned placeholder (see
+    /// [`Cell::skip`]).
+    #[inline]
+    pub fn is_skip(&self) -> bool {
+        matches!(self.kind, Kind::Skip)
+    }
+
     /// Whether this cell is a blank/space.
     pub fn is_blank(&self) -> bool {
         self.content.is_empty() || self.content == " " || self.is_continuation()
@@ -140,12 +168,14 @@ impl Cell {
     /// - `Narrow` → 1
     /// - `Wide`   → 2
     /// - `Continuation` → 0 (the second slot of a wide primary)
+    /// - `Skip`   → 1
     #[inline]
     pub fn width(&self) -> u8 {
         match self.kind {
             Kind::Narrow => 1,
             Kind::Wide => 2,
             Kind::Continuation => 0,
+            Kind::Skip => 1,
         }
     }
 
@@ -197,6 +227,19 @@ mod tests {
         let c = Cell::continuation();
         assert!(c.is_continuation());
         assert_eq!(c.width(), 0);
+    }
+
+    #[test]
+    fn test_skip_cell() {
+        let c = Cell::skip();
+        assert!(c.is_skip());
+        assert!(!c.is_narrow());
+        assert!(!c.is_wide());
+        assert!(!c.is_continuation());
+        assert_eq!(c.width(), 1);
+        assert!(c.is_blank());
+        assert!(c.style().is_empty());
+        assert_eq!(c.content(), "");
     }
 
     #[test]

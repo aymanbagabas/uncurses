@@ -41,8 +41,22 @@ impl Renderer {
         first_x: u16,
         last_x: u16,
     ) -> io::Result<()> {
+        // Pre-compute the row's rightmost externally-painted
+        // placeholder column (across both buffers). Cell-shifting
+        // optimizations (ICH/DCH) acting on a column at or before
+        // it would slide a placeholder off its anchor, so the inner
+        // pass refuses them; operations strictly to the right stay
+        // eligible.
+        let last_skip = match (
+            new_buf.last_skip_col(y),
+            cur_buf.as_ref().and_then(|b| b.last_skip_col(y)),
+        ) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
         let cur_line = cur_buf.as_mut().and_then(|cb| cb.line_mut(y));
-        let first_diff = self.transform_line_inner(out, new_buf, cur_line, y, first_x, last_x)?;
+        let first_diff =
+            self.transform_line_inner(out, new_buf, cur_line, y, first_x, last_x, last_skip)?;
         if let Some(first_diff) = first_diff
             && let Some(cur) = cur_buf.as_mut()
             && let (Some(new_line), Some(cur_line)) = (new_buf.line(y), cur.line_mut(y))
@@ -72,6 +86,7 @@ impl Renderer {
     /// `first_cell` is the leftmost column the screen was updated from
     /// — the wrapper uses this to slice-copy `new_line[first_cell..]`
     /// into `cur_buf` so it tracks what is now on screen.
+    #[allow(clippy::too_many_arguments)]
     fn transform_line_inner(
         &mut self,
         out: &mut Vec<u8>,
@@ -80,6 +95,7 @@ impl Renderer {
         y: u16,
         _first_x: u16,
         _last_x: u16,
+        last_skip: Option<u16>,
     ) -> io::Result<Option<usize>> {
         let width = new_buf.width() as usize;
         let new_line = match new_buf.line(y) {
@@ -346,8 +362,15 @@ impl Renderer {
                 // have to write anyway — or the ICH sequence costs more
                 // than just emitting the m-n cells. Otherwise insert via
                 // ICH or IRM depending on terminal support.
-                if self.opts.contains(Optimizations::ICH)
-                    && ((n_lc as usize) < n_last_nonblank || ich_cost > span)
+                // Shift starts at column `n + 1`. Refuse the
+                // optimization when any externally-painted
+                // placeholder sits at or past that column — the
+                // shift would slide it off its anchor.
+                let shift_col = (n + 1) as u16;
+                let skip_blocks = last_skip.is_some_and(|c| c >= shift_col);
+                if skip_blocks
+                    || (self.opts.contains(Optimizations::ICH)
+                        && ((n_lc as usize) < n_last_nonblank || ich_cost > span))
                 {
                     self.put_range(out, new_buf, cur_slice, new_line, y, (n + 1) as usize, m)?;
                 } else {
@@ -360,7 +383,12 @@ impl Renderer {
                 let dch_cost = ansi::cost::dch_cost(dch_count as u16) as isize;
                 let el_cost = ansi::cost::el_cost(0) as isize;
                 let tail = n_last_nonblank as isize - (n + 1);
-                if !self.opts.contains(Optimizations::DCH) || dch_cost > el_cost + tail {
+                let shift_col = (n + 1) as u16;
+                let skip_blocks = last_skip.is_some_and(|c| c >= shift_col);
+                if !self.opts.contains(Optimizations::DCH)
+                    || dch_cost > el_cost + tail
+                    || skip_blocks
+                {
                     // (n+1) may exceed n_last_nonblank when the
                     // walk-back left n_lc at n_last_nonblank; the
                     // reference relies on Go's signed arithmetic so
