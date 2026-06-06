@@ -261,6 +261,11 @@ pub fn overwrite_cost(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
+            // A cell with no glyph bytes can't advance the terminal
+            // cursor — refuse the candidate so the emit pass agrees.
+            if cell.is_skip() {
+                return None;
+            }
             if cell.style() != style {
                 return None;
             }
