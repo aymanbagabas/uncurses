@@ -80,7 +80,7 @@ mod tests {
     use crate::renderer::buffer::RenderBuffer;
 
     fn cell(c: &str) -> Cell {
-        Cell::new(c, 1)
+        Cell::narrow(c)
     }
 
     fn fill_row(buf: &mut RenderBuffer, y: u16, content: &str) {
@@ -202,7 +202,7 @@ mod tests {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 1);
         // Wide CJK cell at col 0; col 1 is its continuation.
-        let wide = Cell::new("漢", 2);
+        let wide = Cell::wide("漢");
         front.set_cell((0, 0), &wide);
         front.set_cell((3, 0), &cell("a"));
         r.sync_front(&mut front);

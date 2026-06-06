@@ -329,7 +329,7 @@ impl Renderer {
                         }
                     }
                 } else if n >= first_cell as isize
-                    && cell_at_isize(new_line, n).is_some_and(|c| c.width() > 1)
+                    && cell_at_isize(new_line, n).is_some_and(|c| c.is_wide())
                 {
                     while cell_at_isize(new_line, n + 1).is_some_and(|c| c.is_continuation()) {
                         n += 1;

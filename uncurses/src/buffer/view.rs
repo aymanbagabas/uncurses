@@ -79,9 +79,9 @@ mod tests {
         let mut buf = Buffer::new(10, 5);
         {
             let mut v = View::new(&mut buf, Rect::new(2, 1, 3, 2));
-            v.set_cell(Position::new(2, 1), &Cell::new("A", 1)); // inside
-            v.set_cell(Position::new(0, 0), &Cell::new("B", 1)); // outside view
-            v.set_cell(Position::new(5, 1), &Cell::new("C", 1)); // right of view
+            v.set_cell(Position::new(2, 1), &Cell::narrow("A")); // inside
+            v.set_cell(Position::new(0, 0), &Cell::narrow("B")); // outside view
+            v.set_cell(Position::new(5, 1), &Cell::narrow("C")); // right of view
         }
         assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "A");
         assert!(buf.cell(Position::new(0, 0)).unwrap().is_blank());
@@ -91,8 +91,8 @@ mod tests {
     #[test]
     fn view_clips_reads_outside_bounds() {
         let mut buf = Buffer::new(10, 5);
-        buf.set_cell(Position::new(2, 1), &Cell::new("A", 1));
-        buf.set_cell(Position::new(0, 0), &Cell::new("B", 1));
+        buf.set_cell(Position::new(2, 1), &Cell::narrow("A"));
+        buf.set_cell(Position::new(0, 0), &Cell::narrow("B"));
         let mut buf2 = buf.clone();
         let v = View::new(&mut buf2, Rect::new(2, 1, 3, 2));
         assert_eq!(v.cell(Position::new(2, 1)).unwrap().content(), "A");

@@ -479,7 +479,7 @@ mod tests {
         for y in 0..height {
             for x in 0..width {
                 let ch = char::from_u32('a' as u32 + y as u32).unwrap();
-                old_buf.set_cell((x, y), &Cell::new(ch.to_string(), 1));
+                old_buf.set_cell((x, y), &Cell::narrow(ch.to_string()));
             }
         }
         for y in 0..height {
@@ -491,10 +491,10 @@ mod tests {
                 } else {
                     char::from_u32('a' as u32 + (y as u32 + 1)).unwrap()
                 };
-                new_buf.set_cell((x, y), &Cell::new(src.to_string(), 1));
+                new_buf.set_cell((x, y), &Cell::narrow(src.to_string()));
             }
         }
-        new_buf.set_cell((0, 0), &Cell::new("Z", 1));
+        new_buf.set_cell((0, 0), &Cell::narrow("Z"));
 
         let mut old_hashes = vec![0u64; height as usize];
         let mut new_hashes = vec![0u64; height as usize];

@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn test_set_cell_touches() {
         let mut rb = RenderBuffer::new(10, 5);
-        rb.set_cell((3, 2), &Cell::new("X", 1));
+        rb.set_cell((3, 2), &Cell::narrow("X"));
         assert!(rb.has_changes());
         assert!(rb.touched(2).is_some());
         assert!(rb.touched(0).is_none());
@@ -354,8 +354,8 @@ mod tests {
     #[test]
     fn test_touched_span_expansion() {
         let mut rb = RenderBuffer::new(10, 5);
-        rb.set_cell((2, 0), &Cell::new("A", 1));
-        rb.set_cell((7, 0), &Cell::new("B", 1));
+        rb.set_cell((2, 0), &Cell::narrow("A"));
+        rb.set_cell((7, 0), &Cell::narrow("B"));
         let span = rb.touched(0).unwrap();
         assert_eq!(span.first, 2);
         assert_eq!(span.last, 7);
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn test_clear_touched() {
         let mut rb = RenderBuffer::new(10, 5);
-        rb.set_cell((0, 0), &Cell::new("X", 1));
+        rb.set_cell((0, 0), &Cell::narrow("X"));
         assert!(rb.has_changes());
         rb.clear_touched();
         assert!(!rb.has_changes());
@@ -401,7 +401,7 @@ mod tests {
         // route every write through `set_cell` so dirty tracking sees
         // the change.
         let mut rb = RenderBuffer::new(10, 5);
-        rb.fill_rect(Rect::new(2, 1, 3, 2), &Cell::new("X", 1));
+        rb.fill_rect(Rect::new(2, 1, 3, 2), &Cell::narrow("X"));
         assert!(rb.touched(0).is_none());
         let r1 = rb.touched(1).expect("row 1 should be dirty");
         assert_eq!((r1.first, r1.last), (2, 4));
@@ -417,7 +417,7 @@ mod tests {
         // continuation marker, walks back, blanks the just-written
         // primary, then writes its own primary.
         let mut rb = RenderBuffer::new(8, 1);
-        let wide = Cell::new("漢", 2);
+        let wide = Cell::wide("漢");
         rb.fill_rect(Rect::new(0, 0, 6, 1), &wide);
         for x in (0..6).step_by(2) {
             let p = rb.buffer.cell(Position::new(x, 0)).unwrap();
@@ -433,7 +433,7 @@ mod tests {
         // Odd width with a 2-wide fill leaves one trailing slot that
         // can't hold a primary; it must become a blank, not garbage.
         let mut rb = RenderBuffer::new(8, 1);
-        let wide = Cell::new("漢", 2);
+        let wide = Cell::wide("漢");
         rb.fill_rect(Rect::new(0, 0, 5, 1), &wide);
         assert_eq!(rb.buffer.cell(Position::new(0, 0)).unwrap().width(), 2);
         assert_eq!(rb.buffer.cell(Position::new(2, 0)).unwrap().width(), 2);
@@ -446,7 +446,7 @@ mod tests {
     fn clear_via_trait_default_marks_every_row() {
         let mut rb = RenderBuffer::new(4, 3);
         // Stage a non-blank background so clear() has real work to do.
-        rb.fill_rect(Rect::new(0, 0, 4, 3), &Cell::new("X", 1));
+        rb.fill_rect(Rect::new(0, 0, 4, 3), &Cell::narrow("X"));
         rb.clear_touched();
         rb.clear();
         for y in 0..3 {
@@ -462,7 +462,7 @@ mod tests {
         // continuation but the bulk-fill path must also blank the
         // primary at col 2 so no half-wide cell is left behind.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((2, 0), &Cell::new("漢", 2));
+        rb.set_cell((2, 0), &Cell::wide("漢"));
         assert!(
             rb.buffer
                 .cell(Position::new(3, 0))
@@ -486,7 +486,7 @@ mod tests {
         // the primary but the bulk-fill path must also blank the
         // continuation at col 6 sitting just past `hi`.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((5, 0), &Cell::new("漢", 2));
+        rb.set_cell((5, 0), &Cell::wide("漢"));
         assert!(
             rb.buffer
                 .cell(Position::new(6, 0))

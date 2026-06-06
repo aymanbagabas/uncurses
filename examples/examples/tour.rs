@@ -93,7 +93,7 @@ fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
 }
 
 fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
-    let cell = Cell::new(" ", 1).with_style(style.clone());
+    let cell = Cell::narrow(" ").with_style(style.clone());
     for y in a.y + 1..a.y + BOX_H - 1 {
         for x in a.x + 1..a.x + BOX_W - 1 {
             screen.set_cell(Position::new(x, y), &cell);
@@ -217,7 +217,7 @@ fn scene_sprinkles<W: Write>(
                 Color::Basic(BasicColor::BrightYellow)
             };
             let style = Style::EMPTY.with_fg(fg);
-            let cell = Cell::new(glyph, 1).with_style(style);
+            let cell = Cell::narrow(glyph).with_style(style);
             for _ in 0..40 {
                 let dx = rng.range(inner_w) as u16;
                 let dy = rng.range(inner_h) as u16;
@@ -316,7 +316,7 @@ fn scene_panels<W: Write>(
                 let x = a.x + dx;
                 let y = a.y + dy;
                 let style = Style::EMPTY.with_bg(bg.into()).with_fg(fg.into());
-                let cell = Cell::new(" ", 1).with_style(style.clone());
+                let cell = Cell::narrow(" ").with_style(style.clone());
                 for yy in y..y + h {
                     for xx in x..x + w {
                         screen.set_cell(Position::new(xx, yy), &cell);
@@ -698,7 +698,7 @@ fn scene_balls<W: Write>(
                 "scene 6 / 6 — bouncing balls — any key to continue, Q to quit",
             );
         }
-        let blank = Cell::new(" ", 1).with_style(Style::EMPTY);
+        let blank = Cell::narrow(" ").with_style(Style::EMPTY);
         for y in a.y + 1..a.y + BOX_H - 1 {
             for x in a.x + 1..a.x + BOX_W - 1 {
                 screen.set_cell(Position::new(x, y), &blank);
@@ -728,7 +728,7 @@ fn scene_balls<W: Write>(
             let cx = a.x + 1 + ball.x as u16;
             let cy = a.y + 1 + ball.y as u16;
             let style = Style::EMPTY.with_fg(ball.color.into()).with_bold();
-            let cell = Cell::new(ball.glyph, 1).with_style(style);
+            let cell = Cell::narrow(ball.glyph).with_style(style);
             screen.set_cell(Position::new(cx, cy), &cell);
         }
         Ok(())
