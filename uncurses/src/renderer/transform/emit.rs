@@ -2,13 +2,42 @@
 //! plain/ECH/REP), `emit_cell` (single grapheme), `put_range`
 //! (consecutive run), and `insert_cells_op` (ICH).
 
-use std::io::{self, Write};
+use std::io;
 
 use super::predicates::{can_clear_with, is_rep_ascii};
 use crate::ansi;
-use crate::cell::Cell;
+use crate::buffer::surface::Surface;
+use crate::cell::{Cell, CellKind};
+use crate::layout::Position;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
+
+/// Resolve a rect body cell at emit time.
+///
+/// A body cell is "live" when its anchor (the rect cell at
+/// `(area.x, area.y)`) still carries the same area and a non-empty
+/// payload. Live bodies are skipped — the anchor's payload covers
+/// their footprint. Orphan bodies (anchor overwritten or replaced)
+/// render as a single space with the body's style preserved so the
+/// stale rect footprint is wiped from the screen.
+///
+/// Returns the cell to emit, or `None` to skip.
+fn resolve_rect_body(buf: &RenderBuffer, body: &Cell) -> Option<Cell> {
+    let CellKind::Rect(area) = body.kind() else {
+        return None;
+    };
+    debug_assert!(body.content().is_empty());
+    let live = buf
+        .cell(Position::new(area.x, area.y))
+        .is_some_and(|anchor| {
+            matches!(anchor.kind(), CellKind::Rect(a) if a == area) && !anchor.content().is_empty()
+        });
+    if live {
+        None
+    } else {
+        Some(Cell::narrow(" ").with_style(body.style().clone()))
+    }
+}
 
 impl Renderer {
     /// Emit a range of cells from a line, handling style transitions.
@@ -45,12 +74,19 @@ impl Renderer {
             let mut x = first;
             while x <= last {
                 let cell = &line[x];
-                if cell.is_continuation() || cell.is_rect_body_at(x as u16, self.cur.pos.y) {
+                if cell.is_continuation() {
                     x += 1;
                     continue;
                 }
-                if cell.is_rect_anchor_at(x as u16, self.cur.pos.y) {
-                    self.emit_rect_anchor(out, cell)?;
+                // Rect body placeholders: when the anchor is alive,
+                // its payload covers this column — skip. When the
+                // anchor has been overwritten or replaced, the body
+                // is orphaned; emit a space carrying the body's
+                // style so the stale rect footprint is wiped.
+                if cell.is_rect() && cell.content().is_empty() {
+                    if let Some(filler) = resolve_rect_body(new_buf, cell) {
+                        self.emit_cell(out, &filler, surface_width, surface_height)?;
+                    }
                     x += 1;
                     continue;
                 }
@@ -69,17 +105,15 @@ impl Renderer {
                 x += 1;
                 continue;
             }
-            // Rect body cells are opaque to the differ — they exist
-            // only to mark the area as owned by an anchor's payload.
-            // Skip them without emitting anything.
-            if line[x].is_rect_body_at(x as u16, self.cur.pos.y) {
-                x += 1;
-                continue;
-            }
-            // Rect anchor cells emit their payload bytes verbatim and
-            // do not participate in equal-run / ECH / REP grouping.
-            if line[x].is_rect_anchor_at(x as u16, self.cur.pos.y) {
-                self.emit_rect_anchor(out, &line[x])?;
+            // Rect body placeholders are resolved against their
+            // anchor (see the no-optimization branch above for the
+            // rationale). Anchors with non-empty content fall
+            // through to the emit path below; the equal-run guard
+            // at `cell0.is_rect()` keeps them out of ECH/REP.
+            if line[x].is_rect() && line[x].content().is_empty() {
+                if let Some(filler) = resolve_rect_body(new_buf, &line[x]) {
+                    self.emit_cell(out, &filler, surface_width, surface_height)?;
+                }
                 x += 1;
                 continue;
             }
@@ -102,6 +136,14 @@ impl Renderer {
 
             // Equal-run starting at x.
             let cell0 = &line[x];
+            if cell0.is_rect() {
+                // Rect anchor payload bytes are positional and must
+                // never be replayed via ECH/REP equal-run. Per-cell
+                // emit handles the single anchor.
+                self.emit_cell(out, cell0, surface_width, surface_height)?;
+                x = next_idx;
+                continue;
+            }
             let mut count = 2u16;
             let mut j = next_idx + stride;
             while j <= last && line[j] == *cell0 {
@@ -181,7 +223,7 @@ impl Renderer {
                 let (bytes, glyph_width) = if cell0.content().is_empty() {
                     (b" ".as_slice(), 1u16)
                 } else {
-                    (cell0.content().as_bytes(), cell0.width() as u16)
+                    (cell0.content().as_bytes(), cell0.width())
                 };
                 for _ in 0..count {
                     self.put_glyph_bytes(out, bytes, glyph_width, surface_width, surface_height)?;
@@ -204,15 +246,33 @@ impl Renderer {
         if cell.is_continuation() {
             return Ok(());
         }
-        // Rect body cells own no glyph; their existence is a marker
-        // for the differ. Anchors carry payload bytes that do not go
-        // through put_glyph_bytes — emit_range handles them via
-        // emit_rect_anchor before they reach this path.
         if cell.is_rect() {
-            if cell.is_rect_anchor_at(self.cur.pos.x, self.cur.pos.y) {
-                return self.emit_rect_anchor(out, cell);
+            // Rect cells carry an addon-managed payload (e.g. a
+            // sixel DCS sequence) at the anchor position; the rest
+            // of the rect's footprint is filled with body
+            // placeholders that have empty content.
+            //
+            // The anchor's payload is emitted verbatim, advancing
+            // the tracked cursor by the rect's column width. The
+            // payload itself is responsible for any cursor-management
+            // bracketing (DECSC / DECRC / CUF) so the physical
+            // cursor lines up with the tracked cursor at
+            // `(area.x + area.width, area.y)` after emission.
+            //
+            // Body cells produce no output and don't advance the
+            // cursor — the per-row loop reaches them only on rows
+            // below the anchor; cursor positioning to subsequent
+            // dirty cells is handled by the move planner.
+            if cell.content().is_empty() {
+                return Ok(());
             }
-            return Ok(());
+            return self.put_glyph_bytes(
+                out,
+                cell.content().as_bytes(),
+                cell.width(),
+                surface_width,
+                surface_height,
+            );
         }
         self.update_pen(out, Some(cell))?;
         if cell.content().is_empty() {
@@ -221,25 +281,13 @@ impl Renderer {
             self.put_glyph_bytes(
                 out,
                 cell.content().as_bytes(),
-                cell.width() as u16,
+                cell.width(),
                 surface_width,
                 surface_height,
             )
         }
     }
 
-    /// Emit a rect anchor's payload verbatim to the wire.
-    ///
-    /// The payload is an opaque escape sequence (e.g. a sixel DCS
-    /// or an iTerm2 OSC 1337) whose effect on the terminal cursor
-    /// is undefined across implementations. We therefore invalidate
-    /// the tracked cursor position; the next emission must reassert
-    /// position via [`Renderer::move_to`].
-    pub(super) fn emit_rect_anchor(&mut self, out: &mut Vec<u8>, cell: &Cell) -> io::Result<()> {
-        out.write_all(cell.content().as_bytes())?;
-        self.invalidate_cursor();
-        Ok(())
-    }
     /// Emit cells in `new_line[start..=end]`, looking for runs of cells
     /// that already match the old line and skipping over them with a
     /// cursor move when the saved bytes outweigh the cost of the move.
@@ -366,19 +414,21 @@ impl Renderer {
         for i in 0..count {
             match line.get(i) {
                 Some(cell) if cell.is_continuation() => continue,
-                // Rect cells must never be inserted via ICH — that
-                // would shift the addon-managed payload's column
-                // positioning. Higher-level gating (transform/line)
-                // prevents this op from being chosen on rows
-                // containing rects, but defensively no-op here in
-                // case the gate is ever weakened.
-                Some(cell) if cell.is_rect() => continue,
+                Some(cell) if cell.is_rect() => {
+                    // Defensive: rect cells should be excluded by the
+                    // caller-side rect-aware ICH guard. If one slipped
+                    // through, emit a space rather than the opaque
+                    // payload bytes so we don't replay e.g. a DCS
+                    // sequence at the wrong cursor position.
+                    self.reset_pen(out)?;
+                    self.put_glyph_bytes(out, b" ", 1, surface_width, surface_height)?;
+                }
                 Some(cell) => {
                     self.update_pen(out, Some(cell))?;
                     self.put_glyph_bytes(
                         out,
                         cell.content().as_bytes(),
-                        cell.width() as u16,
+                        cell.width(),
                         surface_width,
                         surface_height,
                     )?;

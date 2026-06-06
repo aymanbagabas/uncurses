@@ -23,22 +23,19 @@ use crate::renderer::scroll;
 /// unlucky collision is a missed scroll opportunity — the affected
 /// rows fall through to direct redraw, never visual corruption.
 ///
-/// Rect cells additionally hash their owning rectangle's coordinates
-/// so a row of opaque rect bodies never collides with a blank row or
-/// with the body of a different rect at the same position.
+/// Returns the sentinel hash `0` for any row containing a rect cell:
+/// scrolling a row carrying an opaque payload would move the row's
+/// recorded position in `cur_buf` while the underlying terminal image
+/// stays planted at its original screen coordinates. Sentinel-zero
+/// rows are skipped by scroll detection, so the renderer falls back
+/// to direct repaints around the rect.
 pub(crate) fn hash_line(line: &[Cell]) -> u64 {
+    if line.iter().any(Cell::is_rect) {
+        return 0;
+    }
     let mut hasher = FxHasher::default();
     for cell in line {
         cell.content().hash(&mut hasher);
-        if let Some(rect) = cell.rect() {
-            // Tag with a sentinel to avoid colliding with content
-            // that happens to hash like a rect's tuple.
-            "rect".hash(&mut hasher);
-            rect.x.hash(&mut hasher);
-            rect.y.hash(&mut hasher);
-            rect.width.hash(&mut hasher);
-            rect.height.hash(&mut hasher);
-        }
     }
     hasher.finish()
 }
@@ -206,5 +203,25 @@ impl Renderer {
         }
 
         scroll::apply::apply_scrolls(out, self, new_buf)
+    }
+}
+
+#[cfg(test)]
+mod rect_tests {
+    use super::*;
+    use crate::cell::Cell;
+    use crate::layout::Rect;
+    use crate::style::Style;
+
+    #[test]
+    fn rect_row_hashes_to_zero_to_skip_scroll_detection() {
+        let row = vec![Cell::narrow("x"); 6];
+        let h_text = hash_line(&row);
+        assert_ne!(h_text, 0);
+
+        let area = Rect::new(0, 0, 6, 2);
+        let mut row_with_rect = row.clone();
+        row_with_rect[3] = Cell::rect(area, "P", Style::EMPTY);
+        assert_eq!(hash_line(&row_with_rect), 0);
     }
 }

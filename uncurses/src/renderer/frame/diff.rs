@@ -34,7 +34,12 @@ impl Renderer {
         // pick up those differences too.
         //
         // transform_line itself keeps cur_buf in sync for the row
-        // incrementally, so no post-pass clone is needed here.
+        // incrementally, so no post-pass clone is needed here. Rect
+        // anchors flow through the per-row diff like any other
+        // cell: their payload bytes (which include the cursor-
+        // management bracketing the painter built into the
+        // sequence) are emitted verbatim by `emit_cell`, and body
+        // cells are skipped because they carry empty content.
         let last = width.saturating_sub(1);
         for y in 0..(non_empty as u16).min(height) {
             if new_buf.touched(y).is_some() {

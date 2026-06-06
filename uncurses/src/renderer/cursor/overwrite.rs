@@ -35,6 +35,12 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     let mut i = from;
     while i < to {
         let cell = &line[i];
+        if cell.is_rect() {
+            // Rect cells carry an opaque payload bound to the
+            // anchor position; refuse the overwrite candidate so
+            // the planner picks a real positional move.
+            return false;
+        }
         if cell.width() > 0 {
             if cell.style() != style {
                 return false;
@@ -84,5 +90,18 @@ mod tests {
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(&mut out, &line, &style, 0, 3));
         assert_eq!(out, b"xxx");
+    }
+
+    #[test]
+    fn overwrite_refuses_when_rect_in_range() {
+        use crate::layout::Rect;
+        let mut line: Vec<Cell> = (0..4).map(|_| Cell::narrow("a")).collect();
+        let area = Rect::new(0, 0, 2, 1);
+        line[2] = Cell::rect(area, "DCS", Style::default());
+        let style = Style::default();
+        let mut out = Vec::new();
+        let accepted = collect_overwrite_bytes(&mut out, &line, &style, 0, 4);
+        assert!(!accepted);
+        assert!(out.is_empty());
     }
 }

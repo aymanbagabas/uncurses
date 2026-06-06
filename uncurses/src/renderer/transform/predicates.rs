@@ -19,9 +19,6 @@ use crate::style::{AttrFlags, UnderlineStyle};
 /// and only "invisible-on-blank" attributes (bold/faint/italic/blink).
 pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
     if cell.is_rect() {
-        // Rect cells are opaque to the differ; never replace them
-        // with a generic erase, even if the cell's style happens
-        // to look blank.
         return false;
     }
     if cell.width() != 1 || cell.content() != " " || !cell.style().is_link_empty() {
@@ -48,13 +45,11 @@ pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
 /// cells (the second half of a wide grapheme) are not blank — a wide
 /// cell straddling into the row means the row is non-blank.
 pub(super) fn cells_equal_blank(cell: &Cell, blank: &Cell) -> bool {
-    if cell.is_continuation() {
-        return false;
-    }
-    if cell.is_rect() {
-        // A rect cell is opaque content the addon is responsible
-        // for clearing; it must never compare equal to a generic
-        // blank for the purpose of EL/ED reuse.
+    if cell.is_continuation() || cell.is_rect() {
+        // Continuation and rect cells are never blank under the
+        // ED/EL erase pen — a wide cell straddling the row keeps
+        // it non-blank, and rect cells are opaque payload the
+        // erase can't reproduce.
         return false;
     }
     cell.width() == blank.width()

@@ -12,8 +12,9 @@ pub use surface::{Bounded, Surface, SurfaceMut};
 pub use view::View;
 pub use window::Window;
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellKind};
 use crate::layout::{Position, Rect};
+use crate::style::Style;
 
 /// A 2D grid of terminal cells stored in row-major order with a fixed
 /// stride of `width`. Row `y` lives at `cells[y * width..(y + 1) * width]`.
@@ -94,7 +95,19 @@ impl Buffer {
         Some(&mut self.cells[(pos.y as usize) * w + (pos.x as usize)])
     }
 
-    /// Set a cell at the given position, handling wide-character placeholders.
+    /// Set a cell at the given position, handling wide-character
+    /// placeholders and rect-anchor body propagation.
+    ///
+    /// - Writing a wide primary stamps the right-half
+    ///   [`CellKind::Continuation`] placeholder automatically.
+    /// - Writing a rect anchor (a `Rect`-kind cell at the rect's
+    ///   top-left) stamps body placeholders across the rect's bounds.
+    /// - Overwriting a rect cell with a rect of a *different* identity
+    ///   blanks the old rect first so its body cells don't outlive
+    ///   their anchor. Overwriting a rect cell with a non-rect cell
+    ///   leaves the rest of the rect alone — callers may punch a
+    ///   character through one cell of an image without destroying
+    ///   the rest of it.
     pub fn set(&mut self, pos: impl Into<Position>, cell: &Cell) {
         let pos = pos.into();
         let y = pos.y as usize;
@@ -105,22 +118,37 @@ impl Buffer {
             return;
         }
 
-        // If we're overwriting a rect-typed cell with a cell that
-        // does *not* belong to the same rect, blank every cell of
-        // the existing rect first. This prevents body cells of the
-        // old rect from outliving the anchor and turning into stale
-        // payload references for the differ.
-        let existing_rect = self.cells[y * width + x].rect();
-        if let Some(old) = existing_rect
-            && cell.rect() != Some(old)
+        // Rect anchor write: stamping a rect at its top-left first
+        // blanks every cell of the area with a space carrying the
+        // anchor's style (so any overlapping older rect is cleared,
+        // any wide-cell pair straddling the edges is broken, and the
+        // surrounding background colour matches the anchor's). Then
+        // write the anchor and propagate body placeholders.
+        if let CellKind::Rect(area) = cell.kind()
+            && pos.x == area.x
+            && pos.y == area.y
         {
-            let bounds = Rect::new(0, 0, self.width, self.height);
-            let clipped = bounds.intersection(old);
-            for ry in clipped.top()..clipped.bottom() {
-                let row_start = (ry as usize) * width;
-                for rx in clipped.left()..clipped.right() {
-                    self.cells[row_start + rx as usize] = Cell::BLANK;
-                }
+            let styled_blank = Cell::narrow(" ").with_style(cell.style().clone());
+            <Self as crate::buffer::surface::SurfaceMut>::fill_rect(self, area, &styled_blank);
+            let line_start = (pos.y as usize) * width;
+            self.cells[line_start + pos.x as usize] = cell.clone();
+            self.stamp_rect_body(area);
+            return;
+        }
+
+        // Rect cleanup: a rect of a different identity moving into a
+        // cell currently occupied by a rect blanks the old rect first.
+        // Non-rect overwrites leave the rest of the old rect alone
+        // (orphan body cells — renderer treats them as opaque
+        // occupied cells until something fully clears them).
+        let existing_kind = self.cells[y * width + x].kind();
+        if let CellKind::Rect(old_area) = existing_kind {
+            let new_rect_area = match cell.kind() {
+                CellKind::Rect(area) => Some(area),
+                _ => None,
+            };
+            if matches!(new_rect_area, Some(area) if area != old_area) {
+                self.blank_rect_raw(old_area);
             }
         }
 
@@ -139,22 +167,37 @@ impl Buffer {
             while pc > 0 && line[pc].is_continuation() {
                 pc -= 1;
             }
-            // Verify we found a primary cell (not a continuation at position 0)
-            if !line[pc].is_continuation() {
+            // Verify we found a wide primary (only Wide cells own the
+            // continuations to their right).
+            if line[pc].is_wide() {
                 let pw = line[pc].width() as usize;
                 let end = (pc + pw).min(width);
                 line[pc..end].fill(Cell::BLANK);
-            } else {
+            } else if !line[pc].is_continuation() {
                 // Buffer is corrupted — just blank the single cell
                 line[x] = Cell::BLANK;
             }
         }
 
-        // If we're overwriting the primary cell of a wide char, blank continuations
-        if line[x].width() > 1 {
+        // If we're overwriting the primary cell of a wide char, blank its
+        // continuations. Rect cells own their body slots structurally
+        // (via `stamp_rect_body`); leave those intact here.
+        if line[x].is_wide() {
             let w = line[x].width() as usize;
             let end = (x + w).min(width);
             line[x + 1..end].fill(Cell::BLANK);
+        }
+
+        // Rect anchors don't share the wide-cell continuation discipline:
+        // the body cells are stamped via `stamp_rect_body`, not as
+        // `CellKind::Continuation` placeholders. Place the anchor and
+        // return.
+        if let CellKind::Rect(area) = cell.kind() {
+            line[x] = cell.clone();
+            if pos.x == area.x && pos.y == area.y {
+                self.stamp_rect_body(area);
+            }
+            return;
         }
 
         let cell_width = cell.width() as usize;
@@ -164,7 +207,7 @@ impl Buffer {
             for i in x + 1..x + cell_width {
                 if i < width {
                     // If we'd overwrite a wide cell's primary, blank its continuations
-                    if line[i].width() > 1 {
+                    if line[i].is_wide() {
                         let w = line[i].width() as usize;
                         let end = (i + w).min(width);
                         line[i + 1..end].fill(Cell::BLANK);
@@ -181,6 +224,72 @@ impl Buffer {
         }
 
         line[x] = cell.clone();
+    }
+
+    /// Blank every cell of `area` via raw slice access. Used during
+    /// rect cleanup to clear a departed rect's footprint without
+    /// triggering recursive cleanup paths.
+    fn blank_rect_raw(&mut self, area: Rect) {
+        let width = self.width as usize;
+        let buf_bounds = Rect::new(0, 0, self.width, self.height);
+        let clipped = buf_bounds.intersection(area);
+        for ry in clipped.top()..clipped.bottom() {
+            let row_start = (ry as usize) * width;
+            for rx in clipped.left()..clipped.right() {
+                self.cells[row_start + rx as usize] = Cell::BLANK;
+            }
+        }
+    }
+
+    /// Stamp rect-body placeholders for every cell in `area` other
+    /// Stamp rect-body placeholders across every cell of `area` other
+    /// than the anchor at `(area.x, area.y)`. Body cells carry the
+    /// anchor's style so the addon-owned region presents a consistent
+    /// background under the renderer's ECH wipe. Cells underneath the
+    /// new body (wide-cell halves, foreign rect cells, etc.) are
+    /// blanked via raw slice access to avoid recursive set() calls.
+    fn stamp_rect_body(&mut self, area: Rect) {
+        let width = self.width as usize;
+        let buf_bounds = Rect::new(0, 0, self.width, self.height);
+        let clipped = buf_bounds.intersection(area);
+        let anchor_style = self
+            .cell(Position::new(area.x, area.y))
+            .map(|c| c.style().clone())
+            .unwrap_or(Style::EMPTY);
+        let body = Cell::rect(area, "", anchor_style);
+        for ry in clipped.top()..clipped.bottom() {
+            let row_start = (ry as usize) * width;
+            for rx in clipped.left()..clipped.right() {
+                if rx == area.x && ry == area.y {
+                    continue;
+                }
+                self.cells[row_start + rx as usize] = body.clone();
+            }
+        }
+    }
+
+    /// Collect unique rect areas of any rect cells inside `region`.
+    /// Used by bulk fill paths to fully blank rects whose footprint
+    /// extends beyond the fill region, and by render-buffer touch
+    /// tracking to mark every row a rect spans.
+    pub fn unique_rects_in(&self, region: Rect) -> Vec<Rect> {
+        let mut areas: Vec<Rect> = Vec::new();
+        let clipped = self.bounds().intersection(region);
+        if clipped.is_empty() {
+            return areas;
+        }
+        let width = self.width as usize;
+        for ry in clipped.top()..clipped.bottom() {
+            let row_start = (ry as usize) * width;
+            for rx in clipped.left()..clipped.right() {
+                if let CellKind::Rect(area) = self.cells[row_start + rx as usize].kind()
+                    && !areas.contains(&area)
+                {
+                    areas.push(area);
+                }
+            }
+        }
+        areas
     }
 
     /// Resize the buffer, filling new cells with blanks.
@@ -242,13 +351,31 @@ impl SurfaceMut for Buffer {
     /// stay on the stepped `set_cell` path so primary/continuation
     /// pairing and the trailing-partial-slot blank are placed by the
     /// same wide-cell handling that `set` already implements.
+    ///
+    /// Any rect-anchored regions that intersect the fill are fully
+    /// blanked first (including cells outside the fill region), so a
+    /// bulk fill never leaves orphan rect bodies behind. Filling with
+    /// a `Rect`-kind cell itself is not supported — those should be
+    /// placed through `set` so anchor propagation can run.
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         if clipped.is_empty() {
             return;
         }
 
-        let step = (cell.width() as u16).max(1);
+        debug_assert!(
+            !cell.is_rect(),
+            "fill_rect with a Rect-kind cell is not supported; use set()"
+        );
+
+        // Blank any rect-anchored regions that touch the fill so we
+        // don't leave orphan body cells in rows the fill itself
+        // doesn't visit.
+        for area in self.unique_rects_in(clipped) {
+            self.blank_rect_raw(area);
+        }
+
+        let step = cell.width().max(1);
         if step > 1 {
             // Stepped wide-cell fill: identical to the trait default.
             // Inlined here so the SurfaceMut::fill_rect dispatch goes
@@ -286,7 +413,7 @@ impl SurfaceMut for Buffer {
                 while p > 0 && line[p].is_continuation() {
                     p -= 1;
                 }
-                if !line[p].is_continuation() {
+                if line[p].is_wide() {
                     let pw = line[p].width() as usize;
                     let end = (p + pw).min(lo);
                     for slot in &mut line[p..end] {
@@ -305,7 +432,7 @@ impl SurfaceMut for Buffer {
                 while p > lo && line[p].is_continuation() {
                     p -= 1;
                 }
-                if !line[p].is_continuation() && p + (line[p].width() as usize) > hi {
+                if line[p].is_wide() && p + (line[p].width() as usize) > hi {
                     let pw = line[p].width() as usize;
                     let end = (p + pw).min(row_width);
                     for slot in &mut line[hi..end] {

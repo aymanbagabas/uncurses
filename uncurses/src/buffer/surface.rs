@@ -20,8 +20,9 @@
 //! [`clear_rect`](SurfaceMut::clear_rect)). Implementations may
 //! override any default for a faster path.
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellKind};
 use crate::layout::{Position, Rect};
+use crate::style::Style;
 
 /// A type with a rectangular extent in cell-grid coordinates.
 pub trait Bounded {
@@ -95,7 +96,38 @@ pub trait Surface: Bounded {
                     continue;
                 }
 
-                let w = (cell.width() as u16).max(1);
+                // Rect cells carry a `Rect` in source coordinates that
+                // names their owning rectangle. Translate it to the
+                // destination's coordinate space before writing; drop
+                // the rect entirely if it doesn't fit in the source
+                // view or destination bounds (a sliced rect can't be
+                // safely composed).
+                if let CellKind::Rect(area) = cell.kind() {
+                    let fits_src = area.x >= b.x
+                        && area.y >= b.y
+                        && area.x.saturating_add(area.width) <= b.x.saturating_add(b.width)
+                        && area.y.saturating_add(area.height) <= b.y.saturating_add(b.height);
+                    let new_x = at.x.saturating_add(area.x.saturating_sub(b.x));
+                    let new_y = at.y.saturating_add(area.y.saturating_sub(b.y));
+                    let fits_dst = new_x.saturating_add(area.width) <= t_right
+                        && new_y.saturating_add(area.height) <= tb.y.saturating_add(tb.height);
+                    if !fits_src || !fits_dst {
+                        target.set_cell(dst, &Cell::BLANK);
+                        dx += 1;
+                        continue;
+                    }
+                    let new_area = Rect::new(new_x, new_y, area.width, area.height);
+                    let translated = if src == Position::new(area.x, area.y) {
+                        Cell::rect(new_area, cell.content(), cell.style().clone())
+                    } else {
+                        Cell::rect(new_area, "", Style::EMPTY)
+                    };
+                    target.set_cell(dst, &translated);
+                    dx += 1;
+                    continue;
+                }
+
+                let w = cell.width().max(1);
 
                 // Rect cells encode absolute screen coordinates in
                 // their kind. Copying them with a translation would
@@ -162,7 +194,7 @@ pub trait SurfaceMut: Surface {
     /// for a bulk-blit fast path.
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
-        let step = (cell.width() as u16).max(1);
+        let step = cell.width().max(1);
         for y in clipped.top()..clipped.bottom() {
             let mut x = clipped.left();
             while x + step <= clipped.right() {
@@ -272,7 +304,7 @@ pub trait SurfaceMut: Surface {
 
         for (src_x, cell) in primaries.iter().rev() {
             let dst_x = src_x.saturating_add(n);
-            let cw = (cell.width() as u16).max(1);
+            let cw = cell.width().max(1);
             if dst_x >= right || dst_x + cw > right {
                 continue;
             }
@@ -312,7 +344,7 @@ pub trait SurfaceMut: Surface {
                 continue;
             }
             let dst_x = src_x - n;
-            let cw = (cell.width() as u16).max(1);
+            let cw = cell.width().max(1);
             if dst_x + cw > right {
                 continue;
             }
@@ -335,7 +367,7 @@ fn collect_primaries<S: SurfaceMut + ?Sized>(
         if let Some(cell) = s.cell(Position::new(x, y))
             && !cell.is_continuation()
         {
-            let cw = (cell.width() as u16).max(1);
+            let cw = cell.width().max(1);
             out.push((x, cell.clone()));
             x = x.saturating_add(cw);
             continue;
@@ -355,7 +387,7 @@ fn fill_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16, f
     if left >= right {
         return;
     }
-    let fill_w = (fill.width() as u16).max(1);
+    let fill_w = fill.width().max(1);
     let mut col = left;
     while col + fill_w <= right {
         s.set_cell(Position::new(col, y), fill);
@@ -381,7 +413,7 @@ fn copy_row<S: SurfaceMut + ?Sized>(s: &mut S, src_y: u16, dst_y: u16, width: u1
             x += 1;
             continue;
         }
-        let cw = (cell.width() as u16).max(1);
+        let cw = cell.width().max(1);
         if cw > 1 && x + cw > width {
             s.set_cell(dst, &Cell::BLANK);
             x += 1;
@@ -430,27 +462,27 @@ mod tests {
     }
 
     #[test]
-    fn draw_blanks_rect_cells() {
+    fn draw_translates_rect_cells() {
         let mut src = Buffer::new(3, 2);
         let rect = Rect::new(0, 0, 3, 2);
-        src.set((0, 0), &Cell::rect_anchor(rect, "PAYLOAD"));
-        src.set((1, 0), &Cell::rect_body(rect));
-        src.set((2, 0), &Cell::rect_body(rect));
-        src.set((0, 1), &Cell::rect_body(rect));
-        src.set((1, 1), &Cell::rect_body(rect));
-        src.set((2, 1), &Cell::rect_body(rect));
+        src.set(
+            (0, 0),
+            &Cell::rect(rect, "PAYLOAD", crate::style::Style::EMPTY),
+        );
 
-        let mut dst = Buffer::new(3, 2);
-        src.draw(&mut dst, Position::new(0, 0));
+        let mut dst = Buffer::new(5, 3);
+        // Draw at offset (1, 1): the rect should be translated to
+        // start at (1, 1) in destination coordinates.
+        src.draw(&mut dst, Position::new(1, 1));
 
-        for y in 0..2 {
-            for x in 0..3 {
-                let c = dst.cell(Position::new(x, y)).unwrap();
-                assert!(
-                    c.is_blank() && c.rect().is_none(),
-                    "rect cell propagated through draw at ({x}, {y}): {c:?}"
-                );
-            }
+        let translated = Rect::new(1, 1, 3, 2);
+        let anchor = dst.cell(Position::new(1, 1)).unwrap();
+        assert!(matches!(anchor.kind(), CellKind::Rect(r) if r == translated));
+        assert_eq!(anchor.content(), "PAYLOAD");
+        for (x, y) in [(2, 1), (3, 1), (1, 2), (2, 2), (3, 2)] {
+            let c = dst.cell(Position::new(x, y)).unwrap();
+            assert!(matches!(c.kind(), CellKind::Rect(r) if r == translated));
+            assert_eq!(c.content(), "");
         }
     }
 
@@ -506,6 +538,54 @@ mod tests {
         let landed = dst.cell(Position::new(1, 0)).unwrap();
         assert_eq!(landed.content(), " ");
         assert_eq!(landed.width(), 1);
+    }
+
+    #[test]
+    fn draw_translates_rect_anchor_into_destination_coords() {
+        // Source 4×3 holds a 4×2 rect with anchor at (0,0). After
+        // drawing to (5,1) in a 10×5 destination, the rect's anchor
+        // should live at (5,1) and every cell inside the rect should
+        // carry a CellKind::Rect whose area is the translated rect.
+        let mut src = Buffer::new(4, 3);
+        let area = Rect::new(0, 0, 4, 2);
+        src.set((0, 0), &Cell::rect(area, "DCS", Style::EMPTY));
+
+        let mut dst = Buffer::new(10, 5);
+        src.draw(&mut dst, Position::new(5, 1));
+
+        let translated = Rect::new(5, 1, 4, 2);
+        let anchor = dst.cell(Position::new(5, 1)).unwrap();
+        assert_eq!(anchor.kind(), CellKind::Rect(translated));
+        assert_eq!(anchor.content(), "DCS");
+        for y in 1..3 {
+            for x in 5..9 {
+                let c = dst.cell(Position::new(x, y)).unwrap();
+                assert_eq!(c.kind(), CellKind::Rect(translated));
+            }
+        }
+        // Cells outside the rect remain blank.
+        assert!(dst.cell(Position::new(0, 0)).unwrap() == &Cell::BLANK);
+        assert!(dst.cell(Position::new(9, 4)).unwrap() == &Cell::BLANK);
+    }
+
+    #[test]
+    fn draw_blanks_rect_that_overflows_destination() {
+        // A 4×2 rect translated to (8,0) in a 10×3 destination would
+        // run past the right edge — substitute blanks rather than
+        // composing a sliced rect.
+        let mut src = Buffer::new(4, 2);
+        let area = Rect::new(0, 0, 4, 2);
+        src.set((0, 0), &Cell::rect(area, "DCS", Style::EMPTY));
+
+        let mut dst = Buffer::new(10, 3);
+        src.draw(&mut dst, Position::new(8, 0));
+
+        for y in 0..2 {
+            for x in 8..10 {
+                let c = dst.cell(Position::new(x, y)).unwrap();
+                assert!(!c.is_rect(), "({x},{y}) should not carry a rect");
+            }
+        }
     }
 
     // The remaining tests exercise the SurfaceMut default implementations

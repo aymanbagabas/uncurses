@@ -63,7 +63,7 @@ impl Renderer {
                 self.back_buf.set_cell(pos, new_cell);
                 // Step over any continuation columns owned by the cell
                 // we just wrote so we don't try to re-copy them.
-                let step = (new_cell.width() as u16).max(1);
+                let step = (new_cell.width()).max(1);
                 x = x.saturating_add(step);
             }
         }

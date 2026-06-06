@@ -1,6 +1,6 @@
 //! RenderBuffer — a Buffer with per-line dirty tracking.
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellKind};
 use crate::layout::{Position, Rect};
 
 use crate::buffer::{Bounded, Buffer, Surface, SurfaceMut};
@@ -88,15 +88,47 @@ impl RenderBuffer {
         let changed = existing.is_none_or(|e| e != cell);
 
         if changed {
-            let new_width = cell.width().max(1) as u16;
-            let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
+            let new_width = cell.width().max(1);
+            let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1);
             let width = new_width.max(prev_width);
+            // Capture rect identities the underlying `Buffer::set`
+            // is about to rewrite (the departing old rect and the
+            // incoming new rect) so every row they span is touched
+            // — body rows would otherwise stay unvisited by the
+            // per-row diff and the screen would keep stale pixels.
+            let outgoing_rect = match existing.map(Cell::kind) {
+                Some(CellKind::Rect(area)) => Some(area),
+                _ => None,
+            };
+            let incoming_rect = match cell.kind() {
+                CellKind::Rect(area) if pos.x == area.x && pos.y == area.y => Some(area),
+                _ => None,
+            };
             self.buffer.set(pos, cell);
-            // Touch the range of columns this cell occupies, extending
-            // to cover any wider cell being overwritten so the touched
-            // span includes the orphaned continuation column(s).
             let end_col = pos.x + width - 1;
             self.touch_line(pos.y, pos.x, end_col);
+
+            if let Some(old) = outgoing_rect
+                && incoming_rect.is_some_and(|new| new != old)
+            {
+                self.touch_rect_rows(old);
+            }
+            if let Some(new) = incoming_rect {
+                self.touch_rect_rows(new);
+            }
+        }
+    }
+
+    /// Touch every row that `area` covers, clipped to the buffer.
+    fn touch_rect_rows(&mut self, area: Rect) {
+        let bounds = self.buffer.bounds();
+        let clipped = bounds.intersection(area);
+        if clipped.is_empty() {
+            return;
+        }
+        let last_col = clipped.right().saturating_sub(1);
+        for y in clipped.top()..clipped.bottom() {
+            self.touch_line(y, clipped.left(), last_col);
         }
     }
 
@@ -168,11 +200,7 @@ impl RenderBuffer {
         // Inspect width before the mutable borrow so wide cells touch
         // their continuation column. Width stays stable under the
         // documented contract (no width changes via this handle).
-        let width = self
-            .buffer
-            .cell(pos)
-            .map(|c| c.width().max(1) as u16)
-            .unwrap_or(1);
+        let width = self.buffer.cell(pos).map(|c| c.width().max(1)).unwrap_or(1);
         let end_col = pos.x + width - 1;
         self.touch_line(pos.y, pos.x, end_col);
         self.buffer.cell_mut(pos)
@@ -285,15 +313,34 @@ impl SurfaceMut for RenderBuffer {
     /// trait default would perform — at the cost of marking unchanged
     /// rows touched on no-op fills, which only causes the transform
     /// pass to re-check rows that didn't change.
+    ///
+    /// Rect-anchored regions intersecting the fill are blanked by the
+    /// underlying [`Buffer::fill_rect`] across their entire footprint;
+    /// rows outside `rect` that hold blanked rect bodies are touched
+    /// here so the renderer re-syncs them.
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         if clipped.is_empty() {
             return;
         }
+        // Snapshot rects that will be blanked before they vanish, so we
+        // can mark every row they occupy as touched.
+        let extra_rects = self.buffer.unique_rects_in(clipped);
         self.buffer.fill_rect(rect, cell);
         let last_col = clipped.right().saturating_sub(1);
         for y in clipped.top()..clipped.bottom() {
             self.touch_line(y, clipped.left(), last_col);
+        }
+        let buf_bounds = self.buffer.bounds();
+        for area in extra_rects {
+            let clipped_area = buf_bounds.intersection(area);
+            if clipped_area.is_empty() {
+                continue;
+            }
+            let area_last_col = clipped_area.right().saturating_sub(1);
+            for y in clipped_area.top()..clipped_area.bottom() {
+                self.touch_line(y, clipped_area.left(), area_last_col);
+            }
         }
     }
 
@@ -438,7 +485,7 @@ mod tests {
         assert_eq!(rb.buffer.cell(Position::new(0, 0)).unwrap().width(), 2);
         assert_eq!(rb.buffer.cell(Position::new(2, 0)).unwrap().width(), 2);
         let trailing = rb.buffer.cell(Position::new(4, 0)).unwrap();
-        assert!(trailing.is_blank(), "trailing slot must be blank");
+        assert!(trailing == &Cell::BLANK, "trailing slot must be blank");
         assert_eq!(trailing.width(), 1);
     }
 
@@ -471,11 +518,11 @@ mod tests {
         );
         rb.fill_rect(Rect::new(3, 0, 3, 1), &Cell::BLANK);
         assert!(
-            rb.buffer.cell(Position::new(2, 0)).unwrap().is_blank(),
+            rb.buffer.cell(Position::new(2, 0)).unwrap() == &Cell::BLANK,
             "left-straddle primary must be blanked",
         );
         for x in 3..6 {
-            assert!(rb.buffer.cell(Position::new(x, 0)).unwrap().is_blank());
+            assert!(rb.buffer.cell(Position::new(x, 0)).unwrap() == &Cell::BLANK);
         }
     }
 
@@ -495,7 +542,7 @@ mod tests {
         );
         rb.fill_rect(Rect::new(3, 0, 3, 1), &Cell::BLANK);
         for x in 3..6 {
-            assert!(rb.buffer.cell(Position::new(x, 0)).unwrap().is_blank());
+            assert!(rb.buffer.cell(Position::new(x, 0)).unwrap() == &Cell::BLANK);
         }
         assert!(
             !rb.buffer
@@ -504,6 +551,35 @@ mod tests {
                 .is_continuation(),
             "right-straddle orphan continuation must be cleared",
         );
-        assert!(rb.buffer.cell(Position::new(6, 0)).unwrap().is_blank());
+        assert!(rb.buffer.cell(Position::new(6, 0)).unwrap() == &Cell::BLANK);
+    }
+
+    #[test]
+    fn set_cell_with_rect_anchor_touches_every_row_of_area() {
+        let mut rb = RenderBuffer::new(20, 6);
+        let area = Rect::new(4, 1, 5, 3);
+        rb.set_cell((4, 1), &Cell::rect(area, "DCS", crate::style::Style::EMPTY));
+
+        for y in 1..4 {
+            let span = rb.touched(y).expect("row {y} should be touched");
+            assert!(span.first <= 4 && span.last >= 8);
+        }
+        assert!(rb.touched(0).is_none());
+        assert!(rb.touched(4).is_none());
+    }
+
+    #[test]
+    fn set_cell_replacing_rect_with_different_rect_touches_both_footprints() {
+        let mut rb = RenderBuffer::new(20, 8);
+        let old = Rect::new(2, 1, 4, 3);
+        let new = Rect::new(2, 1, 3, 5);
+        rb.set_cell((2, 1), &Cell::rect(old, "OLD", crate::style::Style::EMPTY));
+        rb.clear_touched();
+
+        rb.set_cell((2, 1), &Cell::rect(new, "NEW", crate::style::Style::EMPTY));
+
+        for y in 1..6 {
+            assert!(rb.touched(y).is_some(), "row {y} should be touched");
+        }
     }
 }
