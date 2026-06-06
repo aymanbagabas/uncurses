@@ -114,7 +114,7 @@ impl Cell {
     /// pixel footprint staying anchored to the column it stamped.
     pub fn skip() -> Self {
         Cell {
-            content: CompactString::default(),
+            content: CompactString::const_new(" "),
             style: Style::EMPTY,
             kind: Kind::Skip,
         }
@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(c.width(), 1);
         assert!(c.is_blank());
         assert!(c.style().is_empty());
-        assert_eq!(c.content(), "");
+        assert_eq!(c.content(), " ");
     }
 
     #[test]
