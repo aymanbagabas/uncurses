@@ -36,6 +36,12 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
+            // A cell with no glyph bytes can't advance the terminal
+            // cursor — emitting nothing keeps it pinned. Refuse the
+            // candidate so the planner picks a real cursor-move op.
+            if cell.is_skip() {
+                return false;
+            }
             if cell.style() != style {
                 return false;
             }
@@ -84,5 +90,18 @@ mod tests {
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(&mut out, &line, &style, 0, 3));
         assert_eq!(out, b"xxx");
+    }
+
+    /// A cell with no glyph bytes cannot advance the terminal cursor.
+    /// If accepted as a candidate, the planner would pick a 0-byte
+    /// overwrite over a real CUF, leaving the terminal cursor pinned
+    /// while the planner believes it advanced. The next emission would
+    /// then land at the wrong column.
+    #[test]
+    fn skip_cell_in_range_refuses_candidate() {
+        let line = vec![Cell::narrow("a"), Cell::skip(), Cell::narrow("b")];
+        let style = Style::default();
+        let mut out = Vec::new();
+        assert!(!collect_overwrite_bytes(&mut out, &line, &style, 0, 3));
     }
 }
