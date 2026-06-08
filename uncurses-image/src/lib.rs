@@ -33,6 +33,7 @@
 
 #![forbid(unsafe_code)]
 
+mod halfblocks;
 mod hash;
 #[cfg(feature = "iterm2")]
 mod iterm2;
@@ -42,6 +43,7 @@ mod resize;
 #[cfg(feature = "sixel")]
 mod sixel;
 
+pub use halfblocks::HalfBlocks;
 pub use image::DynamicImage;
 pub use image::imageops::FilterType;
 #[cfg(feature = "iterm2")]
