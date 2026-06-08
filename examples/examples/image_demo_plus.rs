@@ -1,14 +1,17 @@
-//! Sixel image demo with a movable image and a typing surface.
+//! Image demo with a movable image, a typing surface, and a
+//! cyclable image backend.
 //!
 //! Loads the image at `argv[1]` and paints it scaled to fit a fixed
 //! 8×4 cell rectangle. The rectangle can be moved around the screen
 //! with the arrow keys; mouse clicks place the cursor at the
 //! clicked cell; typing writes characters at the cursor position.
-//! `Ctrl-C` exits.
+//! `Alt-1` / `Alt-2` / `Alt-3` switch between the sixel, iTerm2,
+//! and half-block backends respectively. `Ctrl-C` exits.
 //!
-//! The terminal must report a non-zero cell pixel size for sixel
-//! output to render. Most modern terminals report this via
-//! `TIOCGWINSZ` (`ws_xpixel`/`ws_ypixel`).
+//! Sixel and iTerm2 need the terminal to report a non-zero cell
+//! pixel size; most modern terminals report it via `TIOCGWINSZ`
+//! (`ws_xpixel` / `ws_ypixel`). The half-block backend always
+//! works because it renders into the cell grid directly.
 
 use std::io::Write;
 
@@ -16,16 +19,68 @@ use image::DynamicImage;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton, Source};
-use uncurses::screen::Screen;
+use uncurses::screen::{RegionId, Screen};
 use uncurses::style::Style;
 use uncurses::terminal::size::Winsize;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
-use uncurses_image::{Painter, RegionId, Resize, Sixel};
+use uncurses_image::{HalfBlocks, Iterm2, Painter, Resize, Sixel};
 
 const IMG_W: u16 = 8;
 const IMG_H: u16 = 4;
 const HEADER_ROWS: u16 = 2;
+
+/// Available image backends, cycled with `Alt-1` / `Alt-2` /
+/// `Alt-3`. The enum exists because [`Painter`] uses a generic
+/// writer parameter and so isn't object-safe — host code that
+/// wants runtime selection dispatches over a concrete enum.
+enum Backend {
+    Sixel(Sixel),
+    Iterm2(Iterm2),
+    HalfBlocks(HalfBlocks),
+}
+
+impl Backend {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Sixel(_) => "sixel",
+            Self::Iterm2(_) => "iterm2",
+            Self::HalfBlocks(_) => "halfblocks",
+        }
+    }
+
+    fn paint<W: Write>(
+        &mut self,
+        screen: &mut Screen<W>,
+        id: RegionId,
+        area: uncurses::Rect,
+        image: &DynamicImage,
+        resize: Resize,
+        cell_px: (u16, u16),
+    ) -> std::io::Result<()> {
+        match self {
+            Self::Sixel(p) => p.paint(screen, id, area, image, resize, cell_px),
+            Self::Iterm2(p) => p.paint(screen, id, area, image, resize, cell_px),
+            Self::HalfBlocks(p) => p.paint(screen, id, area, image, resize, cell_px),
+        }
+    }
+
+    fn forget<W: Write>(&mut self, screen: &mut Screen<W>, id: RegionId) -> std::io::Result<()> {
+        match self {
+            Self::Sixel(p) => p.forget(screen, id),
+            Self::Iterm2(p) => p.forget(screen, id),
+            Self::HalfBlocks(p) => p.forget(screen, id),
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            Self::Sixel(p) => p.clear(),
+            Self::Iterm2(p) => p.clear(),
+            Self::HalfBlocks(p) => p.clear(),
+        }
+    }
+}
 
 fn cell_pixel_size(ws: &Winsize) -> (u16, u16) {
     if ws.col == 0 || ws.row == 0 || ws.xpixel == 0 || ws.ypixel == 0 {
@@ -77,7 +132,7 @@ fn main() -> std::io::Result<()> {
     screen.request_text_area_size()?;
     screen.flush()?;
 
-    let mut painter = Sixel::new();
+    let mut backend = Backend::Sixel(Sixel::new());
     let mut cell_px = cell_pixel_size(&ws);
     let mut win_px: (u16, u16) = (0, 0);
     let mut win_cells: (u16, u16) = (0, 0);
@@ -91,7 +146,7 @@ fn main() -> std::io::Result<()> {
     redraw(
         &mut screen,
         &image,
-        &mut painter,
+        &mut backend,
         image_id,
         img_x,
         img_y,
@@ -111,6 +166,22 @@ fn main() -> std::io::Result<()> {
                 modifiers,
                 ..
             }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
+            Event::KeyPress(Key {
+                code: KeyCode::Char(digit @ ('1' | '2' | '3')),
+                modifiers,
+                ..
+            }) if modifiers.contains(KeyModifiers::ALT) => {
+                let next = match digit {
+                    '1' => Backend::Sixel(Sixel::new()),
+                    '2' => Backend::Iterm2(Iterm2::new()),
+                    _ => Backend::HalfBlocks(HalfBlocks::new()),
+                };
+                if next.name() != backend.name() {
+                    backend.forget(&mut screen, image_id)?;
+                    backend = next;
+                    dirty = true;
+                }
+            }
             Event::KeyPress(key) | Event::KeyRepeat(key) => match key.code {
                 KeyCode::Up => {
                     let (nx, ny) = clamp_image_position(
@@ -177,6 +248,7 @@ fn main() -> std::io::Result<()> {
                 _ => {
                     if let Some(text) = key.text.as_deref()
                         && !text.is_empty()
+                        && !key.modifiers.contains(KeyModifiers::ALT)
                     {
                         let end =
                             screen.set_str_with((cx, cy), text, WrapMode::Truncate, Style::EMPTY);
@@ -204,7 +276,7 @@ fn main() -> std::io::Result<()> {
                 let (cnx, cny) = clamp_cursor(ws.col, ws.row, cx, cy);
                 cx = cnx;
                 cy = cny;
-                painter.clear();
+                backend.clear();
                 dirty = true;
             }
             Event::CellPixelSize { width, height } if width != 0 && height != 0 => {
@@ -235,7 +307,7 @@ fn main() -> std::io::Result<()> {
             redraw(
                 &mut screen,
                 &image,
-                &mut painter,
+                &mut backend,
                 image_id,
                 img_x,
                 img_y,
@@ -249,7 +321,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    painter.forget(&mut screen, image_id)?;
+    backend.forget(&mut screen, image_id)?;
     screen.reset()?;
     screen.flush()?;
     disable_raw_mode(stdin(), stdout(), &state)?;
@@ -259,18 +331,36 @@ fn main() -> std::io::Result<()> {
 fn redraw<W: Write>(
     screen: &mut Screen<W>,
     image: &DynamicImage,
-    painter: &mut Sixel,
+    backend: &mut Backend,
     id: RegionId,
     img_x: u16,
     img_y: u16,
     cell_px: (u16, u16),
 ) -> std::io::Result<()> {
-    let header = format!(
-        "arrows: move image | click: place cursor | type to write | C-c: quit | cell_px {}x{}",
+    let header_style = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
+    let line1 = format!(
+        "arrows: move | click: cursor | type to write | C-c: quit | cell_px {}x{}",
         cell_px.0, cell_px.1
     );
-    let header_style = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
-    screen.set_str_with((0, 0), &header, WrapMode::Truncate, header_style);
+    let line2 = format!(
+        "protocol: {}  |  alt-1 sixel  alt-2 iterm2  alt-3 halfblocks",
+        backend.name()
+    );
+    let blank_line = " ".repeat(screen.width() as usize);
+    screen.set_str_with(
+        (0, 0),
+        &blank_line,
+        WrapMode::Truncate,
+        header_style.clone(),
+    );
+    screen.set_str_with(
+        (0, 1),
+        &blank_line,
+        WrapMode::Truncate,
+        header_style.clone(),
+    );
+    screen.set_str_with((0, 0), &line1, WrapMode::Truncate, header_style.clone());
+    screen.set_str_with((0, 1), &line2, WrapMode::Truncate, header_style);
 
     let area = uncurses::Rect {
         x: img_x,
@@ -278,5 +368,5 @@ fn redraw<W: Write>(
         width: IMG_W,
         height: IMG_H,
     };
-    painter.paint(screen, id, area, image, Resize::default(), cell_px)
+    backend.paint(screen, id, area, image, Resize::default(), cell_px)
 }
