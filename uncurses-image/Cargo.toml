@@ -7,18 +7,20 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["png", "jpeg", "sixel"]
+default = ["png", "jpeg", "sixel", "iterm2"]
 png = ["image/png"]
 jpeg = ["image/jpeg"]
 gif = ["image/gif"]
 webp = ["image/webp"]
 sixel = ["dep:icy_sixel"]
+iterm2 = ["dep:base64", "png"]
 
 [dependencies]
 uncurses = { path = "../uncurses" }
 image = { version = "0.25", default-features = false }
 rustc-hash = { workspace = true }
 icy_sixel = { version = "0.5", optional = true }
+base64 = { workspace = true, optional = true }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
