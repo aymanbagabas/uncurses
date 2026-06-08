@@ -490,6 +490,9 @@ impl<W: Write> Screen<W> {
     /// cursor returns to the anchor and stays in sync with the
     /// renderer's tracked cursor.
     fn write_regions(&mut self) -> io::Result<()> {
+        if !self.regions_dirty {
+            return Ok(());
+        }
         if self.regions.is_empty() {
             self.regions_dirty = false;
             return Ok(());
@@ -550,6 +553,7 @@ impl<W: Write> Screen<W> {
     /// Force a full redraw on next render.
     pub fn invalidate(&mut self) {
         self.renderer.request_clear();
+        self.regions_dirty = true;
     }
 
     /// Register or update an external paint region.
@@ -618,10 +622,10 @@ impl<W: Write> Screen<W> {
     /// Cells inside the region's stored area that are still
     /// placeholders and not covered by another region are released
     /// back to blank in the front buffer. Pixel residue from the
-    /// external paint is *not* cleared — that's protocol-specific
-    /// and is the caller's responsibility (e.g. emit a final
-    /// transparent payload, or call [`Self::invalidate`] to force a
-    /// full redraw).
+    /// external paint is *not* cleared by the screen — that's
+    /// protocol-specific and is the caller's responsibility (e.g.
+    /// emit a final transparent payload, or call
+    /// [`Self::invalidate`] to force a full redraw).
     pub fn clear_region(&mut self, id: RegionId) {
         let Some(prev) = self.regions.remove(id) else {
             return;
