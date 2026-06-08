@@ -1827,6 +1827,31 @@ mod regions_api {
             "region payload reached writer: {out:?}"
         );
     }
+
+    #[test]
+    fn cell_only_change_does_not_re_emit_region_payload() {
+        // After a region is emitted, a frame whose only change is a
+        // text cell write outside the region must NOT re-emit the
+        // payload — re-emission would paint pixels over freshly
+        // written glyphs.
+        use crate::cell::Cell;
+
+        let mut screen = Screen::new(Vec::<u8>::new()).with_size(20, 4);
+        screen.set_region(RegionId(1), Rect::new(0, 0, 4, 2), payload("PAYLOAD"));
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let pre = screen.writer.len();
+        // Write a glyph in a cell outside the region's footprint.
+        screen.set_cell((10u16, 0u16), &Cell::narrow("a"));
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        let out = String::from_utf8_lossy(&screen.writer[pre..]).into_owned();
+        assert!(out.contains('a'), "glyph reached writer: {out:?}");
+        assert!(
+            !out.contains("PAYLOAD"),
+            "payload must not re-emit on cell-only change: {out:?}"
+        );
+    }
 }
 
 mod regions_resize_and_alt {
