@@ -2194,6 +2194,7 @@ dependencies = [
 name = "uncurses-image"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "icy_sixel",
  "image",
  "rustc-hash",

@@ -34,6 +34,9 @@
 #![forbid(unsafe_code)]
 
 mod hash;
+#[cfg(feature = "iterm2")]
+mod iterm2;
+mod layout;
 mod painter;
 mod resize;
 #[cfg(feature = "sixel")]
@@ -41,6 +44,8 @@ mod sixel;
 
 pub use image::DynamicImage;
 pub use image::imageops::FilterType;
+#[cfg(feature = "iterm2")]
+pub use iterm2::Iterm2;
 pub use painter::Painter;
 pub use resize::{CropAnchor, Resize};
 #[cfg(feature = "sixel")]
