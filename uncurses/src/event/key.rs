@@ -223,7 +223,11 @@ impl Key {
 pub enum KeyCode {
     /// A printable character.
     Char(char),
-    /// Function key (F1-F24).
+    /// Function key. Valid range is `1..=35` (xterm goes to F20,
+    /// kitty extends to F35). Construct via [`KeyCode::function`] for
+    /// a checked builder; the bare variant is `pub` so decoders can
+    /// emit literals, but downstream code matching on `F(n)` should
+    /// treat values outside the valid range as bugs.
     F(u8),
     /// Legacy VT220 Find key, distinct from Home. Only emitted when the
     /// decoder is configured with [`DecoderFlags::FIND_KEY`].
@@ -318,6 +322,23 @@ pub enum KeyCode {
     IsoLevel3Shift,
     /// ISO Level 5 Shift.
     IsoLevel5Shift,
+}
+
+impl KeyCode {
+    /// Highest valid function-key index. Matches the kitty keyboard
+    /// protocol's F1..F35 range (xterm tops out at F20).
+    pub const FUNCTION_KEY_MAX: u8 = 35;
+
+    /// Construct a function-key code, validating that `n` is in
+    /// `1..=FUNCTION_KEY_MAX`. Returns `None` for `n == 0` or values
+    /// above the supported range.
+    pub fn function(n: u8) -> Option<KeyCode> {
+        if (1..=Self::FUNCTION_KEY_MAX).contains(&n) {
+            Some(KeyCode::F(n))
+        } else {
+            None
+        }
+    }
 }
 
 impl fmt::Display for Key {
@@ -506,7 +527,7 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         return Ok(KeyCode::Char(first));
     }
 
-    // Function key: f<n> where 1 <= n <= 24.
+    // Function key: f<n> where 1 <= n <= KeyCode::FUNCTION_KEY_MAX.
     let lower = token.to_ascii_lowercase();
     if let Some(rest) = lower.strip_prefix('f')
         && rest.chars().all(|c| c.is_ascii_digit())
@@ -515,10 +536,8 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         let n: u8 = rest
             .parse()
             .map_err(|_| ParseKeyError::InvalidFunctionKey(token.to_string()))?;
-        if !(1..=24).contains(&n) {
-            return Err(ParseKeyError::InvalidFunctionKey(token.to_string()));
-        }
-        return Ok(KeyCode::F(n));
+        return KeyCode::function(n)
+            .ok_or_else(|| ParseKeyError::InvalidFunctionKey(token.to_string()));
     }
 
     Ok(match lower.as_str() {
@@ -1070,6 +1089,7 @@ mod tests {
         assert_eq!(parse("f1").code, KeyCode::F(1));
         assert_eq!(parse("f12").code, KeyCode::F(12));
         assert_eq!(parse("f24").code, KeyCode::F(24));
+        assert_eq!(parse("f35").code, KeyCode::F(35));
     }
 
     #[test]
@@ -1079,9 +1099,20 @@ mod tests {
             Err(ParseKeyError::InvalidFunctionKey(_))
         ));
         assert!(matches!(
-            "f25".parse::<Key>(),
+            "f36".parse::<Key>(),
             Err(ParseKeyError::InvalidFunctionKey(_))
         ));
+    }
+
+    #[test]
+    fn keycode_function_validates_range() {
+        assert_eq!(KeyCode::function(1), Some(KeyCode::F(1)));
+        assert_eq!(
+            KeyCode::function(KeyCode::FUNCTION_KEY_MAX),
+            Some(KeyCode::F(KeyCode::FUNCTION_KEY_MAX))
+        );
+        assert_eq!(KeyCode::function(0), None);
+        assert_eq!(KeyCode::function(KeyCode::FUNCTION_KEY_MAX + 1), None);
     }
 
     #[test]
