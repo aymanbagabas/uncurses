@@ -544,6 +544,7 @@ dependencies = [
  "uncurses",
  "uncurses-image",
  "uncurses-ratatui",
+ "uncurses-textsize",
 ]
 
 [[package]]
@@ -2208,6 +2209,14 @@ dependencies = [
  "ratatui",
  "uncurses",
  "unicode-width",
+]
+
+[[package]]
+name = "uncurses-textsize"
+version = "0.1.0"
+dependencies = [
+ "compact_str 0.8.2",
+ "uncurses",
 ]
 
 [[package]]

@@ -211,9 +211,18 @@ impl Renderer {
         if !need {
             return Ok(());
         }
+        // When any cell in the trailing region was a placeholder
+        // in the previous frame, an EL-0 may not reliably erase
+        // multicell glyphs an external paint protocol rendered at
+        // the pixel layer. Force the literal-space fill: every
+        // top-row cell of any such glyph is overwritten, dropping
+        // the multicell unambiguously.
+        let prev_had_skip = old_line
+            .map(|cur| (cur_x..width).any(|j| cur.get(j).is_some_and(|c| c.is_skip())))
+            .unwrap_or(false);
         self.update_pen(out, Some(blank))?;
         let count = width.saturating_sub(cur_x);
-        if self.el0_cost() <= count {
+        if !prev_had_skip && self.el0_cost() <= count {
             ansi::write_erase_to_eol(out)?;
         } else if count > 0 {
             // Bulk-emit the ASCII space fill. Going through

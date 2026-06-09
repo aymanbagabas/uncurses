@@ -109,4 +109,18 @@ impl<W: Write> Screen<W> {
     pub fn grapheme_clusters(&self) -> bool {
         self.state.grapheme_clusters
     }
+
+    /// Display width, in cells, of one extended grapheme cluster
+    /// under this screen's [`Self::width_mode`] and
+    /// [`Self::eaw_wide`] policy.
+    pub fn grapheme_width(&self, g: &str) -> u8 {
+        self.width_mode().grapheme_width(g, self.eaw_wide)
+    }
+
+    /// Iterate `s` as `(cluster, width)` pairs under this screen's
+    /// [`Self::width_mode`] and [`Self::eaw_wide`] policy. See
+    /// [`crate::text::grapheme_cells`].
+    pub fn grapheme_cells<'a>(&self, s: &'a str) -> impl Iterator<Item = (&'a str, u8)> {
+        crate::text::grapheme_cells(s, self.width_mode(), self.eaw_wide)
+    }
 }

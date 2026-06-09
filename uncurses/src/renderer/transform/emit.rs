@@ -90,11 +90,26 @@ impl Renderer {
                 j += stride;
             }
 
+            // If any cell in the run was a placeholder in the
+            // previous frame, suppress run-based optimisations
+            // (ECH/REP). External paint protocols can render
+            // glyphs that span more than one cell at the pixel
+            // layer; per-cell literal writes guarantee each
+            // top-row cell is overwritten and the multicell is
+            // dropped, regardless of how the terminal handles
+            // erasure of intersecting multicells.
+            let prev_had_skip = self
+                .cur_buf
+                .as_ref()
+                .and_then(|cb| cb.line(self.cur.pos.y))
+                .is_some_and(|prev| prev[x..j].iter().any(|c| c.is_skip()));
+
             let ech_b = ansi::cost::ech_cost(count);
             let cup_b = ansi::cost::cup_cost(self.cur.pos.y, self.cur.pos.x.saturating_add(count));
             let rep_b = ansi::cost::rep_cost(count);
 
-            if has_ech
+            if !prev_had_skip
+                && has_ech
                 && (count as usize) > ech_b + cup_b
                 && can_clear_with(cell0, self.opts.contains(Optimizations::BCE))
             {
@@ -110,7 +125,8 @@ impl Renderer {
                     self.cur.pos.x.saturating_add(count),
                 )?;
                 x = j;
-            } else if has_rep
+            } else if !prev_had_skip
+                && has_rep
                 && (count as usize) > rep_b
                 && is_rep_ascii(cell0.content().as_bytes())
             {

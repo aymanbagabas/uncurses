@@ -158,8 +158,19 @@ impl Renderer {
                 first_cell = o_first;
                 copy_from = first_cell;
                 let leading = n_first - o_first;
+                // EL-1 may not reliably erase multicell glyphs an
+                // external paint protocol rendered at the pixel
+                // layer. When any old cell in the leading region
+                // was a placeholder, fall through to per-cell
+                // emission so each top-row cell is overwritten.
+                let prev_had_skip = cur_line
+                    .as_deref()
+                    .map(|cur| {
+                        (first_cell..n_first).any(|j| cur.get(j).is_some_and(|c| c.is_skip()))
+                    })
+                    .unwrap_or(false);
                 const EL1_COST: usize = 4; // ESC [ 1 K
-                if EL1_COST < leading {
+                if !prev_had_skip && EL1_COST < leading {
                     if n_first >= width {
                         self.move_to(out, new_buf, y, 0)?;
                         self.update_pen(out, Some(leading_blank))?;
