@@ -73,6 +73,25 @@ impl Decoder {
                 };
                 ParseResult::Event(Event::KeyPress(Key::new(code, KeyModifiers::ALT)), 2)
             }
+            // `ESC` followed by a Ctrl-letter byte: Alt+Ctrl+<letter>.
+            // Mirrors the bare-byte mapping in `mod.rs::parse_byte` so
+            // every decoder path produces the same identity for this
+            // combo.
+            b @ (0x01..=0x08 | 0x0b..=0x0c | 0x0e..=0x1a) => {
+                let c = (b - 1 + b'a') as char;
+                ParseResult::Event(
+                    Event::KeyPress(Key::new(
+                        KeyCode::Char(c),
+                        KeyModifiers::ALT | KeyModifiers::CTRL,
+                    )),
+                    2,
+                )
+            }
+            // `ESC` followed by 0x7f: Alt+Backspace.
+            0x7f => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::ALT)),
+                2,
+            ),
             _ => ParseResult::Event(
                 Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
                 1,
