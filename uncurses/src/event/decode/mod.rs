@@ -2115,11 +2115,275 @@ mod tests {
         let k = press(p.parse(b"\x1b[6;6~"));
         assert_eq!(k.code, KeyCode::PageDown);
         assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+    }
 
-        // CSI 1;6 A  =  Up, mods=Ctrl+Shift, no event-type
+    // ---------------------------------------------------------------
+    // Shifted-input coverage across decoder paths and scripts.
+    //
+    // Each block exercises one entry point with the same set of
+    // codepoints so regressions in case-folding, shifted_key
+    // synthesis, and text auto-population surface uniformly.
+    // ---------------------------------------------------------------
+
+    // --- Bare-byte path (ASCII) ------------------------------------
+
+    #[test]
+    fn bare_ascii_uppercase_letter_canonicalizes() {
         let mut p = Decoder::new();
-        let k = press(p.parse(b"\x1b[1;6A"));
-        assert_eq!(k.code, KeyCode::Up);
-        assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::SHIFT);
+        let k = press(p.parse(b"A"));
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.shifted_key, Some('A'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn bare_ascii_lowercase_letter_unshifted() {
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"a"));
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.shifted_key, None);
+        assert!(k.modifiers.is_empty());
+        assert_eq!(k.text.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn bare_ascii_digit_no_case_variant() {
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"1"));
+        assert_eq!(k.code, KeyCode::Char('1'));
+        assert_eq!(k.shifted_key, None);
+        assert_eq!(k.text.as_deref(), Some("1"));
+    }
+
+    // --- UTF-8 path ------------------------------------------------
+
+    #[test]
+    fn utf8_cyrillic_uppercase_canonicalizes() {
+        let mut p = Decoder::new();
+        // Ц = U+0426 = 0xD0 0xA6
+        let k = press(p.parse("Ц".as_bytes()));
+        assert_eq!(k.code, KeyCode::Char('ц'));
+        assert_eq!(k.shifted_key, Some('Ц'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Ц"));
+    }
+
+    #[test]
+    fn utf8_cyrillic_lowercase_unshifted() {
+        let mut p = Decoder::new();
+        let k = press(p.parse("ц".as_bytes()));
+        assert_eq!(k.code, KeyCode::Char('ц'));
+        assert_eq!(k.shifted_key, None);
+        assert!(k.modifiers.is_empty());
+        assert_eq!(k.text.as_deref(), Some("ц"));
+    }
+
+    #[test]
+    fn utf8_greek_uppercase_canonicalizes() {
+        let mut p = Decoder::new();
+        let k = press(p.parse("Α".as_bytes()));
+        assert_eq!(k.code, KeyCode::Char('α'));
+        assert_eq!(k.shifted_key, Some('Α'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Α"));
+    }
+
+    #[test]
+    fn utf8_german_eszett_no_uppercase_single_cp() {
+        let mut p = Decoder::new();
+        // 'ß' uppercases to "SS" (multi-cp) — helper leaves it alone,
+        // but text auto-populates with the original codepoint.
+        let k = press(p.parse("ß".as_bytes()));
+        assert_eq!(k.code, KeyCode::Char('ß'));
+        assert_eq!(k.shifted_key, None);
+        assert!(k.modifiers.is_empty());
+        assert_eq!(k.text.as_deref(), Some("ß"));
+    }
+
+    #[test]
+    fn utf8_turkish_i_with_dot_multi_codepoint_lower() {
+        let mut p = Decoder::new();
+        // 'İ' lowercases to "i\u{307}" (multi-cp); helper bails.
+        let k = press(p.parse("İ".as_bytes()));
+        assert_eq!(k.code, KeyCode::Char('İ'));
+        assert_eq!(k.shifted_key, None);
+        assert_eq!(k.text.as_deref(), Some("İ"));
+    }
+
+    #[test]
+    fn utf8_arabic_no_case_variant() {
+        let mut p = Decoder::new();
+        // Arabic letter alef — no case folding.
+        let k = press(p.parse("ا".as_bytes()));
+        assert_eq!(k.code, KeyCode::Char('ا'));
+        assert_eq!(k.shifted_key, None);
+        assert!(k.modifiers.is_empty());
+        assert_eq!(k.text.as_deref(), Some("ا"));
+    }
+
+    #[test]
+    fn utf8_hebrew_no_case_variant() {
+        let mut p = Decoder::new();
+        // Hebrew letter alef — no case folding.
+        let k = press(p.parse("א".as_bytes()));
+        assert_eq!(k.code, KeyCode::Char('א'));
+        assert_eq!(k.shifted_key, None);
+        assert!(k.modifiers.is_empty());
+        assert_eq!(k.text.as_deref(), Some("א"));
+    }
+
+    // --- Kitty CSI u path -----------------------------------------
+
+    #[test]
+    fn kitty_csi_u_cyrillic_uppercase() {
+        let mut p = Decoder::new();
+        // 'Ц' = 1062. Bare kitty CSI u with no shifted/base reported.
+        let k = press(p.parse(b"\x1b[1062u"));
+        assert_eq!(k.code, KeyCode::Char('ц'));
+        assert_eq!(k.shifted_key, Some('Ц'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Ц"));
+    }
+
+    #[test]
+    fn kitty_csi_u_cyrillic_lowercase_with_shift() {
+        let mut p = Decoder::new();
+        // 'ц' = 1094, modifiers=Shift (mod value 2 = 1<<0 + 1).
+        let k = press(p.parse(b"\x1b[1094;2u"));
+        assert_eq!(k.code, KeyCode::Char('ц'));
+        assert_eq!(k.shifted_key, Some('Ц'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Ц"));
+    }
+
+    #[test]
+    fn kitty_csi_u_greek_uppercase() {
+        let mut p = Decoder::new();
+        // 'Α' = 913
+        let k = press(p.parse(b"\x1b[913u"));
+        assert_eq!(k.code, KeyCode::Char('α'));
+        assert_eq!(k.shifted_key, Some('Α'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Α"));
+    }
+
+    #[test]
+    fn kitty_csi_u_turkish_multi_cp_lower_passthrough() {
+        let mut p = Decoder::new();
+        // 'İ' = 304, lowercases to "i\u{307}" — helper leaves it alone.
+        let k = press(p.parse(b"\x1b[304u"));
+        assert_eq!(k.code, KeyCode::Char('İ'));
+        assert_eq!(k.shifted_key, None);
+        assert_eq!(k.text.as_deref(), Some("İ"));
+    }
+
+    #[test]
+    fn kitty_csi_u_arabic_with_shift_no_synthesis() {
+        let mut p = Decoder::new();
+        // 'ا' = 1575, modifiers=Shift. No case variant; shifted_key
+        // stays None; text still surfaces the typed glyph.
+        let k = press(p.parse(b"\x1b[1575;2u"));
+        assert_eq!(k.code, KeyCode::Char('ا'));
+        assert_eq!(k.shifted_key, None);
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("ا"));
+    }
+
+    // --- modifyOtherKeys-2 path -----------------------------------
+
+    #[test]
+    fn mok2_cyrillic_uppercase_letter() {
+        let mut p = Decoder::new();
+        // CSI 27 ; 1 ; 1062 ~  (no modifier, codepoint 'Ц')
+        let k = press(p.parse(b"\x1b[27;1;1062~"));
+        assert_eq!(k.code, KeyCode::Char('ц'));
+        assert_eq!(k.shifted_key, Some('Ц'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Ц"));
+    }
+
+    #[test]
+    fn mok2_greek_lowercase_with_shift() {
+        let mut p = Decoder::new();
+        // CSI 27 ; 2 ; 945 ~  (Shift, codepoint 'α'); '2' encodes Shift.
+        let k = press(p.parse(b"\x1b[27;2;945~"));
+        assert_eq!(k.code, KeyCode::Char('α'));
+        assert_eq!(k.shifted_key, Some('Α'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Α"));
+    }
+
+    #[test]
+    fn mok2_ctrl_cyrillic_suppresses_text() {
+        let mut p = Decoder::new();
+        // CSI 27 ; 5 ; 1094 ~  (Ctrl, codepoint 'ц')
+        let k = press(p.parse(b"\x1b[27;5;1094~"));
+        assert_eq!(k.code, KeyCode::Char('ц'));
+        assert!(k.modifiers.contains(KeyModifiers::CTRL));
+        assert!(k.text.is_none());
+    }
+
+    // --- win32 input mode -----------------------------------------
+
+    #[test]
+    fn win32_uppercase_letter_with_shift_only() {
+        let mut p = Decoder::new();
+        // 'A' (vk=0x41=65), Shift (cks=0x10=16), key down, repeat 1.
+        let evs = p.parse(b"\x1b[65;30;65;1;16;1_");
+        let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
+            panic!()
+        };
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.shifted_key, Some('A'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn win32_uppercase_letter_via_caps_lock_no_synthetic_shift() {
+        let mut p = Decoder::new();
+        // 'A' produced by CapsLock alone (cks=0x80=128), key down.
+        let evs = p.parse(b"\x1b[65;30;65;1;128;1_");
+        let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
+            panic!()
+        };
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.shifted_key, Some('A'));
+        assert!(k.modifiers.contains(KeyModifiers::CAPS_LOCK));
+        assert!(
+            !k.modifiers.contains(KeyModifiers::SHIFT),
+            "CapsLock alone must not synthesize SHIFT"
+        );
+        assert_eq!(k.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn win32_lowercase_letter_via_shift_plus_caps_lock() {
+        let mut p = Decoder::new();
+        // 'a' produced by Shift+CapsLock (cks=0x10|0x80=144), key down.
+        let evs = p.parse(b"\x1b[65;30;97;1;144;1_");
+        let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
+            panic!()
+        };
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.shifted_key, Some('A'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert!(k.modifiers.contains(KeyModifiers::CAPS_LOCK));
+        assert_eq!(k.text.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn win32_cyrillic_uppercase_letter_with_shift() {
+        let mut p = Decoder::new();
+        // 'Ц' = U+0426 = 1062, vk arbitrary, cks Shift only.
+        let evs = p.parse(b"\x1b[65;30;1062;1;16;1_");
+        let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
+            panic!()
+        };
+        assert_eq!(k.code, KeyCode::Char('ц'));
+        assert_eq!(k.shifted_key, Some('Ц'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("Ц"));
     }
 }
