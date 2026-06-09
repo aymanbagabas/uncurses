@@ -85,7 +85,7 @@ impl Key {
 
     /// Apply the canonicalization rules described on [`Self::new`].
     /// Idempotent.
-    fn normalize(&mut self) {
+    pub(crate) fn normalize(&mut self) {
         // Case folding for printable Char codes.
         if let KeyCode::Char(c) = self.code {
             if c.is_uppercase() {
