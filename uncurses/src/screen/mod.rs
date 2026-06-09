@@ -82,6 +82,15 @@ pub struct Screen<W: Write> {
     /// changed, so newly-added or just-cleared regions reach the
     /// terminal.
     regions_dirty: bool,
+    /// Rectangles a region used to occupy but no longer does.
+    /// Drained at the top of [`Self::write_regions`] as explicit
+    /// per-row ECH sequences before any new region payload is
+    /// re-emitted: external paint protocols (e.g. OSC 66) can
+    /// stamp multi-cell glyphs that survive ordinary cell-diff
+    /// erases on some terminals; an explicit ECH at the stale
+    /// footprint forces the terminal to drop those glyphs before
+    /// the new payload lands.
+    stale_region_rects: Vec<Rect>,
 }
 
 impl<W: Write> Screen<W> {
@@ -120,6 +129,7 @@ impl<W: Write> Screen<W> {
             eaw_wide: false,
             regions: regions::Regions::default(),
             regions_dirty: false,
+            stale_region_rects: Vec::new(),
         }
     }
 
@@ -482,18 +492,39 @@ impl<W: Write> Screen<W> {
     }
 
     /// Emit each registered paint region in registration order:
-    /// queue a cursor move to the region's origin via the planner,
+    /// move the cursor to the region's origin using absolute CUP,
     /// then write the payload bytes raw.
     ///
-    /// Payloads are responsible for cursor state — the typical
-    /// pattern is to wrap with `\x1b7…\x1b8` (DECSC/DECRC) so the
-    /// cursor returns to the anchor and stays in sync with the
-    /// renderer's tracked cursor.
+    /// Region anchors are addressed with absolute CUP rather
+    /// than the planner's optimized motion: external payloads
+    /// can advance the cursor in ways the planner can't see, and
+    /// region origins are absolute screen coordinates anyway.
+    /// The renderer's tracked cursor is invalidated after the
+    /// loop so the next planner-driven move reasserts itself.
     fn write_regions(&mut self) -> io::Result<()> {
         if !self.regions_dirty {
             return Ok(());
         }
+        // Drain stale rectangles first: emit an explicit ECH at the
+        // footprint each region used to occupy. ECH is a spec-defined
+        // erase action, so terminals that handle external paint (e.g.
+        // OSC 66 multi-cell glyphs) must drop any intersecting glyph.
+        // The cell-diff already overwrites these cells with spaces,
+        // but on some terminals plain space-writes don't release a
+        // multi-cell glyph; ECH does.
+        for rect in self.stale_region_rects.drain(..) {
+            if rect.is_empty() {
+                continue;
+            }
+            let width = u32::from(rect.width());
+            for y in rect.top()..rect.bottom() {
+                let row = u32::from(y).saturating_add(1);
+                let col = u32::from(rect.left()).saturating_add(1);
+                write!(&mut self.buf, "\x1b[{row};{col}H\x1b[{width}X")?;
+            }
+        }
         if self.regions.is_empty() {
+            self.renderer.invalidate_cursor();
             self.regions_dirty = false;
             return Ok(());
         }
@@ -503,10 +534,12 @@ impl<W: Write> Screen<W> {
             .map(|(_, r)| (r.area.position(), Arc::clone(&r.payload)))
             .collect();
         for (origin, payload) in entries {
-            self.renderer
-                .move_to(&mut self.buf, &self.front_buf, origin.y, origin.x)?;
+            let row = origin.y.saturating_add(1);
+            let col = origin.x.saturating_add(1);
+            write!(&mut self.buf, "\x1b[{row};{col}H")?;
             self.buf.extend_from_slice(&payload);
         }
+        self.renderer.invalidate_cursor();
         self.regions_dirty = false;
         Ok(())
     }
@@ -525,6 +558,8 @@ impl<W: Write> Screen<W> {
         self.height = height;
         self.front_buf.resize(width, height);
         self.renderer.request_clear();
+        // Full-screen clear supersedes any pending per-region ECH.
+        self.stale_region_rects.clear();
 
         let bounds = Rect::new(0, 0, width, height);
         let mut surviving: Vec<(RegionId, regions::Region)> = Vec::new();
@@ -553,6 +588,7 @@ impl<W: Write> Screen<W> {
     /// Force a full redraw on next render.
     pub fn invalidate(&mut self) {
         self.renderer.request_clear();
+        self.stale_region_rects.clear();
         self.regions_dirty = true;
     }
 
@@ -594,7 +630,10 @@ impl<W: Write> Screen<W> {
         // the new one and aren't covered by another region. Only
         // cells that are still placeholders we stamped get blanked
         // — anything else is host-owned content we must preserve.
-        if let Some(prev) = prev {
+        if let Some(prev) = prev
+            && prev.area != area
+        {
+            self.stale_region_rects.push(prev.area);
             for y in prev.area.top()..prev.area.bottom() {
                 for x in prev.area.left()..prev.area.right() {
                     if area.contains((x, y)) {
@@ -630,6 +669,7 @@ impl<W: Write> Screen<W> {
         let Some(prev) = self.regions.remove(id) else {
             return;
         };
+        self.stale_region_rects.push(prev.area);
         for y in prev.area.top()..prev.area.bottom() {
             for x in prev.area.left()..prev.area.right() {
                 if self.regions.any_covers(x, y) {
@@ -649,6 +689,7 @@ impl<W: Write> Screen<W> {
     pub fn clear_regions(&mut self) {
         let drained = self.regions.drain();
         for (_, region) in drained {
+            self.stale_region_rects.push(region.area);
             for y in region.area.top()..region.area.bottom() {
                 for x in region.area.left()..region.area.right() {
                     let pos = crate::Position::new(x, y);
