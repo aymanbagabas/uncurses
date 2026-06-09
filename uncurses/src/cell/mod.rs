@@ -6,6 +6,26 @@ use compact_str::CompactString;
 
 use crate::style::Style;
 
+/// Structural kind of a cell within the grid.
+///
+/// Encodes wide-cell invariants in the type system: a wide grapheme
+/// occupies a [`Kind::Wide`] primary cell followed immediately by
+/// a [`Kind::Continuation`] placeholder in the column to the
+/// right. The previous magic-number `width: u8` field is replaced by
+/// this enum so callers don't have to translate between `0`, `1`, and
+/// `2` to reason about cell roles.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum Kind {
+    /// Single-column glyph cell.
+    Narrow,
+    /// Primary cell of a two-column grapheme. The cell at `column + 1`
+    /// carries [`Kind::Continuation`].
+    Wide,
+    /// Right-half placeholder of a [`Kind::Wide`] primary at the
+    /// column to the left. Carries no content of its own.
+    Continuation,
+}
+
 /// A single terminal cell.
 #[derive(Debug, Clone)]
 pub struct Cell {
@@ -17,16 +37,14 @@ pub struct Cell {
     /// run of identically-linked cells shares a single allocation
     /// without per-cell deep clones.
     style: Style,
-    /// Display width: 1 for normal, 2 for wide, 0 for wide-char
-    /// continuation. Pairs with [`Cell::content`]: width `0` always
-    /// implies an empty content string.
-    width: u8,
+    /// Structural kind: narrow, wide primary, or wide continuation.
+    kind: Kind,
 }
 
 impl PartialEq for Cell {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width && self.style == other.style && self.content == other.content
+        self.kind == other.kind && self.style == other.style && self.content == other.content
     }
 }
 
@@ -39,41 +57,75 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// A blank cell with default style and width 1.
+    /// A blank narrow cell with default style.
     pub const BLANK: Cell = Cell {
         content: CompactString::const_new(" "),
         style: Style::EMPTY,
-        width: 1,
+        kind: Kind::Narrow,
     };
 
-    /// Create a new cell with the given grapheme-cluster `content` and
-    /// display `width`.
-    ///
-    /// `width` is the cell count the content occupies on screen: 1 for
-    /// normal, 2 for wide (CJK / wide emoji), 0 for the placeholder
-    /// continuation that follows a wide cell (use `""` as content).
-    /// Callers that already know the width (e.g. after running
-    /// [`crate::text::grapheme_cells`]) pass it directly; callers that
-    /// need to measure pass
-    /// [`crate::text::char_width`] or
-    /// [`crate::text::grapheme_width`] along with their chosen
-    /// `eaw_wide` policy.
-    pub fn new(content: impl Into<CompactString>, width: u8) -> Self {
+    /// Create a single-column cell with the given grapheme-cluster
+    /// `content` and default style.
+    pub fn narrow(content: impl Into<CompactString>) -> Self {
         Cell {
             content: content.into(),
             style: Style::EMPTY,
-            width,
+            kind: Kind::Narrow,
         }
+    }
+
+    /// Create the primary cell of a two-column grapheme.
+    ///
+    /// When a wide cell is written into a buffer the slot at
+    /// `column + 1` is filled with a [`Kind::Continuation`]
+    /// placeholder automatically by the buffer layer.
+    pub fn wide(content: impl Into<CompactString>) -> Self {
+        Cell {
+            content: content.into(),
+            style: Style::EMPTY,
+            kind: Kind::Wide,
+        }
+    }
+
+    /// Create a wide-character continuation placeholder.
+    ///
+    /// Continuation cells carry no content; they occupy the right
+    /// half of a [`Cell::wide`] primary at the column to their left.
+    pub fn continuation() -> Self {
+        Cell {
+            content: CompactString::default(),
+            style: Style::EMPTY,
+            kind: Kind::Continuation,
+        }
+    }
+
+    /// The cell's structural kind.
+    #[inline]
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// Whether this cell is a single-column glyph cell.
+    #[inline]
+    pub fn is_narrow(&self) -> bool {
+        matches!(self.kind, Kind::Narrow)
+    }
+
+    /// Whether this cell is the primary of a two-column grapheme.
+    #[inline]
+    pub fn is_wide(&self) -> bool {
+        matches!(self.kind, Kind::Wide)
+    }
+
+    /// Whether this cell is a wide-character continuation placeholder.
+    #[inline]
+    pub fn is_continuation(&self) -> bool {
+        matches!(self.kind, Kind::Continuation)
     }
 
     /// Whether this cell is a blank/space.
     pub fn is_blank(&self) -> bool {
-        self.content.is_empty() || self.content == " " || (self.width == 0)
-    }
-
-    /// Whether this is a wide-char continuation cell.
-    pub fn is_continuation(&self) -> bool {
-        self.width == 0
+        self.content.is_empty() || self.content == " " || self.is_continuation()
     }
 
     /// The cell's grapheme-cluster content. Empty for a wide-cell
@@ -83,11 +135,18 @@ impl Cell {
         self.content.as_str()
     }
 
-    /// The cell's display width: 1 for normal, 2 for wide, 0 for the
-    /// continuation placeholder that follows a wide cell.
+    /// Column footprint of this cell on the grid.
+    ///
+    /// - `Narrow` → 1
+    /// - `Wide`   → 2
+    /// - `Continuation` → 0 (the second slot of a wide primary)
     #[inline]
     pub fn width(&self) -> u8 {
-        self.width
+        match self.kind {
+            Kind::Narrow => 1,
+            Kind::Wide => 2,
+            Kind::Continuation => 0,
+        }
     }
 
     /// The cell's style (colors, attributes, underline, and any
@@ -111,28 +170,38 @@ mod tests {
     #[test]
     fn test_blank_cell() {
         let c = Cell::BLANK;
-        assert_eq!(c.width, 1);
+        assert!(c.is_narrow());
+        assert_eq!(c.width(), 1);
         assert!(c.is_blank());
         assert!(c.style().is_empty());
     }
 
     #[test]
-    fn test_new_cell() {
-        let c = Cell::new("A", 1);
+    fn test_narrow_cell() {
+        let c = Cell::narrow("A");
         assert_eq!(c.content(), "A");
-        assert_eq!(c.width, 1);
+        assert!(c.is_narrow());
+        assert_eq!(c.width(), 1);
+    }
+
+    #[test]
+    fn test_wide_cell() {
+        let c = Cell::wide("中");
+        assert_eq!(c.content(), "中");
+        assert!(c.is_wide());
+        assert_eq!(c.width(), 2);
     }
 
     #[test]
     fn test_continuation_cell() {
-        let c = Cell::new("", 0);
-        assert_eq!(c.width, 0);
+        let c = Cell::continuation();
         assert!(c.is_continuation());
+        assert_eq!(c.width(), 0);
     }
 
     #[test]
     fn test_cell_with_style() {
-        let c = Cell::new("x", 1).with_style(Style::EMPTY.with_bold());
+        let c = Cell::narrow("x").with_style(Style::EMPTY.with_bold());
         assert!(c.style().attrs.contains(crate::style::AttrFlags::BOLD));
     }
 }

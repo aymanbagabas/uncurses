@@ -543,7 +543,7 @@ mod tests {
         // Cells match the active pen so overwrite is eligible.
         let line: Vec<Cell> = (0..20)
             .map(|i| {
-                Cell::new(((b'a' + (i as u8 % 26)) as char).to_string(), 1)
+                Cell::narrow(((b'a' + (i as u8 % 26)) as char).to_string())
                     .with_style(r.cur.style().clone())
             })
             .collect();

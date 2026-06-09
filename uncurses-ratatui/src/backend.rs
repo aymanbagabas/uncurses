@@ -248,7 +248,7 @@ impl<W: Write> UncursesBackend<W> {
             let mut line = String::new();
             for x in 0..width {
                 if let Some(cell) = self.screen.cell((x, y).into())
-                    && cell.width() > 0
+                    && !cell.is_continuation()
                 {
                     line.push_str(cell.content());
                 }
