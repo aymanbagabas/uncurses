@@ -323,6 +323,9 @@ pub enum KeyCode {
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mods = self.modifiers;
+        // Canonical order: ctrl, alt, shift, super, hyper, meta. Lock
+        // states (Caps/Num/Scroll) are intentionally omitted — they are
+        // session state, not binding modifiers.
         if mods.contains(KeyModifiers::CTRL) {
             f.write_str("ctrl+")?;
         }
@@ -332,26 +335,18 @@ impl fmt::Display for Key {
         if mods.contains(KeyModifiers::SHIFT) {
             f.write_str("shift+")?;
         }
-        if mods.contains(KeyModifiers::META) {
-            f.write_str("meta+")?;
+        if mods.contains(KeyModifiers::SUPER) {
+            f.write_str("super+")?;
         }
         if mods.contains(KeyModifiers::HYPER) {
             f.write_str("hyper+")?;
         }
-        if mods.contains(KeyModifiers::SUPER) {
-            f.write_str("super+")?;
-        }
-        if mods.contains(KeyModifiers::CAPS_LOCK) {
-            f.write_str("capslock+")?;
-        }
-        if mods.contains(KeyModifiers::NUM_LOCK) {
-            f.write_str("numlock+")?;
-        }
-        if mods.contains(KeyModifiers::SCROLL_LOCK) {
-            f.write_str("scrolllock+")?;
+        if mods.contains(KeyModifiers::META) {
+            f.write_str("meta+")?;
         }
 
         match self.code {
+            KeyCode::Char('+') => f.write_str("plus"),
             KeyCode::Char(c) => write!(f, "{c}"),
             KeyCode::F(n) => write!(f, "f{n}"),
             KeyCode::Up => f.write_str("up"),
@@ -378,7 +373,65 @@ impl fmt::Display for Key {
             KeyCode::PrintScreen => f.write_str("printscreen"),
             KeyCode::Pause => f.write_str("pause"),
             KeyCode::Menu => f.write_str("menu"),
-            _ => write!(f, "{:?}", self.code),
+            // Keypad
+            KeyCode::KpEnter => f.write_str("kpenter"),
+            KeyCode::KpAdd => f.write_str("kpadd"),
+            KeyCode::KpSubtract => f.write_str("kpsubtract"),
+            KeyCode::KpMultiply => f.write_str("kpmultiply"),
+            KeyCode::KpDivide => f.write_str("kpdivide"),
+            KeyCode::KpDecimal => f.write_str("kpdecimal"),
+            KeyCode::KpEqual => f.write_str("kpequal"),
+            KeyCode::KpSeparator => f.write_str("kpseparator"),
+            KeyCode::KpLeft => f.write_str("kpleft"),
+            KeyCode::KpRight => f.write_str("kpright"),
+            KeyCode::KpUp => f.write_str("kpup"),
+            KeyCode::KpDown => f.write_str("kpdown"),
+            KeyCode::KpPageUp => f.write_str("kppgup"),
+            KeyCode::KpPageDown => f.write_str("kppgdn"),
+            KeyCode::KpHome => f.write_str("kphome"),
+            KeyCode::KpEnd => f.write_str("kpend"),
+            KeyCode::KpInsert => f.write_str("kpinsert"),
+            KeyCode::KpDelete => f.write_str("kpdelete"),
+            KeyCode::KpBegin => f.write_str("kpbegin"),
+            KeyCode::Kp0 => f.write_str("kp0"),
+            KeyCode::Kp1 => f.write_str("kp1"),
+            KeyCode::Kp2 => f.write_str("kp2"),
+            KeyCode::Kp3 => f.write_str("kp3"),
+            KeyCode::Kp4 => f.write_str("kp4"),
+            KeyCode::Kp5 => f.write_str("kp5"),
+            KeyCode::Kp6 => f.write_str("kp6"),
+            KeyCode::Kp7 => f.write_str("kp7"),
+            KeyCode::Kp8 => f.write_str("kp8"),
+            KeyCode::Kp9 => f.write_str("kp9"),
+            // Media
+            KeyCode::MediaPlay => f.write_str("mediaplay"),
+            KeyCode::MediaPause => f.write_str("mediapause"),
+            KeyCode::MediaPlayPause => f.write_str("mediaplaypause"),
+            KeyCode::MediaReverse => f.write_str("mediareverse"),
+            KeyCode::MediaStop => f.write_str("mediastop"),
+            KeyCode::MediaRewind => f.write_str("mediarewind"),
+            KeyCode::MediaFastForward => f.write_str("mediafastforward"),
+            KeyCode::MediaNext => f.write_str("medianext"),
+            KeyCode::MediaPrev => f.write_str("mediaprev"),
+            KeyCode::MediaRecord => f.write_str("mediarecord"),
+            KeyCode::VolumeUp => f.write_str("volumeup"),
+            KeyCode::VolumeDown => f.write_str("volumedown"),
+            KeyCode::VolumeMute => f.write_str("volumemute"),
+            // Modifier keys
+            KeyCode::LeftShift => f.write_str("leftshift"),
+            KeyCode::RightShift => f.write_str("rightshift"),
+            KeyCode::LeftCtrl => f.write_str("leftctrl"),
+            KeyCode::RightCtrl => f.write_str("rightctrl"),
+            KeyCode::LeftAlt => f.write_str("leftalt"),
+            KeyCode::RightAlt => f.write_str("rightalt"),
+            KeyCode::LeftSuper => f.write_str("leftsuper"),
+            KeyCode::RightSuper => f.write_str("rightsuper"),
+            KeyCode::LeftHyper => f.write_str("lefthyper"),
+            KeyCode::RightHyper => f.write_str("righthyper"),
+            KeyCode::LeftMeta => f.write_str("leftmeta"),
+            KeyCode::RightMeta => f.write_str("rightmeta"),
+            KeyCode::IsoLevel3Shift => f.write_str("isolevel3shift"),
+            KeyCode::IsoLevel5Shift => f.write_str("isolevel5shift"),
         }
     }
 }
@@ -679,5 +732,96 @@ mod tests {
         let b = Key::new(KeyCode::Char('b'), KeyModifiers::empty());
         assert_ne!(a, ctrl_a);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn display_canonical_mod_order() {
+        // Construct with all six binding modifiers; expect canonical
+        // ctrl, alt, shift, super, hyper, meta order regardless of
+        // input insertion.
+        let mods = KeyModifiers::META
+            | KeyModifiers::HYPER
+            | KeyModifiers::SUPER
+            | KeyModifiers::SHIFT
+            | KeyModifiers::ALT
+            | KeyModifiers::CTRL;
+        let k = Key {
+            code: KeyCode::Char('a'),
+            modifiers: mods,
+            text: None,
+            shifted_key: None,
+            base_key: None,
+        };
+        assert_eq!(k.to_string(), "ctrl+alt+shift+super+hyper+meta+a");
+    }
+
+    #[test]
+    fn display_omits_lock_state() {
+        let k = Key {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::CAPS_LOCK | KeyModifiers::NUM_LOCK | KeyModifiers::SCROLL_LOCK,
+            text: None,
+            shifted_key: None,
+            base_key: None,
+        };
+        assert_eq!(k.to_string(), "a");
+    }
+
+    #[test]
+    fn display_lock_state_combined_with_binding_mod() {
+        // Real input: Ctrl+a while CapsLock is on. Caps drops from
+        // Display so the binding string stays stable.
+        let k = Key {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK,
+            text: None,
+            shifted_key: None,
+            base_key: None,
+        };
+        assert_eq!(k.to_string(), "ctrl+a");
+    }
+
+    #[test]
+    fn display_char_plus_uses_word() {
+        let k = Key::new(KeyCode::Char('+'), KeyModifiers::CTRL);
+        assert_eq!(k.to_string(), "ctrl+plus");
+    }
+
+    #[test]
+    fn display_modifier_key_variants() {
+        let k = Key::new(KeyCode::LeftShift, KeyModifiers::empty());
+        assert_eq!(k.to_string(), "leftshift");
+        let k = Key::new(KeyCode::RightAlt, KeyModifiers::empty());
+        assert_eq!(k.to_string(), "rightalt");
+        let k = Key::new(KeyCode::IsoLevel3Shift, KeyModifiers::empty());
+        assert_eq!(k.to_string(), "isolevel3shift");
+    }
+
+    #[test]
+    fn display_keypad_variants() {
+        assert_eq!(
+            Key::new(KeyCode::Kp0, KeyModifiers::empty()).to_string(),
+            "kp0"
+        );
+        assert_eq!(
+            Key::new(KeyCode::KpEnter, KeyModifiers::empty()).to_string(),
+            "kpenter"
+        );
+        assert_eq!(
+            Key::new(KeyCode::KpPageUp, KeyModifiers::empty()).to_string(),
+            "kppgup"
+        );
+    }
+
+    #[test]
+    fn display_media_variants() {
+        assert_eq!(
+            Key::new(KeyCode::MediaPlayPause, KeyModifiers::empty()).to_string(),
+            "mediaplaypause"
+        );
+        assert_eq!(
+            Key::new(KeyCode::VolumeMute, KeyModifiers::empty()).to_string(),
+            "volumemute"
+        );
     }
 }
