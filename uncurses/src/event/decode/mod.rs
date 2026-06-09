@@ -2872,6 +2872,20 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn cross_decoder_alt_shift_tab_is_alt_backtab() {
+        // `\x1b\x1b[Z` = ESC + (CSI Z). The CSI decoder yields BackTab
+        // (with SHIFT collapsed by normalize); the outer ESC promotes
+        // it to Alt+BackTab. Kitty/MOK2 produce the same identity.
+        let key = assert_all_equal(&[
+            ("bare ESC + CSI Z", b"\x1b\x1b[Z"),
+            ("kitty Tab+Alt+Shift", b"\x1b[9;4u"),
+            ("mok2 Tab+Alt+Shift", b"\x1b[27;4;9~"),
+        ]);
+        assert_eq!(key.code, KeyCode::BackTab);
+        assert_eq!(key.modifiers, KeyModifiers::ALT);
+    }
+
     // --- Documented pre-existing divergences --------------------------
     //
     // These cases are NOT cross-decoder equal. They reflect limitations
