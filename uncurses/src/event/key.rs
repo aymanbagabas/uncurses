@@ -407,8 +407,8 @@ impl fmt::Display for Key {
             KeyCode::KpRight => f.write_str("kpright"),
             KeyCode::KpUp => f.write_str("kpup"),
             KeyCode::KpDown => f.write_str("kpdown"),
-            KeyCode::KpPageUp => f.write_str("kppgup"),
-            KeyCode::KpPageDown => f.write_str("kppgdn"),
+            KeyCode::KpPageUp => f.write_str("kppageup"),
+            KeyCode::KpPageDown => f.write_str("kppagedown"),
             KeyCode::KpHome => f.write_str("kphome"),
             KeyCode::KpEnd => f.write_str("kpend"),
             KeyCode::KpInsert => f.write_str("kpinsert"),
@@ -550,25 +550,26 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         "end" => KeyCode::End,
         "find" => KeyCode::Find,
         "select" => KeyCode::Select,
-        "pgup" | "pageup" | "page-up" => KeyCode::PageUp,
-        "pgdn" | "pagedown" | "page-down" => KeyCode::PageDown,
+        "pgup" | "pageup" => KeyCode::PageUp,
+        "pgdn" | "pagedown" => KeyCode::PageDown,
         // Editing
         "backspace" | "bs" => KeyCode::Backspace,
         "delete" | "del" => KeyCode::Delete,
         "insert" | "ins" => KeyCode::Insert,
         "tab" => KeyCode::Tab,
-        "backtab" | "back-tab" => KeyCode::BackTab,
+        "backtab" => KeyCode::BackTab,
         "enter" | "return" | "ret" => KeyCode::Enter,
         // Whitespace / special
         "space" | "spc" => KeyCode::Space,
         "esc" | "escape" => KeyCode::Escape,
-        "capslock" | "caps-lock" => KeyCode::CapsLock,
-        "scrolllock" | "scroll-lock" => KeyCode::ScrollLock,
-        "numlock" | "num-lock" => KeyCode::NumLock,
-        "printscreen" | "print-screen" | "prtsc" => KeyCode::PrintScreen,
+        "capslock" => KeyCode::CapsLock,
+        "scrolllock" => KeyCode::ScrollLock,
+        "numlock" => KeyCode::NumLock,
+        "printscreen" | "prtsc" => KeyCode::PrintScreen,
         "pause" => KeyCode::Pause,
         "menu" => KeyCode::Menu,
-        // Punctuation aliases
+        // Punctuation aliases. `plus` is the Display form for `Char('+')`;
+        // the literal `+` is also accepted via the single-character path.
         "plus" => KeyCode::Char('+'),
         // Keypad
         "kpenter" => KeyCode::KpEnter,
@@ -627,8 +628,8 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         "righthyper" => KeyCode::RightHyper,
         "leftmeta" => KeyCode::LeftMeta,
         "rightmeta" => KeyCode::RightMeta,
-        "isolevel3shift" | "iso-level3-shift" => KeyCode::IsoLevel3Shift,
-        "isolevel5shift" | "iso-level5-shift" => KeyCode::IsoLevel5Shift,
+        "isolevel3shift" => KeyCode::IsoLevel3Shift,
+        "isolevel5shift" => KeyCode::IsoLevel5Shift,
         _ => return Err(ParseKeyError::UnknownKey(token.to_string())),
     })
 }
@@ -642,12 +643,26 @@ impl std::str::FromStr for Key {
             return Err(ParseKeyError::Empty);
         }
 
+        // Single-character input: treat as a literal key with no
+        // modifiers. This lets `+`, `-`, and any other single character
+        // round-trip cleanly without being misread as a `+`-separator.
+        if s.chars().nth(1).is_none() {
+            let code = parse_key_code(s)?;
+            return Ok(Key::new(code, KeyModifiers::empty()));
+        }
+
         // Split on the last `+` to separate modifiers from the key.
-        // This lets `plus` stay reserved for the literal `+` character
-        // (Display emits "plus" for `KeyCode::Char('+')`).
-        let (mod_part, key_part) = match s.rsplit_once('+') {
-            Some((m, k)) => (m, k),
-            None => ("", s),
+        // The literal `+` key is spelled `plus` in Display output, but
+        // forms like `ctrl++` are also accepted: a trailing `++` means
+        // "the `+` key, with the preceding `+` as separator". A single
+        // trailing `+` with no preceding `+` is a dangling separator.
+        let (mod_part, key_part) = if let Some(head) = s.strip_suffix('+') {
+            match head.strip_suffix('+') {
+                Some(mods) => (mods, "+"),
+                None => return Err(ParseKeyError::EmptyComponent),
+            }
+        } else {
+            s.rsplit_once('+').unwrap_or(("", s))
         };
 
         if key_part.is_empty() {
@@ -1037,7 +1052,7 @@ mod tests {
         );
         assert_eq!(
             Key::new(KeyCode::KpPageUp, KeyModifiers::empty()).to_string(),
-            "kppgup"
+            "kppageup"
         );
     }
 
@@ -1179,6 +1194,8 @@ mod tests {
         assert_eq!("".parse::<Key>(), Err(ParseKeyError::Empty));
         assert_eq!("   ".parse::<Key>(), Err(ParseKeyError::Empty));
         assert_eq!("ctrl+".parse::<Key>(), Err(ParseKeyError::EmptyComponent));
+        // `ctrl++a` still errors: the inner `+` produces an empty
+        // modifier token. (`ctrl++` alone is the ctrl+literal-`+` form.)
         assert_eq!("ctrl++a".parse::<Key>(), Err(ParseKeyError::EmptyComponent));
         assert!(matches!(
             "foo+a".parse::<Key>(),
@@ -1203,6 +1220,63 @@ mod tests {
     }
 
     #[test]
+    fn fromstr_literal_plus() {
+        // Bare `+` is the literal key character (single-char shortcut).
+        assert_eq!(parse("+").code, KeyCode::Char('+'));
+        // `plus` alias parses identically.
+        assert_eq!(parse("plus").code, KeyCode::Char('+'));
+        // `ctrl++` is ctrl + the literal `+` key.
+        assert_eq!(
+            parse("ctrl++"),
+            Key::new(KeyCode::Char('+'), KeyModifiers::CTRL)
+        );
+        // `ctrl+plus` resolves to the same Key.
+        assert_eq!(parse("ctrl++"), parse("ctrl+plus"));
+    }
+
+    #[test]
+    fn fromstr_literal_symbols() {
+        // Symbols other than `+` parse literally with no aliases.
+        assert_eq!(parse("-").code, KeyCode::Char('-'));
+        assert_eq!(parse("*").code, KeyCode::Char('*'));
+        assert_eq!(parse("/").code, KeyCode::Char('/'));
+        assert_eq!(parse("=").code, KeyCode::Char('='));
+        assert_eq!(parse("[").code, KeyCode::Char('['));
+        assert_eq!(parse("ctrl+-").code, KeyCode::Char('-'));
+        assert_eq!(parse("ctrl+/").code, KeyCode::Char('/'));
+        assert_eq!(parse("alt+[").code, KeyCode::Char('['));
+    }
+
+    #[test]
+    fn fromstr_rejects_hyphen_aliases() {
+        // Hyphenated key-name aliases are intentionally not accepted;
+        // `+` is the only valid binding separator.
+        assert!(matches!(
+            "page-up".parse::<Key>(),
+            Err(ParseKeyError::UnknownKey(_))
+        ));
+        assert!(matches!(
+            "back-tab".parse::<Key>(),
+            Err(ParseKeyError::UnknownKey(_))
+        ));
+        assert!(matches!(
+            "caps-lock".parse::<Key>(),
+            Err(ParseKeyError::UnknownKey(_))
+        ));
+    }
+
+    #[test]
+    fn display_kp_pageup_long_form() {
+        assert_eq!(
+            Key::new(KeyCode::KpPageDown, KeyModifiers::empty()).to_string(),
+            "kppagedown"
+        );
+        // The short `kppgup`/`kppgdn` forms remain accepted on input.
+        assert_eq!(parse("kppgup").code, KeyCode::KpPageUp);
+        assert_eq!(parse("kppgdn").code, KeyCode::KpPageDown);
+    }
+
+    #[test]
     fn display_fromstr_roundtrip_named_variants() {
         // Every variant emitted by Display must round-trip back to an
         // equal Key.
@@ -1223,6 +1297,7 @@ mod tests {
             (KeyCode::Char('ц'), KeyModifiers::empty()),
             (KeyCode::F(1), KeyModifiers::empty()),
             (KeyCode::F(24), KeyModifiers::CTRL),
+            (KeyCode::F(35), KeyModifiers::empty()),
             (KeyCode::Up, KeyModifiers::empty()),
             (KeyCode::Down, KeyModifiers::SHIFT),
             (KeyCode::Left, KeyModifiers::ALT),
