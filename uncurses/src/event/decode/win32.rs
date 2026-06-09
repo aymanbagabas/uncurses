@@ -69,11 +69,10 @@ impl Decoder {
                 char::from_u32(ch).unwrap_or('\u{fffd}')
             };
 
-            let mut key = Key::new(KeyCode::Char(code)).with_modifiers(mods);
+            let mut key = Key::new(KeyCode::Char(code), mods);
             if !code.is_control() {
-                key = key.with_text(code.to_string());
+                key.text = Some(code.to_string());
             }
-            crate::event::key::normalize_shift_case(&mut key);
             return self.emit_win32_key(key, kd, rep, consumed);
         }
 
@@ -128,11 +127,10 @@ impl Decoder {
             }
         }
 
-        let mut key = Key::new(base_code).with_modifiers(effective_mods);
+        let mut key = Key::new(base_code, effective_mods);
         if let Some(t) = text {
-            key = key.with_text(t);
+            key.text = Some(t);
         }
-        crate::event::key::normalize_shift_case(&mut key);
 
         self.win32_last_cks.set(cks);
         self.emit_win32_key(key, kd, rep, consumed)

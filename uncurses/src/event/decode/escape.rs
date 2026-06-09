@@ -19,7 +19,10 @@ impl Decoder {
         // once the caller signals the escape timeout has elapsed.
         if buf.len() < 2 {
             return if self.expired {
-                ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Escape)), 1)
+                ParseResult::Event(
+                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                    1,
+                )
             } else {
                 ParseResult::Incomplete
             };
@@ -43,9 +46,10 @@ impl Decoder {
                     };
                     ParseResult::Event(Event::KeyPress(key), n + 1)
                 }
-                ParseResult::Event(_, _) | ParseResult::None(_) => {
-                    ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Escape)), 1)
-                }
+                ParseResult::Event(_, _) | ParseResult::None(_) => ParseResult::Event(
+                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                    1,
+                ),
                 ParseResult::Incomplete => ParseResult::Incomplete,
             };
         }
@@ -67,12 +71,12 @@ impl Decoder {
                 } else {
                     KeyCode::Char(b as char)
                 };
-                ParseResult::Event(
-                    Event::KeyPress(Key::new(code).with_modifiers(KeyModifiers::ALT)),
-                    2,
-                )
+                ParseResult::Event(Event::KeyPress(Key::new(code, KeyModifiers::ALT)), 2)
             }
-            _ => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Escape)), 1),
+            _ => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                1,
+            ),
         }
     }
 }

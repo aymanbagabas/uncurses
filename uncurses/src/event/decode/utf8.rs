@@ -7,7 +7,7 @@
 
 use super::Decoder;
 use super::result::ParseResult;
-use crate::event::{Event, Key, KeyCode};
+use crate::event::{Event, Key, KeyCode, KeyModifiers};
 
 impl Decoder {
     pub(super) fn parse_utf8(&self, buf: &[u8]) -> ParseResult {
@@ -36,8 +36,7 @@ impl Decoder {
         match std::str::from_utf8(&buf[..expected_len]) {
             Ok(s) => {
                 if let Some(c) = s.chars().next() {
-                    let mut key = Key::new(KeyCode::Char(c));
-                    crate::event::key::normalize_shift_case(&mut key);
+                    let key = Key::new(KeyCode::Char(c), KeyModifiers::empty());
                     ParseResult::Event(Event::KeyPress(key), expected_len)
                 } else {
                     ParseResult::None(expected_len)

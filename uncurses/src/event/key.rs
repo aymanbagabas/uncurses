@@ -35,42 +35,42 @@ pub struct Key {
 }
 
 impl Key {
-    /// Construct a key with default modifiers and no associated text.
+    /// Construct a canonical key from its required fields.
     ///
-    /// When `code` is a printable `KeyCode::Char`, `text` is
-    /// pre-populated with the codepoint so callers reading typed
-    /// input don't have to fall back to inspecting `code`. Control
-    /// codepoints leave `text` as `None`.
-    pub fn new(code: KeyCode) -> Self {
-        let text = printable_text(code, KeyModifiers::empty());
-        Self {
+    /// Runs normalization once at construction:
+    ///
+    /// * If `code` is an uppercase `Char` with a single-codepoint
+    ///   lowercase mapping, the code is lowered, the original
+    ///   uppercase is stored in `shifted_key`, and `SHIFT` is added to
+    ///   `modifiers` (unless `CAPS_LOCK` is already set, in which case
+    ///   no synthetic Shift is added).
+    /// * If `code` is a lowercase `Char` and `modifiers` already
+    ///   contains `SHIFT` or `CAPS_LOCK`, `shifted_key` is populated
+    ///   with the single-codepoint uppercase mapping.
+    /// * If the resulting code is printable (`Char` non-control or
+    ///   `Space`) and `modifiers` is a printable subset
+    ///   (`SHIFT | CAPS_LOCK | NUM_LOCK`), `text` is auto-populated
+    ///   with the user-perceived glyph (shifted form when shifted).
+    ///
+    /// No-op for: non-`Char` codes, codepoints without a proper
+    /// single-codepoint case flip (e.g. Turkish `İ`), titlecase
+    /// digraphs (e.g. `ǅ`), and modifier sets that suppress printable
+    /// input (Ctrl, Alt, Super, Hyper, Meta).
+    ///
+    /// Optional fields (`text`, `shifted_key`, `base_key`) start
+    /// empty; mutate them directly on the returned [`Key`] when a
+    /// decoder protocol surfaces extra information (e.g. kitty's
+    /// reported shifted codepoint or associated text).
+    pub fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
+        let mut k = Self {
             code,
-            modifiers: KeyModifiers::empty(),
-            text,
+            modifiers,
+            text: None,
             shifted_key: None,
             base_key: None,
-        }
-    }
-
-    /// Replace the active modifiers. If `text` was the codepoint
-    /// auto-populated by [`Self::new`] and the new modifiers make
-    /// the key non-printable (anything beyond Shift), `text` is
-    /// cleared. Modifier sets that still yield typed input (none,
-    /// Shift) keep the existing text untouched. An explicitly set
-    /// `text` (via [`Self::with_text`]) is never overwritten here.
-    pub fn with_modifiers(mut self, mods: KeyModifiers) -> Self {
-        if self.text.as_deref() == printable_text(self.code, KeyModifiers::empty()).as_deref()
-            && printable_text(self.code, mods).is_none()
-        {
-            self.text = None;
-        }
-        self.modifiers = mods;
-        self
-    }
-
-    pub fn with_text(mut self, text: impl Into<String>) -> Self {
-        self.text = Some(text.into());
-        self
+        };
+        k.normalize();
+        k
     }
 
     /// Return the character if this is a simple character key.
@@ -82,114 +82,58 @@ impl Key {
             _ => None,
         }
     }
-}
 
-/// Normalize the case of a [`Key`] produced by a decoder so the keycode
-/// is always lowercase and the uppercase variant lives in `shifted_key`.
-///
-/// Two complementary transforms, both safe to run idempotently:
-///
-/// * When `code` is an uppercase `Char` with a single-codepoint
-///   lowercase mapping, the code is lowered, the original uppercase is
-///   stored in `shifted_key` (unless already populated), and `SHIFT` is
-///   added to `modifiers` — except when `CAPS_LOCK` is already set, in
-///   which case CapsLock is the legitimate reason for the uppercase and
-///   no synthetic Shift is added.
-/// * When `code` is a lowercase `Char` and `modifiers` already contains
-///   `SHIFT` or `CAPS_LOCK`, `shifted_key` is populated with the
-///   single-codepoint uppercase mapping (unless already populated).
-///
-/// In both branches, when the modifier set still represents typed input
-/// (none, Shift, CapsLock, NumLock; i.e. no Ctrl/Alt/Super/Hyper/Meta)
-/// and `text` is empty, `text` is populated with the *shifted* glyph —
-/// the character the user perceives as typed.
-///
-/// No-op for any of: non-`Char` codes, codepoints with no proper case
-/// flip, multi-codepoint case mappings (e.g. Turkish `İ` lowercases to
-/// `i\u{307}`), or characters whose `to_lowercase`/`to_uppercase` is
-/// the identity (titlecase digraphs like `ǅ`).
-pub(crate) fn normalize_shift_case(key: &mut Key) {
-    let KeyCode::Char(c) = key.code else { return };
-
-    // Modifiers that do not suppress printable input.
-    const PRINTABLE_ALLOWED: KeyModifiers = KeyModifiers::SHIFT
-        .union(KeyModifiers::CAPS_LOCK)
-        .union(KeyModifiers::NUM_LOCK);
-    let printable = (key.modifiers - PRINTABLE_ALLOWED).is_empty();
-
-    // `text` is treated as auto-populated (and thus safe to upgrade to
-    // the shifted glyph) when it's empty or matches the codepoint we're
-    // about to transform. Any other value is caller-explicit and we
-    // must leave it untouched.
-    let mut tmp = [0u8; 4];
-    let original_str: &str = c.encode_utf8(&mut tmp);
-    let text_is_pre_shift = key
-        .text
-        .as_deref()
-        .map(|t| t == original_str)
-        .unwrap_or(true);
-
-    if c.is_uppercase() {
-        let mut iter = c.to_lowercase();
-        let Some(lower) = iter.next() else { return };
-        if iter.next().is_some() || lower == c {
-            return;
-        }
-        key.code = KeyCode::Char(lower);
-        if key.shifted_key.is_none() {
-            key.shifted_key = Some(c);
-        }
-        if !key.modifiers.contains(KeyModifiers::CAPS_LOCK) {
-            key.modifiers |= KeyModifiers::SHIFT;
-        }
-        if text_is_pre_shift {
-            if printable {
-                key.text = Some(c.to_string());
-            } else {
-                // Non-printable mods (e.g. Ctrl): drop the auto-populated
-                // glyph so consumers don't see "typed text" for Ctrl+A.
-                key.text = None;
+    /// Apply the canonicalization rules described on [`Self::new`].
+    /// Idempotent.
+    fn normalize(&mut self) {
+        // Case folding for printable Char codes.
+        if let KeyCode::Char(c) = self.code {
+            if c.is_uppercase() {
+                let mut iter = c.to_lowercase();
+                if let Some(lower) = iter.next()
+                    && iter.next().is_none()
+                    && lower != c
+                {
+                    self.code = KeyCode::Char(lower);
+                    if self.shifted_key.is_none() {
+                        self.shifted_key = Some(c);
+                    }
+                    if !self.modifiers.contains(KeyModifiers::CAPS_LOCK) {
+                        self.modifiers |= KeyModifiers::SHIFT;
+                    }
+                }
+            } else if c.is_lowercase()
+                && self
+                    .modifiers
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::CAPS_LOCK)
+                && self.shifted_key.is_none()
+            {
+                let mut iter = c.to_uppercase();
+                if let Some(upper) = iter.next()
+                    && iter.next().is_none()
+                    && upper != c
+                {
+                    self.shifted_key = Some(upper);
+                }
             }
         }
-    } else if c.is_lowercase()
-        && key
-            .modifiers
-            .intersects(KeyModifiers::SHIFT | KeyModifiers::CAPS_LOCK)
-    {
-        let mut iter = c.to_uppercase();
-        let Some(upper) = iter.next() else { return };
-        if iter.next().is_some() || upper == c {
-            return;
-        }
-        if key.shifted_key.is_none() {
-            key.shifted_key = Some(upper);
-        }
-        if text_is_pre_shift {
-            if printable {
-                key.text = Some(upper.to_string());
-            } else {
-                key.text = None;
+
+        // Text auto-population for printable input.
+        if self.text.is_none() {
+            const PRINTABLE_ALLOWED: KeyModifiers = KeyModifiers::SHIFT
+                .union(KeyModifiers::CAPS_LOCK)
+                .union(KeyModifiers::NUM_LOCK);
+            if (self.modifiers - PRINTABLE_ALLOWED).is_empty() {
+                let glyph: Option<char> = match self.code {
+                    KeyCode::Char(c) if !c.is_control() => Some(self.shifted_key.unwrap_or(c)),
+                    KeyCode::Space => Some(' '),
+                    _ => None,
+                };
+                if let Some(g) = glyph {
+                    self.text = Some(g.to_string());
+                }
             }
         }
-    }
-}
-
-/// Codepoint-as-string for a printable [`KeyCode::Char`] or [`KeyCode::Space`]
-/// with a modifier set that doesn't override the typed glyph (none / Shift /
-/// locks); `None` for control codepoints or modifier sets that make the key
-/// non-printable (Ctrl, Alt, …).
-fn printable_text(code: KeyCode, mods: KeyModifiers) -> Option<String> {
-    const ALLOWED: KeyModifiers = KeyModifiers::SHIFT
-        .union(KeyModifiers::CAPS_LOCK)
-        .union(KeyModifiers::NUM_LOCK);
-    if (mods - ALLOWED).is_empty() {
-        match code {
-            KeyCode::Char(c) if !c.is_control() => Some(c.to_string()),
-            KeyCode::Space => Some(" ".to_string()),
-            _ => None,
-        }
-    } else {
-        None
     }
 }
 
@@ -381,32 +325,31 @@ mod tests {
 
     #[test]
     fn test_key_display() {
-        let k = Key::new(KeyCode::Char('a')).with_modifiers(KeyModifiers::CTRL);
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL);
         assert_eq!(k.to_string(), "ctrl+a");
     }
 
     #[test]
     fn test_key_display_function() {
-        let k = Key::new(KeyCode::F(12));
+        let k = Key::new(KeyCode::F(12), KeyModifiers::empty());
         assert_eq!(k.to_string(), "f12");
     }
 
     #[test]
     fn test_key_char() {
-        let k = Key::new(KeyCode::Char('x'));
+        let k = Key::new(KeyCode::Char('x'), KeyModifiers::empty());
         assert_eq!(k.char(), Some('x'));
     }
 
     #[test]
     fn test_key_char_special() {
-        let k = Key::new(KeyCode::Enter);
+        let k = Key::new(KeyCode::Enter, KeyModifiers::empty());
         assert_eq!(k.char(), None);
     }
 
     #[test]
-    fn normalize_uppercase_ascii_lowers_code_and_adds_shift() {
-        let mut k = Key::new(KeyCode::Char('A'));
-        normalize_shift_case(&mut k);
+    fn new_uppercase_ascii_lowers_code_and_adds_shift() {
+        let k = Key::new(KeyCode::Char('A'), KeyModifiers::empty());
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
@@ -414,9 +357,8 @@ mod tests {
     }
 
     #[test]
-    fn normalize_uppercase_with_caps_lock_does_not_add_shift() {
-        let mut k = Key::new(KeyCode::Char('A')).with_modifiers(KeyModifiers::CAPS_LOCK);
-        normalize_shift_case(&mut k);
+    fn new_uppercase_with_caps_lock_does_not_add_shift() {
+        let k = Key::new(KeyCode::Char('A'), KeyModifiers::CAPS_LOCK);
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(!k.modifiers.contains(KeyModifiers::SHIFT));
@@ -425,32 +367,25 @@ mod tests {
     }
 
     #[test]
-    fn normalize_lowercase_with_shift_populates_shifted_key() {
-        let mut k = Key::new(KeyCode::Char('a')).with_modifiers(KeyModifiers::SHIFT);
-        normalize_shift_case(&mut k);
+    fn new_lowercase_with_shift_populates_shifted_key() {
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT);
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert_eq!(k.text.as_deref(), Some("A"));
     }
 
     #[test]
-    fn normalize_lowercase_without_shift_unchanged() {
-        let mut k = Key::new(KeyCode::Char('a'));
-        normalize_shift_case(&mut k);
+    fn new_lowercase_without_shift_populates_text() {
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, None);
         assert!(k.modifiers.is_empty());
-        // text was auto-populated by Key::new for the printable char;
-        // helper is a no-op for lowercase without Shift/Caps.
         assert_eq!(k.text.as_deref(), Some("a"));
     }
 
     #[test]
-    fn normalize_ctrl_uppercase_does_not_set_text() {
-        // Ctrl+A: code is uppercase, but Ctrl suppresses typed glyph —
-        // text must stay None even though we still lower-case the code.
-        let mut k = Key::new(KeyCode::Char('A')).with_modifiers(KeyModifiers::CTRL);
-        normalize_shift_case(&mut k);
+    fn new_ctrl_uppercase_does_not_set_text() {
+        let k = Key::new(KeyCode::Char('A'), KeyModifiers::CTRL);
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(k.modifiers.contains(KeyModifiers::CTRL));
@@ -459,27 +394,16 @@ mod tests {
     }
 
     #[test]
-    fn normalize_ctrl_shift_lowercase_does_not_set_text() {
-        let mut k =
-            Key::new(KeyCode::Char('a')).with_modifiers(KeyModifiers::CTRL | KeyModifiers::SHIFT);
-        normalize_shift_case(&mut k);
+    fn new_ctrl_shift_lowercase_does_not_set_text() {
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL | KeyModifiers::SHIFT);
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(k.text.is_none());
     }
 
     #[test]
-    fn normalize_does_not_overwrite_existing_text() {
-        let mut k = Key::new(KeyCode::Char('A')).with_text("A");
-        normalize_shift_case(&mut k);
-        assert_eq!(k.code, KeyCode::Char('a'));
-        assert_eq!(k.text.as_deref(), Some("A"));
-    }
-
-    #[test]
-    fn normalize_cyrillic_uppercase() {
-        let mut k = Key::new(KeyCode::Char('Ц'));
-        normalize_shift_case(&mut k);
+    fn new_cyrillic_uppercase() {
+        let k = Key::new(KeyCode::Char('Ц'), KeyModifiers::empty());
         assert_eq!(k.code, KeyCode::Char('ц'));
         assert_eq!(k.shifted_key, Some('Ц'));
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
@@ -487,69 +411,72 @@ mod tests {
     }
 
     #[test]
-    fn normalize_greek_lowercase_with_shift() {
-        let mut k = Key::new(KeyCode::Char('α')).with_modifiers(KeyModifiers::SHIFT);
-        normalize_shift_case(&mut k);
+    fn new_greek_lowercase_with_shift() {
+        let k = Key::new(KeyCode::Char('α'), KeyModifiers::SHIFT);
         assert_eq!(k.code, KeyCode::Char('α'));
         assert_eq!(k.shifted_key, Some('Α'));
         assert_eq!(k.text.as_deref(), Some("Α"));
     }
 
     #[test]
-    fn normalize_multi_codepoint_lower_left_alone() {
+    fn new_multi_codepoint_lower_left_alone() {
         // 'İ' lowercases to "i\u{307}" — two codepoints; leave as-is.
-        let mut k = Key::new(KeyCode::Char('İ'));
-        normalize_shift_case(&mut k);
+        let k = Key::new(KeyCode::Char('İ'), KeyModifiers::empty());
         assert_eq!(k.code, KeyCode::Char('İ'));
         assert_eq!(k.shifted_key, None);
         assert!(k.modifiers.is_empty());
-        // text auto-populated; helper bails on multi-cp lowercase.
+        // Still printable input — text auto-populates with the original codepoint.
         assert_eq!(k.text.as_deref(), Some("İ"));
     }
 
     #[test]
-    fn normalize_titlecase_digraph_left_alone() {
+    fn new_titlecase_digraph_left_alone() {
         // 'ǅ' is titlecase; is_uppercase() and is_lowercase() are both false.
-        let mut k = Key::new(KeyCode::Char('ǅ'));
-        normalize_shift_case(&mut k);
+        let k = Key::new(KeyCode::Char('ǅ'), KeyModifiers::empty());
         assert_eq!(k.code, KeyCode::Char('ǅ'));
         assert_eq!(k.shifted_key, None);
+        assert_eq!(k.text.as_deref(), Some("ǅ"));
     }
 
     #[test]
-    fn normalize_digit_unchanged() {
-        let mut k = Key::new(KeyCode::Char('1')).with_modifiers(KeyModifiers::SHIFT);
-        normalize_shift_case(&mut k);
+    fn new_digit_with_shift_keeps_digit_text() {
+        // '1' has no case variant; text auto-populates from the codepoint.
+        let k = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT);
         assert_eq!(k.code, KeyCode::Char('1'));
         assert_eq!(k.shifted_key, None);
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
-        // text auto-populated by Key::new and kept across with_modifiers
-        // because Shift alone is still printable; helper doesn't touch
-        // codepoints without a case variant.
         assert_eq!(k.text.as_deref(), Some("1"));
     }
 
     #[test]
-    fn normalize_non_char_unchanged() {
-        let mut k = Key::new(KeyCode::Enter).with_modifiers(KeyModifiers::SHIFT);
-        normalize_shift_case(&mut k);
+    fn new_non_char_no_text() {
+        let k = Key::new(KeyCode::Enter, KeyModifiers::SHIFT);
         assert_eq!(k.code, KeyCode::Enter);
         assert_eq!(k.shifted_key, None);
+        assert!(k.text.is_none());
     }
 
     #[test]
-    fn normalize_preserves_existing_shifted_key() {
-        let mut k = Key {
-            code: KeyCode::Char('A'),
-            modifiers: KeyModifiers::empty(),
-            text: Some("A".to_string()),
-            shifted_key: Some('!'),
-            base_key: None,
-        };
-        normalize_shift_case(&mut k);
-        assert_eq!(k.code, KeyCode::Char('a'));
-        // Pre-existing shifted_key must not be overwritten.
-        assert_eq!(k.shifted_key, Some('!'));
-        assert_eq!(k.text.as_deref(), Some("A"));
+    fn new_space_populates_text() {
+        let k = Key::new(KeyCode::Space, KeyModifiers::empty());
+        assert_eq!(k.code, KeyCode::Space);
+        assert_eq!(k.text.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn new_space_with_ctrl_no_text() {
+        let k = Key::new(KeyCode::Space, KeyModifiers::CTRL);
+        assert_eq!(k.code, KeyCode::Space);
+        assert!(k.text.is_none());
+    }
+
+    #[test]
+    fn direct_field_mutation_overrides_auto_text() {
+        let mut k = Key::new(KeyCode::Char('2'), KeyModifiers::SHIFT);
+        // Simulate a decoder that knows the terminal-reported shifted glyph.
+        k.shifted_key = Some('@');
+        k.text = Some("@".to_string());
+        assert_eq!(k.text.as_deref(), Some("@"));
+        assert_eq!(k.shifted_key, Some('@'));
     }
 }
