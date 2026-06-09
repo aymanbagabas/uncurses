@@ -2386,4 +2386,43 @@ mod tests {
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
         assert_eq!(k.text.as_deref(), Some("Ц"));
     }
+
+    // --- Legacy fixterms CSI u shape -----------------------------------
+    //
+    // Fixterms predates the kitty extension and uses bare
+    // `CSI codepoint ; mods u` with no shifted/base subparams. The
+    // modifier value follows the same 1-based scheme kitty uses, so
+    // these sequences round-trip through the kitty decoder unchanged.
+
+    #[test]
+    fn fixterms_bare_uppercase_letter_canonicalizes() {
+        let mut p = Decoder::new();
+        let k = press(p.parse(b"\x1b[65u"));
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.shifted_key, Some('A'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn fixterms_shift_lowercase_letter_synthesizes_shifted() {
+        let mut p = Decoder::new();
+        // CSI 97;2 u = 'a' + Shift.
+        let k = press(p.parse(b"\x1b[97;2u"));
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert_eq!(k.shifted_key, Some('A'));
+        assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+        assert_eq!(k.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn fixterms_ctrl_letter_suppresses_text() {
+        let mut p = Decoder::new();
+        // CSI 97;5 u = Ctrl+a.
+        let k = press(p.parse(b"\x1b[97;5u"));
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert!(k.modifiers.contains(KeyModifiers::CTRL));
+        assert!(k.text.is_none());
+        assert_eq!(k.shifted_key, None);
+    }
 }
