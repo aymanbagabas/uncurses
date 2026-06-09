@@ -238,16 +238,17 @@ impl Decoder {
     pub(crate) fn expire_leading(&self, b0: u8) -> Option<Event> {
         if b0 == 0x1b {
             let key = if self.flags.contains(DecoderFlags::CTRL_OPEN_BRACKET) {
-                Key::new(KeyCode::Char('[')).with_modifiers(KeyModifiers::CTRL)
+                Key::new(KeyCode::Char('['), KeyModifiers::CTRL)
             } else {
-                Key::new(KeyCode::Escape)
+                Key::new(KeyCode::Escape, KeyModifiers::empty())
             };
             Some(Event::KeyPress(key))
         } else if is_c1_introducer(b0) {
             let c = (b0 - 0x40) as char;
-            Some(Event::KeyPress(
-                Key::new(KeyCode::Char(c)).with_modifiers(KeyModifiers::CTRL | KeyModifiers::ALT),
-            ))
+            Some(Event::KeyPress(Key::new(
+                KeyCode::Char(c),
+                KeyModifiers::CTRL | KeyModifiers::ALT,
+            )))
         } else {
             None
         }
@@ -343,16 +344,19 @@ impl Decoder {
                         // silently dropped.
                         let b0 = self.buf[0];
                         if b0 == 0x1b {
-                            events.push(Event::KeyPress(Key::new(KeyCode::Escape)));
+                            events.push(Event::KeyPress(Key::new(
+                                KeyCode::Escape,
+                                KeyModifiers::empty(),
+                            )));
                             self.buf.drain(..1);
                             continue;
                         }
                         if is_c1_introducer(b0) {
                             let c = (b0 - 0x40) as char;
-                            events.push(Event::KeyPress(
-                                Key::new(KeyCode::Char(c))
-                                    .with_modifiers(KeyModifiers::CTRL | KeyModifiers::ALT),
-                            ));
+                            events.push(Event::KeyPress(Key::new(
+                                KeyCode::Char(c),
+                                KeyModifiers::CTRL | KeyModifiers::ALT,
+                            )));
                             self.buf.drain(..1);
                             continue;
                         }
@@ -395,58 +399,63 @@ impl Decoder {
                 // Ctrl+A through Ctrl+Z (excluding Tab/LF/CR/Esc which have dedicated keys).
                 let c = (buf[0] - 1 + b'a') as char;
                 ParseResult::Event(
-                    Event::KeyPress(Key::new(KeyCode::Char(c)).with_modifiers(KeyModifiers::CTRL)),
+                    Event::KeyPress(Key::new(KeyCode::Char(c), KeyModifiers::CTRL)),
                     1,
                 )
             }
             0x09 => {
                 if self.flags.contains(DecoderFlags::CTRL_I) {
                     ParseResult::Event(
-                        Event::KeyPress(
-                            Key::new(KeyCode::Char('i')).with_modifiers(KeyModifiers::CTRL),
-                        ),
+                        Event::KeyPress(Key::new(KeyCode::Char('i'), KeyModifiers::CTRL)),
                         1,
                     )
                 } else {
-                    ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Tab)), 1)
+                    ParseResult::Event(
+                        Event::KeyPress(Key::new(KeyCode::Tab, KeyModifiers::empty())),
+                        1,
+                    )
                 }
             }
-            0x0a => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Enter)), 1),
+            0x0a => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Enter, KeyModifiers::empty())),
+                1,
+            ),
             0x0d => {
                 if self.flags.contains(DecoderFlags::CTRL_M) {
                     ParseResult::Event(
-                        Event::KeyPress(
-                            Key::new(KeyCode::Char('m')).with_modifiers(KeyModifiers::CTRL),
-                        ),
+                        Event::KeyPress(Key::new(KeyCode::Char('m'), KeyModifiers::CTRL)),
                         1,
                     )
                 } else {
-                    ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Enter)), 1)
+                    ParseResult::Event(
+                        Event::KeyPress(Key::new(KeyCode::Enter, KeyModifiers::empty())),
+                        1,
+                    )
                 }
             }
             0x00 => {
                 let key = if self.flags.contains(DecoderFlags::CTRL_AT) {
-                    Key::new(KeyCode::Char('@')).with_modifiers(KeyModifiers::CTRL)
+                    Key::new(KeyCode::Char('@'), KeyModifiers::CTRL)
                 } else {
-                    Key::new(KeyCode::Space).with_modifiers(KeyModifiers::CTRL)
+                    Key::new(KeyCode::Space, KeyModifiers::CTRL)
                 };
                 ParseResult::Event(Event::KeyPress(key), 1)
             }
             // Ctrl+\, Ctrl+], Ctrl+^, Ctrl+_
             0x1c => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char('\\')).with_modifiers(KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char('\\'), KeyModifiers::CTRL)),
                 1,
             ),
             0x1d => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char(']')).with_modifiers(KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char(']'), KeyModifiers::CTRL)),
                 1,
             ),
             0x1e => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char('^')).with_modifiers(KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char('^'), KeyModifiers::CTRL)),
                 1,
             ),
             0x1f => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char('_')).with_modifiers(KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char('_'), KeyModifiers::CTRL)),
                 1,
             ),
             0x7f => {
@@ -455,7 +464,7 @@ impl Decoder {
                 } else {
                     KeyCode::Backspace
                 };
-                ParseResult::Event(Event::KeyPress(Key::new(code)), 1)
+                ParseResult::Event(Event::KeyPress(Key::new(code, KeyModifiers::empty())), 1)
             }
             // 8-bit C1 control codes that introduce a string/control sequence
             // (equivalent to their `ESC X` 7-bit forms).
@@ -471,20 +480,22 @@ impl Decoder {
             b @ 0x80..=0x9f => {
                 let c = (b - 0x40) as char;
                 ParseResult::Event(
-                    Event::KeyPress(
-                        Key::new(KeyCode::Char(c))
-                            .with_modifiers(KeyModifiers::CTRL | KeyModifiers::ALT),
-                    ),
+                    Event::KeyPress(Key::new(
+                        KeyCode::Char(c),
+                        KeyModifiers::CTRL | KeyModifiers::ALT,
+                    )),
                     1,
                 )
             }
             b if b >= 0x80 => self.parse_utf8(buf),
-            0x20 => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Space)), 1),
-            b => {
-                let mut key = Key::new(KeyCode::Char(b as char));
-                crate::event::key::normalize_shift_case(&mut key);
-                ParseResult::Event(Event::KeyPress(key), 1)
-            }
+            0x20 => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Space, KeyModifiers::empty())),
+                1,
+            ),
+            b => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Char(b as char), KeyModifiers::empty())),
+                1,
+            ),
         }
     }
 }

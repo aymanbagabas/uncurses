@@ -209,7 +209,7 @@ fn recognize(
         let cpr = Event::CursorPosition(crate::Position::new((col - 1) as u16, (row - 1) as u16));
         if row == 1 && col >= 1 && col - 1 <= 15 {
             let mods = xterm_modifiers(col as u16);
-            let f3 = Event::KeyPress(Key::new(KeyCode::F(3)).with_modifiers(mods));
+            let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods));
             return Some(Event::Multi(vec![f3, cpr]));
         }
         return Some(cpr);
@@ -373,7 +373,7 @@ fn recognize(
         }
         match final_byte {
             b'Z' => {
-                let key = Key::new(KeyCode::BackTab).with_modifiers(KeyModifiers::SHIFT);
+                let key = Key::new(KeyCode::BackTab, KeyModifiers::SHIFT);
                 return Some(key_event_for_phase(key, csi_kitty_phase(params)));
             }
             b'~' => {
@@ -412,18 +412,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
                 None => return None,
             },
         };
-        let mut key = Key::new(key_code).with_modifiers(mods);
-        // For pure printable chars with no/Shift modifier, surface the
-        // typed text so callers that read .text get the glyph. Skip
-        // when Shift is the only modifier — the protocol reports the
-        // base codepoint, not the shifted glyph, so we'd be lying;
-        // `normalize_shift_case` populates `shifted_key` instead.
-        if let KeyCode::Char(c) = key_code
-            && mods.is_empty()
-        {
-            key = key.with_text(c.to_string());
-        }
-        crate::event::key::normalize_shift_case(&mut key);
+        let key = Key::new(key_code, mods);
         return Some(Event::KeyPress(key));
     }
 
