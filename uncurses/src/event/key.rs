@@ -20,18 +20,48 @@ bitflags! {
 }
 
 /// A key event.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Equality and hashing intentionally consider only [`code`](Self::code)
+/// and [`modifiers`](Self::modifiers): two keys representing the same
+/// press compare equal regardless of whether informational fields
+/// ([`text`](Self::text), [`shifted_key`](Self::shifted_key),
+/// [`base_key`](Self::base_key)) were populated by the producing
+/// decoder. This makes `Key` safe to use as a `HashMap` key for binding
+/// lookups even when some decoder paths surface richer metadata than
+/// others.
+#[derive(Debug, Clone)]
 pub struct Key {
     /// The key code (which key was pressed).
     pub code: KeyCode,
     /// Active modifiers.
     pub modifiers: KeyModifiers,
     /// Associated text (from Kitty protocol or composed input).
+    ///
+    /// Informational; ignored by `==` and `Hash`.
     pub text: Option<String>,
     /// Shifted-layer codepoint (Kitty Report-Alternate-Keys).
+    ///
+    /// Informational; ignored by `==` and `Hash`.
     pub shifted_key: Option<char>,
     /// Base-layout codepoint (Kitty Report-Alternate-Keys).
+    ///
+    /// Informational; ignored by `==` and `Hash`.
     pub base_key: Option<char>,
+}
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code && self.modifiers == other.modifiers
+    }
+}
+
+impl Eq for Key {}
+
+impl std::hash::Hash for Key {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.code.hash(state);
+        self.modifiers.hash(state);
+    }
 }
 
 impl Key {
@@ -478,5 +508,36 @@ mod tests {
         k.text = Some("@".to_string());
         assert_eq!(k.text.as_deref(), Some("@"));
         assert_eq!(k.shifted_key, Some('@'));
+    }
+
+    #[test]
+    fn eq_ignores_informational_fields() {
+        let bare = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT);
+        let mut decorated = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT);
+        decorated.text = Some("custom".to_string());
+        decorated.shifted_key = Some('Z');
+        decorated.base_key = Some('q');
+        assert_eq!(bare, decorated);
+    }
+
+    #[test]
+    fn hash_ignores_informational_fields() {
+        use std::collections::HashMap;
+        let mut map: HashMap<Key, &'static str> = HashMap::new();
+        map.insert(Key::new(KeyCode::Char('a'), KeyModifiers::CTRL), "ctrl-a");
+
+        let mut lookup = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL);
+        lookup.text = Some("ignored".to_string());
+        lookup.shifted_key = Some('X');
+        assert_eq!(map.get(&lookup), Some(&"ctrl-a"));
+    }
+
+    #[test]
+    fn eq_distinguishes_code_and_modifiers() {
+        let a = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        let ctrl_a = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL);
+        let b = Key::new(KeyCode::Char('b'), KeyModifiers::empty());
+        assert_ne!(a, ctrl_a);
+        assert_ne!(a, b);
     }
 }
