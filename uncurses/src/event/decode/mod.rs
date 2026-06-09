@@ -642,7 +642,9 @@ mod tests {
         match &events[0] {
             Event::KeyPress(k) => {
                 assert_eq!(k.code, KeyCode::BackTab);
-                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+                // BackTab does not carry SHIFT — the variant itself
+                // already encodes "Shift was applied to Tab".
+                assert!(k.modifiers.is_empty());
             }
             _ => panic!("Expected Key event"),
         }
@@ -2099,7 +2101,7 @@ mod tests {
         match evs.as_slice() {
             [Event::KeyRelease(k)] => {
                 assert_eq!(k.code, KeyCode::BackTab);
-                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+                assert!(k.modifiers.is_empty());
             }
             other => panic!("expected single KeyRelease, got {other:?}"),
         }
@@ -2424,5 +2426,144 @@ mod tests {
         assert!(k.modifiers.contains(KeyModifiers::CTRL));
         assert!(k.text.is_none());
         assert_eq!(k.shifted_key, None);
+    }
+
+    // --- Cross-decoder identity ----------------------------------------
+    //
+    // For a given logical press, every decoder path must produce a Key
+    // whose (code, modifiers) match — that pair is the binding identity
+    // used by `==` and `Hash`. Informational fields (`text`,
+    // `shifted_key`, `base_key`) may legitimately differ depending on
+    // which kitty enhancement flags the terminal advertises.
+
+    fn first_press(p: &mut Decoder, bytes: &[u8]) -> Key {
+        let evs = p.parse(bytes);
+        let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
+            panic!("expected KeyPress, got something else")
+        };
+        k
+    }
+
+    #[test]
+    fn cross_decoder_plain_a_matches() {
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"a");
+        let mut p = Decoder::new();
+        let kitty_bare = first_press(&mut p, b"\x1b[97u");
+        let mut p = Decoder::new();
+        // Kitty with associated text (no shifted/base).
+        let kitty_text = first_press(&mut p, b"\x1b[97;1;97u");
+        let mut p = Decoder::new();
+        // Kitty with alternate keys.
+        let kitty_alt = first_press(&mut p, b"\x1b[97:97:97u");
+        let mut p = Decoder::new();
+        let mok2 = first_press(&mut p, b"\x1b[27;1;97~");
+        assert_eq!(bare, kitty_bare);
+        assert_eq!(bare, kitty_text);
+        assert_eq!(bare, kitty_alt);
+        assert_eq!(bare, mok2);
+    }
+
+    #[test]
+    fn cross_decoder_shift_a_matches() {
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"A");
+        let mut p = Decoder::new();
+        let kitty_bare = first_press(&mut p, b"\x1b[65u");
+        let mut p = Decoder::new();
+        // Kitty all-keys: codepoint stays unshifted (97), modifier=2 (Shift).
+        let kitty_all = first_press(&mut p, b"\x1b[97;2u");
+        let mut p = Decoder::new();
+        // Kitty alt-keys: code:shifted:base.
+        let kitty_alt = first_press(&mut p, b"\x1b[97:65:97;2u");
+        let mut p = Decoder::new();
+        // Kitty assoc-text: text codepoint 65 ('A').
+        let kitty_text = first_press(&mut p, b"\x1b[97;2;65u");
+        let mut p = Decoder::new();
+        let mok2 = first_press(&mut p, b"\x1b[27;2;97~");
+        assert_eq!(bare, kitty_bare);
+        assert_eq!(bare, kitty_all);
+        assert_eq!(bare, kitty_alt);
+        assert_eq!(bare, kitty_text);
+        assert_eq!(bare, mok2);
+    }
+
+    #[test]
+    fn cross_decoder_ctrl_a_matches() {
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"\x01");
+        let mut p = Decoder::new();
+        let kitty = first_press(&mut p, b"\x1b[97;5u");
+        let mut p = Decoder::new();
+        let mok2 = first_press(&mut p, b"\x1b[27;5;97~");
+        assert_eq!(bare, kitty);
+        assert_eq!(bare, mok2);
+    }
+
+    #[test]
+    fn cross_decoder_alt_a_matches() {
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"\x1ba");
+        let mut p = Decoder::new();
+        let kitty = first_press(&mut p, b"\x1b[97;3u");
+        let mut p = Decoder::new();
+        let mok2 = first_press(&mut p, b"\x1b[27;3;97~");
+        assert_eq!(bare, kitty);
+        assert_eq!(bare, mok2);
+    }
+
+    #[test]
+    fn cross_decoder_cyrillic_upper_matches() {
+        // 'Ц' = U+0426 = 0xD0 0xA6.
+        let mut p = Decoder::new();
+        let utf8 = first_press(&mut p, "Ц".as_bytes());
+        let mut p = Decoder::new();
+        // Kitty bare codepoint for Ц.
+        let kitty_bare = first_press(&mut p, b"\x1b[1062u");
+        let mut p = Decoder::new();
+        // Kitty all-keys for Shift+ц: code stays lowercase, mod=2.
+        let kitty_all = first_press(&mut p, b"\x1b[1094;2u");
+        let mut p = Decoder::new();
+        // Kitty alt-keys: code:shifted (Ц).
+        let kitty_alt = first_press(&mut p, b"\x1b[1094:1062;2u");
+        assert_eq!(utf8, kitty_bare);
+        assert_eq!(utf8, kitty_all);
+        assert_eq!(utf8, kitty_alt);
+    }
+
+    #[test]
+    fn cross_decoder_shift_tab_is_backtab_everywhere() {
+        // Bare CSI Z and kitty both canonicalize Shift+Tab to BackTab
+        // with the shift modifier dropped. MOK2 must do the same.
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"\x1b[Z");
+        let mut p = Decoder::new();
+        let kitty = first_press(&mut p, b"\x1b[9;2u");
+        let mut p = Decoder::new();
+        let mok2 = first_press(&mut p, b"\x1b[27;2;9~");
+        assert_eq!(bare, kitty);
+        assert_eq!(bare, mok2);
+    }
+
+    #[test]
+    fn cross_decoder_enter_matches() {
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"\r");
+        let mut p = Decoder::new();
+        let kitty = first_press(&mut p, b"\x1b[13u");
+        let mut p = Decoder::new();
+        let mok2 = first_press(&mut p, b"\x1b[27;1;13~");
+        assert_eq!(bare, kitty);
+        assert_eq!(bare, mok2);
+    }
+
+    #[test]
+    fn cross_decoder_escape_matches() {
+        let mut p = Decoder::new();
+        let kitty = first_press(&mut p, b"\x1b[27u");
+        let mut p = Decoder::new();
+        let mok2 = first_press(&mut p, b"\x1b[27;1;27~");
+        assert_eq!(kitty, mok2);
+        assert_eq!(kitty.code, KeyCode::Escape);
     }
 }

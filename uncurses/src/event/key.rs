@@ -116,6 +116,15 @@ impl Key {
     /// Apply the canonicalization rules described on [`Self::new`].
     /// Idempotent.
     pub(crate) fn normalize(&mut self) {
+        // Shift+Tab collapses to BackTab with no Shift modifier. This is
+        // a universal convention (legacy `CSI Z`, kitty CSI u, MOK2),
+        // not a protocol detail — apply it once here so every decoder
+        // path emits the same canonical BackTab identity.
+        if self.code == KeyCode::Tab && self.modifiers.contains(KeyModifiers::SHIFT) {
+            self.code = KeyCode::BackTab;
+            self.modifiers.remove(KeyModifiers::SHIFT);
+        }
+
         // Case folding for printable Char codes.
         if let KeyCode::Char(c) = self.code {
             if c.is_uppercase() {
