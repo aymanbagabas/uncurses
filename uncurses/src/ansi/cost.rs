@@ -260,7 +260,7 @@ pub fn overwrite_cost(
     let mut cost = 0usize;
     while i < to {
         let cell = &line[i];
-        if cell.width() > 0 {
+        if !cell.is_continuation() {
             if cell.style() != style {
                 return None;
             }

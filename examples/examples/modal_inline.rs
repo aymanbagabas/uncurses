@@ -138,7 +138,7 @@ fn paint_scrim<W: Write>(screen: &mut Screen<W>) {
     // wins because we overwrite each cell.
     let scrim = Style::EMPTY.with_bg(Color::Rgb(0x55, 0x55, 0x55));
     let bounds = Rect::new(0, 0, screen.width(), screen.height());
-    screen.fill_rect(bounds, &Cell::new(" ", 1).with_style(scrim));
+    screen.fill_rect(bounds, &Cell::narrow(" ").with_style(scrim));
 }
 
 fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
@@ -164,7 +164,7 @@ fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
         .with_fg(BasicColor::BrightYellow.into())
         .with_bg(BasicColor::Blue.into());
 
-    screen.fill_rect(rect, &Cell::new(" ", 1).with_style(body.clone()));
+    screen.fill_rect(rect, &Cell::narrow(" ").with_style(body.clone()));
 
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;

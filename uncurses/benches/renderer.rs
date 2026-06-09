@@ -10,7 +10,7 @@ fn filled_buffer(offset: u8) -> RenderBuffer {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             let ch = char::from(b'a' + ((x as u8 + y as u8 + offset) % 26));
-            buf.set_cell((x, y), &Cell::new(ch.to_string(), 1));
+            buf.set_cell((x, y), &Cell::narrow(ch.to_string()));
         }
     }
     buf
@@ -22,7 +22,7 @@ fn shifted_up_buffer() -> RenderBuffer {
         for x in 0..WIDTH {
             let source_y = (y + 1) % HEIGHT;
             let ch = char::from(b'a' + ((x as u8 + source_y as u8) % 26));
-            buf.set_cell((x, y), &Cell::new(ch.to_string(), 1));
+            buf.set_cell((x, y), &Cell::narrow(ch.to_string()));
         }
     }
     buf
@@ -92,8 +92,8 @@ fn single_cell_change(c: &mut Criterion) {
     let mut second = first.clone();
     first.clear_touched();
     second.clear_touched();
-    first.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::new("0", 1));
-    second.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::new("1", 1));
+    first.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::narrow("0"));
+    second.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::narrow("1"));
 
     bench_swap_render(
         c,

@@ -250,7 +250,7 @@ fn s(bytes: &[u8]) -> String {
 }
 
 fn fill(screen: &mut Screen<&mut Vec<u8>>, x: u16, y: u16, content: &str) {
-    screen.set_cell((x, y), &Cell::new(content, 1));
+    screen.set_cell((x, y), &Cell::narrow(content));
 }
 
 fn draw_wrapped(screen: &mut Screen<&mut Vec<u8>>, src: &str) {
@@ -320,7 +320,7 @@ fn truecolor_profile_emits_38_2_rgb() {
             .with_color_profile(Profile::TrueColor);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -342,7 +342,7 @@ fn ansi256_profile_emits_38_5_index() {
             .with_color_profile(Profile::Ansi256);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -361,7 +361,7 @@ fn ansi_profile_emits_basic_sgr_3x_or_9x() {
             .with_color_profile(Profile::Ansi);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -385,7 +385,7 @@ fn ascii_profile_emits_no_color_sgr() {
             .with_color_profile(Profile::Ascii);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -708,7 +708,7 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::new(char::from(b'A' + y as u8).to_string(), 1),
+                    &Cell::narrow(char::from(b'A' + y as u8).to_string()),
                 );
             }
         }
@@ -718,12 +718,12 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::new(char::from(b'A' + 1 + y as u8).to_string(), 1),
+                    &Cell::narrow(char::from(b'A' + 1 + y as u8).to_string()),
                 );
             }
         }
         for x in 0..10u16 {
-            screen.set_cell((x, 4u16), &Cell::new("F", 1));
+            screen.set_cell((x, 4u16), &Cell::narrow("F"));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -749,7 +749,7 @@ fn wide_characters_round_trip_to_output() {
         let mut screen = Screen::new(&mut buf).with_size(10, 1);
         let wide = ["🌟", "中", "文", "字"];
         for (i, ch) in wide.iter().enumerate() {
-            screen.set_cell((i as u16 * 2, 0u16), &Cell::new(*ch, 2));
+            screen.set_cell((i as u16 * 2, 0u16), &Cell::wide(*ch));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -765,7 +765,7 @@ fn zero_width_combining_mark_reaches_output() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::new(&mut buf).with_size(5, 1);
-        screen.set_cell((0u16, 0u16), &Cell::new("a\u{0301}", 1));
+        screen.set_cell((0u16, 0u16), &Cell::narrow("a\u{0301}"));
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -779,19 +779,19 @@ fn styled_text_emits_specific_sgr_payloads() {
         let mut screen = Screen::new(&mut buf).with_size(4, 1);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_bold()),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_bold()),
         );
         screen.set_cell(
             (1u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_fg(Color::rgb(255, 0, 0))),
         );
         screen.set_cell(
             (2u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_bg(Color::rgb(0, 255, 0))),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_bg(Color::rgb(0, 255, 0))),
         );
         screen.set_cell(
             (3u16, 0u16),
-            &Cell::new("X", 1).with_style(Style::EMPTY.with_bold().with_fg(Color::rgb(0, 0, 255))),
+            &Cell::narrow("X").with_style(Style::EMPTY.with_bold().with_fg(Color::rgb(0, 0, 255))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -812,7 +812,7 @@ fn hyperlinks_emit_osc8_with_url() {
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
-                &Cell::new(ch.to_string(), 1).with_style(style.clone()),
+                &Cell::narrow(ch.to_string()).with_style(style.clone()),
             );
         }
         screen.render().unwrap();
@@ -838,7 +838,7 @@ fn hyperlinks_suppressed_under_disabled_profile() {
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
-                &Cell::new(ch.to_string(), 1).with_style(style.clone()),
+                &Cell::narrow(ch.to_string()).with_style(style.clone()),
             );
         }
         screen.render().unwrap();
@@ -880,7 +880,7 @@ fn scroll_optimization_default_keeps_bottom_row_glyph() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::new(char::from(b'A' + y as u8).to_string(), 1),
+                    &Cell::narrow(char::from(b'A' + y as u8).to_string()),
                 );
             }
         }
@@ -890,12 +890,12 @@ fn scroll_optimization_default_keeps_bottom_row_glyph() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::new(char::from(b'A' + 1 + y as u8).to_string(), 1),
+                    &Cell::narrow(char::from(b'A' + 1 + y as u8).to_string()),
                 );
             }
         }
         for x in 0..10u16 {
-            screen.set_cell((x, 4u16), &Cell::new("F", 1));
+            screen.set_cell((x, 4u16), &Cell::narrow("F"));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -916,7 +916,7 @@ fn large_buffer_renders_bottom_right_glyph() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::new(&mut buf).with_size(1000, 1000);
-        screen.set_cell((999u16, 999u16), &Cell::new("X", 1));
+        screen.set_cell((999u16, 999u16), &Cell::narrow("X"));
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -939,7 +939,7 @@ fn underline_styles_emit_extended_sgr_params() {
         ];
         for (i, u) in styles.iter().enumerate() {
             let st = Style::EMPTY.with_underline_style(*u);
-            screen.set_cell((i as u16, 0u16), &Cell::new("U", 1).with_style(st));
+            screen.set_cell((i as u16, 0u16), &Cell::narrow("U").with_style(st));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -965,7 +965,7 @@ fn text_attribute_variants_emit_matching_sgr_params() {
             Style::EMPTY.with_bold(),
         ];
         for (i, st) in styles.iter().enumerate() {
-            screen.set_cell((i as u16, 0u16), &Cell::new("A", 1).with_style(st.clone()));
+            screen.set_cell((i as u16, 0u16), &Cell::narrow("A").with_style(st.clone()));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1005,7 +1005,7 @@ fn color_downsampling_emits_profile_specific_sgr() {
             let mut screen = Screen::new(&mut buf)
                 .with_size(3, 1)
                 .with_color_profile(profile);
-            let cell = Cell::new("C", 1).with_style(Style::EMPTY.with_fg(Color::rgb(123, 234, 45)));
+            let cell = Cell::narrow("C").with_style(Style::EMPTY.with_fg(Color::rgb(123, 234, 45)));
             screen.set_cell((0u16, 0u16), &cell);
             screen.render().unwrap();
             screen.flush().unwrap();
@@ -1031,7 +1031,7 @@ fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
         let mut screen = Screen::new(&mut buf).with_size(5, 3);
         screen.set_alt_screen(true).unwrap();
         for y in 0..3u16 {
-            screen.set_cell((4u16, y), &Cell::new("X", 1));
+            screen.set_cell((4u16, y), &Cell::narrow("X"));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1058,7 +1058,7 @@ fn line_clearing_uses_el_when_row_shrinks() {
         screen.flush().unwrap();
         for x in 0..10u16 {
             let c = if x == 0 {
-                Cell::new("X", 1)
+                Cell::narrow("X")
             } else {
                 Cell::BLANK
             };
@@ -1196,7 +1196,7 @@ fn renderer_redraws_when_style_changes() {
 
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::new("A", 1).with_style(Style::EMPTY.with_bold()),
+            &Cell::narrow("A").with_style(Style::EMPTY.with_bold()),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1212,7 +1212,7 @@ fn basic_color_fg_emits_sgr_31() {
     {
         let mut screen = Screen::new(&mut buf).with_size(1, 1);
         let cell =
-            Cell::new("X", 1).with_style(Style::EMPTY.with_fg(Color::Basic(BasicColor::Red)));
+            Cell::narrow("X").with_style(Style::EMPTY.with_fg(Color::Basic(BasicColor::Red)));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1329,10 +1329,10 @@ fn inline_erase_until_end_of_line_clears_trailing_cells() {
 
         for x in 0..10u16 {
             let cell = match x {
-                0 => Cell::new("A", 1),
-                1 => Cell::new("B", 1),
-                2 => Cell::new("C", 1),
-                3 => Cell::new("E", 1),
+                0 => Cell::narrow("A"),
+                1 => Cell::narrow("B"),
+                2 => Cell::narrow("C"),
+                3 => Cell::narrow("E"),
                 _ => Cell::BLANK,
             };
             screen.set_cell((x, 1u16), &cell);

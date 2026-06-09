@@ -73,7 +73,7 @@ mod tests {
         r.cur_buf = Some(RenderBuffer::new(10, 1));
 
         let mut new_buf = RenderBuffer::new(10, 1);
-        new_buf.set_cell((3, 0), &Cell::new("X", 1));
+        new_buf.set_cell((3, 0), &Cell::narrow("X"));
 
         let mut sink = Vec::new();
         r.transform_line(&mut sink, &new_buf, 0, 0, 9).unwrap();
@@ -101,16 +101,16 @@ mod tests {
         // Old buffer has content across the full line
         let mut old_buf = RenderBuffer::new(10, 1);
         for i in 0..10 {
-            old_buf.set_cell((i, 0), &Cell::new("X", 1));
+            old_buf.set_cell((i, 0), &Cell::narrow("X"));
         }
         old_buf.clear_touched();
         r.cur_buf = Some(old_buf);
 
         // New buffer only has content in first 3 cols, rest is blank
         let mut new_buf = RenderBuffer::new(10, 1);
-        new_buf.set_cell((0, 0), &Cell::new("A", 1));
-        new_buf.set_cell((1, 0), &Cell::new("B", 1));
-        new_buf.set_cell((2, 0), &Cell::new("C", 1));
+        new_buf.set_cell((0, 0), &Cell::narrow("A"));
+        new_buf.set_cell((1, 0), &Cell::narrow("B"));
+        new_buf.set_cell((2, 0), &Cell::narrow("C"));
 
         let mut sink = Vec::new();
         r.transform_line(&mut sink, &new_buf, 0, 0, 9).unwrap();
@@ -140,7 +140,7 @@ mod tests {
         // scroll blanked or shifted cur_buf).
         let mut cur = RenderBuffer::new(width, height);
         for (x, ch) in "ABCDEFGHIJ".chars().enumerate() {
-            cur.buffer.set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+            cur.buffer.set((x as u16, 0), &Cell::narrow(ch.to_string()));
         }
         r.cur_buf = Some(cur);
         r.last_width = width;
@@ -153,7 +153,7 @@ mod tests {
         for (x, ch) in "012XYZWVUT".chars().enumerate() {
             new_buf
                 .buffer
-                .set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+                .set((x as u16, 0), &Cell::narrow(ch.to_string()));
         }
         new_buf.touch_line(0, 3, 9);
 
@@ -176,7 +176,7 @@ mod tests {
         let mut r = Renderer::new();
         let mut cur = RenderBuffer::new(width, 1);
         for (x, ch) in "Hello world!".chars().enumerate() {
-            cur.buffer.set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+            cur.buffer.set((x as u16, 0), &Cell::narrow(ch.to_string()));
         }
         r.cur_buf = Some(cur);
         r.last_width = width;
@@ -186,7 +186,7 @@ mod tests {
         for (x, ch) in "      world!".chars().enumerate() {
             new_buf
                 .buffer
-                .set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+                .set((x as u16, 0), &Cell::narrow(ch.to_string()));
         }
         new_buf.touch_line(0, 0, width - 1);
 
@@ -208,7 +208,7 @@ mod tests {
         let mut r = Renderer::new();
         let mut cur = RenderBuffer::new(width, 1);
         for (x, ch) in "Hello there".chars().enumerate() {
-            cur.buffer.set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+            cur.buffer.set((x as u16, 0), &Cell::narrow(ch.to_string()));
         }
         r.cur_buf = Some(cur);
         r.last_width = width;
@@ -233,7 +233,7 @@ mod tests {
 
         let mut new_buf = RenderBuffer::new(10, 1);
         let style = Style::EMPTY.with_fg(Color::Basic(BasicColor::Red));
-        new_buf.set_cell((0, 0), &Cell::new("R", 1).with_style(style));
+        new_buf.set_cell((0, 0), &Cell::narrow("R").with_style(style));
 
         let mut sink = Vec::new();
         r.transform_line(&mut sink, &new_buf, 0, 0, 9).unwrap();
@@ -250,15 +250,15 @@ mod tests {
         // Old buffer has content on all 5 lines
         let mut old_buf = RenderBuffer::new(10, 5);
         for y in 0..5 {
-            old_buf.set_cell((0, y), &Cell::new("X", 1));
+            old_buf.set_cell((0, y), &Cell::narrow("X"));
         }
 
         r.cur_buf = Some(old_buf);
 
         // New buffer only has content on first 2 lines
         let mut new_buf = RenderBuffer::new(10, 5);
-        new_buf.set_cell((0, 0), &Cell::new("A", 1));
-        new_buf.set_cell((0, 1), &Cell::new("B", 1));
+        new_buf.set_cell((0, 0), &Cell::narrow("A"));
+        new_buf.set_cell((0, 1), &Cell::narrow("B"));
 
         let mut sink = Vec::new();
         r.clear_bottom(&mut sink, &new_buf).unwrap();
@@ -286,9 +286,9 @@ mod tests {
         // pen on entry is default, so ED would paint with default bg
         // and erase the red background — wrong.
         let bg_red =
-            Cell::new(" ", 1).with_style(Style::EMPTY.with_bg(crate::color::Color::Indexed(1)));
+            Cell::narrow(" ").with_style(Style::EMPTY.with_bg(crate::color::Color::Indexed(1)));
         let mut new_buf = RenderBuffer::new(10, 4);
-        new_buf.set_cell((0, 0), &Cell::new("A", 1));
+        new_buf.set_cell((0, 0), &Cell::narrow("A"));
         for x in 0..10u16 {
             new_buf.set_cell((x, 3), &bg_red.clone());
         }
@@ -312,13 +312,13 @@ mod tests {
         let mut old_buf = RenderBuffer::new(10, 1);
         let mut new_buf = RenderBuffer::new(10, 1);
         for x in 0..10u16 {
-            old_buf.set_cell((x, 0), &Cell::new("a", 1));
-            new_buf.set_cell((x, 0), &Cell::new("a", 1));
+            old_buf.set_cell((x, 0), &Cell::narrow("a"));
+            new_buf.set_cell((x, 0), &Cell::narrow("a"));
         }
-        old_buf.set_cell((0, 0), &Cell::new("X", 1));
-        old_buf.set_cell((9, 0), &Cell::new("X", 1));
-        new_buf.set_cell((0, 0), &Cell::new("A", 1));
-        new_buf.set_cell((9, 0), &Cell::new("B", 1));
+        old_buf.set_cell((0, 0), &Cell::narrow("X"));
+        old_buf.set_cell((9, 0), &Cell::narrow("X"));
+        new_buf.set_cell((0, 0), &Cell::narrow("A"));
+        new_buf.set_cell((9, 0), &Cell::narrow("B"));
         r.cur_buf = Some(old_buf);
         r.last_width = 10;
         r.last_height = 1;
