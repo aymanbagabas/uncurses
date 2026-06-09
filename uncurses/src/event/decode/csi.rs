@@ -373,7 +373,11 @@ fn recognize(
         }
         match final_byte {
             b'Z' => {
-                let key = Key::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+                // Pass SHIFT through `Key::new`; normalize collapses
+                // Tab+Shift to BackTab uniformly. CSI Z is the legacy
+                // single-byte spelling, so we route through Tab to keep
+                // the canonicalization in one place.
+                let key = Key::new(KeyCode::Tab, KeyModifiers::SHIFT);
                 return Some(key_event_for_phase(key, csi_kitty_phase(params)));
             }
             b'~' => {

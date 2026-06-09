@@ -61,13 +61,6 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     // producing '@'), which `Key::new` couldn't infer up front.
     key.normalize();
 
-    // Match legacy `CSI Z` semantics: Shift+Tab is reported as BackTab
-    // with no Shift modifier, regardless of the encoding path used.
-    if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT) {
-        key.code = KeyCode::BackTab;
-        key.modifiers.remove(KeyModifiers::SHIFT);
-    }
-
     Some(key_event_for_phase(key, phase))
 }
 
