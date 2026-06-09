@@ -45,15 +45,10 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     let mut key = Key::new(code, modifiers);
     if let Some(c) = shifted.and_then(char::from_u32) {
         key.shifted_key = Some(c);
-        // Refresh text from the terminal-reported shifted glyph when
-        // `Key::new` couldn't derive it (e.g. Shift+2 producing '@'),
-        // and modifiers still represent printable input.
-        const PRINTABLE_ALLOWED: KeyModifiers = KeyModifiers::SHIFT
-            .union(KeyModifiers::CAPS_LOCK)
-            .union(KeyModifiers::NUM_LOCK);
-        if (key.modifiers - PRINTABLE_ALLOWED).is_empty() {
-            key.text = Some(c.to_string());
-        }
+        // Reset any text `Key::new` auto-derived from the un-shifted
+        // code so `normalize()` below can re-derive it from the
+        // protocol-reported shifted glyph (e.g. Shift+2 → '@').
+        key.text = None;
     }
     if let Some(c) = base.and_then(char::from_u32) {
         key.base_key = Some(c);
@@ -61,6 +56,10 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     if let Some(t) = protocol_text {
         key.text = Some(t);
     }
+    // Re-canonicalize: the protocol-reported shifted glyph may now
+    // back-fill `text` for inputs without a case variant (e.g. Shift+2
+    // producing '@'), which `Key::new` couldn't infer up front.
+    key.normalize();
 
     // Match legacy `CSI Z` semantics: Shift+Tab is reported as BackTab
     // with no Shift modifier, regardless of the encoding path used.
