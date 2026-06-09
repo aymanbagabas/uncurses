@@ -50,6 +50,16 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
         base_key: base.and_then(char::from_u32),
     };
 
+    let mut key = key;
+    super::super::key::normalize_shift_case(&mut key);
+
+    // Match legacy `CSI Z` semantics: Shift+Tab is reported as BackTab
+    // with no Shift modifier, regardless of the encoding path used.
+    if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT) {
+        key.code = KeyCode::BackTab;
+        key.modifiers.remove(KeyModifiers::SHIFT);
+    }
+
     Some(key_event_for_phase(key, phase))
 }
 
@@ -89,6 +99,7 @@ fn kitty_keycode_to_keycode(code: u32) -> Option<KeyCode> {
         9 => return Some(KeyCode::Tab),
         13 => return Some(KeyCode::Enter),
         27 => return Some(KeyCode::Escape),
+        32 => return Some(KeyCode::Space),
         127 => return Some(KeyCode::Backspace),
         _ => {}
     }

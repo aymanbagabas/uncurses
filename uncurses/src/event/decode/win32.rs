@@ -73,6 +73,7 @@ impl Decoder {
             if !code.is_control() {
                 key = key.with_text(code.to_string());
             }
+            crate::event::key::normalize_shift_case(&mut key);
             return self.emit_win32_key(key, kd, rep, consumed);
         }
 
@@ -131,6 +132,7 @@ impl Decoder {
         if let Some(t) = text {
             key = key.with_text(t);
         }
+        crate::event::key::normalize_shift_case(&mut key);
 
         self.win32_last_cks.set(cks);
         self.emit_win32_key(key, kd, rep, consumed)

@@ -470,7 +470,9 @@ fn run() -> std::io::Result<()> {
                 ..
             }) if modifiers.contains(KeyModifiers::CTRL) => break,
 
-            Event::KeyPress(Key { code, .. }) => match code {
+            Event::KeyPress(Key {
+                code, modifiers, ..
+            }) => match code {
                 KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
                 KeyCode::PageUp => {
@@ -480,8 +482,10 @@ fn run() -> std::io::Result<()> {
                     app.preview_scroll =
                         (app.preview_scroll + 10).min(app.preview_lines.len().saturating_sub(1));
                 }
-                KeyCode::Char('g') => app.preview_scroll = 0,
-                KeyCode::Char('G') => {
+                KeyCode::Char('g') if !modifiers.contains(KeyModifiers::SHIFT) => {
+                    app.preview_scroll = 0
+                }
+                KeyCode::Char('g') if modifiers.contains(KeyModifiers::SHIFT) => {
                     app.preview_scroll = app.preview_lines.len().saturating_sub(1);
                 }
                 KeyCode::Enter => app.enter(),
