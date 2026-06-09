@@ -405,6 +405,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
             0x09 => KeyCode::Tab,
             0x0d => KeyCode::Enter,
             0x1b => KeyCode::Escape,
+            0x20 => KeyCode::Space,
             0x7f => KeyCode::Backspace,
             _ => match char::from_u32(r) {
                 Some(c) => KeyCode::Char(c),
@@ -413,12 +414,16 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
         };
         let mut key = Key::new(key_code).with_modifiers(mods);
         // For pure printable chars with no/Shift modifier, surface the
-        // typed text so callers that read .text get the glyph.
+        // typed text so callers that read .text get the glyph. Skip
+        // when Shift is the only modifier — the protocol reports the
+        // base codepoint, not the shifted glyph, so we'd be lying;
+        // `normalize_shift_case` populates `shifted_key` instead.
         if let KeyCode::Char(c) = key_code
-            && (mods.is_empty() || mods == KeyModifiers::SHIFT)
+            && mods.is_empty()
         {
             key = key.with_text(c.to_string());
         }
+        crate::event::key::normalize_shift_case(&mut key);
         return Some(Event::KeyPress(key));
     }
 

@@ -61,12 +61,17 @@ impl Decoder {
             b'_' => self.parse_apc(buf),
             b'X' => self.parse_sos_pm_apc(buf, b'X'),
             b'^' => self.parse_sos_pm_apc(buf, b'^'),
-            b if (0x20..0x7f).contains(&b) => ParseResult::Event(
-                Event::KeyPress(
-                    Key::new(KeyCode::Char(b as char)).with_modifiers(KeyModifiers::ALT),
-                ),
-                2,
-            ),
+            b if (0x20..0x7f).contains(&b) => {
+                let code = if b == b' ' {
+                    KeyCode::Space
+                } else {
+                    KeyCode::Char(b as char)
+                };
+                ParseResult::Event(
+                    Event::KeyPress(Key::new(code).with_modifiers(KeyModifiers::ALT)),
+                    2,
+                )
+            }
             _ => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Escape)), 1),
         }
     }

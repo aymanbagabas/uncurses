@@ -428,7 +428,7 @@ impl Decoder {
                 let key = if self.flags.contains(DecoderFlags::CTRL_AT) {
                     Key::new(KeyCode::Char('@')).with_modifiers(KeyModifiers::CTRL)
                 } else {
-                    Key::new(KeyCode::Char(' ')).with_modifiers(KeyModifiers::CTRL)
+                    Key::new(KeyCode::Space).with_modifiers(KeyModifiers::CTRL)
                 };
                 ParseResult::Event(Event::KeyPress(key), 1)
             }
@@ -479,7 +479,12 @@ impl Decoder {
                 )
             }
             b if b >= 0x80 => self.parse_utf8(buf),
-            b => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Char(b as char))), 1),
+            0x20 => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Space)), 1),
+            b => {
+                let mut key = Key::new(KeyCode::Char(b as char));
+                crate::event::key::normalize_shift_case(&mut key);
+                ParseResult::Event(Event::KeyPress(key), 1)
+            }
         }
     }
 }
@@ -1313,7 +1318,8 @@ mod tests {
         assert_eq!(evs.len(), 1);
         match &evs[0] {
             Event::KeyPress(k) => {
-                assert_eq!(k.code, KeyCode::Char('A'));
+                assert_eq!(k.code, KeyCode::Char('a'));
+                assert_eq!(k.shifted_key, Some('A'));
                 assert!(k.modifiers.contains(KeyModifiers::CTRL));
                 assert!(k.modifiers.contains(KeyModifiers::SHIFT));
             }
@@ -1783,7 +1789,7 @@ mod tests {
     fn decoder_flag_ctrl_at_swaps_ctrl_space() {
         let mut p = Decoder::new();
         let k = press(p.parse(b"\x00"));
-        assert_eq!(k.code, KeyCode::Char(' '));
+        assert_eq!(k.code, KeyCode::Space);
         assert_eq!(k.modifiers, KeyModifiers::CTRL);
 
         let mut p = Decoder::new().with_flags(DecoderFlags::CTRL_AT);
