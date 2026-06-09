@@ -453,6 +453,215 @@ impl fmt::Display for KeyCode {
     }
 }
 
+/// Errors produced when parsing a [`Key`] or [`KeyCode`] from a string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseKeyError {
+    /// Input was empty or whitespace-only.
+    Empty,
+    /// A `+`-separated component was empty (e.g. `"ctrl++a"` or
+    /// `"ctrl+"`).
+    EmptyComponent,
+    /// A modifier token was not recognized.
+    UnknownModifier(String),
+    /// The terminal key token was not recognized.
+    UnknownKey(String),
+    /// A function-key token (`f<n>`) had an out-of-range index.
+    InvalidFunctionKey(String),
+}
+
+impl fmt::Display for ParseKeyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("empty key string"),
+            Self::EmptyComponent => f.write_str("empty `+`-separated component"),
+            Self::UnknownModifier(s) => write!(f, "unknown modifier: {s:?}"),
+            Self::UnknownKey(s) => write!(f, "unknown key name: {s:?}"),
+            Self::InvalidFunctionKey(s) => write!(f, "invalid function key: {s:?}"),
+        }
+    }
+}
+
+impl std::error::Error for ParseKeyError {}
+
+fn parse_modifier(token: &str) -> Result<KeyModifiers, ParseKeyError> {
+    let mods = match token.to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => KeyModifiers::CTRL,
+        "alt" | "opt" | "option" => KeyModifiers::ALT,
+        "shift" => KeyModifiers::SHIFT,
+        "super" | "win" | "cmd" | "command" => KeyModifiers::SUPER,
+        "hyper" => KeyModifiers::HYPER,
+        "meta" => KeyModifiers::META,
+        _ => return Err(ParseKeyError::UnknownModifier(token.to_string())),
+    };
+    Ok(mods)
+}
+
+fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
+    // Single non-`+` character: treat as Char (case preserved so
+    // `Key::new` can canonicalize uppercase into shift+lowercase).
+    let mut chars = token.chars();
+    if let Some(first) = chars.next()
+        && chars.next().is_none()
+    {
+        return Ok(KeyCode::Char(first));
+    }
+
+    // Function key: f<n> where 1 <= n <= 24.
+    let lower = token.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix('f')
+        && rest.chars().all(|c| c.is_ascii_digit())
+        && !rest.is_empty()
+    {
+        let n: u8 = rest
+            .parse()
+            .map_err(|_| ParseKeyError::InvalidFunctionKey(token.to_string()))?;
+        if !(1..=24).contains(&n) {
+            return Err(ParseKeyError::InvalidFunctionKey(token.to_string()));
+        }
+        return Ok(KeyCode::F(n));
+    }
+
+    Ok(match lower.as_str() {
+        // Navigation
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "find" => KeyCode::Find,
+        "select" => KeyCode::Select,
+        "pgup" | "pageup" | "page-up" => KeyCode::PageUp,
+        "pgdn" | "pagedown" | "page-down" => KeyCode::PageDown,
+        // Editing
+        "backspace" | "bs" => KeyCode::Backspace,
+        "delete" | "del" => KeyCode::Delete,
+        "insert" | "ins" => KeyCode::Insert,
+        "tab" => KeyCode::Tab,
+        "backtab" | "back-tab" => KeyCode::BackTab,
+        "enter" | "return" | "ret" => KeyCode::Enter,
+        // Whitespace / special
+        "space" | "spc" => KeyCode::Space,
+        "esc" | "escape" => KeyCode::Escape,
+        "capslock" | "caps-lock" => KeyCode::CapsLock,
+        "scrolllock" | "scroll-lock" => KeyCode::ScrollLock,
+        "numlock" | "num-lock" => KeyCode::NumLock,
+        "printscreen" | "print-screen" | "prtsc" => KeyCode::PrintScreen,
+        "pause" => KeyCode::Pause,
+        "menu" => KeyCode::Menu,
+        // Punctuation aliases
+        "plus" => KeyCode::Char('+'),
+        // Keypad
+        "kpenter" => KeyCode::KpEnter,
+        "kpadd" => KeyCode::KpAdd,
+        "kpsubtract" => KeyCode::KpSubtract,
+        "kpmultiply" => KeyCode::KpMultiply,
+        "kpdivide" => KeyCode::KpDivide,
+        "kpdecimal" => KeyCode::KpDecimal,
+        "kpequal" => KeyCode::KpEqual,
+        "kpseparator" => KeyCode::KpSeparator,
+        "kpleft" => KeyCode::KpLeft,
+        "kpright" => KeyCode::KpRight,
+        "kpup" => KeyCode::KpUp,
+        "kpdown" => KeyCode::KpDown,
+        "kppgup" | "kppageup" => KeyCode::KpPageUp,
+        "kppgdn" | "kppagedown" => KeyCode::KpPageDown,
+        "kphome" => KeyCode::KpHome,
+        "kpend" => KeyCode::KpEnd,
+        "kpinsert" => KeyCode::KpInsert,
+        "kpdelete" => KeyCode::KpDelete,
+        "kpbegin" => KeyCode::KpBegin,
+        "kp0" => KeyCode::Kp0,
+        "kp1" => KeyCode::Kp1,
+        "kp2" => KeyCode::Kp2,
+        "kp3" => KeyCode::Kp3,
+        "kp4" => KeyCode::Kp4,
+        "kp5" => KeyCode::Kp5,
+        "kp6" => KeyCode::Kp6,
+        "kp7" => KeyCode::Kp7,
+        "kp8" => KeyCode::Kp8,
+        "kp9" => KeyCode::Kp9,
+        // Media
+        "mediaplay" => KeyCode::MediaPlay,
+        "mediapause" => KeyCode::MediaPause,
+        "mediaplaypause" => KeyCode::MediaPlayPause,
+        "mediareverse" => KeyCode::MediaReverse,
+        "mediastop" => KeyCode::MediaStop,
+        "mediarewind" => KeyCode::MediaRewind,
+        "mediafastforward" => KeyCode::MediaFastForward,
+        "medianext" => KeyCode::MediaNext,
+        "mediaprev" => KeyCode::MediaPrev,
+        "mediarecord" => KeyCode::MediaRecord,
+        "volumeup" => KeyCode::VolumeUp,
+        "volumedown" => KeyCode::VolumeDown,
+        "volumemute" => KeyCode::VolumeMute,
+        // Modifier keys
+        "leftshift" => KeyCode::LeftShift,
+        "rightshift" => KeyCode::RightShift,
+        "leftctrl" => KeyCode::LeftCtrl,
+        "rightctrl" => KeyCode::RightCtrl,
+        "leftalt" => KeyCode::LeftAlt,
+        "rightalt" => KeyCode::RightAlt,
+        "leftsuper" => KeyCode::LeftSuper,
+        "rightsuper" => KeyCode::RightSuper,
+        "lefthyper" => KeyCode::LeftHyper,
+        "righthyper" => KeyCode::RightHyper,
+        "leftmeta" => KeyCode::LeftMeta,
+        "rightmeta" => KeyCode::RightMeta,
+        "isolevel3shift" | "iso-level3-shift" => KeyCode::IsoLevel3Shift,
+        "isolevel5shift" | "iso-level5-shift" => KeyCode::IsoLevel5Shift,
+        _ => return Err(ParseKeyError::UnknownKey(token.to_string())),
+    })
+}
+
+impl std::str::FromStr for Key {
+    type Err = ParseKeyError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(ParseKeyError::Empty);
+        }
+
+        // Split on the last `+` to separate modifiers from the key.
+        // This lets `plus` stay reserved for the literal `+` character
+        // (Display emits "plus" for `KeyCode::Char('+')`).
+        let (mod_part, key_part) = match s.rsplit_once('+') {
+            Some((m, k)) => (m, k),
+            None => ("", s),
+        };
+
+        if key_part.is_empty() {
+            return Err(ParseKeyError::EmptyComponent);
+        }
+
+        let mut modifiers = KeyModifiers::empty();
+        if !mod_part.is_empty() {
+            for tok in mod_part.split('+') {
+                if tok.is_empty() {
+                    return Err(ParseKeyError::EmptyComponent);
+                }
+                modifiers |= parse_modifier(tok)?;
+            }
+        }
+
+        let code = parse_key_code(key_part)?;
+        Ok(Key::new(code, modifiers))
+    }
+}
+
+impl std::str::FromStr for KeyCode {
+    type Err = ParseKeyError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            return Err(ParseKeyError::Empty);
+        }
+        parse_key_code(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,5 +1032,210 @@ mod tests {
             Key::new(KeyCode::VolumeMute, KeyModifiers::empty()).to_string(),
             "volumemute"
         );
+    }
+
+    // --- FromStr ------------------------------------------------------
+
+    fn parse(s: &str) -> Key {
+        s.parse::<Key>()
+            .unwrap_or_else(|e| panic!("parse {s:?}: {e}"))
+    }
+
+    #[test]
+    fn fromstr_single_char_lowercase() {
+        let k = parse("a");
+        assert_eq!(k.code, KeyCode::Char('a'));
+        assert!(k.modifiers.is_empty());
+    }
+
+    #[test]
+    fn fromstr_uppercase_char_canonicalizes_to_shift_lowercase() {
+        // Reuse Key::new's canonicalization so callers writing
+        // "A" or "shift+a" end up at the same identity.
+        assert_eq!(
+            "A".parse::<Key>().unwrap(),
+            "shift+a".parse::<Key>().unwrap()
+        );
+    }
+
+    #[test]
+    fn fromstr_modifier_order_independent() {
+        let canonical = parse("ctrl+shift+a");
+        assert_eq!(parse("shift+ctrl+a"), canonical);
+        assert_eq!(parse("Shift+Ctrl+a"), canonical);
+    }
+
+    #[test]
+    fn fromstr_function_keys() {
+        assert_eq!(parse("f1").code, KeyCode::F(1));
+        assert_eq!(parse("f12").code, KeyCode::F(12));
+        assert_eq!(parse("f24").code, KeyCode::F(24));
+    }
+
+    #[test]
+    fn fromstr_function_key_out_of_range() {
+        assert!(matches!(
+            "f0".parse::<Key>(),
+            Err(ParseKeyError::InvalidFunctionKey(_))
+        ));
+        assert!(matches!(
+            "f25".parse::<Key>(),
+            Err(ParseKeyError::InvalidFunctionKey(_))
+        ));
+    }
+
+    #[test]
+    fn fromstr_named_keys() {
+        assert_eq!(parse("esc").code, KeyCode::Escape);
+        assert_eq!(parse("escape").code, KeyCode::Escape);
+        assert_eq!(parse("pgup").code, KeyCode::PageUp);
+        assert_eq!(parse("pageup").code, KeyCode::PageUp);
+        assert_eq!(parse("enter").code, KeyCode::Enter);
+        assert_eq!(parse("return").code, KeyCode::Enter);
+        assert_eq!(parse("ret").code, KeyCode::Enter);
+        assert_eq!(parse("backspace").code, KeyCode::Backspace);
+        assert_eq!(parse("bs").code, KeyCode::Backspace);
+        assert_eq!(parse("delete").code, KeyCode::Delete);
+        assert_eq!(parse("del").code, KeyCode::Delete);
+        assert_eq!(parse("space").code, KeyCode::Space);
+    }
+
+    #[test]
+    fn fromstr_modifier_aliases() {
+        assert_eq!(parse("control+a"), parse("ctrl+a"));
+        assert_eq!(parse("option+a"), parse("alt+a"));
+        assert_eq!(parse("cmd+a"), parse("super+a"));
+        assert_eq!(parse("command+a"), parse("super+a"));
+        assert_eq!(parse("win+a"), parse("super+a"));
+    }
+
+    #[test]
+    fn fromstr_plus_alias_round_trips() {
+        let k = parse("ctrl+plus");
+        assert_eq!(k.code, KeyCode::Char('+'));
+        assert!(k.modifiers.contains(KeyModifiers::CTRL));
+        assert_eq!(k.to_string(), "ctrl+plus");
+    }
+
+    #[test]
+    fn fromstr_keypad_and_media() {
+        assert_eq!(parse("kp0").code, KeyCode::Kp0);
+        assert_eq!(parse("kpenter").code, KeyCode::KpEnter);
+        assert_eq!(parse("mediaplaypause").code, KeyCode::MediaPlayPause);
+        assert_eq!(parse("volumemute").code, KeyCode::VolumeMute);
+    }
+
+    #[test]
+    fn fromstr_modifier_keys_themselves() {
+        assert_eq!(parse("leftshift").code, KeyCode::LeftShift);
+        assert_eq!(parse("rightalt").code, KeyCode::RightAlt);
+        assert_eq!(parse("isolevel3shift").code, KeyCode::IsoLevel3Shift);
+    }
+
+    #[test]
+    fn fromstr_unicode_char() {
+        assert_eq!(parse("ц").code, KeyCode::Char('ц'));
+        assert_eq!(parse("α").code, KeyCode::Char('α'));
+    }
+
+    #[test]
+    fn fromstr_trims_whitespace() {
+        assert_eq!(parse("  ctrl+a  "), parse("ctrl+a"));
+    }
+
+    #[test]
+    fn fromstr_errors() {
+        assert_eq!("".parse::<Key>(), Err(ParseKeyError::Empty));
+        assert_eq!("   ".parse::<Key>(), Err(ParseKeyError::Empty));
+        assert_eq!("ctrl+".parse::<Key>(), Err(ParseKeyError::EmptyComponent));
+        assert_eq!("ctrl++a".parse::<Key>(), Err(ParseKeyError::EmptyComponent));
+        assert!(matches!(
+            "foo+a".parse::<Key>(),
+            Err(ParseKeyError::UnknownModifier(_))
+        ));
+        assert!(matches!(
+            "ctrl+xyz".parse::<Key>(),
+            Err(ParseKeyError::UnknownKey(_))
+        ));
+    }
+
+    #[test]
+    fn fromstr_keycode_only() {
+        let kc: KeyCode = "esc".parse().unwrap();
+        assert_eq!(kc, KeyCode::Escape);
+        let kc: KeyCode = "f5".parse().unwrap();
+        assert_eq!(kc, KeyCode::F(5));
+        assert!(matches!(
+            "ctrl+a".parse::<KeyCode>(),
+            Err(ParseKeyError::UnknownKey(_))
+        ));
+    }
+
+    #[test]
+    fn display_fromstr_roundtrip_named_variants() {
+        // Every variant emitted by Display must round-trip back to an
+        // equal Key.
+        let cases: &[(KeyCode, KeyModifiers)] = &[
+            (KeyCode::Char('a'), KeyModifiers::empty()),
+            (KeyCode::Char('a'), KeyModifiers::CTRL),
+            (KeyCode::Char('a'), KeyModifiers::CTRL | KeyModifiers::ALT),
+            (
+                KeyCode::Char('a'),
+                KeyModifiers::CTRL
+                    | KeyModifiers::ALT
+                    | KeyModifiers::SHIFT
+                    | KeyModifiers::SUPER
+                    | KeyModifiers::HYPER
+                    | KeyModifiers::META,
+            ),
+            (KeyCode::Char('+'), KeyModifiers::CTRL),
+            (KeyCode::Char('ц'), KeyModifiers::empty()),
+            (KeyCode::F(1), KeyModifiers::empty()),
+            (KeyCode::F(24), KeyModifiers::CTRL),
+            (KeyCode::Up, KeyModifiers::empty()),
+            (KeyCode::Down, KeyModifiers::SHIFT),
+            (KeyCode::Left, KeyModifiers::ALT),
+            (KeyCode::Right, KeyModifiers::CTRL),
+            (KeyCode::Home, KeyModifiers::empty()),
+            (KeyCode::End, KeyModifiers::empty()),
+            (KeyCode::PageUp, KeyModifiers::empty()),
+            (KeyCode::PageDown, KeyModifiers::empty()),
+            (KeyCode::Backspace, KeyModifiers::empty()),
+            (KeyCode::Delete, KeyModifiers::empty()),
+            (KeyCode::Insert, KeyModifiers::empty()),
+            (KeyCode::Tab, KeyModifiers::empty()),
+            (KeyCode::BackTab, KeyModifiers::empty()),
+            (KeyCode::Enter, KeyModifiers::empty()),
+            (KeyCode::Space, KeyModifiers::empty()),
+            (KeyCode::Escape, KeyModifiers::empty()),
+            (KeyCode::CapsLock, KeyModifiers::empty()),
+            (KeyCode::ScrollLock, KeyModifiers::empty()),
+            (KeyCode::NumLock, KeyModifiers::empty()),
+            (KeyCode::PrintScreen, KeyModifiers::empty()),
+            (KeyCode::Pause, KeyModifiers::empty()),
+            (KeyCode::Menu, KeyModifiers::empty()),
+            (KeyCode::Kp0, KeyModifiers::empty()),
+            (KeyCode::Kp9, KeyModifiers::empty()),
+            (KeyCode::KpEnter, KeyModifiers::empty()),
+            (KeyCode::KpPageUp, KeyModifiers::empty()),
+            (KeyCode::KpPageDown, KeyModifiers::empty()),
+            (KeyCode::KpBegin, KeyModifiers::empty()),
+            (KeyCode::MediaPlay, KeyModifiers::empty()),
+            (KeyCode::MediaPlayPause, KeyModifiers::empty()),
+            (KeyCode::VolumeUp, KeyModifiers::empty()),
+            (KeyCode::VolumeMute, KeyModifiers::empty()),
+            (KeyCode::LeftShift, KeyModifiers::empty()),
+            (KeyCode::RightMeta, KeyModifiers::empty()),
+            (KeyCode::IsoLevel3Shift, KeyModifiers::empty()),
+            (KeyCode::IsoLevel5Shift, KeyModifiers::empty()),
+        ];
+        for (code, mods) in cases {
+            let k = Key::new(*code, *mods);
+            let s = k.to_string();
+            let parsed = s
+                .parse::<Key>()
+                .unwrap_or_else(|e| panic!("failed to parse {s:?} (from {code:?}, {mods:?}): {e}"));
+            assert_eq!(parsed, k, "round-trip mismatch for {s:?}");
+        }
     }
 }
