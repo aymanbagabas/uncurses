@@ -378,8 +378,8 @@ impl fmt::Display for Key {
             KeyCode::End => f.write_str("end"),
             KeyCode::Find => f.write_str("find"),
             KeyCode::Select => f.write_str("select"),
-            KeyCode::PageUp => f.write_str("pgup"),
-            KeyCode::PageDown => f.write_str("pgdn"),
+            KeyCode::PageUp => f.write_str("pageup"),
+            KeyCode::PageDown => f.write_str("pagedown"),
             KeyCode::Backspace => f.write_str("backspace"),
             KeyCode::Delete => f.write_str("delete"),
             KeyCode::Insert => f.write_str("insert"),
@@ -387,7 +387,7 @@ impl fmt::Display for Key {
             KeyCode::BackTab => f.write_str("backtab"),
             KeyCode::Enter => f.write_str("enter"),
             KeyCode::Space => f.write_str("space"),
-            KeyCode::Escape => f.write_str("esc"),
+            KeyCode::Escape => f.write_str("escape"),
             KeyCode::CapsLock => f.write_str("capslock"),
             KeyCode::ScrollLock => f.write_str("scrolllock"),
             KeyCode::NumLock => f.write_str("numlock"),
@@ -1038,6 +1038,29 @@ mod tests {
         assert_eq!(k.to_string(), "rightalt");
         let k = Key::new(KeyCode::IsoLevel3Shift, KeyModifiers::empty());
         assert_eq!(k.to_string(), "isolevel3shift");
+    }
+
+    #[test]
+    fn display_uses_full_words() {
+        // Display always emits the unabbreviated name; the short forms
+        // (`pgup`, `pgdn`, `esc`, etc.) live only on the parse side.
+        assert_eq!(
+            Key::new(KeyCode::PageUp, KeyModifiers::empty()).to_string(),
+            "pageup"
+        );
+        assert_eq!(
+            Key::new(KeyCode::PageDown, KeyModifiers::empty()).to_string(),
+            "pagedown"
+        );
+        assert_eq!(
+            Key::new(KeyCode::Escape, KeyModifiers::empty()).to_string(),
+            "escape"
+        );
+        // Round-trip the short forms through Display and back to the
+        // same Key.
+        assert_eq!(parse("pgup"), parse("pageup"));
+        assert_eq!(parse("pgdn"), parse("pagedown"));
+        assert_eq!(parse("esc"), parse("escape"));
     }
 
     #[test]
