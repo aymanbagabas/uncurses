@@ -551,7 +551,7 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         "find" => KeyCode::Find,
         "select" => KeyCode::Select,
         "pgup" | "pageup" => KeyCode::PageUp,
-        "pgdn" | "pagedown" => KeyCode::PageDown,
+        "pgdn" | "pgdown" | "pagedown" => KeyCode::PageDown,
         // Editing
         "backspace" | "bs" => KeyCode::Backspace,
         "delete" | "del" => KeyCode::Delete,
@@ -585,7 +585,7 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         "kpup" => KeyCode::KpUp,
         "kpdown" => KeyCode::KpDown,
         "kppgup" | "kppageup" => KeyCode::KpPageUp,
-        "kppgdn" | "kppagedown" => KeyCode::KpPageDown,
+        "kppgdn" | "kppgdown" | "kppagedown" => KeyCode::KpPageDown,
         "kphome" => KeyCode::KpHome,
         "kpend" => KeyCode::KpEnd,
         "kpinsert" => KeyCode::KpInsert,
@@ -1060,6 +1060,7 @@ mod tests {
         // same Key.
         assert_eq!(parse("pgup"), parse("pageup"));
         assert_eq!(parse("pgdn"), parse("pagedown"));
+        assert_eq!(parse("pgdown"), parse("pagedown"));
         assert_eq!(parse("esc"), parse("escape"));
     }
 
