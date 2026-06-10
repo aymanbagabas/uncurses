@@ -67,25 +67,36 @@ impl std::hash::Hash for Key {
 impl Key {
     /// Construct a canonical key from its required fields.
     ///
-    /// Runs normalization once at construction:
+    /// Runs normalization once at construction. The exact rules are
+    /// applied in this order:
     ///
-    /// * If `code` is an uppercase `Char` with a single-codepoint
-    ///   lowercase mapping, the code is lowered, the original
-    ///   uppercase is stored in `shifted_key`, and `SHIFT` is added to
-    ///   `modifiers` (unless `CAPS_LOCK` is already set, in which case
-    ///   no synthetic Shift is added).
-    /// * If `code` is a lowercase `Char` and `modifiers` already
-    ///   contains `SHIFT` or `CAPS_LOCK`, `shifted_key` is populated
-    ///   with the single-codepoint uppercase mapping.
-    /// * If the resulting code is printable (`Char` non-control or
-    ///   `Space`) and `modifiers` is a printable subset
-    ///   (`SHIFT | CAPS_LOCK | NUM_LOCK`), `text` is auto-populated
-    ///   with the user-perceived glyph (shifted form when shifted).
+    /// 1. **Tab + Shift → BackTab.** If `code` is [`KeyCode::Tab`] and
+    ///    `modifiers` contains `SHIFT`, the code is rewritten to
+    ///    [`KeyCode::BackTab`] and `SHIFT` is removed.
+    /// 2. **Char case folding.** Always applied for `Char` codes
+    ///    regardless of the other modifiers:
+    ///    * Uppercase `Char` with a single-codepoint lowercase mapping:
+    ///      code is lowered, the original uppercase is stored in
+    ///      `shifted_key`, and `SHIFT` is added to `modifiers` (unless
+    ///      `CAPS_LOCK` is already set, in which case no synthetic
+    ///      Shift is added).
+    ///    * Lowercase `Char` with `modifiers` already containing
+    ///      `SHIFT` or `CAPS_LOCK`: `shifted_key` is populated with
+    ///      the single-codepoint uppercase mapping.
+    /// 3. **Printable text auto-population.** Only when `modifiers`
+    ///    is a subset of `SHIFT | CAPS_LOCK | NUM_LOCK` and the
+    ///    resulting code is printable (`Char` non-control or
+    ///    [`KeyCode::Space`]): `text` is filled with the
+    ///    user-perceived glyph. The shifted form is used only when
+    ///    `SHIFT` or `CAPS_LOCK` is in effect; otherwise the bare
+    ///    code character is used. Modifier sets containing Ctrl,
+    ///    Alt, Super, Hyper, or Meta suppress this step.
     ///
-    /// No-op for: non-`Char` codes, codepoints without a proper
-    /// single-codepoint case flip (e.g. Turkish `İ`), titlecase
-    /// digraphs (e.g. `ǅ`), and modifier sets that suppress printable
-    /// input (Ctrl, Alt, Super, Hyper, Meta).
+    /// Steps 1 and 2 are unaffected by the presence of Ctrl/Alt/etc.;
+    /// only step 3 is gated on the modifier set.
+    ///
+    /// Codepoints without a proper single-codepoint case flip (Turkish
+    /// `İ`, titlecase digraphs like `ǅ`) leave the code unchanged.
     ///
     /// Optional fields (`text`, `shifted_key`, `base_key`) start
     /// empty; mutate them directly on the returned [`Key`] when a
@@ -163,8 +174,20 @@ impl Key {
                 .union(KeyModifiers::CAPS_LOCK)
                 .union(KeyModifiers::NUM_LOCK);
             if (self.modifiers - PRINTABLE_ALLOWED).is_empty() {
+                // The shifted glyph is only what the user perceives
+                // when the shifted layer is actually engaged. Decoders
+                // (e.g. kitty's Report-Alternate-Keys) may populate
+                // `shifted_key` regardless of whether Shift is held,
+                // so we must not blindly use it here.
+                let shifted = self
+                    .modifiers
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::CAPS_LOCK);
                 let glyph: Option<char> = match self.code {
-                    KeyCode::Char(c) if !c.is_control() => Some(self.shifted_key.unwrap_or(c)),
+                    KeyCode::Char(c) if !c.is_control() => Some(if shifted {
+                        self.shifted_key.unwrap_or(c)
+                    } else {
+                        c
+                    }),
                     KeyCode::Space => Some(' '),
                     _ => None,
                 };
@@ -410,6 +433,33 @@ mod tests {
         let k = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT);
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
+        assert_eq!(k.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn shifted_key_does_not_pollute_text_without_shift() {
+        // A decoder may have pre-populated `shifted_key` from protocol
+        // metadata (e.g. kitty's Report-Alternate-Keys) even on a bare
+        // key press. `text` must reflect what the user actually typed,
+        // which is the unshifted glyph, not the shifted one.
+        let mut k = Key {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::empty(),
+            text: None,
+            shifted_key: Some('A'),
+            base_key: None,
+        };
+        k.normalize();
+        assert_eq!(k.text.as_deref(), Some("a"));
+        // With Shift, the shifted glyph wins.
+        let mut k = Key {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::SHIFT,
+            text: None,
+            shifted_key: Some('A'),
+            base_key: None,
+        };
+        k.normalize();
         assert_eq!(k.text.as_deref(), Some("A"));
     }
 
