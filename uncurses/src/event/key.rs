@@ -176,18 +176,33 @@ impl Key {
             if (self.modifiers - PRINTABLE_ALLOWED).is_empty() {
                 // The shifted glyph is only what the user perceives
                 // when the shifted layer is actually engaged. Decoders
-                // (e.g. kitty's Report-Alternate-Keys) may populate
-                // `shifted_key` regardless of whether Shift is held,
-                // so we must not blindly use it here.
-                let shifted = self
-                    .modifiers
-                    .intersects(KeyModifiers::SHIFT | KeyModifiers::CAPS_LOCK);
+                // may populate `shifted_key` regardless of whether
+                // Shift is actually held, so we must not blindly use
+                // it here.
+                //
+                // CapsLock only acts as a shifted layer for cased
+                // ASCII letters — it does not produce the shifted
+                // glyph for digits or symbols on any common layout.
+                // Whether Shift cancels CapsLock on letters is a
+                // host convention (some platforms cancel, most OR);
+                // the library takes the OR-side that matches the
+                // majority. Hosts wanting cancellation should
+                // populate `text` directly from the resolved
+                // character.
                 let glyph: Option<char> = match self.code {
-                    KeyCode::Char(c) if !c.is_control() => Some(if shifted {
-                        self.shifted_key.unwrap_or(c)
-                    } else {
-                        c
-                    }),
+                    KeyCode::Char(c) if !c.is_control() => {
+                        let shifted = if c.is_ascii_alphabetic() {
+                            self.modifiers
+                                .intersects(KeyModifiers::SHIFT | KeyModifiers::CAPS_LOCK)
+                        } else {
+                            self.modifiers.contains(KeyModifiers::SHIFT)
+                        };
+                        Some(if shifted {
+                            self.shifted_key.unwrap_or(c)
+                        } else {
+                            c
+                        })
+                    }
                     KeyCode::Space => Some(' '),
                     _ => None,
                 };
@@ -439,8 +454,8 @@ mod tests {
     #[test]
     fn shifted_key_does_not_pollute_text_without_shift() {
         // A decoder may have pre-populated `shifted_key` from protocol
-        // metadata (e.g. kitty's Report-Alternate-Keys) even on a bare
-        // key press. `text` must reflect what the user actually typed,
+        // metadata (e.g. an alternate-key report) even on a bare key
+        // press. `text` must reflect what the user actually typed,
         // which is the unshifted glyph, not the shifted one.
         let mut k = Key {
             code: KeyCode::Char('a'),
@@ -461,6 +476,45 @@ mod tests {
         };
         k.normalize();
         assert_eq!(k.text.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn caps_lock_only_shifts_ascii_letters() {
+        // CapsLock does not produce the shifted glyph for digits or
+        // symbols on any common layout. Even if a decoder populated
+        // `shifted_key` for a non-letter key, `text` derived under
+        // CapsLock alone must use the base glyph.
+        let mut k = Key {
+            code: KeyCode::Char('2'),
+            modifiers: KeyModifiers::CAPS_LOCK,
+            text: None,
+            shifted_key: Some('@'),
+            base_key: None,
+        };
+        k.normalize();
+        assert_eq!(k.text.as_deref(), Some("2"));
+
+        // ASCII letters do treat CapsLock as a shifted layer.
+        let mut k = Key {
+            code: KeyCode::Char('a'),
+            modifiers: KeyModifiers::CAPS_LOCK,
+            text: None,
+            shifted_key: Some('A'),
+            base_key: None,
+        };
+        k.normalize();
+        assert_eq!(k.text.as_deref(), Some("A"));
+
+        // With Shift held, non-letters still take the shifted glyph.
+        let mut k = Key {
+            code: KeyCode::Char('2'),
+            modifiers: KeyModifiers::SHIFT,
+            text: None,
+            shifted_key: Some('@'),
+            base_key: None,
+        };
+        k.normalize();
+        assert_eq!(k.text.as_deref(), Some("@"));
     }
 
     #[test]
