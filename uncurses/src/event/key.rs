@@ -518,8 +518,11 @@ fn parse_modifier(token: &str) -> Result<KeyModifiers, ParseKeyError> {
 }
 
 fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
-    // Single non-`+` character: treat as Char (case preserved so
-    // `Key::new` can canonicalize uppercase into shift+lowercase).
+    // Single character: treat as Char (case preserved so `Key::new`
+    // can canonicalize uppercase into shift+lowercase). Includes `+`
+    // — the modifier-separator handling in `Key::from_str` passes
+    // the literal `+` through to this function as a single-char
+    // token.
     let mut chars = token.chars();
     if let Some(first) = chars.next()
         && chars.next().is_none()
