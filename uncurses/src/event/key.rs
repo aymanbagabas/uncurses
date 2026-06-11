@@ -181,27 +181,18 @@ impl Key {
                 // it here.
                 //
                 // CapsLock only acts as a shifted layer for cased
-                // ASCII letters — it does not produce the shifted
-                // glyph for digits or symbols on any common layout.
-                // Whether Shift cancels CapsLock on letters is a
-                // host convention (some platforms cancel, most OR);
-                // the library takes the OR-side that matches the
-                // majority. Hosts wanting cancellation should
-                // populate `text` directly from the resolved
-                // character.
-                // CapsLock only acts as a shifted layer for cased
-                // letters. The decoder/constructor normalizes
-                // uppercase to lowercase + SHIFT before we get here,
-                // so `is_lowercase()` is the right test: it covers
-                // every Unicode cased letter (ASCII, Cyrillic, Greek,
-                // Latin-Extended, …) and excludes digits, symbols,
-                // and uncased scripts where CapsLock has no effect.
-                // Whether Shift cancels CapsLock on letters is a
-                // host convention (some platforms cancel, most OR);
-                // the library takes the OR-side that matches the
-                // majority. Hosts wanting cancellation should
-                // populate `text` directly from the resolved
-                // character.
+                // letters. `Key::new` normalizes uppercase to lowercase
+                // + SHIFT before we get here, so `is_lowercase()` is
+                // the right test: it covers every Unicode cased letter
+                // (ASCII, Cyrillic, Greek, Latin-Extended, …) and
+                // excludes digits, symbols, and uncased scripts where
+                // CapsLock has no effect on common layouts.
+                //
+                // Whether Shift cancels CapsLock on letters is a host
+                // convention (some platforms cancel, most OR); the
+                // library takes the OR-side that matches the majority.
+                // Hosts wanting cancellation should populate `text`
+                // directly from the resolved character.
                 let glyph: Option<char> = match self.code {
                     KeyCode::Char(c) if !c.is_control() => {
                         let shifted = if c.is_lowercase() {
