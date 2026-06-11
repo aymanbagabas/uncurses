@@ -84,7 +84,7 @@ impl ColorCache {
     pub(super) fn convert_style<'a>(&self, style: &'a Style) -> Cow<'a, Style> {
         match self.profile {
             Profile::TrueColor => Cow::Borrowed(style),
-            Profile::Disabled => Cow::Owned(Style::EMPTY),
+            Profile::Disabled => Cow::Owned(Style::default()),
             Profile::Ascii => Cow::Owned(Style {
                 fg: None,
                 bg: None,

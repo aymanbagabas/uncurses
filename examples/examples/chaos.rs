@@ -53,7 +53,7 @@ fn build_pattern(width: u16, height: u16, rng: &mut Rng) -> Vec<Cell> {
         let fg = rng.color();
         let bg = rng.color();
         let attr = rng.pick(&attrs);
-        let mut style = Style::EMPTY.fg(fg).bg(bg);
+        let mut style = Style::default().fg(fg).bg(bg);
         style = match attr {
             Attr::None => style,
             Attr::Bold => style.bold(),

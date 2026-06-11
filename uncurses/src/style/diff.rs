@@ -158,7 +158,7 @@ pub fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Re
 pub fn convert_style(style: &Style, profile: crate::color::Profile) -> Style {
     use crate::color::Profile;
     match profile {
-        Profile::Disabled => Style::EMPTY,
+        Profile::Disabled => Style::default(),
         Profile::Ascii => Style {
             fg: None,
             bg: None,
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn test_diff_no_change() {
         let mut buf = Vec::new();
-        let s = Style::EMPTY.bold();
+        let s = Style::default().bold();
         let wrote = write_style_diff(&mut buf, &s, &s).unwrap();
         assert!(!wrote);
         assert!(buf.is_empty());
@@ -203,8 +203,8 @@ mod tests {
     #[test]
     fn test_diff_to_empty() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.bold();
-        let wrote = write_style_diff(&mut buf, &from, &Style::EMPTY).unwrap();
+        let from = Style::default().bold();
+        let wrote = write_style_diff(&mut buf, &from, &Style::default()).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[m");
     }
@@ -212,8 +212,8 @@ mod tests {
     #[test]
     fn test_diff_add_italic() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.bold();
-        let to = Style::EMPTY.bold().italic();
+        let from = Style::default().bold();
+        let to = Style::default().bold().italic();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[3m");
@@ -222,8 +222,8 @@ mod tests {
     #[test]
     fn test_diff_add_italic_and_fg_single_csi() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.bold();
-        let to = Style::EMPTY
+        let from = Style::default().bold();
+        let to = Style::default()
             .bold()
             .italic()
             .fg(Color::Basic(BasicColor::Red));
@@ -236,8 +236,8 @@ mod tests {
     #[test]
     fn test_diff_remove_bold_uses_sgr22() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.bold().italic();
-        let to = Style::EMPTY.italic();
+        let from = Style::default().bold().italic();
+        let to = Style::default().italic();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         // SGR 22 turns off bold; italic is preserved (no diff needed for it).
@@ -247,10 +247,10 @@ mod tests {
     #[test]
     fn test_diff_remove_bold_keep_faint_uses_sgr22_then_2() {
         let mut buf = Vec::new();
-        let mut from = Style::EMPTY;
+        let mut from = Style::default();
         from.attrs |= AttrFlags::BOLD;
         from.attrs |= AttrFlags::FAINT;
-        let mut to = Style::EMPTY;
+        let mut to = Style::default();
         to.attrs |= AttrFlags::FAINT;
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
@@ -263,10 +263,10 @@ mod tests {
         // divider must emit SGR 2. Previously the "add" loop skipped
         // bold/faint unconditionally, so the faint never reached the wire.
         let mut buf = Vec::new();
-        let from = Style::EMPTY
+        let from = Style::default()
             .fg(Color::Basic(BasicColor::BrightWhite))
             .bg(Color::Basic(BasicColor::Blue));
-        let to = Style::EMPTY.faint();
+        let to = Style::default().faint();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[2;39;49m");
@@ -275,8 +275,8 @@ mod tests {
     #[test]
     fn test_diff_add_bold_only() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.italic();
-        let to = Style::EMPTY.italic().bold();
+        let from = Style::default().italic();
+        let to = Style::default().italic().bold();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[1m");
@@ -285,8 +285,8 @@ mod tests {
     #[test]
     fn test_diff_add_slow_blink_only() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.italic();
-        let mut to = Style::EMPTY;
+        let from = Style::default().italic();
+        let mut to = Style::default();
         to.attrs |= AttrFlags::ITALIC | AttrFlags::SLOW_BLINK;
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
@@ -296,10 +296,10 @@ mod tests {
     #[test]
     fn test_diff_remove_blink_uses_sgr25() {
         let mut buf = Vec::new();
-        let mut from = Style::EMPTY;
+        let mut from = Style::default();
         from.attrs |= AttrFlags::SLOW_BLINK;
         from.attrs |= AttrFlags::ITALIC;
-        let mut to = Style::EMPTY;
+        let mut to = Style::default();
         to.attrs |= AttrFlags::ITALIC;
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
@@ -309,8 +309,8 @@ mod tests {
     #[test]
     fn test_diff_fg_change() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.fg(Color::Basic(BasicColor::Red));
-        let to = Style::EMPTY.fg(Color::Basic(BasicColor::Blue));
+        let from = Style::default().fg(Color::Basic(BasicColor::Red));
+        let to = Style::default().fg(Color::Basic(BasicColor::Blue));
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[34m");
@@ -319,8 +319,8 @@ mod tests {
     #[test]
     fn test_diff_remove_fg() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY.fg(Color::Basic(BasicColor::Red));
-        let to = Style::EMPTY;
+        let from = Style::default().fg(Color::Basic(BasicColor::Red));
+        let to = Style::default();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[m");
@@ -329,10 +329,10 @@ mod tests {
     #[test]
     fn test_diff_fg_and_bg_change_single_csi() {
         let mut buf = Vec::new();
-        let from = Style::EMPTY
+        let from = Style::default()
             .fg(Color::Basic(BasicColor::Red))
             .bg(Color::Basic(BasicColor::Black));
-        let to = Style::EMPTY
+        let to = Style::default()
             .fg(Color::Basic(BasicColor::Blue))
             .bg(Color::Indexed(7));
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
@@ -342,14 +342,14 @@ mod tests {
 
     #[test]
     fn test_convert_style_notty() {
-        let s = Style::EMPTY.bold().fg(Color::Basic(BasicColor::Red));
+        let s = Style::default().bold().fg(Color::Basic(BasicColor::Red));
         let converted = convert_style(&s, crate::color::Profile::Disabled);
         assert!(converted.is_empty());
     }
 
     #[test]
     fn test_convert_style_ascii() {
-        let s = Style::EMPTY.bold().fg(Color::Basic(BasicColor::Red));
+        let s = Style::default().bold().fg(Color::Basic(BasicColor::Red));
         let converted = convert_style(&s, crate::color::Profile::Ascii);
         assert!(converted.attrs.contains(AttrFlags::BOLD));
         assert_eq!(converted.fg, None);

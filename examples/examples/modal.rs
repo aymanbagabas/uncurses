@@ -103,7 +103,7 @@ fn paint_background<W: Write>(screen: &mut Screen<W>) {
     if w == 0 || h == 0 {
         return;
     }
-    let body = Style::EMPTY.fg(BasicColor::BrightBlack.into());
+    let body = Style::default().fg(BasicColor::BrightBlack.into());
     // Reserve the bottom row for the status line.
     let body_rows = h.saturating_sub(1);
     for y in 0..body_rows {
@@ -118,7 +118,7 @@ fn paint_status<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
         return;
     }
     let y = h - 1;
-    let status = Style::EMPTY
+    let status = Style::default()
         .fg(BasicColor::Black.into())
         .bg(BasicColor::BrightWhite.into());
     screen.fill_rect(
@@ -145,14 +145,14 @@ fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
 }
 
 fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
-    let frame = Style::EMPTY
+    let frame = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())
         .bold();
-    let body = Style::EMPTY
+    let body = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into());
-    let hint = Style::EMPTY
+    let hint = Style::default()
         .fg(BasicColor::BrightYellow.into())
         .bg(BasicColor::Blue.into())
         .italic();

@@ -69,7 +69,7 @@ pub fn to_uncurses_style(s: RtStyle) -> CzStyle {
     } else {
         UnderlineStyle::None
     };
-    let mut style = CzStyle::EMPTY.underline_style(underline);
+    let mut style = CzStyle::default().underline_style(underline);
     if let Some(fg) = s.fg.and_then(to_uncurses_color) {
         style = style.fg(fg);
     }

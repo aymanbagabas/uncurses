@@ -23,10 +23,10 @@ use crate::color::{BasicColor, Color};
 /// Read SGR parameters into a mutable style.
 ///
 /// Modifies `style` in-place. A `0` parameter (or an empty parameter
-/// list) resets the style to [`Style::EMPTY`].
+/// list) resets the style to [`Style::default()`].
 pub fn read_style(params: Params<'_>, style: &mut Style) {
     if params.is_empty() {
-        *style = Style::EMPTY;
+        *style = Style::default();
         return;
     }
 
@@ -34,7 +34,7 @@ pub fn read_style(params: Params<'_>, style: &mut Style) {
     while let Some(g) = groups.next() {
         let main = sgr_main(g);
         match main {
-            0 => *style = Style::EMPTY,
+            0 => *style = Style::default(),
             1 => style.attrs |= AttrFlags::BOLD,
             2 => style.attrs |= AttrFlags::FAINT,
             3 => style.attrs |= AttrFlags::ITALIC,
@@ -201,14 +201,14 @@ mod tests {
     use super::*;
 
     fn rs(body: &[u8]) -> Style {
-        let mut s = Style::EMPTY;
+        let mut s = Style::default();
         read_style(Params::from_raw(body), &mut s);
         s
     }
 
     #[test]
     fn reset() {
-        let mut s = Style::EMPTY.bold();
+        let mut s = Style::default().bold();
         read_style(Params::from_raw(b"0"), &mut s);
         assert!(s.is_empty());
     }
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(rs(b"4:3").underline, UnderlineStyle::Curly);
         assert_eq!(rs(b"4").underline, UnderlineStyle::Single);
 
-        let mut s = Style::EMPTY.underline();
+        let mut s = Style::default().underline();
         read_style(Params::from_raw(b"24"), &mut s);
         assert_eq!(s.underline, UnderlineStyle::None);
     }
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn defaults_clear() {
-        let mut s = Style::EMPTY
+        let mut s = Style::default()
             .fg(Color::Basic(BasicColor::Red))
             .bg(Color::Basic(BasicColor::Blue))
             .underline_color(Color::Basic(BasicColor::Green));
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn clear_bold_keeps_faint_off() {
         // `22` should clear both bold and faint.
-        let mut s = Style::EMPTY.bold().faint();
+        let mut s = Style::default().bold().faint();
         read_style(Params::from_raw(b"22"), &mut s);
         assert!(!s.attrs.contains(AttrFlags::BOLD));
         assert!(!s.attrs.contains(AttrFlags::FAINT));
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn empty_params_resets() {
-        let mut s = Style::EMPTY.bold();
+        let mut s = Style::default().bold();
         read_style(Params::EMPTY, &mut s);
         assert!(s.is_empty());
     }
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn omitted_top_level_param_acts_as_reset() {
         // `CSI ; m` — leading empty slot decodes as `0` ⇒ reset.
-        let mut s = Style::EMPTY.bold();
+        let mut s = Style::default().bold();
         read_style(Params::from_raw(b";"), &mut s);
         assert!(s.is_empty());
     }

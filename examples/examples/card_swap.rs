@@ -72,7 +72,7 @@ fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
     let w = screen.width();
     let h = screen.height();
 
-    let footer = Style::EMPTY.fg(BasicColor::BrightBlack.into());
+    let footer = Style::default().fg(BasicColor::BrightBlack.into());
     let footer_text = "Press any key to swap the cards, or q to quit.";
     if h >= 2 {
         screen.set_str_with(
@@ -87,8 +87,8 @@ fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
         return;
     }
 
-    let border_a = Style::EMPTY.fg(BasicColor::BrightYellow.into()).bold();
-    let border_b = Style::EMPTY.fg(BasicColor::BrightMagenta.into()).bold();
+    let border_a = Style::default().fg(BasicColor::BrightYellow.into()).bold();
+    let border_b = Style::default().fg(BasicColor::BrightMagenta.into()).bold();
 
     // Card A at (3, 1); Card B offset by (10, 2) from A.
     let ax = 3u16;

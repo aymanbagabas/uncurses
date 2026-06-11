@@ -65,7 +65,7 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
             target,
             mode: WidthMode::default(),
             eaw_wide: false,
-            style: Style::EMPTY,
+            style: Style::default(),
         }
     }
 
@@ -81,10 +81,10 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         self
     }
 
-    /// Clear the current style back to [`Style::EMPTY`]. Returns
+    /// Clear the current style back to [`Style::default()`]. Returns
     /// `&mut self` for chaining.
     pub fn reset(&mut self) -> &mut Self {
-        self.style = Style::EMPTY;
+        self.style = Style::default();
         self
     }
 
@@ -467,12 +467,12 @@ mod tests {
             (0, 0),
             "a",
             WrapMode::Truncate,
-            Style::EMPTY.bold().link("https://x", ""),
+            Style::default().bold().link("https://x", ""),
         );
         assert!(cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
         assert_eq!(link_of(cell_at(&b, 0, 0).style()), Some(("https://x", "")));
         // Second call with `_with` and an empty style must reset.
-        Painter::new(&mut b).set_str_with((1, 0), "b", WrapMode::Truncate, Style::EMPTY);
+        Painter::new(&mut b).set_str_with((1, 0), "b", WrapMode::Truncate, Style::default());
         assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
         assert!(cell_at(&b, 1, 0).style().link.is_none());
     }

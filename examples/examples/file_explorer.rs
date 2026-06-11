@@ -272,14 +272,16 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
     let preview_w: u16 = w - preview_x;
     let body_h: u16 = h.saturating_sub(2);
 
-    let header = Style::EMPTY
+    let header = Style::default()
         .fg(Color::Basic(BasicColor::Black))
         .bg(Color::Basic(BasicColor::Cyan))
         .bold();
-    let normal = Style::EMPTY;
-    let dim = Style::EMPTY.faint();
-    let dir_style = Style::EMPTY.fg(Color::Basic(BasicColor::BrightBlue)).bold();
-    let selected = Style::EMPTY
+    let normal = Style::default();
+    let dim = Style::default().faint();
+    let dir_style = Style::default()
+        .fg(Color::Basic(BasicColor::BrightBlue))
+        .bold();
+    let selected = Style::default()
         .bg(Color::Basic(BasicColor::Blue))
         .fg(Color::Basic(BasicColor::BrightWhite));
     let selected_dir = selected.clone().bold();
@@ -361,7 +363,7 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
         (0, status_y),
         &status_line,
         WrapMode::Truncate,
-        Style::EMPTY
+        Style::default()
             .bg(Color::Basic(BasicColor::BrightBlack))
             .fg(Color::Basic(BasicColor::White)),
     );
