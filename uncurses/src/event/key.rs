@@ -102,53 +102,30 @@ impl std::hash::Hash for Key {
 }
 
 impl Key {
-    /// Construct a canonical key from its required fields.
+    /// Construct a [`Key`] with the given code and modifiers.
     ///
-    /// Runs normalization once at construction. The exact rules are
-    /// applied in this order:
-    ///
-    /// 1. **Tab + Shift → BackTab.** If `code` is [`KeyCode::Tab`] and
-    ///    `modifiers` contains `SHIFT`, the code is rewritten to
-    ///    [`KeyCode::BackTab`] and `SHIFT` is removed.
-    /// 2. **Char case folding.** Always applied for `Char` codes
-    ///    regardless of the other modifiers:
-    ///    * Uppercase `Char` with a single-codepoint lowercase mapping:
-    ///      code is lowered, the original uppercase is stored in
-    ///      `shifted_key`, and `SHIFT` is added to `modifiers` (unless
-    ///      `CAPS_LOCK` is already set, in which case no synthetic
-    ///      Shift is added).
-    ///    * Lowercase `Char` with `modifiers` already containing
-    ///      `SHIFT` or `CAPS_LOCK`: `shifted_key` is populated with
-    ///      the single-codepoint uppercase mapping.
-    /// 3. **Printable text auto-population.** Only when `modifiers`
-    ///    is a subset of `SHIFT | CAPS_LOCK | NUM_LOCK` and the
-    ///    resulting code is printable (`Char` non-control or
-    ///    [`KeyCode::Space`]): `text` is filled with the
-    ///    user-perceived glyph. The shifted form is used only when
-    ///    `SHIFT` or `CAPS_LOCK` is in effect; otherwise the bare
-    ///    code character is used. Modifier sets containing Ctrl,
-    ///    Alt, Super, Hyper, or Meta suppress this step.
-    ///
-    /// Steps 1 and 2 are unaffected by the presence of Ctrl/Alt/etc.;
-    /// only step 3 is gated on the modifier set.
-    ///
-    /// Codepoints without a proper single-codepoint case flip (Turkish
-    /// `İ`, titlecase digraphs like `ǅ`) leave the code unchanged.
-    ///
-    /// Optional fields (`text`, `shifted_key`, `base_key`) start
-    /// empty; mutate them directly on the returned [`Key`] when a
-    /// decoder protocol surfaces extra information (e.g. kitty's
-    /// reported shifted codepoint or associated text).
+    /// This is a transparent constructor: no canonicalization is
+    /// performed. Optional fields (`text`, `shifted_key`, `base_key`)
+    /// start empty. Decoder paths populate the optional fields as
+    /// needed and then call [`Key::normalize`] to apply the canonical
+    /// identity rules (Shift+Tab → BackTab, case folding, printable
+    /// text auto-population).
     pub fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
-        let mut k = Self {
+        Self {
             code,
             modifiers,
             text: None,
             shifted_key: None,
             base_key: None,
-        };
-        k.normalize();
-        k
+        }
+    }
+
+    /// Consume `self` and return the canonical form. Equivalent to
+    /// [`Key::normalize`] but composes nicely in expression position
+    /// (e.g. `Key::new(code, mods).normalized()`).
+    pub fn normalized(mut self) -> Self {
+        self.normalize();
+        self
     }
 
     /// Return the character if this is a simple character key.
@@ -191,8 +168,8 @@ impl Key {
     /// use uncurses::event::{Key, KeyCode, KeyModifiers};
     ///
     /// // Case-sensitive: g and G are distinct (vim-style).
-    /// let plain_g = Key::new(KeyCode::Char('g'), KeyModifiers::empty());
-    /// let big_g   = Key::new(KeyCode::Char('G'), KeyModifiers::empty());
+    /// let plain_g = Key::new(KeyCode::Char('g'), KeyModifiers::empty()).normalized();
+    /// let big_g   = Key::new(KeyCode::Char('G'), KeyModifiers::empty()).normalized();
     /// assert!(plain_g.matches("g"));
     /// assert!(!plain_g.matches("G"));
     /// assert!(big_g.matches("G"));
@@ -220,7 +197,7 @@ impl Key {
     /// ```
     /// use uncurses::event::{Key, KeyCode, KeyModifiers};
     ///
-    /// let key = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+    /// let key = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL).normalized();
     /// assert!(key.matches_any(["esc", "ctrl+c", "q"]));
     /// assert!(!key.matches_any(["esc", "q"]));
     /// ```
@@ -766,7 +743,7 @@ impl std::str::FromStr for Key {
         // round-trip cleanly without being misread as a `+`-separator.
         if s.chars().nth(1).is_none() {
             let code = parse_key_code(s)?;
-            return Ok(Key::new(code, KeyModifiers::empty()));
+            return Ok(Key::new(code, KeyModifiers::empty()).normalized());
         }
 
         // Split on the last `+` to separate modifiers from the key.
@@ -804,7 +781,7 @@ impl std::str::FromStr for Key {
         }
 
         let code = parse_key_code(key_part)?;
-        Ok(Key::new(code, modifiers))
+        Ok(Key::new(code, modifiers).normalized())
     }
 }
 
@@ -826,31 +803,31 @@ mod tests {
 
     #[test]
     fn test_key_display() {
-        let k = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL);
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL).normalized();
         assert_eq!(k.to_string(), "ctrl+a");
     }
 
     #[test]
     fn test_key_display_function() {
-        let k = Key::new(KeyCode::F(12), KeyModifiers::empty());
+        let k = Key::new(KeyCode::F(12), KeyModifiers::empty()).normalized();
         assert_eq!(k.to_string(), "f12");
     }
 
     #[test]
     fn test_key_char() {
-        let k = Key::new(KeyCode::Char('x'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('x'), KeyModifiers::empty()).normalized();
         assert_eq!(k.char(), Some('x'));
     }
 
     #[test]
     fn test_key_char_special() {
-        let k = Key::new(KeyCode::Enter, KeyModifiers::empty());
+        let k = Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized();
         assert_eq!(k.char(), None);
     }
 
     #[test]
     fn new_uppercase_ascii_lowers_code_and_adds_shift() {
-        let k = Key::new(KeyCode::Char('A'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('A'), KeyModifiers::empty()).normalized();
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
@@ -859,7 +836,7 @@ mod tests {
 
     #[test]
     fn new_uppercase_with_caps_lock_does_not_add_shift() {
-        let k = Key::new(KeyCode::Char('A'), KeyModifiers::CAPS_LOCK);
+        let k = Key::new(KeyCode::Char('A'), KeyModifiers::CAPS_LOCK).normalized();
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(!k.modifiers.contains(KeyModifiers::SHIFT));
@@ -869,7 +846,7 @@ mod tests {
 
     #[test]
     fn new_lowercase_with_shift_populates_shifted_key() {
-        let k = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT);
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT).normalized();
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert_eq!(k.text.as_deref(), Some("A"));
@@ -966,7 +943,7 @@ mod tests {
 
     #[test]
     fn new_lowercase_without_shift_populates_text() {
-        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty()).normalized();
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, None);
         assert!(k.modifiers.is_empty());
@@ -975,7 +952,7 @@ mod tests {
 
     #[test]
     fn new_ctrl_uppercase_does_not_set_text() {
-        let k = Key::new(KeyCode::Char('A'), KeyModifiers::CTRL);
+        let k = Key::new(KeyCode::Char('A'), KeyModifiers::CTRL).normalized();
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(k.modifiers.contains(KeyModifiers::CTRL));
@@ -985,7 +962,7 @@ mod tests {
 
     #[test]
     fn new_ctrl_shift_lowercase_does_not_set_text() {
-        let k = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL | KeyModifiers::SHIFT);
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL | KeyModifiers::SHIFT).normalized();
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
         assert!(k.text.is_none());
@@ -993,7 +970,7 @@ mod tests {
 
     #[test]
     fn new_cyrillic_uppercase() {
-        let k = Key::new(KeyCode::Char('Ц'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('Ц'), KeyModifiers::empty()).normalized();
         assert_eq!(k.code, KeyCode::Char('ц'));
         assert_eq!(k.shifted_key, Some('Ц'));
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
@@ -1002,7 +979,7 @@ mod tests {
 
     #[test]
     fn new_greek_lowercase_with_shift() {
-        let k = Key::new(KeyCode::Char('α'), KeyModifiers::SHIFT);
+        let k = Key::new(KeyCode::Char('α'), KeyModifiers::SHIFT).normalized();
         assert_eq!(k.code, KeyCode::Char('α'));
         assert_eq!(k.shifted_key, Some('Α'));
         assert_eq!(k.text.as_deref(), Some("Α"));
@@ -1011,7 +988,7 @@ mod tests {
     #[test]
     fn new_multi_codepoint_lower_left_alone() {
         // 'İ' lowercases to "i\u{307}" — two codepoints; leave as-is.
-        let k = Key::new(KeyCode::Char('İ'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('İ'), KeyModifiers::empty()).normalized();
         assert_eq!(k.code, KeyCode::Char('İ'));
         assert_eq!(k.shifted_key, None);
         assert!(k.modifiers.is_empty());
@@ -1022,7 +999,7 @@ mod tests {
     #[test]
     fn new_titlecase_digraph_left_alone() {
         // 'ǅ' is titlecase; is_uppercase() and is_lowercase() are both false.
-        let k = Key::new(KeyCode::Char('ǅ'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('ǅ'), KeyModifiers::empty()).normalized();
         assert_eq!(k.code, KeyCode::Char('ǅ'));
         assert_eq!(k.shifted_key, None);
         assert_eq!(k.text.as_deref(), Some("ǅ"));
@@ -1031,7 +1008,7 @@ mod tests {
     #[test]
     fn new_digit_with_shift_keeps_digit_text() {
         // '1' has no case variant; text auto-populates from the codepoint.
-        let k = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT);
+        let k = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT).normalized();
         assert_eq!(k.code, KeyCode::Char('1'));
         assert_eq!(k.shifted_key, None);
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
@@ -1040,7 +1017,7 @@ mod tests {
 
     #[test]
     fn new_non_char_no_text() {
-        let k = Key::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        let k = Key::new(KeyCode::Enter, KeyModifiers::SHIFT).normalized();
         assert_eq!(k.code, KeyCode::Enter);
         assert_eq!(k.shifted_key, None);
         assert!(k.text.is_none());
@@ -1048,21 +1025,21 @@ mod tests {
 
     #[test]
     fn new_space_populates_text() {
-        let k = Key::new(KeyCode::Space, KeyModifiers::empty());
+        let k = Key::new(KeyCode::Space, KeyModifiers::empty()).normalized();
         assert_eq!(k.code, KeyCode::Space);
         assert_eq!(k.text.as_deref(), Some(" "));
     }
 
     #[test]
     fn new_space_with_ctrl_no_text() {
-        let k = Key::new(KeyCode::Space, KeyModifiers::CTRL);
+        let k = Key::new(KeyCode::Space, KeyModifiers::CTRL).normalized();
         assert_eq!(k.code, KeyCode::Space);
         assert!(k.text.is_none());
     }
 
     #[test]
     fn direct_field_mutation_overrides_auto_text() {
-        let mut k = Key::new(KeyCode::Char('2'), KeyModifiers::SHIFT);
+        let mut k = Key::new(KeyCode::Char('2'), KeyModifiers::SHIFT).normalized();
         // Simulate a decoder that knows the terminal-reported shifted glyph.
         k.shifted_key = Some('@');
         k.text = Some("@".to_string());
@@ -1072,8 +1049,8 @@ mod tests {
 
     #[test]
     fn eq_ignores_informational_fields() {
-        let bare = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT);
-        let mut decorated = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT);
+        let bare = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT).normalized();
+        let mut decorated = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT).normalized();
         decorated.text = Some("custom".to_string());
         decorated.shifted_key = Some('Z');
         decorated.base_key = Some('q');
@@ -1084,9 +1061,12 @@ mod tests {
     fn hash_ignores_informational_fields() {
         use std::collections::HashMap;
         let mut map: HashMap<Key, &'static str> = HashMap::new();
-        map.insert(Key::new(KeyCode::Char('a'), KeyModifiers::CTRL), "ctrl-a");
+        map.insert(
+            Key::new(KeyCode::Char('a'), KeyModifiers::CTRL).normalized(),
+            "ctrl-a",
+        );
 
-        let mut lookup = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL);
+        let mut lookup = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL).normalized();
         lookup.text = Some("ignored".to_string());
         lookup.shifted_key = Some('X');
         assert_eq!(map.get(&lookup), Some(&"ctrl-a"));
@@ -1094,9 +1074,9 @@ mod tests {
 
     #[test]
     fn eq_distinguishes_code_and_modifiers() {
-        let a = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
-        let ctrl_a = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL);
-        let b = Key::new(KeyCode::Char('b'), KeyModifiers::empty());
+        let a = Key::new(KeyCode::Char('a'), KeyModifiers::empty()).normalized();
+        let ctrl_a = Key::new(KeyCode::Char('a'), KeyModifiers::CTRL).normalized();
+        let b = Key::new(KeyCode::Char('b'), KeyModifiers::empty()).normalized();
         assert_ne!(a, ctrl_a);
         assert_ne!(a, b);
     }
@@ -1150,17 +1130,17 @@ mod tests {
 
     #[test]
     fn display_char_plus_uses_word() {
-        let k = Key::new(KeyCode::Char('+'), KeyModifiers::CTRL);
+        let k = Key::new(KeyCode::Char('+'), KeyModifiers::CTRL).normalized();
         assert_eq!(k.to_string(), "ctrl+plus");
     }
 
     #[test]
     fn display_modifier_key_variants() {
-        let k = Key::new(KeyCode::LeftShift, KeyModifiers::empty());
+        let k = Key::new(KeyCode::LeftShift, KeyModifiers::empty()).normalized();
         assert_eq!(k.to_string(), "leftshift");
-        let k = Key::new(KeyCode::RightAlt, KeyModifiers::empty());
+        let k = Key::new(KeyCode::RightAlt, KeyModifiers::empty()).normalized();
         assert_eq!(k.to_string(), "rightalt");
-        let k = Key::new(KeyCode::IsoLevel3Shift, KeyModifiers::empty());
+        let k = Key::new(KeyCode::IsoLevel3Shift, KeyModifiers::empty()).normalized();
         assert_eq!(k.to_string(), "isolevel3shift");
     }
 
@@ -1169,15 +1149,21 @@ mod tests {
         // Display always emits the unabbreviated name; the short forms
         // (`pgup`, `pgdn`, `esc`, etc.) live only on the parse side.
         assert_eq!(
-            Key::new(KeyCode::PageUp, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::PageUp, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "pageup"
         );
         assert_eq!(
-            Key::new(KeyCode::PageDown, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::PageDown, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "pagedown"
         );
         assert_eq!(
-            Key::new(KeyCode::Escape, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::Escape, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "escape"
         );
         // Round-trip the short forms through Display and back to the
@@ -1191,15 +1177,21 @@ mod tests {
     #[test]
     fn display_keypad_variants() {
         assert_eq!(
-            Key::new(KeyCode::Kp0, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::Kp0, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "kp0"
         );
         assert_eq!(
-            Key::new(KeyCode::KpEnter, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::KpEnter, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "kpenter"
         );
         assert_eq!(
-            Key::new(KeyCode::KpPageUp, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::KpPageUp, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "kppageup"
         );
     }
@@ -1207,11 +1199,15 @@ mod tests {
     #[test]
     fn display_media_variants() {
         assert_eq!(
-            Key::new(KeyCode::MediaPlayPause, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::MediaPlayPause, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "mediaplaypause"
         );
         assert_eq!(
-            Key::new(KeyCode::VolumeMute, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::VolumeMute, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "volumemute"
         );
     }
@@ -1379,7 +1375,7 @@ mod tests {
         // `ctrl++` is ctrl + the literal `+` key.
         assert_eq!(
             parse("ctrl++"),
-            Key::new(KeyCode::Char('+'), KeyModifiers::CTRL)
+            Key::new(KeyCode::Char('+'), KeyModifiers::CTRL).normalized()
         );
         // `ctrl+plus` resolves to the same Key.
         assert_eq!(parse("ctrl++"), parse("ctrl+plus"));
@@ -1417,19 +1413,27 @@ mod tests {
     #[test]
     fn display_uses_named_symbol_forms() {
         assert_eq!(
-            Key::new(KeyCode::Char('-'), KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::Char('-'), KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "minus"
         );
         assert_eq!(
-            Key::new(KeyCode::Char('='), KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::Char('='), KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "equals"
         );
         assert_eq!(
-            Key::new(KeyCode::Char('+'), KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::Char('+'), KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "plus"
         );
         assert_eq!(
-            Key::new(KeyCode::Char('-'), KeyModifiers::CTRL).to_string(),
+            Key::new(KeyCode::Char('-'), KeyModifiers::CTRL)
+                .normalized()
+                .to_string(),
             "ctrl+minus"
         );
     }
@@ -1455,7 +1459,9 @@ mod tests {
     #[test]
     fn display_kp_pageup_long_form() {
         assert_eq!(
-            Key::new(KeyCode::KpPageDown, KeyModifiers::empty()).to_string(),
+            Key::new(KeyCode::KpPageDown, KeyModifiers::empty())
+                .normalized()
+                .to_string(),
             "kppagedown"
         );
         // The short `kppgup`/`kppgdn` forms remain accepted on input.
@@ -1527,7 +1533,7 @@ mod tests {
             (KeyCode::IsoLevel5Shift, KeyModifiers::empty()),
         ];
         for (code, mods) in cases {
-            let k = Key::new(*code, *mods);
+            let k = Key::new(*code, *mods).normalized();
             let s = k.to_string();
             let parsed = s
                 .parse::<Key>()
@@ -1538,23 +1544,27 @@ mod tests {
 
     #[test]
     fn eq_ignores_lock_state() {
-        let plain = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+        let plain = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL).normalized();
         let with_caps = Key::new(
             KeyCode::Char('c'),
             KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK,
-        );
+        )
+        .normalized();
         let with_num = Key::new(
             KeyCode::Char('c'),
             KeyModifiers::CTRL | KeyModifiers::NUM_LOCK,
-        );
+        )
+        .normalized();
         let with_scroll = Key::new(
             KeyCode::Char('c'),
             KeyModifiers::CTRL | KeyModifiers::SCROLL_LOCK,
-        );
+        )
+        .normalized();
         let with_all_locks = Key::new(
             KeyCode::Char('c'),
             KeyModifiers::CTRL | KeyModifiers::LOCK_MASK,
-        );
+        )
+        .normalized();
         assert_eq!(plain, with_caps);
         assert_eq!(plain, with_num);
         assert_eq!(plain, with_scroll);
@@ -1570,19 +1580,21 @@ mod tests {
             k.hash(&mut s);
             s.finish()
         }
-        let plain = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+        let plain = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL).normalized();
         let with_locks = Key::new(
             KeyCode::Char('c'),
             KeyModifiers::CTRL | KeyModifiers::LOCK_MASK,
-        );
+        )
+        .normalized();
         assert_eq!(h(&plain), h(&with_locks));
     }
 
     #[test]
     fn eq_still_distinguishes_binding_modifiers() {
-        let ctrl = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
-        let alt = Key::new(KeyCode::Char('c'), KeyModifiers::ALT);
-        let ctrl_alt = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL | KeyModifiers::ALT);
+        let ctrl = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL).normalized();
+        let alt = Key::new(KeyCode::Char('c'), KeyModifiers::ALT).normalized();
+        let ctrl_alt =
+            Key::new(KeyCode::Char('c'), KeyModifiers::CTRL | KeyModifiers::ALT).normalized();
         assert_ne!(ctrl, alt);
         assert_ne!(ctrl, ctrl_alt);
     }
@@ -1593,20 +1605,21 @@ mod tests {
         let live = Key::new(
             KeyCode::Char('c'),
             KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK,
-        );
+        )
+        .normalized();
         assert_eq!(parsed, live);
     }
 
     #[test]
     fn matches_simple_char() {
-        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty()).normalized();
         assert!(k.matches("a"));
         assert!(!k.matches("b"));
     }
 
     #[test]
     fn matches_modifier_combo() {
-        let k = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+        let k = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL).normalized();
         assert!(k.matches("ctrl+c"));
         assert!(!k.matches("alt+c"));
         assert!(!k.matches("ctrl+x"));
@@ -1614,7 +1627,7 @@ mod tests {
 
     #[test]
     fn matches_named_key() {
-        let k = Key::new(KeyCode::F(5), KeyModifiers::SHIFT);
+        let k = Key::new(KeyCode::F(5), KeyModifiers::SHIFT).normalized();
         assert!(k.matches("shift+f5"));
         assert!(!k.matches("f5"));
     }
@@ -1624,13 +1637,14 @@ mod tests {
         let k = Key::new(
             KeyCode::Char('a'),
             KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK | KeyModifiers::NUM_LOCK,
-        );
+        )
+        .normalized();
         assert!(k.matches("ctrl+a"));
     }
 
     #[test]
     fn matches_invalid_pattern_is_false() {
-        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty()).normalized();
         assert!(!k.matches(""));
         assert!(!k.matches("frob+nargle"));
         assert!(!k.matches("ctrl+"));
@@ -1638,21 +1652,21 @@ mod tests {
 
     #[test]
     fn matches_any_basic() {
-        let k = Key::new(KeyCode::Escape, KeyModifiers::empty());
+        let k = Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized();
         assert!(k.matches_any(["esc", "ctrl+c", "q"]));
         assert!(!k.matches_any(["enter", "tab"]));
     }
 
     #[test]
     fn matches_any_empty_is_false() {
-        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty()).normalized();
         let none: [&str; 0] = [];
         assert!(!k.matches_any(none));
     }
 
     #[test]
     fn matches_any_accepts_string_and_str() {
-        let k = Key::new(KeyCode::Char('q'), KeyModifiers::empty());
+        let k = Key::new(KeyCode::Char('q'), KeyModifiers::empty()).normalized();
         let owned: Vec<String> = vec!["esc".into(), "q".into()];
         assert!(k.matches_any(&owned));
         let borrowed: Vec<&str> = vec!["esc", "q"];
@@ -1662,14 +1676,14 @@ mod tests {
     #[test]
     fn matches_is_case_sensitive_for_letters() {
         // Vim-style: g and G are distinct bindings.
-        let plain_g = Key::new(KeyCode::Char('g'), KeyModifiers::empty());
+        let plain_g = Key::new(KeyCode::Char('g'), KeyModifiers::empty()).normalized();
         assert!(plain_g.matches("g"));
         assert!(!plain_g.matches("G"));
         assert!(!plain_g.matches("shift+g"));
 
-        // `Key::new(Char('G'), empty)` normalizes to Char('g') + SHIFT,
+        // `Key::new(Char('G'), empty).normalized()` normalizes to Char('g') + SHIFT,
         // matching what a decoder emits for a shift+g press.
-        let big_g = Key::new(KeyCode::Char('G'), KeyModifiers::empty());
+        let big_g = Key::new(KeyCode::Char('G'), KeyModifiers::empty()).normalized();
         assert_eq!(big_g.code, KeyCode::Char('g'));
         assert!(big_g.modifiers.contains(KeyModifiers::SHIFT));
         assert!(big_g.matches("G"));
@@ -1679,7 +1693,7 @@ mod tests {
 
     #[test]
     fn matches_modifier_combos_with_letters() {
-        let ctrl_g = Key::new(KeyCode::Char('g'), KeyModifiers::CTRL);
+        let ctrl_g = Key::new(KeyCode::Char('g'), KeyModifiers::CTRL).normalized();
         assert!(ctrl_g.matches("ctrl+g"));
         assert!(!ctrl_g.matches("ctrl+G"));
         assert!(!ctrl_g.matches("ctrl+shift+g"));
@@ -1691,7 +1705,7 @@ mod tests {
     fn matches_text_first_layout_independent() {
         // shift+1 on a US layout produces "!". Pattern "!" should hit
         // the key by its produced text even though the code is `1`.
-        let mut shift_1 = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT);
+        let mut shift_1 = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT).normalized();
         shift_1.text = Some("!".to_string());
         assert!(shift_1.matches("!"));
         // The physical-key spelling still matches via strict equality.
@@ -1702,7 +1716,7 @@ mod tests {
     fn matches_text_first_respects_binding_modifiers() {
         // ctrl+! must not silently match a key whose text happens to
         // be "!" — binding modifiers gate the text fallback.
-        let mut shift_1 = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT);
+        let mut shift_1 = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT).normalized();
         shift_1.text = Some("!".to_string());
         assert!(!shift_1.matches("ctrl+!"));
     }
@@ -1710,7 +1724,7 @@ mod tests {
     #[test]
     fn matches_text_first_handles_layout_glyph() {
         // shift+/ produces "?" on a US layout.
-        let mut shift_slash = Key::new(KeyCode::Char('/'), KeyModifiers::SHIFT);
+        let mut shift_slash = Key::new(KeyCode::Char('/'), KeyModifiers::SHIFT).normalized();
         shift_slash.text = Some("?".to_string());
         assert!(shift_slash.matches("?"));
         assert!(shift_slash.matches("shift+/"));

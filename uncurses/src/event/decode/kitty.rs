@@ -45,10 +45,6 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     let mut key = Key::new(code, modifiers);
     if let Some(c) = shifted.and_then(char::from_u32) {
         key.shifted_key = Some(c);
-        // Reset any text `Key::new` auto-derived from the un-shifted
-        // code so `normalize()` below can re-derive it from the
-        // protocol-reported shifted glyph (e.g. Shift+2 → '@').
-        key.text = None;
     }
     if let Some(c) = base.and_then(char::from_u32) {
         key.base_key = Some(c);
@@ -56,9 +52,11 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     if let Some(t) = protocol_text {
         key.text = Some(t);
     }
-    // Re-canonicalize: the protocol-reported shifted glyph may now
-    // back-fill `text` for inputs without a case variant (e.g. Shift+2
-    // producing '@'), which `Key::new` couldn't infer up front.
+    // Apply the canonical identity rules (Shift+Tab → BackTab, case
+    // folding, printable text auto-population) once after all
+    // protocol-supplied fields have been set, so the shifted glyph
+    // can back-fill `text` for inputs without a case variant
+    // (e.g. Shift+2 producing '@').
     key.normalize();
 
     Some(key_event_for_phase(key, phase))

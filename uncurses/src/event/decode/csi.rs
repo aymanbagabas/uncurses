@@ -209,7 +209,7 @@ fn recognize(
         let cpr = Event::CursorPosition(crate::Position::new((col - 1) as u16, (row - 1) as u16));
         if row == 1 && col >= 1 && col - 1 <= 15 {
             let mods = xterm_modifiers(col as u16);
-            let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods));
+            let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods).normalized());
             return Some(Event::Multi(vec![f3, cpr]));
         }
         return Some(cpr);
@@ -377,7 +377,7 @@ fn recognize(
                 // Tab+Shift to BackTab uniformly. CSI Z is the legacy
                 // single-byte spelling, so we route through Tab to keep
                 // the canonicalization in one place.
-                let key = Key::new(KeyCode::Tab, KeyModifiers::SHIFT);
+                let key = Key::new(KeyCode::Tab, KeyModifiers::SHIFT).normalized();
                 return Some(key_event_for_phase(key, csi_kitty_phase(params)));
             }
             b'~' => {
@@ -416,7 +416,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
                 None => return None,
             },
         };
-        let key = Key::new(key_code, mods);
+        let key = Key::new(key_code, mods).normalized();
         return Some(Event::KeyPress(key));
     }
 
