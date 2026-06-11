@@ -209,7 +209,7 @@ fn recognize(
         let cpr = Event::CursorPosition(crate::Position::new((col - 1) as u16, (row - 1) as u16));
         if row == 1 && col >= 1 && col - 1 <= 15 {
             let mods = xterm_modifiers(col as u16);
-            let f3 = Event::KeyPress(Key::new(KeyCode::F(3)).with_modifiers(mods));
+            let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods));
             return Some(Event::Multi(vec![f3, cpr]));
         }
         return Some(cpr);
@@ -373,7 +373,11 @@ fn recognize(
         }
         match final_byte {
             b'Z' => {
-                let key = Key::new(KeyCode::BackTab).with_modifiers(KeyModifiers::SHIFT);
+                // Pass SHIFT through `Key::new`; normalize collapses
+                // Tab+Shift to BackTab uniformly. CSI Z is the legacy
+                // single-byte spelling, so we route through Tab to keep
+                // the canonicalization in one place.
+                let key = Key::new(KeyCode::Tab, KeyModifiers::SHIFT);
                 return Some(key_event_for_phase(key, csi_kitty_phase(params)));
             }
             b'~' => {
@@ -405,20 +409,14 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
             0x09 => KeyCode::Tab,
             0x0d => KeyCode::Enter,
             0x1b => KeyCode::Escape,
+            0x20 => KeyCode::Space,
             0x7f => KeyCode::Backspace,
             _ => match char::from_u32(r) {
                 Some(c) => KeyCode::Char(c),
                 None => return None,
             },
         };
-        let mut key = Key::new(key_code).with_modifiers(mods);
-        // For pure printable chars with no/Shift modifier, surface the
-        // typed text so callers that read .text get the glyph.
-        if let KeyCode::Char(c) = key_code
-            && (mods.is_empty() || mods == KeyModifiers::SHIFT)
-        {
-            key = key.with_text(c.to_string());
-        }
+        let key = Key::new(key_code, mods);
         return Some(Event::KeyPress(key));
     }
 

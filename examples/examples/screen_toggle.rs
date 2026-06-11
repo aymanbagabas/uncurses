@@ -41,7 +41,7 @@ fn main() -> std::io::Result<()> {
                 ..
             }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
             Event::KeyPress(Key {
-                code: KeyCode::Char(' '),
+                code: KeyCode::Space,
                 ..
             }) => {
                 alt = !alt;
