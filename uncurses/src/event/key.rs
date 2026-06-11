@@ -5,6 +5,18 @@ use std::fmt;
 
 bitflags! {
     /// Keyboard modifier flags.
+    ///
+    /// Modifiers split into two categories:
+    ///
+    /// * **Binding modifiers** — `SHIFT`, `ALT`, `CTRL`, `META`,
+    ///   `HYPER`, `SUPER`. These participate in [`Key`] equality and
+    ///   in [`Key::matches`].
+    /// * **Lock states** — `CAPS_LOCK`, `NUM_LOCK`, `SCROLL_LOCK`,
+    ///   collectively [`LOCK_MASK`](Self::LOCK_MASK). These report
+    ///   the keyboard latch and are *never* binding modifiers: they
+    ///   are ignored by `Key` equality, hashing, [`Key::matches`],
+    ///   and the [`Display`](fmt::Display) form. Hosts that need to
+    ///   inspect lock state can mask `modifiers` with `LOCK_MASK`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct KeyModifiers: u16 {
         const SHIFT       = 0b0000_0000_0000_0001;
@@ -43,6 +55,10 @@ bitflags! {
 /// [`SCROLL_LOCK`](KeyModifiers::SCROLL_LOCK)). This makes `Key` safe
 /// to use as a `HashMap` key for binding lookups across decoder paths
 /// and across keyboard latch states.
+///
+/// For string-based binding matching that additionally folds letter
+/// case and consults [`text`](Self::text) for layout-specific glyphs,
+/// see [`matches`](Self::matches) and [`matches_any`](Self::matches_any).
 #[derive(Debug, Clone)]
 pub struct Key {
     /// The key code (which key was pressed).
@@ -51,7 +67,10 @@ pub struct Key {
     pub modifiers: KeyModifiers,
     /// Associated text (from Kitty protocol or composed input).
     ///
-    /// Informational; ignored by `==` and `Hash`.
+    /// Informational; ignored by `==` and `Hash`. Consulted by
+    /// [`Key::matches`] when it carries a layout-specific glyph that
+    /// differs from `code` (for example `"!"` for `shift+1` on a US
+    /// layout), enabling layout-independent string bindings.
     pub text: Option<String>,
     /// Shifted-layer codepoint (Kitty Report-Alternate-Keys).
     ///
@@ -140,6 +159,73 @@ impl Key {
             KeyCode::Space => Some(' '),
             _ => None,
         }
+    }
+
+    /// Test whether this key matches a string pattern.
+    ///
+    /// Matching is two-tier:
+    ///
+    /// 1. If this key carries a [`text`](Self::text) value and it
+    ///    equals `pattern` byte-for-byte, the match succeeds. Lets
+    ///    bindings be written as the produced glyph (`"?"`, `"!"`,
+    ///    `"@"`) and hit any keystroke that resolves to that text,
+    ///    independent of keyboard layout.
+    /// 2. Otherwise, `pattern` is parsed as a [`Key`] with the same
+    ///    grammar as [`FromStr`](std::str::FromStr) (for example
+    ///    `"ctrl+c"`, `"shift+f1"`, `"alt+plus"`) and compared with
+    ///    [`PartialEq`]. Lock state (`CapsLock`, `NumLock`,
+    ///    `ScrollLock`) is ignored by `==`; matching is otherwise
+    ///    case-sensitive — `"g"` and `"G"` are distinct (`"G"` is a
+    ///    synonym for `"shift+g"`).
+    ///
+    /// Returns `false` for any pattern that fails to parse and has
+    /// no matching `text`; invalid patterns never panic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use uncurses::event::{Key, KeyCode, KeyModifiers};
+    ///
+    /// // Case-sensitive: g and G are distinct (vim-style).
+    /// let plain_g = Key::new(KeyCode::Char('g'), KeyModifiers::empty());
+    /// let big_g   = Key::new(KeyCode::Char('G'), KeyModifiers::empty());
+    /// assert!(plain_g.matches("g"));
+    /// assert!(!plain_g.matches("G"));
+    /// assert!(big_g.matches("G"));
+    /// assert!(big_g.matches("shift+g")); // "G" and "shift+g" are synonyms.
+    /// assert!(!big_g.matches("g"));
+    /// ```
+    pub fn matches(&self, pattern: &str) -> bool {
+        if let Some(text) = self.text.as_deref()
+            && text == pattern
+        {
+            return true;
+        }
+        pattern.parse::<Key>().is_ok_and(|p| *self == p)
+    }
+
+    /// Test whether this key matches any pattern in the iterator.
+    ///
+    /// Equivalent to calling [`matches`](Self::matches) for each
+    /// pattern and stopping at the first hit. Accepts any iterable
+    /// yielding string-like items, including arrays, slices, and
+    /// vectors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use uncurses::event::{Key, KeyCode, KeyModifiers};
+    ///
+    /// let key = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+    /// assert!(key.matches_any(["esc", "ctrl+c", "q"]));
+    /// assert!(!key.matches_any(["esc", "q"]));
+    /// ```
+    pub fn matches_any<I, S>(&self, patterns: I) -> bool
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        patterns.into_iter().any(|p| self.matches(p.as_ref()))
     }
 
     /// Apply the canonicalization rules described on [`Self::new`].
@@ -1496,5 +1582,124 @@ mod tests {
             KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK,
         );
         assert_eq!(parsed, live);
+    }
+
+    #[test]
+    fn matches_simple_char() {
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        assert!(k.matches("a"));
+        assert!(!k.matches("b"));
+    }
+
+    #[test]
+    fn matches_modifier_combo() {
+        let k = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+        assert!(k.matches("ctrl+c"));
+        assert!(!k.matches("alt+c"));
+        assert!(!k.matches("ctrl+x"));
+    }
+
+    #[test]
+    fn matches_named_key() {
+        let k = Key::new(KeyCode::F(5), KeyModifiers::SHIFT);
+        assert!(k.matches("shift+f5"));
+        assert!(!k.matches("f5"));
+    }
+
+    #[test]
+    fn matches_ignores_lock_state() {
+        let k = Key::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK | KeyModifiers::NUM_LOCK,
+        );
+        assert!(k.matches("ctrl+a"));
+    }
+
+    #[test]
+    fn matches_invalid_pattern_is_false() {
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        assert!(!k.matches(""));
+        assert!(!k.matches("frob+nargle"));
+        assert!(!k.matches("ctrl+"));
+    }
+
+    #[test]
+    fn matches_any_basic() {
+        let k = Key::new(KeyCode::Escape, KeyModifiers::empty());
+        assert!(k.matches_any(["esc", "ctrl+c", "q"]));
+        assert!(!k.matches_any(["enter", "tab"]));
+    }
+
+    #[test]
+    fn matches_any_empty_is_false() {
+        let k = Key::new(KeyCode::Char('a'), KeyModifiers::empty());
+        let none: [&str; 0] = [];
+        assert!(!k.matches_any(none));
+    }
+
+    #[test]
+    fn matches_any_accepts_string_and_str() {
+        let k = Key::new(KeyCode::Char('q'), KeyModifiers::empty());
+        let owned: Vec<String> = vec!["esc".into(), "q".into()];
+        assert!(k.matches_any(&owned));
+        let borrowed: Vec<&str> = vec!["esc", "q"];
+        assert!(k.matches_any(borrowed));
+    }
+
+    #[test]
+    fn matches_is_case_sensitive_for_letters() {
+        // Vim-style: g and G are distinct bindings.
+        let plain_g = Key::new(KeyCode::Char('g'), KeyModifiers::empty());
+        assert!(plain_g.matches("g"));
+        assert!(!plain_g.matches("G"));
+        assert!(!plain_g.matches("shift+g"));
+
+        // `Key::new(Char('G'), empty)` normalizes to Char('g') + SHIFT,
+        // matching what a decoder emits for a shift+g press.
+        let big_g = Key::new(KeyCode::Char('G'), KeyModifiers::empty());
+        assert_eq!(big_g.code, KeyCode::Char('g'));
+        assert!(big_g.modifiers.contains(KeyModifiers::SHIFT));
+        assert!(big_g.matches("G"));
+        assert!(big_g.matches("shift+g"));
+        assert!(!big_g.matches("g"));
+    }
+
+    #[test]
+    fn matches_modifier_combos_with_letters() {
+        let ctrl_g = Key::new(KeyCode::Char('g'), KeyModifiers::CTRL);
+        assert!(ctrl_g.matches("ctrl+g"));
+        assert!(!ctrl_g.matches("ctrl+G"));
+        assert!(!ctrl_g.matches("ctrl+shift+g"));
+        assert!(!ctrl_g.matches("g"));
+        assert!(!ctrl_g.matches("alt+g"));
+    }
+
+    #[test]
+    fn matches_text_first_layout_independent() {
+        // shift+1 on a US layout produces "!". Pattern "!" should hit
+        // the key by its produced text even though the code is `1`.
+        let mut shift_1 = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT);
+        shift_1.text = Some("!".to_string());
+        assert!(shift_1.matches("!"));
+        // The physical-key spelling still matches via strict equality.
+        assert!(shift_1.matches("shift+1"));
+    }
+
+    #[test]
+    fn matches_text_first_respects_binding_modifiers() {
+        // ctrl+! must not silently match a key whose text happens to
+        // be "!" — binding modifiers gate the text fallback.
+        let mut shift_1 = Key::new(KeyCode::Char('1'), KeyModifiers::SHIFT);
+        shift_1.text = Some("!".to_string());
+        assert!(!shift_1.matches("ctrl+!"));
+    }
+
+    #[test]
+    fn matches_text_first_handles_layout_glyph() {
+        // shift+/ produces "?" on a US layout.
+        let mut shift_slash = Key::new(KeyCode::Char('/'), KeyModifiers::SHIFT);
+        shift_slash.text = Some("?".to_string());
+        assert!(shift_slash.matches("?"));
+        assert!(shift_slash.matches("shift+/"));
     }
 }
