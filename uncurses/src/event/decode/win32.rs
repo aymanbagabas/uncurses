@@ -69,8 +69,27 @@ impl Decoder {
                 char::from_u32(ch).unwrap_or('\u{fffd}')
             };
 
-            let mut key = Key::new(KeyCode::Char(code), mods);
-            if !code.is_control() {
+            // Apply the same printable/AltGr rules as the vk!=0 path:
+            // surface `text` only when held modifiers are consistent
+            // with the codepoint actually being typed (no Ctrl/Alt/etc.
+            // outside the AltGr combination), and strip Ctrl+Alt when
+            // the codepoint comes from AltGr on a non-US layout.
+            let altgr_mask = WIN32_LEFT_CTRL_PRESSED | WIN32_RIGHT_ALT_PRESSED;
+            let alt_gr = (cks & altgr_mask) == altgr_mask;
+            let cks_no_locks = cks & !(WIN32_NUMLOCK_ON | WIN32_SCROLLLOCK_ON);
+            let mut effective_mods = mods;
+            let printable = !code.is_control()
+                && (cks_no_locks == 0
+                    || cks_no_locks == WIN32_SHIFT_PRESSED
+                    || cks_no_locks == WIN32_CAPSLOCK_ON
+                    || cks_no_locks == (WIN32_SHIFT_PRESSED | WIN32_CAPSLOCK_ON)
+                    || alt_gr);
+            if printable && alt_gr {
+                effective_mods.remove(KeyModifiers::CTRL);
+                effective_mods.remove(KeyModifiers::ALT);
+            }
+            let mut key = Key::new(KeyCode::Char(code), effective_mods);
+            if printable {
                 key.text = Some(code.to_string());
             }
             return self.emit_win32_key(key, kd, rep, consumed);
@@ -111,8 +130,12 @@ impl Decoder {
         let print_code = char::from_u32(ch).unwrap_or('\u{fffd}');
         if !print_code.is_control() {
             // Promote alpha vk codes into their typed character so callers
-            // that match on `KeyCode::Char` get the actual glyph.
-            base_code = KeyCode::Char(print_code);
+            // that match on `KeyCode::Char` get the actual glyph. Space is
+            // canonicalized to `KeyCode::Space` by `win32_vk_to_keycode`
+            // and must stay that way to match other decoder paths.
+            if print_code != ' ' {
+                base_code = KeyCode::Char(print_code);
+            }
             let printable = cks_no_locks == 0
                 || cks_no_locks == WIN32_SHIFT_PRESSED
                 || cks_no_locks == WIN32_CAPSLOCK_ON
