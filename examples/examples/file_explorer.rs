@@ -38,7 +38,7 @@ use std::thread;
 
 use uncurses::SurfaceMut;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton, Source};
+use uncurses::event::{Event, MouseButton, Source};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -455,45 +455,33 @@ fn run() -> std::io::Result<()> {
     while let Ok(ev) = rx.recv() {
         let mut dirty = true;
         match ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => break,
-            Event::KeyPress(Key {
-                code: KeyCode::Escape,
-                ..
-            }) => break,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => break,
+            Event::KeyPress(key) if key.matches_any(["q", "esc", "ctrl+c"]) => break,
 
-            Event::KeyPress(Key { code, text, .. }) => {
-                let text = text.as_deref();
-                match code {
-                    KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
-                    KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
-                    KeyCode::PageUp => {
-                        app.preview_scroll = app.preview_scroll.saturating_sub(10);
-                    }
-                    KeyCode::PageDown => {
-                        app.preview_scroll = (app.preview_scroll + 10)
-                            .min(app.preview_lines.len().saturating_sub(1));
-                    }
-                    // Case-distinguished movement: match the resolved
-                    // `text` instead of `code` + Shift so this works
-                    // the same under Shift, CapsLock, or
-                    // Shift+CapsLock — whatever the host convention.
-                    KeyCode::Char(_) if text == Some("g") => app.preview_scroll = 0,
-                    KeyCode::Char(_) if text == Some("G") => {
-                        app.preview_scroll = app.preview_lines.len().saturating_sub(1);
-                    }
-                    KeyCode::Enter => app.enter(),
-                    KeyCode::Backspace => app.go_up(),
-                    KeyCode::Char('r') => app.refresh(),
-                    _ => dirty = false,
+            Event::KeyPress(key) => {
+                if key.matches_any(["up", "k"]) {
+                    app.move_selection(-1);
+                } else if key.matches_any(["down", "j"]) {
+                    app.move_selection(1);
+                } else if key.matches("pageup") {
+                    app.preview_scroll = app.preview_scroll.saturating_sub(10);
+                } else if key.matches("pagedown") {
+                    app.preview_scroll =
+                        (app.preview_scroll + 10).min(app.preview_lines.len().saturating_sub(1));
+                } else if key.matches("g") {
+                    // Case-distinguished movement: `matches` consults
+                    // the resolved `text` so g/G work the same under
+                    // Shift, CapsLock, or Shift+CapsLock.
+                    app.preview_scroll = 0;
+                } else if key.matches("G") {
+                    app.preview_scroll = app.preview_lines.len().saturating_sub(1);
+                } else if key.matches("enter") {
+                    app.enter();
+                } else if key.matches("backspace") {
+                    app.go_up();
+                } else if key.matches("r") {
+                    app.refresh();
+                } else {
+                    dirty = false;
                 }
             }
 

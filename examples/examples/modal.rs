@@ -10,7 +10,7 @@ use std::io::Write;
 use uncurses::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, Source};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -58,20 +58,8 @@ fn main() -> std::io::Result<()> {
         let ev = events.read()?;
         let mut dirty = false;
         match ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q') | KeyCode::Escape,
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Char(' ' | 'm'),
-                ..
-            }) => {
+            Event::KeyPress(key) if key.matches_any(["q", "esc", "ctrl+c"]) => quit = true,
+            Event::KeyPress(key) if key.matches_any(["space", "m"]) => {
                 modal_open = !modal_open;
                 dirty = true;
             }
