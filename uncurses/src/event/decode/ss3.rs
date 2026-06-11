@@ -66,7 +66,9 @@ fn recognize(view: Ss3, raw_with_intro: &[u8], flags: DecoderFlags) -> Option<Ev
         _ => None,
     };
     if let Some(code) = key {
-        return Some(Event::KeyPress(Key::new(code, KeyModifiers::empty())));
+        return Some(Event::KeyPress(
+            Key::new(code, KeyModifiers::empty()).normalized(),
+        ));
     }
     lookup_legacy_key(raw_with_intro, flags).map(Event::KeyPress)
 }

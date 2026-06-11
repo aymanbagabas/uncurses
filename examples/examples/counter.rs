@@ -8,7 +8,7 @@ use std::io::Write;
 use uncurses::SurfaceMut;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton, Source};
+use uncurses::event::{Event, MouseButton, Source};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -36,20 +36,8 @@ fn main() -> std::io::Result<()> {
         let ev = events.read()?;
         let mut dirty = false;
         match ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q') | KeyCode::Escape,
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Enter | KeyCode::Space,
-                ..
-            }) => {
+            Event::KeyPress(key) if key.matches_any(["q", "esc", "ctrl+c"]) => quit = true,
+            Event::KeyPress(key) if key.matches_any(["enter", "space"]) => {
                 count = count.saturating_add(1);
                 dirty = true;
             }

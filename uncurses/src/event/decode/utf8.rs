@@ -36,7 +36,7 @@ impl Decoder {
         match std::str::from_utf8(&buf[..expected_len]) {
             Ok(s) => {
                 if let Some(c) = s.chars().next() {
-                    let key = Key::new(KeyCode::Char(c), KeyModifiers::empty());
+                    let key = Key::new(KeyCode::Char(c), KeyModifiers::empty()).normalized();
                     ParseResult::Event(Event::KeyPress(key), expected_len)
                 } else {
                     ParseResult::None(expected_len)
