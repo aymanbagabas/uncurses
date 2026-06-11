@@ -10,7 +10,7 @@ use std::io::Write;
 use uncurses::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, Source};
+use uncurses::event::{Event, Key, Source};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -50,6 +50,12 @@ fn main() -> std::io::Result<()> {
     let mut modal_open = true;
     let mut quit = false;
 
+    // Parse key bindings once. `Key: FromStr`, and `==` compares on
+    // the canonical chord identity — so plain equality is the right
+    // operator for keyboard-shortcut matching.
+    let quit_keys: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
+    let toggle_keys: [Key; 2] = ["space", "m"].map(|s| s.parse().unwrap());
+
     redraw(&mut screen, modal_open);
     screen.render()?;
     screen.flush()?;
@@ -58,8 +64,8 @@ fn main() -> std::io::Result<()> {
         let ev = events.read()?;
         let mut dirty = false;
         match ev {
-            Event::KeyPress(key) if key.matches_any(["q", "esc", "ctrl+c"]) => quit = true,
-            Event::KeyPress(key) if key.matches_any(["space", "m"]) => {
+            Event::KeyPress(ref key) if quit_keys.contains(key) => quit = true,
+            Event::KeyPress(ref key) if toggle_keys.contains(key) => {
                 modal_open = !modal_open;
                 dirty = true;
             }

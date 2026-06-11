@@ -8,7 +8,7 @@ use std::io::Write;
 use uncurses::SurfaceMut;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, MouseButton, Source};
+use uncurses::event::{Event, Key, MouseButton, Source};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -27,6 +27,12 @@ fn main() -> std::io::Result<()> {
     let mut quit = false;
     let mut button_rect;
 
+    // Parse key bindings once. `Key: FromStr`, and `==` compares on
+    // the canonical chord identity — so plain equality is the right
+    // operator for keyboard-shortcut matching.
+    let quit_keys: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
+    let click_keys: [Key; 2] = ["enter", "space"].map(|s| s.parse().unwrap());
+
     redraw(&mut screen, count);
     button_rect = button_bounds(&screen, count);
     screen.render()?;
@@ -36,8 +42,8 @@ fn main() -> std::io::Result<()> {
         let ev = events.read()?;
         let mut dirty = false;
         match ev {
-            Event::KeyPress(key) if key.matches_any(["q", "esc", "ctrl+c"]) => quit = true,
-            Event::KeyPress(key) if key.matches_any(["enter", "space"]) => {
+            Event::KeyPress(ref key) if quit_keys.contains(key) => quit = true,
+            Event::KeyPress(ref key) if click_keys.contains(key) => {
                 count = count.saturating_add(1);
                 dirty = true;
             }
