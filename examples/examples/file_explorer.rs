@@ -38,7 +38,7 @@ use std::thread;
 
 use uncurses::SurfaceMut;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, MouseButton, Source};
+use uncurses::event::{Event, Key, MouseButton, Source};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -452,33 +452,50 @@ fn run() -> std::io::Result<()> {
         }
     });
 
+    // Parse key bindings once. `Key` implements `FromStr`, so
+    // `"ctrl+c".parse::<Key>()` produces a canonical `Key` value, and
+    // `PartialEq` compares only the chord identity (`code` +
+    // `modifiers`, with `CAPS_LOCK`/`NUM_LOCK` ignored) — so plain
+    // `==` is the right operator for keyboard-shortcut matching.
+    let quit_keys: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
+    let up_keys: [Key; 2] = ["up", "k"].map(|s| s.parse().unwrap());
+    let down_keys: [Key; 2] = ["down", "j"].map(|s| s.parse().unwrap());
+    let pgup_key: Key = "pageup".parse().unwrap();
+    let pgdn_key: Key = "pagedown".parse().unwrap();
+    // `g` and `G` parse to different canonical chords: `g` is the
+    // bare lowercase code, `G` normalizes to `g + SHIFT`. `==`
+    // distinguishes them, which is what vim-style `g`/`G` bindings
+    // want.
+    let top_key: Key = "g".parse().unwrap();
+    let bottom_key: Key = "G".parse().unwrap();
+    let enter_key: Key = "enter".parse().unwrap();
+    let backspace_key: Key = "backspace".parse().unwrap();
+    let refresh_key: Key = "r".parse().unwrap();
+
     while let Ok(ev) = rx.recv() {
         let mut dirty = true;
         match ev {
-            Event::KeyPress(key) if key.matches_any(["q", "esc", "ctrl+c"]) => break,
+            Event::KeyPress(ref key) if quit_keys.contains(key) => break,
 
             Event::KeyPress(key) => {
-                if key.matches_any(["up", "k"]) {
+                if up_keys.contains(&key) {
                     app.move_selection(-1);
-                } else if key.matches_any(["down", "j"]) {
+                } else if down_keys.contains(&key) {
                     app.move_selection(1);
-                } else if key.matches("pageup") {
+                } else if key == pgup_key {
                     app.preview_scroll = app.preview_scroll.saturating_sub(10);
-                } else if key.matches("pagedown") {
+                } else if key == pgdn_key {
                     app.preview_scroll =
                         (app.preview_scroll + 10).min(app.preview_lines.len().saturating_sub(1));
-                } else if key.matches("g") {
-                    // Case-distinguished movement: `matches` consults
-                    // the resolved `text` so g/G work the same under
-                    // Shift, CapsLock, or Shift+CapsLock.
+                } else if key == top_key {
                     app.preview_scroll = 0;
-                } else if key.matches("G") {
+                } else if key == bottom_key {
                     app.preview_scroll = app.preview_lines.len().saturating_sub(1);
-                } else if key.matches("enter") {
+                } else if key == enter_key {
                     app.enter();
-                } else if key.matches("backspace") {
+                } else if key == backspace_key {
                     app.go_up();
-                } else if key.matches("r") {
+                } else if key == refresh_key {
                     app.refresh();
                 } else {
                     dirty = false;
