@@ -3,6 +3,11 @@
 //! View 1: pick from a list with `j`/`k` (or arrows), confirm with `Enter`.
 //! View 2: progress bar fills, then auto-exits after a 3-second countdown.
 //! `q`, `Esc`, or `Ctrl-C` exits at any time.
+//!
+//! Inline screen: each renderer paints into a [`Painter`] and reports
+//! the number of rows it wanted to use, and the screen is resized to
+//! match. The screen height is *always* the current frame's height —
+//! never the terminal window.
 
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -11,9 +16,9 @@ use uncurses::SurfaceMut;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::screen::Screen;
-use uncurses::style::Style;
+use uncurses::style::{Style, write_style};
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::{Painter, WrapMode};
 
 const CHOICES: &[&str] = &[
     "Plant carrots",
@@ -25,10 +30,6 @@ const CHOICES: &[&str] = &[
 const BAR_WIDTH: u16 = 50;
 const TICK: Duration = Duration::from_secs(1);
 const FRAME: Duration = Duration::from_micros(16_667);
-// Choice view: header + blank + 4 choices + blank + countdown + blank + footer.
-// Loaded view: header + blank + deps + blank + label + bar + blank + countdown.
-// 11 rows fits both.
-const VIEW_H: u16 = 11;
 
 #[derive(Default)]
 struct State {
@@ -42,20 +43,23 @@ struct State {
 fn main() -> std::io::Result<()> {
     let state_term = enable_raw_mode(stdin(), stdout())?;
     let size = get_window_size(stdout()).unwrap_or_default();
-    let mut screen = Screen::new(stdout()).with_size(size.col, VIEW_H);
-    screen.set_cursor_visible(false)?;
-
-    let mut events = Source::new(stdin())?;
+    let mut term_cols = size.col;
     let mut s = State {
         ticks: 10,
         ..Default::default()
     };
+    // Start at a single row; the first redraw will grow the screen to
+    // match the first frame's measured height.
+    let mut screen = Screen::new(stdout()).with_size(term_cols, 1);
+    screen.set_cursor_visible(false)?;
+
+    let mut events = Source::new(stdin())?;
     let mut quit = false;
 
     let mut next_tick = Instant::now() + TICK;
     let mut next_frame = Instant::now() + FRAME;
 
-    redraw(&mut screen, &s);
+    fit_and_redraw(&mut screen, &s, term_cols);
     screen.render()?;
     screen.flush()?;
 
@@ -100,7 +104,7 @@ fn main() -> std::io::Result<()> {
                         _ => {}
                     },
                     Event::Resize(ws) => {
-                        screen.resize(ws.col, VIEW_H);
+                        term_cols = ws.col;
                         dirty = true;
                     }
                     _ => {}
@@ -140,15 +144,17 @@ fn main() -> std::io::Result<()> {
         }
 
         if dirty && !quit {
-            redraw(&mut screen, &s);
+            fit_and_redraw(&mut screen, &s, term_cols);
             screen.render()?;
             screen.flush()?;
         }
     }
 
-    screen.resize(screen.width(), 3);
+    // Bye: "Bye!" on row 1 plus a trailing blank row so the prompt
+    // returns on its own line below the message.
+    screen.resize(term_cols, 3);
     screen.clear();
-    screen.set_str((2, 1), "Bye!", WrapMode::Truncate);
+    Painter::new(&mut screen).set_str((2, 1), "Bye!", WrapMode::Truncate);
     screen.render()?;
 
     screen.reset()?;
@@ -157,58 +163,83 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, s: &State) {
+/// Paint the current frame and size the screen to the rows it used.
+///
+/// Each renderer tracks its own intended row count independent of any
+/// clipping, so a too-small initial buffer simply triggers a resize and
+/// a single repaint.
+fn fit_and_redraw<W: Write>(screen: &mut Screen<W>, s: &State, cols: u16) {
     screen.clear();
-    if s.chosen {
-        draw_chosen(screen, s);
-    } else {
-        draw_choices(screen, s);
+    let needed = paint(screen, s);
+    if screen.width() != cols || screen.height() != needed {
+        screen.resize(cols, needed);
+        screen.clear();
+        paint(screen, s);
     }
 }
 
-fn draw_choices<W: Write>(screen: &mut Screen<W>, s: &State) {
-    let subtle = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
-    let checkbox = Style::EMPTY.with_fg(BasicColor::Cyan.into()).with_bold();
-    let ticks_st = Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold();
+fn paint<W: Write>(screen: &mut Screen<W>, s: &State) -> u16 {
+    let mut p = Painter::new(screen);
+    if s.chosen {
+        draw_chosen(&mut p, s)
+    } else {
+        draw_choices(&mut p, s)
+    }
+}
 
+/// SGR escape sequence for `style`, suitable for embedding in a string
+/// painted by [`Painter`] (which interprets inline `CSI ... m`).
+fn sgr(style: &Style) -> String {
+    let mut buf = Vec::with_capacity(24);
+    write_style(&mut buf, style).expect("write to Vec is infallible");
+    String::from_utf8(buf).expect("SGR bytes are ASCII")
+}
+
+/// SGR reset (`ESC [ m`) — restores [`Style::EMPTY`] for following cells.
+const RESET: &str = "\x1b[m";
+
+fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
+    let subtle = sgr(&Style::EMPTY.with_fg(BasicColor::BrightBlack.into()));
+    let checkbox = sgr(&Style::EMPTY.with_fg(BasicColor::Cyan.into()).with_bold());
+    let ticks_st = sgr(&Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold());
+
+    let mut last = 0u16;
     let mut y = 1u16;
-    screen.set_str((2, y), "What to do today?", WrapMode::Truncate);
+    p.set_str((2, y), "What to do today?", WrapMode::Truncate);
+    last = last.max(y);
     y += 2;
 
     for (i, choice) in CHOICES.iter().enumerate() {
         let row = y + i as u16;
-        if i == s.choice {
-            let line = format!("[x] {choice}");
-            screen.set_str_with((2, row), &line, WrapMode::Truncate, checkbox.clone());
+        let line = if i == s.choice {
+            format!("{checkbox}[x] {choice}{RESET}")
         } else {
-            let line = format!("[ ] {choice}");
-            screen.set_str_with((2, row), &line, WrapMode::Truncate, subtle.clone());
-        }
+            format!("{subtle}[ ] {choice}{RESET}")
+        };
+        p.set_str((2, row), &line, WrapMode::Truncate);
+        last = last.max(row);
     }
 
     y += CHOICES.len() as u16 + 1;
-    screen.set_str((2, y), "Program quits in", WrapMode::Truncate);
-    let n = format!(" {} ", s.ticks);
-    screen.set_str_with((2 + 17, y), &n, WrapMode::Truncate, ticks_st.clone());
-    let after_x = 2 + 17 + n.chars().count() as u16;
-    screen.set_str((after_x, y), "seconds", WrapMode::Truncate);
+    let line = format!("Program quits in {ticks_st}{}{RESET} seconds", s.ticks);
+    p.set_str((2, y), &line, WrapMode::Truncate);
+    last = last.max(y);
 
     y += 2;
-    screen.set_str_with(
-        (2, y),
-        "j/k or up/down: select  •  enter: choose  •  q: quit",
-        WrapMode::Truncate,
-        subtle.clone(),
-    );
+    let line = format!("{subtle}j/k or up/down: select  •  enter: choose  •  q: quit{RESET}");
+    p.set_str((2, y), &line, WrapMode::Truncate);
+    last = last.max(y);
+
+    last + 1
 }
 
-fn draw_chosen<W: Write>(screen: &mut Screen<W>, s: &State) {
-    let keyword = Style::EMPTY
+fn draw_chosen<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
+    let keyword = sgr(&Style::EMPTY
         .with_fg(BasicColor::BrightMagenta.into())
-        .with_bold();
-    let ticks_st = Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold();
-    let bar_st = Style::EMPTY.with_fg(BasicColor::BrightGreen.into());
-    let empty_st = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
+        .with_bold());
+    let ticks_st = sgr(&Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold());
+    let bar_st = sgr(&Style::EMPTY.with_fg(BasicColor::BrightGreen.into()));
+    let empty_st = sgr(&Style::EMPTY.with_fg(BasicColor::BrightBlack.into()));
 
     let (head, deps): (&str, [&str; 2]) = match s.choice {
         0 => ("Carrot planting?", ["libgarden", "vegeutils"]),
@@ -220,45 +251,39 @@ fn draw_chosen<W: Write>(screen: &mut Screen<W>, s: &State) {
         ),
     };
 
+    let mut last = 0u16;
     let mut y = 1u16;
-    screen.set_str((2, y), head, WrapMode::Truncate);
+    p.set_str((2, y), head, WrapMode::Truncate);
+    last = last.max(y);
     y += 2;
 
-    let prefix = "Need ";
-    screen.set_str((2, y), prefix, WrapMode::Truncate);
-    let mut x = 2 + prefix.chars().count() as u16;
-    screen.set_str_with((x, y), deps[0], WrapMode::Truncate, keyword.clone());
-    x += deps[0].chars().count() as u16;
-    screen.set_str((x, y), " and ", WrapMode::Truncate);
-    x += 5;
-    screen.set_str_with((x, y), deps[1], WrapMode::Truncate, keyword.clone());
-    x += deps[1].chars().count() as u16;
-    screen.set_str((x, y), "...", WrapMode::Truncate);
+    let line = format!(
+        "Need {keyword}{}{RESET} and {keyword}{}{RESET}...",
+        deps[0], deps[1]
+    );
+    p.set_str((2, y), &line, WrapMode::Truncate);
+    last = last.max(y);
     y += 2;
 
     let label = if s.loaded { "Done." } else { "Downloading..." };
-    screen.set_str((2, y), label, WrapMode::Truncate);
+    p.set_str((2, y), label, WrapMode::Truncate);
+    last = last.max(y);
     y += 1;
 
     let filled = (BAR_WIDTH as f32 * s.progress).round() as u16;
-    let filled_str: String = "█".repeat(filled as usize);
-    let empty_str: String = "░".repeat((BAR_WIDTH - filled) as usize);
-    screen.set_str_with((2, y), &filled_str, WrapMode::Truncate, bar_st.clone());
-    screen.set_str_with(
-        (2 + filled, y),
-        &empty_str,
-        WrapMode::Truncate,
-        empty_st.clone(),
-    );
+    let filled_str = "█".repeat(filled as usize);
+    let empty_str = "░".repeat((BAR_WIDTH - filled) as usize);
     let pct = format!(" {:>3.0}%", s.progress * 100.0);
-    screen.set_str((2 + BAR_WIDTH, y), &pct, WrapMode::Truncate);
+    let bar = format!("{bar_st}{filled_str}{empty_st}{empty_str}{RESET}{pct}");
+    p.set_str((2, y), &bar, WrapMode::Truncate);
+    last = last.max(y);
 
     if s.loaded {
         y += 2;
-        screen.set_str((2, y), "Exiting in", WrapMode::Truncate);
-        let n = format!(" {} ", s.ticks);
-        screen.set_str_with((2 + 11, y), &n, WrapMode::Truncate, ticks_st.clone());
-        let after_x = 2 + 11 + n.chars().count() as u16;
-        screen.set_str((after_x, y), "seconds", WrapMode::Truncate);
+        let line = format!("Exiting in {ticks_st}{}{RESET} seconds", s.ticks);
+        p.set_str((2, y), &line, WrapMode::Truncate);
+        last = last.max(y);
     }
+
+    last + 1
 }
