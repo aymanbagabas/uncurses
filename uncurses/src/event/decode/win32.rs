@@ -92,6 +92,7 @@ impl Decoder {
             if printable {
                 key.text = Some(code.to_string());
             }
+            key.normalize();
             return self.emit_win32_key(key, kd, rep, consumed);
         }
 
@@ -154,6 +155,7 @@ impl Decoder {
         if let Some(t) = text {
             key.text = Some(t);
         }
+        key.normalize();
 
         self.win32_last_cks.set(cks);
         self.emit_win32_key(key, kd, rep, consumed)
