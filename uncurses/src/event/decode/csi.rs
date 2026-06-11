@@ -373,10 +373,8 @@ fn recognize(
         }
         match final_byte {
             b'Z' => {
-                // Pass SHIFT through `Key::new`; normalize collapses
-                // Tab+Shift to BackTab uniformly. CSI Z is the legacy
-                // single-byte spelling, so we route through Tab to keep
-                // the canonicalization in one place.
+                // Legacy single-byte spelling for Shift+Tab. Emit the
+                // uniform `Tab + SHIFT` identity directly.
                 let key = Key::new(KeyCode::Tab, KeyModifiers::SHIFT).normalized();
                 return Some(key_event_for_phase(key, csi_kitty_phase(params)));
             }
