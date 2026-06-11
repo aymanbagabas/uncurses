@@ -7,9 +7,14 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["unicode-rs"]
+unicode-rs = ["uncurses/unicode-rs", "uncurses-ratatui/unicode-rs"]
+icu = ["uncurses/icu", "uncurses-ratatui/icu"]
+
 [dependencies]
-uncurses = { path = "../uncurses" }
-uncurses-ratatui = { path = "../uncurses-ratatui" }
+uncurses = { path = "../uncurses", default-features = false }
+uncurses-ratatui = { path = "../uncurses-ratatui", default-features = false }
 ratatui = { version = "0.30", features = ["underline-color"] }
 
 [target.'cfg(unix)'.dependencies]
