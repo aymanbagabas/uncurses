@@ -544,7 +544,7 @@ mod tests {
         let line: Vec<Cell> = (0..20)
             .map(|i| {
                 Cell::narrow(((b'a' + (i as u8 % 26)) as char).to_string())
-                    .with_style(r.cur.style().clone())
+                    .style(r.cur.style().clone())
             })
             .collect();
         for fx in 0u16..20 {

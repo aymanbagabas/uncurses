@@ -125,5 +125,5 @@ pub(crate) fn cell_from_ratatui(rc: &ratatui::buffer::Cell) -> CzCell {
     } else {
         CzCell::narrow(symbol)
     };
-    cell.with_style(style)
+    cell.style(style)
 }

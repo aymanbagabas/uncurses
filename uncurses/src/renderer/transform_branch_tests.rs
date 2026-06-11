@@ -234,7 +234,7 @@ fn transform_pen_change_emits_sgr() {
 
     let mut new_buf = RenderBuffer::new(width, 1);
     let red = Style::default().fg(Color::Basic(BasicColor::Red));
-    new_buf.set_cell((0, 0), &Cell::narrow("R").with_style(red));
+    new_buf.set_cell((0, 0), &Cell::narrow("R").style(red));
 
     let out = transform_output(&mut renderer, &new_buf);
     assert_eq!(out, b"\x1b[31mR");
@@ -248,7 +248,7 @@ fn transform_osc8_link_open_and_close() {
 
     let linked_style = Style::default().link("https://example.test", "");
     let mut linked_buf = RenderBuffer::new(width, 1);
-    linked_buf.set_cell((0, 0), &Cell::narrow("L").with_style(linked_style));
+    linked_buf.set_cell((0, 0), &Cell::narrow("L").style(linked_style));
     let open = transform_output(&mut renderer, &linked_buf);
     assert!(
         open.windows(b"\x1b]8;;https://example.test\x1b\\L".len())
@@ -335,9 +335,9 @@ fn clear_bottom_with_styled_blank() {
     let width = 8;
     let height = 4;
     let bg = Style::default().bg(Color::Basic(BasicColor::Blue));
-    let blank = Cell::BLANK.with_style(bg);
+    let blank = Cell::BLANK.style(bg);
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
-    renderer.cur.set_style(blank.style().clone());
+    renderer.cur.set_style(blank.style.clone());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
@@ -369,9 +369,9 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
     let width = 8;
     let height = 4;
     let bg = Style::default().bg(Color::Basic(BasicColor::Blue));
-    let blank = Cell::BLANK.with_style(bg);
+    let blank = Cell::BLANK.style(bg);
     let mut renderer = renderer(width, height, Optimizations::none());
-    renderer.cur.set_style(blank.style().clone());
+    renderer.cur.set_style(blank.style.clone());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {

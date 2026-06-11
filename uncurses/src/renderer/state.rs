@@ -102,7 +102,7 @@ impl Cursor {
     /// lazily on first access after a pen change.
     pub(super) fn current_blank(&mut self) -> &Cell {
         if self.blank_dirty {
-            self.blank = Cell::BLANK.with_style(self.style.clone());
+            self.blank = Cell::BLANK.style(self.style.clone());
             self.blank_dirty = false;
         }
         &self.blank
@@ -121,7 +121,7 @@ impl Cursor {
                         bg: Some(bg),
                         ..Style::default()
                     };
-                    Cell::BLANK.with_style(s)
+                    Cell::BLANK.style(s)
                 }
                 None => Cell::BLANK,
             };

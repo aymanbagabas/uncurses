@@ -36,7 +36,7 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            if cell.style() != style {
+            if &cell.style != style {
                 return false;
             }
             i += cell.width() as usize;
