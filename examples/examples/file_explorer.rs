@@ -273,18 +273,16 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
     let body_h: u16 = h.saturating_sub(2);
 
     let header = Style::EMPTY
-        .with_fg(Color::Basic(BasicColor::Black))
-        .with_bg(Color::Basic(BasicColor::Cyan))
-        .with_bold();
+        .fg(Color::Basic(BasicColor::Black))
+        .bg(Color::Basic(BasicColor::Cyan))
+        .bold();
     let normal = Style::EMPTY;
-    let dim = Style::EMPTY.with_faint();
-    let dir_style = Style::EMPTY
-        .with_fg(Color::Basic(BasicColor::BrightBlue))
-        .with_bold();
+    let dim = Style::EMPTY.faint();
+    let dir_style = Style::EMPTY.fg(Color::Basic(BasicColor::BrightBlue)).bold();
     let selected = Style::EMPTY
-        .with_bg(Color::Basic(BasicColor::Blue))
-        .with_fg(Color::Basic(BasicColor::BrightWhite));
-    let selected_dir = selected.clone().with_bold();
+        .bg(Color::Basic(BasicColor::Blue))
+        .fg(Color::Basic(BasicColor::BrightWhite));
+    let selected_dir = selected.clone().bold();
 
     // Header bar across full width.
     {
@@ -364,8 +362,8 @@ fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
         &status_line,
         WrapMode::Truncate,
         Style::EMPTY
-            .with_bg(Color::Basic(BasicColor::BrightBlack))
-            .with_fg(Color::Basic(BasicColor::White)),
+            .bg(Color::Basic(BasicColor::BrightBlack))
+            .fg(Color::Basic(BasicColor::White)),
     );
 }
 

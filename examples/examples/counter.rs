@@ -114,12 +114,12 @@ fn redraw<W: Write>(screen: &mut Screen<W>, count: u32) {
     let y = h / 2;
 
     let button = Style::EMPTY
-        .with_fg(BasicColor::BrightWhite.into())
-        .with_bg(BasicColor::Blue.into())
-        .with_bold();
+        .fg(BasicColor::BrightWhite.into())
+        .bg(BasicColor::Blue.into())
+        .bold();
     screen.set_str_with((x, y), &inner, WrapMode::Truncate, button);
 
-    let help = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
+    let help = Style::EMPTY.fg(BasicColor::BrightBlack.into());
     let hint = "click / enter / space: increment • q: quit";
     let hint_w = hint.chars().count() as u16;
     let hx = w.saturating_sub(hint_w) / 2;

@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_cell_with_style() {
-        let c = Cell::narrow("x").with_style(Style::EMPTY.with_bold());
+        let c = Cell::narrow("x").with_style(Style::EMPTY.bold());
         assert!(c.style().attrs.contains(crate::style::AttrFlags::BOLD));
     }
 }

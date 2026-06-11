@@ -3,6 +3,12 @@ use crate::renderer::RenderBuffer;
 use crate::style::Style;
 use crate::text::{Painter, WidthMode, WrapMode};
 
+fn link_of(s: &Style) -> Option<(&str, &str)> {
+    s.link
+        .as_deref()
+        .map(|l| (l.url.as_str(), l.params.as_str()))
+}
+
 #[test]
 fn test_new_buffer() {
     let buf = Buffer::new(80, 24);
@@ -279,14 +285,14 @@ fn write_string_with_link() {
         (0, 0),
         "hi",
         WrapMode::Truncate,
-        Style::EMPTY.with_link("https://example.com", ""),
+        Style::EMPTY.link("https://example.com", ""),
     );
     assert_eq!(
-        buf.cell(Position::new(0, 0)).unwrap().style().link(),
+        link_of(buf.cell(Position::new(0, 0)).unwrap().style()),
         Some(("https://example.com", ""))
     );
     assert_eq!(
-        buf.cell(Position::new(1, 0)).unwrap().style().link(),
+        link_of(buf.cell(Position::new(1, 0)).unwrap().style()),
         Some(("https://example.com", ""))
     );
 }

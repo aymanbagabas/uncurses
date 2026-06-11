@@ -199,9 +199,9 @@ fn sgr(style: &Style) -> String {
 const RESET: &str = "\x1b[m";
 
 fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
-    let subtle = sgr(&Style::EMPTY.with_fg(BasicColor::BrightBlack.into()));
-    let checkbox = sgr(&Style::EMPTY.with_fg(BasicColor::Cyan.into()).with_bold());
-    let ticks_st = sgr(&Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold());
+    let subtle = sgr(&Style::EMPTY.fg(BasicColor::BrightBlack.into()));
+    let checkbox = sgr(&Style::EMPTY.fg(BasicColor::Cyan.into()).bold());
+    let ticks_st = sgr(&Style::EMPTY.fg(BasicColor::Yellow.into()).bold());
 
     let mut last = 0u16;
     let mut y = 1u16;
@@ -221,7 +221,7 @@ fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
     }
 
     y += CHOICES.len() as u16 + 1;
-    let line = format!("Program quits in {ticks_st}{}{RESET} seconds", s.ticks);
+    let line = format!("Program quits in {ticks_st}{RESET} seconds");
     p.set_str((2, y), &line, WrapMode::Truncate);
     last = last.max(y);
 
@@ -234,12 +234,10 @@ fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
 }
 
 fn draw_chosen<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
-    let keyword = sgr(&Style::EMPTY
-        .with_fg(BasicColor::BrightMagenta.into())
-        .with_bold());
-    let ticks_st = sgr(&Style::EMPTY.with_fg(BasicColor::Yellow.into()).with_bold());
-    let bar_st = sgr(&Style::EMPTY.with_fg(BasicColor::BrightGreen.into()));
-    let empty_st = sgr(&Style::EMPTY.with_fg(BasicColor::BrightBlack.into()));
+    let keyword = sgr(&Style::EMPTY.fg(BasicColor::BrightMagenta.into()).bold());
+    let ticks_st = sgr(&Style::EMPTY.fg(BasicColor::Yellow.into()).bold());
+    let bar_st = sgr(&Style::EMPTY.fg(BasicColor::BrightGreen.into()));
+    let empty_st = sgr(&Style::EMPTY.fg(BasicColor::BrightBlack.into()));
 
     let (head, deps): (&str, [&str; 2]) = match s.choice {
         0 => ("Carrot planting?", ["libgarden", "vegeutils"]),

@@ -106,16 +106,11 @@ fn write<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Styl
 }
 
 fn write_link<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
-    screen.set_str_with(
-        (x, y),
-        s,
-        WrapMode::Truncate,
-        style.clone().with_link(url, ""),
-    );
+    screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone().link(url, ""));
 }
 
 fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
-    let dim = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
+    let dim = Style::EMPTY.fg(BasicColor::BrightBlack.into());
     let label_w = hint.chars().count() as i32;
     let center = a.x as i32 + BOX_W as i32 / 2;
     let lx = (center - label_w / 2).max(0) as u16;
@@ -201,11 +196,7 @@ fn scene_sprinkles<W: Write>(
             let a = anchor(screen);
             if frame_no == 0 {
                 paint_blank(screen);
-                draw_box(
-                    screen,
-                    a,
-                    &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
-                );
+                draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
                 footer(screen, a, "scene 1 / 6 — sprinkles");
             }
             let inner_w = (BOX_W - 2) as u32;
@@ -216,7 +207,7 @@ fn scene_sprinkles<W: Write>(
             } else {
                 Color::Basic(BasicColor::BrightYellow)
             };
-            let style = Style::EMPTY.with_fg(fg);
+            let style = Style::EMPTY.fg(fg);
             let cell = Cell::narrow(glyph).with_style(style);
             for _ in 0..40 {
                 let dx = rng.range(inner_w) as u16;
@@ -249,9 +240,9 @@ fn scene_panels<W: Write>(
         &'static str,
         PanelAttr,
     );
-    let id_attr: PanelAttr = |s| s.with_italic();
-    let bd_attr: PanelAttr = |s| s.with_bold();
-    let mx_attr: PanelAttr = |s| s.with_bold().with_italic();
+    let id_attr: PanelAttr = |s| s.italic();
+    let bd_attr: PanelAttr = |s| s.bold();
+    let mx_attr: PanelAttr = |s| s.bold().italic();
     let mut panels: Vec<Panel> = vec![
         (
             4,
@@ -307,15 +298,11 @@ fn scene_panels<W: Write>(
 
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
-            );
+            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
             for &(dx, dy, w, h, bg, fg, label, attr) in &panels {
                 let x = a.x + dx;
                 let y = a.y + dy;
-                let style = Style::EMPTY.with_bg(bg.into()).with_fg(fg.into());
+                let style = Style::EMPTY.bg(bg.into()).fg(fg.into());
                 let cell = Cell::narrow(" ").with_style(style.clone());
                 for yy in y..y + h {
                     for xx in x..x + w {
@@ -372,14 +359,14 @@ fn scene_art<W: Write>(
                 }
                 if last_row == usize::MAX {
                     paint_blank(screen);
-                    fill_inside(screen, a, &Style::EMPTY.with_bg(BasicColor::Black.into()));
-                    draw_box(screen, a, &Style::EMPTY.with_fg(BasicColor::Red.into()));
+                    fill_inside(screen, a, &Style::EMPTY.bg(BasicColor::Black.into()));
+                    draw_box(screen, a, &Style::EMPTY.fg(BasicColor::Red.into()));
                     footer(screen, a, "scene 3 / 6 — line-by-line art");
                 }
                 last_row = row;
                 let style = Style::EMPTY
-                    .with_fg(BasicColor::BrightWhite.into())
-                    .with_bg(BasicColor::Black.into());
+                    .fg(BasicColor::BrightWhite.into())
+                    .bg(BasicColor::Black.into());
                 for (i, line) in ART.iter().take(row).enumerate() {
                     write(screen, label_x, label_y + i as u16, line, &style);
                 }
@@ -390,10 +377,10 @@ fn scene_art<W: Write>(
                 }
                 last_phase = Some(phase);
                 let mut style = Style::EMPTY
-                    .with_fg(BasicColor::BrightWhite.into())
-                    .with_bg(BasicColor::Black.into());
+                    .fg(BasicColor::BrightWhite.into())
+                    .bg(BasicColor::Black.into());
                 if phase {
-                    style = style.with_faint();
+                    style = style.faint();
                 }
                 for (i, line) in ART.iter().enumerate() {
                     write(screen, label_x, label_y + i as u16, line, &style);
@@ -420,15 +407,9 @@ fn scene_banner<W: Write>(
             drawn = true;
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::EMPTY.with_fg(BasicColor::BrightCyan.into()),
-            );
+            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightCyan.into()));
 
-            let title = Style::EMPTY
-                .with_fg(BasicColor::BrightWhite.into())
-                .with_bold();
+            let title = Style::EMPTY.fg(BasicColor::BrightWhite.into()).bold();
             write(screen, a.x + 4, a.y + 1, "Style sampler", &title);
 
             // Underline styles row.
@@ -436,77 +417,71 @@ fn scene_banner<W: Write>(
             let col = a.x + 4;
 
             let single = Style::EMPTY
-                .with_fg(BasicColor::BrightWhite.into())
-                .with_underline_style(UnderlineStyle::Single);
+                .fg(BasicColor::BrightWhite.into())
+                .underline_style(UnderlineStyle::Single);
             write(screen, col, row, "single", &single);
 
             let double = Style::EMPTY
-                .with_fg(BasicColor::BrightWhite.into())
-                .with_underline_style(UnderlineStyle::Double)
-                .with_underline_color(BasicColor::Cyan.into());
+                .fg(BasicColor::BrightWhite.into())
+                .underline_style(UnderlineStyle::Double)
+                .underline_color(BasicColor::Cyan.into());
             write(screen, col + 10, row, "double", &double);
 
             let curly = Style::EMPTY
-                .with_fg(BasicColor::BrightWhite.into())
-                .with_underline_style(UnderlineStyle::Curly)
-                .with_underline_color(BasicColor::BrightRed.into());
+                .fg(BasicColor::BrightWhite.into())
+                .underline_style(UnderlineStyle::Curly)
+                .underline_color(BasicColor::BrightRed.into());
             write(screen, col + 20, row, "curly", &curly);
 
             let dotted = Style::EMPTY
-                .with_fg(BasicColor::BrightWhite.into())
-                .with_underline_style(UnderlineStyle::Dotted)
-                .with_underline_color(BasicColor::BrightYellow.into());
+                .fg(BasicColor::BrightWhite.into())
+                .underline_style(UnderlineStyle::Dotted)
+                .underline_color(BasicColor::BrightYellow.into());
             write(screen, col + 30, row, "dotted", &dotted);
 
             let dashed = Style::EMPTY
-                .with_fg(BasicColor::BrightWhite.into())
-                .with_underline_style(UnderlineStyle::Dashed)
-                .with_underline_color(BasicColor::BrightGreen.into());
+                .fg(BasicColor::BrightWhite.into())
+                .underline_style(UnderlineStyle::Dashed)
+                .underline_color(BasicColor::BrightGreen.into());
             write(screen, col + 40, row, "dashed", &dashed);
 
             // Text attributes row.
             let attr_row = a.y + 5;
-            let white = || Style::EMPTY.with_fg(BasicColor::BrightWhite.into());
-            write(screen, col, attr_row, "bold", &white().with_bold());
-            write(screen, col + 6, attr_row, "italic", &white().with_italic());
-            write(screen, col + 14, attr_row, "faint", &white().with_faint());
-            write(
-                screen,
-                col + 21,
-                attr_row,
-                " reverse ",
-                &white().with_reverse(),
-            );
+            let white = || Style::EMPTY.fg(BasicColor::BrightWhite.into());
+            write(screen, col, attr_row, "bold", &white().bold());
+            write(screen, col + 6, attr_row, "italic", &white().italic());
+            write(screen, col + 14, attr_row, "faint", &white().faint());
+            write(screen, col + 21, attr_row, " reverse ", &white().reverse());
             write(
                 screen,
                 col + 32,
                 attr_row,
                 "strike",
-                &white().with_strikethrough(),
+                &white().strikethrough(),
             );
-            write(screen, col + 40, attr_row, "blink", &white().with_blink());
+            write(screen, col + 40, attr_row, "blink", &white().blink());
 
             // Spell-check look (curly red underline on a typo).
             let plain = white();
             write(screen, col, a.y + 7, "spell-check look:", &plain);
             let typo = white()
-                .with_underline_style(UnderlineStyle::Curly)
-                .with_underline_color(BasicColor::BrightRed.into());
+                .underline_style(UnderlineStyle::Curly)
+                .underline_color(BasicColor::BrightRed.into());
             write(screen, col + 19, a.y + 7, "teh", &typo);
             write(screen, col + 23, a.y + 7, "quick brown fox", &plain);
 
             // Mixed-style demo line: bold + italic + colored fg.
             let mixed = Style::EMPTY
-                .with_fg(BasicColor::BrightMagenta.into())
-                .with_bold()
-                .with_italic();
+                .fg(BasicColor::BrightMagenta.into())
+                .bold()
+                .italic();
             write(screen, col, a.y + 9, "bold + italic + magenta", &mixed);
 
             // Hyperlink line.
             let link_label = Style::EMPTY
-                .with_fg(BasicColor::BrightBlue.into())
-                .with_underline_style(UnderlineStyle::Single)
-                .with_bold();
+                .fg(BasicColor::BrightBlue.into())
+                .underline_style(UnderlineStyle::Single)
+                .bold();
             write(screen, col, a.y + 11, "open the project page →", &plain);
             write_link(
                 screen,
@@ -590,11 +565,7 @@ fn scene_marquee<W: Write>(
         if !drawn_box {
             drawn_box = true;
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
-            );
+            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
             footer(
                 screen,
                 a,
@@ -620,12 +591,10 @@ fn scene_marquee<W: Write>(
             let ch = chars[idx];
             let mut buf = [0u8; 4];
             let s = ch.encode_utf8(&mut buf);
-            let mut style = Style::EMPTY.with_fg(BasicColor::BrightWhite.into());
+            let mut style = Style::EMPTY.fg(BasicColor::BrightWhite.into());
             for (lo, hi, us, c) in &spans {
                 if idx >= *lo && idx < *hi {
-                    style = style
-                        .with_underline_style(*us)
-                        .with_underline_color((*c).into());
+                    style = style.underline_style(*us).underline_color((*c).into());
                     break;
                 }
             }
@@ -686,11 +655,7 @@ fn scene_balls<W: Write>(
         if !box_drawn {
             box_drawn = true;
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::EMPTY.with_fg(BasicColor::BrightWhite.into()),
-            );
+            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
             // Hint sits below the box; full interior is free for bouncing.
             footer(
                 screen,
@@ -727,7 +692,7 @@ fn scene_balls<W: Write>(
         for ball in &balls {
             let cx = a.x + 1 + ball.x as u16;
             let cy = a.y + 1 + ball.y as u16;
-            let style = Style::EMPTY.with_fg(ball.color.into()).with_bold();
+            let style = Style::EMPTY.fg(ball.color.into()).bold();
             let cell = Cell::narrow(ball.glyph).with_style(style);
             screen.set_cell(Position::new(cx, cy), &cell);
         }

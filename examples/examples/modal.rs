@@ -103,7 +103,7 @@ fn paint_background<W: Write>(screen: &mut Screen<W>) {
     if w == 0 || h == 0 {
         return;
     }
-    let body = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
+    let body = Style::EMPTY.fg(BasicColor::BrightBlack.into());
     // Reserve the bottom row for the status line.
     let body_rows = h.saturating_sub(1);
     for y in 0..body_rows {
@@ -119,8 +119,8 @@ fn paint_status<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
     }
     let y = h - 1;
     let status = Style::EMPTY
-        .with_fg(BasicColor::Black.into())
-        .with_bg(BasicColor::BrightWhite.into());
+        .fg(BasicColor::Black.into())
+        .bg(BasicColor::BrightWhite.into());
     screen.fill_rect(
         Rect::new(0, y, screen.width(), 1),
         &Cell::narrow(" ").with_style(status.clone()),
@@ -146,16 +146,16 @@ fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
 
 fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
     let frame = Style::EMPTY
-        .with_fg(BasicColor::BrightWhite.into())
-        .with_bg(BasicColor::Blue.into())
-        .with_bold();
+        .fg(BasicColor::BrightWhite.into())
+        .bg(BasicColor::Blue.into())
+        .bold();
     let body = Style::EMPTY
-        .with_fg(BasicColor::BrightWhite.into())
-        .with_bg(BasicColor::Blue.into());
+        .fg(BasicColor::BrightWhite.into())
+        .bg(BasicColor::Blue.into());
     let hint = Style::EMPTY
-        .with_fg(BasicColor::BrightYellow.into())
-        .with_bg(BasicColor::Blue.into())
-        .with_italic();
+        .fg(BasicColor::BrightYellow.into())
+        .bg(BasicColor::Blue.into())
+        .italic();
 
     // Solid fill so background text never bleeds through the modal.
     screen.fill_rect(rect, &Cell::narrow(" ").with_style(body.clone()));
