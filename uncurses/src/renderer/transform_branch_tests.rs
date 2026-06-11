@@ -233,7 +233,7 @@ fn transform_pen_change_emits_sgr() {
     renderer.cur_buf = Some(RenderBuffer::new(width, 1));
 
     let mut new_buf = RenderBuffer::new(width, 1);
-    let red = Style::EMPTY.with_fg(Color::Basic(BasicColor::Red));
+    let red = Style::EMPTY.fg(Color::Basic(BasicColor::Red));
     new_buf.set_cell((0, 0), &Cell::narrow("R").with_style(red));
 
     let out = transform_output(&mut renderer, &new_buf);
@@ -246,7 +246,7 @@ fn transform_osc8_link_open_and_close() {
     let mut renderer = renderer(width, 1, Optimizations::none());
     renderer.cur_buf = Some(RenderBuffer::new(width, 1));
 
-    let linked_style = Style::EMPTY.with_link("https://example.test", "");
+    let linked_style = Style::EMPTY.link("https://example.test", "");
     let mut linked_buf = RenderBuffer::new(width, 1);
     linked_buf.set_cell((0, 0), &Cell::narrow("L").with_style(linked_style));
     let open = transform_output(&mut renderer, &linked_buf);
@@ -272,7 +272,7 @@ fn reset_pen_closes_osc8_and_emits_sgr_reset() {
     let mut renderer = renderer(10, 1, Optimizations::none());
     renderer
         .cur
-        .set_style(Style::EMPTY.with_link("https://example.test", ""));
+        .set_style(Style::EMPTY.link("https://example.test", ""));
 
     let mut out = Vec::new();
     renderer.reset_pen(&mut out).unwrap();
@@ -283,7 +283,7 @@ fn reset_pen_closes_osc8_and_emits_sgr_reset() {
         std::str::from_utf8(&out)
     );
     assert!(
-        renderer.cur.style().link().is_none(),
+        renderer.cur.style().link.is_none(),
         "link tracking should be cleared after reset_pen"
     );
 }
@@ -334,7 +334,7 @@ fn clear_bottom_without_bce_still_uses_ed_for_default_blank() {
 fn clear_bottom_with_styled_blank() {
     let width = 8;
     let height = 4;
-    let bg = Style::EMPTY.with_bg(Color::Basic(BasicColor::Blue));
+    let bg = Style::EMPTY.bg(Color::Basic(BasicColor::Blue));
     let blank = Cell::BLANK.with_style(bg);
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
     renderer.cur.set_style(blank.style().clone());
@@ -368,7 +368,7 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
     // transform emit styled spaces explicitly.
     let width = 8;
     let height = 4;
-    let bg = Style::EMPTY.with_bg(Color::Basic(BasicColor::Blue));
+    let bg = Style::EMPTY.bg(Color::Basic(BasicColor::Blue));
     let blank = Cell::BLANK.with_style(bg);
     let mut renderer = renderer(width, height, Optimizations::none());
     renderer.cur.set_style(blank.style().clone());

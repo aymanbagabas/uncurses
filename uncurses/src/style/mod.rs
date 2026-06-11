@@ -13,13 +13,11 @@ use bitflags::bitflags;
 use crate::color::Color;
 
 /// Hyperlink target carried by a [`Style`]. Stored behind an [`Arc`]
-/// so cells in a hyperlink span share a single allocation. Private
-/// to the style module — public callers interact with hyperlinks
-/// through [`Style::with_link`] and [`Style::link`].
+/// so cells in a hyperlink span share a single allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct LinkData {
-    url: String,
-    params: String,
+pub struct Link {
+    pub url: String,
+    pub params: String,
 }
 
 bitflags! {
@@ -56,12 +54,12 @@ pub enum UnderlineStyle {
 /// keeps a single allocation.
 #[derive(Debug, Clone, Default)]
 pub struct Style {
-    pub(crate) fg: Option<Color>,
-    pub(crate) bg: Option<Color>,
-    pub(crate) underline_color: Option<Color>,
-    pub(crate) underline: UnderlineStyle,
-    pub(crate) attrs: AttrFlags,
-    pub(crate) link: Option<Arc<LinkData>>,
+    pub fg: Option<Color>,
+    pub bg: Option<Color>,
+    pub underline_color: Option<Color>,
+    pub underline: UnderlineStyle,
+    pub attrs: AttrFlags,
+    pub link: Option<Arc<Link>>,
 }
 
 impl PartialEq for Style {
@@ -128,73 +126,73 @@ impl Style {
         self.link.is_none()
     }
 
-    pub fn with_bold(mut self) -> Self {
+    pub fn bold(mut self) -> Self {
         self.attrs |= AttrFlags::BOLD;
         self
     }
 
-    pub fn with_faint(mut self) -> Self {
+    pub fn faint(mut self) -> Self {
         self.attrs |= AttrFlags::FAINT;
         self
     }
 
-    pub fn with_italic(mut self) -> Self {
+    pub fn italic(mut self) -> Self {
         self.attrs |= AttrFlags::ITALIC;
         self
     }
 
-    pub fn with_underline(mut self) -> Self {
+    pub fn underline(mut self) -> Self {
         self.underline = UnderlineStyle::Single;
         self
     }
 
-    pub fn with_strikethrough(mut self) -> Self {
+    pub fn strikethrough(mut self) -> Self {
         self.attrs |= AttrFlags::STRIKETHROUGH;
         self
     }
 
-    pub fn with_blink(mut self) -> Self {
+    pub fn blink(mut self) -> Self {
         self.attrs |= AttrFlags::SLOW_BLINK;
         self
     }
 
-    pub fn with_rapid_blink(mut self) -> Self {
+    pub fn rapid_blink(mut self) -> Self {
         self.attrs |= AttrFlags::RAPID_BLINK;
         self
     }
 
-    pub fn with_reverse(mut self) -> Self {
+    pub fn reverse(mut self) -> Self {
         self.attrs |= AttrFlags::REVERSE;
         self
     }
 
-    pub fn with_conceal(mut self) -> Self {
+    pub fn conceal(mut self) -> Self {
         self.attrs |= AttrFlags::CONCEAL;
         self
     }
 
-    pub fn with_fg(mut self, color: Color) -> Self {
+    pub fn fg(mut self, color: Color) -> Self {
         self.fg = Some(color);
         self
     }
 
-    pub fn with_bg(mut self, color: Color) -> Self {
+    pub fn bg(mut self, color: Color) -> Self {
         self.bg = Some(color);
         self
     }
 
-    pub fn with_underline_color(mut self, color: Color) -> Self {
+    pub fn underline_color(mut self, color: Color) -> Self {
         self.underline_color = Some(color);
         self
     }
 
-    pub fn with_underline_style(mut self, style: UnderlineStyle) -> Self {
+    pub fn underline_style(mut self, style: UnderlineStyle) -> Self {
         self.underline = style;
         self
     }
 
     /// Replace the entire attribute flag set.
-    pub fn with_attrs(mut self, attrs: AttrFlags) -> Self {
+    pub fn attrs(mut self, attrs: AttrFlags) -> Self {
         self.attrs = attrs;
         self
     }
@@ -202,50 +200,17 @@ impl Style {
     /// Attach a hyperlink to this style. Pass an empty `url` to clear
     /// the link; `params` are OSC 8 parameter pairs (e.g. `"id=foo"`)
     /// or empty.
-    pub fn with_link(mut self, url: impl Into<String>, params: impl Into<String>) -> Self {
+    pub fn link(mut self, url: impl Into<String>, params: impl Into<String>) -> Self {
         let url = url.into();
         if url.is_empty() {
             self.link = None;
         } else {
-            self.link = Some(Arc::new(LinkData {
+            self.link = Some(Arc::new(Link {
                 url,
                 params: params.into(),
             }));
         }
         self
-    }
-
-    /// The attached hyperlink as `(url, params)`, or `None` when no
-    /// link is set. `params` is empty when the link has none.
-    pub fn link(&self) -> Option<(&str, &str)> {
-        self.link
-            .as_deref()
-            .map(|l| (l.url.as_str(), l.params.as_str()))
-    }
-
-    /// Foreground color, if any.
-    pub fn fg(&self) -> Option<Color> {
-        self.fg
-    }
-
-    /// Background color, if any.
-    pub fn bg(&self) -> Option<Color> {
-        self.bg
-    }
-
-    /// Underline color, if any.
-    pub fn underline_color(&self) -> Option<Color> {
-        self.underline_color
-    }
-
-    /// Underline style.
-    pub fn underline_style(&self) -> UnderlineStyle {
-        self.underline
-    }
-
-    /// Text attribute flags.
-    pub fn attrs(&self) -> AttrFlags {
-        self.attrs
     }
 
     pub fn is_bold(&self) -> bool {
@@ -299,9 +264,9 @@ mod tests {
     #[test]
     fn test_style_builder() {
         let s = Style::EMPTY
-            .with_bold()
-            .with_italic()
-            .with_fg(Color::Basic(BasicColor::Red));
+            .bold()
+            .italic()
+            .fg(Color::Basic(BasicColor::Red));
         assert!(s.attrs.contains(AttrFlags::BOLD));
         assert!(s.attrs.contains(AttrFlags::ITALIC));
         assert_eq!(s.fg, Some(Color::Basic(BasicColor::Red)));
@@ -309,16 +274,17 @@ mod tests {
     }
 
     #[test]
-    fn with_link_empty_url_clears() {
-        let s = Style::EMPTY.with_link("https://x", "id=42");
-        assert_eq!(s.link(), Some(("https://x", "id=42")));
+    fn link_empty_url_clears() {
+        let s = Style::EMPTY.link("https://x", "id=42");
+        let l = s.link.as_deref().unwrap();
+        assert_eq!((l.url.as_str(), l.params.as_str()), ("https://x", "id=42"));
 
         // Empty url clears, regardless of params.
-        let s = s.with_link("", "id=ignored");
-        assert!(s.link().is_none());
+        let s = s.link("", "id=ignored");
+        assert!(s.link.is_none());
         assert!(s.is_empty());
 
-        let s = Style::EMPTY.with_link("", "");
-        assert!(s.link().is_none());
+        let s = Style::EMPTY.link("", "");
+        assert!(s.link.is_none());
     }
 }

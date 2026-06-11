@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_write_bold() {
         let mut buf = Vec::new();
-        write_style(&mut buf, &Style::EMPTY.with_bold()).unwrap();
+        write_style(&mut buf, &Style::EMPTY.bold()).unwrap();
         assert_eq!(buf, b"\x1b[1m");
     }
 
@@ -251,10 +251,10 @@ mod tests {
     fn test_write_combined_single_csi() {
         let mut buf = Vec::new();
         let s = Style::EMPTY
-            .with_bold()
-            .with_italic()
-            .with_fg(Color::Basic(BasicColor::Red))
-            .with_bg(Color::Indexed(42));
+            .bold()
+            .italic()
+            .fg(Color::Basic(BasicColor::Red))
+            .bg(Color::Indexed(42));
         write_style(&mut buf, &s).unwrap();
         // single CSI ... m with all params joined by ;
         assert_eq!(buf, b"\x1b[1;3;31;48;5;42m");
@@ -264,8 +264,8 @@ mod tests {
     fn test_write_with_curly_underline_and_rgb_fg() {
         let mut buf = Vec::new();
         let s = Style::EMPTY
-            .with_underline_style(UnderlineStyle::Curly)
-            .with_fg(Color::Rgb(10, 20, 30));
+            .underline_style(UnderlineStyle::Curly)
+            .fg(Color::Rgb(10, 20, 30));
         write_style(&mut buf, &s).unwrap();
         assert_eq!(buf, b"\x1b[4:3;38;2;10;20;30m");
     }

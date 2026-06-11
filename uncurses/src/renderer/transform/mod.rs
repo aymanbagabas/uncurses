@@ -232,7 +232,7 @@ mod tests {
         r.cur_buf = Some(RenderBuffer::new(10, 1));
 
         let mut new_buf = RenderBuffer::new(10, 1);
-        let style = Style::EMPTY.with_fg(Color::Basic(BasicColor::Red));
+        let style = Style::EMPTY.fg(Color::Basic(BasicColor::Red));
         new_buf.set_cell((0, 0), &Cell::narrow("R").with_style(style));
 
         let mut sink = Vec::new();
@@ -285,8 +285,7 @@ mod tests {
         // new_buf has the bottom row filled with bg-red spaces. The
         // pen on entry is default, so ED would paint with default bg
         // and erase the red background — wrong.
-        let bg_red =
-            Cell::narrow(" ").with_style(Style::EMPTY.with_bg(crate::color::Color::Indexed(1)));
+        let bg_red = Cell::narrow(" ").with_style(Style::EMPTY.bg(crate::color::Color::Indexed(1)));
         let mut new_buf = RenderBuffer::new(10, 4);
         new_buf.set_cell((0, 0), &Cell::narrow("A"));
         for x in 0..10u16 {

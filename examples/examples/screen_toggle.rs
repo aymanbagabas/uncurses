@@ -84,10 +84,10 @@ fn redraw<W: Write>(screen: &mut Screen<W>, alt: bool) {
         " inline mode "
     };
     let keyword = Style::EMPTY
-        .with_fg(BasicColor::BrightCyan.into())
-        .with_bg(BasicColor::Black.into())
-        .with_bold();
-    let help = Style::EMPTY.with_fg(BasicColor::BrightBlack.into());
+        .fg(BasicColor::BrightCyan.into())
+        .bg(BasicColor::Black.into())
+        .bold();
+    let help = Style::EMPTY.fg(BasicColor::BrightBlack.into());
 
     screen.set_str((2, 1), "You're in", WrapMode::Truncate);
     screen.set_str_with((12, 1), mode, WrapMode::Truncate, keyword);
