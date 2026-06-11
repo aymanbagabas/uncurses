@@ -189,9 +189,22 @@ impl Key {
                 // majority. Hosts wanting cancellation should
                 // populate `text` directly from the resolved
                 // character.
+                // CapsLock only acts as a shifted layer for cased
+                // letters. The decoder/constructor normalizes
+                // uppercase to lowercase + SHIFT before we get here,
+                // so `is_lowercase()` is the right test: it covers
+                // every Unicode cased letter (ASCII, Cyrillic, Greek,
+                // Latin-Extended, …) and excludes digits, symbols,
+                // and uncased scripts where CapsLock has no effect.
+                // Whether Shift cancels CapsLock on letters is a
+                // host convention (some platforms cancel, most OR);
+                // the library takes the OR-side that matches the
+                // majority. Hosts wanting cancellation should
+                // populate `text` directly from the resolved
+                // character.
                 let glyph: Option<char> = match self.code {
                     KeyCode::Char(c) if !c.is_control() => {
-                        let shifted = if c.is_ascii_alphabetic() {
+                        let shifted = if c.is_lowercase() {
                             self.modifiers
                                 .intersects(KeyModifiers::SHIFT | KeyModifiers::CAPS_LOCK)
                         } else {
@@ -479,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn caps_lock_only_shifts_ascii_letters() {
+    fn caps_lock_shifts_cased_letters_only() {
         // CapsLock does not produce the shifted glyph for digits or
         // symbols on any common layout. Even if a decoder populated
         // `shifted_key` for a non-letter key, `text` derived under
@@ -494,7 +507,7 @@ mod tests {
         k.normalize();
         assert_eq!(k.text.as_deref(), Some("2"));
 
-        // ASCII letters do treat CapsLock as a shifted layer.
+        // ASCII letters treat CapsLock as a shifted layer.
         let mut k = Key {
             code: KeyCode::Char('a'),
             modifiers: KeyModifiers::CAPS_LOCK,
@@ -504,6 +517,29 @@ mod tests {
         };
         k.normalize();
         assert_eq!(k.text.as_deref(), Some("A"));
+
+        // Non-ASCII cased letters (e.g. Cyrillic, Greek, Latin
+        // Extended) participate too — the rule is "any cased letter",
+        // not "ASCII only".
+        let mut k = Key {
+            code: KeyCode::Char('ä'),
+            modifiers: KeyModifiers::CAPS_LOCK,
+            text: None,
+            shifted_key: Some('Ä'),
+            base_key: None,
+        };
+        k.normalize();
+        assert_eq!(k.text.as_deref(), Some("Ä"));
+
+        let mut k = Key {
+            code: KeyCode::Char('д'),
+            modifiers: KeyModifiers::CAPS_LOCK,
+            text: None,
+            shifted_key: Some('Д'),
+            base_key: None,
+        };
+        k.normalize();
+        assert_eq!(k.text.as_deref(), Some("Д"));
 
         // With Shift held, non-letters still take the shifted glyph.
         let mut k = Key {
