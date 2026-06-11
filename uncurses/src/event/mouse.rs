@@ -41,13 +41,13 @@ pub struct Mouse {
 }
 
 impl Mouse {
-    /// Construct a mouse event with no modifiers.
-    pub fn new(x: u16, y: u16, button: MouseButton) -> Self {
+    /// Construct a mouse event.
+    pub fn new(x: u16, y: u16, button: MouseButton, modifiers: KeyModifiers) -> Self {
         Self {
             x,
             y,
             button,
-            modifiers: KeyModifiers::empty(),
+            modifiers,
         }
     }
 }
@@ -75,12 +75,7 @@ pub fn mouse_pixel_to_cell(
     } else {
         0
     };
-    Mouse {
-        x,
-        y,
-        button: m.button,
-        modifiers: m.modifiers,
-    }
+    Mouse::new(x, y, m.button, m.modifiers)
 }
 
 /// Decode a SGR mouse event from CSI < params.
@@ -210,12 +205,7 @@ fn build_mouse_event(cb: u16, cx: u16, cy: u16, is_release: Option<bool>) -> Eve
         }
     };
 
-    let mouse = Mouse {
-        x: cx,
-        y: cy,
-        button,
-        modifiers,
-    };
+    let mouse = Mouse::new(cx, cy, button, modifiers);
 
     let release = is_release.unwrap_or(cb & 3 == 3 && !is_wheel && !is_extra);
     if is_wheel {
@@ -340,7 +330,7 @@ mod tests {
     #[test]
     fn test_mouse_pixel_to_cell() {
         // 800x600 pixels, 80x24 cells → each cell is 10px wide, 25px tall
-        let m = Mouse::new(100, 200, MouseButton::Left);
+        let m = Mouse::new(100, 200, MouseButton::Left, KeyModifiers::empty());
         let c = mouse_pixel_to_cell(m, 800, 600, 80, 24);
         assert_eq!(c.x, 10);
         assert_eq!(c.y, 8);
@@ -376,7 +366,8 @@ mod tests {
 
     #[test]
     fn test_sgr_roundtrip() {
-        let original = Event::MouseClick(Mouse::new(10, 20, MouseButton::Left));
+        let original =
+            Event::MouseClick(Mouse::new(10, 20, MouseButton::Left, KeyModifiers::empty()));
 
         let mut buf = Vec::new();
         write_sgr_mouse(&mut buf, &original).unwrap();
