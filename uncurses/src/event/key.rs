@@ -16,19 +16,33 @@ bitflags! {
         const CAPS_LOCK   = 0b0000_0000_0100_0000;
         const NUM_LOCK    = 0b0000_0000_1000_0000;
         const SCROLL_LOCK = 0b0000_0001_0000_0000;
+
+        /// Mask of lock-state bits (`CAPS_LOCK | NUM_LOCK | SCROLL_LOCK`).
+        ///
+        /// Lock states report the current keyboard latch and are *not*
+        /// binding modifiers: they are ignored by [`Key`] equality,
+        /// hashing, [`Key::matches`], and [`Display`](fmt::Display).
+        /// Callers that need to inspect or compare lock state can mask
+        /// the modifier set with this constant.
+        const LOCK_MASK   = Self::CAPS_LOCK.bits()
+                          | Self::NUM_LOCK.bits()
+                          | Self::SCROLL_LOCK.bits();
     }
 }
 
 /// A key event.
 ///
 /// Equality and hashing intentionally consider only [`code`](Self::code)
-/// and [`modifiers`](Self::modifiers): two keys representing the same
-/// press compare equal regardless of whether informational fields
-/// ([`text`](Self::text), [`shifted_key`](Self::shifted_key),
-/// [`base_key`](Self::base_key)) were populated by the producing
-/// decoder. This makes `Key` safe to use as a `HashMap` key for binding
-/// lookups even when some decoder paths surface richer metadata than
-/// others.
+/// and the *binding* portion of [`modifiers`](Self::modifiers): two
+/// keys representing the same press compare equal regardless of
+/// whether informational fields ([`text`](Self::text),
+/// [`shifted_key`](Self::shifted_key), [`base_key`](Self::base_key))
+/// were populated by the producing decoder, and regardless of lock
+/// state ([`CAPS_LOCK`](KeyModifiers::CAPS_LOCK),
+/// [`NUM_LOCK`](KeyModifiers::NUM_LOCK),
+/// [`SCROLL_LOCK`](KeyModifiers::SCROLL_LOCK)). This makes `Key` safe
+/// to use as a `HashMap` key for binding lookups across decoder paths
+/// and across keyboard latch states.
 #[derive(Debug, Clone)]
 pub struct Key {
     /// The key code (which key was pressed).
@@ -51,7 +65,9 @@ pub struct Key {
 
 impl PartialEq for Key {
     fn eq(&self, other: &Self) -> bool {
-        self.code == other.code && self.modifiers == other.modifiers
+        self.code == other.code
+            && self.modifiers.difference(KeyModifiers::LOCK_MASK)
+                == other.modifiers.difference(KeyModifiers::LOCK_MASK)
     }
 }
 
@@ -60,7 +76,9 @@ impl Eq for Key {}
 impl std::hash::Hash for Key {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.code.hash(state);
-        self.modifiers.hash(state);
+        self.modifiers
+            .difference(KeyModifiers::LOCK_MASK)
+            .hash(state);
     }
 }
 
@@ -1370,5 +1388,66 @@ mod tests {
                 .unwrap_or_else(|e| panic!("failed to parse {s:?} (from {code:?}, {mods:?}): {e}"));
             assert_eq!(parsed, k, "round-trip mismatch for {s:?}");
         }
+    }
+
+    #[test]
+    fn eq_ignores_lock_state() {
+        let plain = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+        let with_caps = Key::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK,
+        );
+        let with_num = Key::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CTRL | KeyModifiers::NUM_LOCK,
+        );
+        let with_scroll = Key::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CTRL | KeyModifiers::SCROLL_LOCK,
+        );
+        let with_all_locks = Key::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CTRL | KeyModifiers::LOCK_MASK,
+        );
+        assert_eq!(plain, with_caps);
+        assert_eq!(plain, with_num);
+        assert_eq!(plain, with_scroll);
+        assert_eq!(plain, with_all_locks);
+    }
+
+    #[test]
+    fn hash_ignores_lock_state() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        fn h(k: &Key) -> u64 {
+            let mut s = DefaultHasher::new();
+            k.hash(&mut s);
+            s.finish()
+        }
+        let plain = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+        let with_locks = Key::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CTRL | KeyModifiers::LOCK_MASK,
+        );
+        assert_eq!(h(&plain), h(&with_locks));
+    }
+
+    #[test]
+    fn eq_still_distinguishes_binding_modifiers() {
+        let ctrl = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL);
+        let alt = Key::new(KeyCode::Char('c'), KeyModifiers::ALT);
+        let ctrl_alt = Key::new(KeyCode::Char('c'), KeyModifiers::CTRL | KeyModifiers::ALT);
+        assert_ne!(ctrl, alt);
+        assert_ne!(ctrl, ctrl_alt);
+    }
+
+    #[test]
+    fn parsed_key_equals_key_with_lock_state() {
+        let parsed: Key = "ctrl+c".parse().expect("parse");
+        let live = Key::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CTRL | KeyModifiers::CAPS_LOCK,
+        );
+        assert_eq!(parsed, live);
     }
 }
