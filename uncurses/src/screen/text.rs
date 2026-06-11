@@ -32,7 +32,7 @@ impl<W: Write> Screen<W> {
     }
 
     /// Like [`Self::set_str`] but starts with the given `style` instead
-    /// of [`Style::EMPTY`]. Inline SGR/OSC 8 sequences in `s` still
+    /// of [`Style::default()`]. Inline SGR/OSC 8 sequences in `s` still
     /// mutate the painter's state as they're encountered.
     pub fn set_str_with(
         &mut self,
@@ -65,7 +65,7 @@ impl<W: Write> Screen<W> {
     }
 
     /// Like [`Self::set_str_rect`] but starts with the given `style`
-    /// instead of [`Style::EMPTY`].
+    /// instead of [`Style::default()`].
     pub fn set_str_rect_with(
         &mut self,
         rect: impl Into<Rect>,

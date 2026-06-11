@@ -469,7 +469,7 @@ mod tests {
         let opts = Optimizations::default()
             .difference(Optimizations::CSR | Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
-        let bg_style = Style::EMPTY.bg(Color::Basic(BasicColor::Blue));
+        let bg_style = Style::default().bg(Color::Basic(BasicColor::Blue));
         renderer.cur.set_style(bg_style.clone());
         renderer.cur.pos = Position { y: 3, x: 0 };
         let mut new_buf = RenderBuffer::new(10, 4);
@@ -507,7 +507,7 @@ mod tests {
         let opts = Optimizations::default()
             .difference(Optimizations::CSR | Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
-        let pen = Style::EMPTY
+        let pen = Style::default()
             .bg(Color::Basic(BasicColor::Red))
             .fg(Color::Basic(BasicColor::White))
             .bold();
@@ -522,7 +522,7 @@ mod tests {
 
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
-        let bg_only = Style::EMPTY.bg(Color::Basic(BasicColor::Red));
+        let bg_only = Style::default().bg(Color::Basic(BasicColor::Red));
         let expected = Cell::BLANK.with_style(bg_only);
         assert!(
             bottom_row.iter().all(|c| *c == expected),
@@ -550,7 +550,7 @@ mod tests {
         let mut renderer = make_renderer(10, 4, opts);
         renderer
             .cur
-            .set_style(Style::EMPTY.bg(Color::Basic(BasicColor::Red)));
+            .set_style(Style::default().bg(Color::Basic(BasicColor::Red)));
         renderer.cur.mark_pen_changed();
         renderer.cur.pos = Position { y: 3, x: 0 };
         let mut new_buf = RenderBuffer::new(10, 4);

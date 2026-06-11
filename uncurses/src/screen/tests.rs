@@ -320,7 +320,7 @@ fn truecolor_profile_emits_38_2_rgb() {
             .with_color_profile(Profile::TrueColor);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -342,7 +342,7 @@ fn ansi256_profile_emits_38_5_index() {
             .with_color_profile(Profile::Ansi256);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -361,7 +361,7 @@ fn ansi_profile_emits_basic_sgr_3x_or_9x() {
             .with_color_profile(Profile::Ansi);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -385,7 +385,7 @@ fn ascii_profile_emits_no_color_sgr() {
             .with_color_profile(Profile::Ascii);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -779,19 +779,19 @@ fn styled_text_emits_specific_sgr_payloads() {
         let mut screen = Screen::new(&mut buf).with_size(4, 1);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.bold()),
+            &Cell::narrow("X").with_style(Style::default().bold()),
         );
         screen.set_cell(
             (1u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.fg(Color::rgb(255, 0, 0))),
+            &Cell::narrow("X").with_style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.set_cell(
             (2u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.bg(Color::rgb(0, 255, 0))),
+            &Cell::narrow("X").with_style(Style::default().bg(Color::rgb(0, 255, 0))),
         );
         screen.set_cell(
             (3u16, 0u16),
-            &Cell::narrow("X").with_style(Style::EMPTY.bold().fg(Color::rgb(0, 0, 255))),
+            &Cell::narrow("X").with_style(Style::default().bold().fg(Color::rgb(0, 0, 255))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -808,7 +808,7 @@ fn hyperlinks_emit_osc8_with_url() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::new(&mut buf).with_size(10, 1);
-        let style = Style::EMPTY.link("https://example.com", "");
+        let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
@@ -834,7 +834,7 @@ fn hyperlinks_suppressed_under_disabled_profile() {
         let mut screen = Screen::new(&mut buf)
             .with_size(10, 1)
             .with_color_profile(Profile::Disabled);
-        let style = Style::EMPTY.link("https://example.com", "");
+        let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
@@ -938,7 +938,7 @@ fn underline_styles_emit_extended_sgr_params() {
             UnderlineStyle::Dashed,
         ];
         for (i, u) in styles.iter().enumerate() {
-            let st = Style::EMPTY.underline_style(*u);
+            let st = Style::default().underline_style(*u);
             screen.set_cell((i as u16, 0u16), &Cell::narrow("U").with_style(st));
         }
         screen.render().unwrap();
@@ -958,11 +958,11 @@ fn text_attribute_variants_emit_matching_sgr_params() {
     {
         let mut screen = Screen::new(&mut buf).with_size(5, 1);
         let styles = [
-            Style::EMPTY.italic(),
-            Style::EMPTY.faint(),
-            Style::EMPTY.reverse(),
-            Style::EMPTY.strikethrough(),
-            Style::EMPTY.bold(),
+            Style::default().italic(),
+            Style::default().faint(),
+            Style::default().reverse(),
+            Style::default().strikethrough(),
+            Style::default().bold(),
         ];
         for (i, st) in styles.iter().enumerate() {
             screen.set_cell((i as u16, 0u16), &Cell::narrow("A").with_style(st.clone()));
@@ -1005,7 +1005,7 @@ fn color_downsampling_emits_profile_specific_sgr() {
             let mut screen = Screen::new(&mut buf)
                 .with_size(3, 1)
                 .with_color_profile(profile);
-            let cell = Cell::narrow("C").with_style(Style::EMPTY.fg(Color::rgb(123, 234, 45)));
+            let cell = Cell::narrow("C").with_style(Style::default().fg(Color::rgb(123, 234, 45)));
             screen.set_cell((0u16, 0u16), &cell);
             screen.render().unwrap();
             screen.flush().unwrap();
@@ -1196,7 +1196,7 @@ fn renderer_redraws_when_style_changes() {
 
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("A").with_style(Style::EMPTY.bold()),
+            &Cell::narrow("A").with_style(Style::default().bold()),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1211,7 +1211,7 @@ fn basic_color_fg_emits_sgr_31() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::new(&mut buf).with_size(1, 1);
-        let cell = Cell::narrow("X").with_style(Style::EMPTY.fg(Color::Basic(BasicColor::Red)));
+        let cell = Cell::narrow("X").with_style(Style::default().fg(Color::Basic(BasicColor::Red)));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render().unwrap();
         screen.flush().unwrap();

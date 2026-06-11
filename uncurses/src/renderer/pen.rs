@@ -16,7 +16,7 @@ impl Renderer {
     pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
         let target_style = match cell {
             Some(c) => c.style(),
-            None => &Style::EMPTY,
+            None => &Style::default(),
         };
 
         // Raw-equality fast path: most cells in a styled run share the

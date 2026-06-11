@@ -31,7 +31,7 @@ fn redraw<W: Write>(screen: &mut Screen<W>) -> std::io::Result<()> {
     } else {
         HEADER.chars().take(w as usize).collect()
     };
-    screen.set_str_with((0, 0), &header, WrapMode::Truncate, Style::EMPTY);
+    screen.set_str_with((0, 0), &header, WrapMode::Truncate, Style::default());
     Ok(())
 }
 
@@ -96,14 +96,18 @@ fn main() -> std::io::Result<()> {
                 }
                 KeyCode::Backspace if cx > 0 => {
                     cx -= 1;
-                    screen.set_str_with((cx, cy), " ", WrapMode::Truncate, Style::EMPTY);
+                    screen.set_str_with((cx, cy), " ", WrapMode::Truncate, Style::default());
                 }
                 _ => {
                     if let Some(text) = key.text.as_deref()
                         && !text.is_empty()
                     {
-                        let end =
-                            screen.set_str_with((cx, cy), text, WrapMode::Truncate, Style::EMPTY);
+                        let end = screen.set_str_with(
+                            (cx, cy),
+                            text,
+                            WrapMode::Truncate,
+                            Style::default(),
+                        );
                         let (nx, ny) = clamp_to_screen(&screen, end.x, end.y);
                         cx = nx;
                         cy = ny;

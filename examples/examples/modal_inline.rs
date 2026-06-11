@@ -104,9 +104,9 @@ fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
 }
 
 fn paint_content<W: Write>(screen: &mut Screen<W>) {
-    let cyan = Style::EMPTY.fg(BasicColor::BrightCyan.into());
-    let plain = Style::EMPTY;
-    let bullet_color = Style::EMPTY.fg(BasicColor::Yellow.into());
+    let cyan = Style::default().fg(BasicColor::BrightCyan.into());
+    let plain = Style::default();
+    let bullet_color = Style::default().fg(BasicColor::Yellow.into());
 
     screen.set_str_with(
         (0, 1),
@@ -126,7 +126,7 @@ fn paint_content<W: Write>(screen: &mut Screen<W>) {
             (0, y),
             "•",
             WrapMode::Truncate,
-            Style::EMPTY.fg(BasicColor::Yellow.into()),
+            Style::default().fg(BasicColor::Yellow.into()),
         );
         screen.set_str_with((2, y), label, WrapMode::Truncate, bullet_color.clone());
     }
@@ -136,7 +136,7 @@ fn paint_scrim<W: Write>(screen: &mut Screen<W>) {
     // Dim the surface with a uniform gray fill so the modal stands
     // out. The cells behind keep their content but the scrim's bg
     // wins because we overwrite each cell.
-    let scrim = Style::EMPTY.bg(Color::Rgb(0x55, 0x55, 0x55));
+    let scrim = Style::default().bg(Color::Rgb(0x55, 0x55, 0x55));
     let bounds = Rect::new(0, 0, screen.width(), screen.height());
     screen.fill_rect(bounds, &Cell::narrow(" ").with_style(scrim));
 }
@@ -153,14 +153,14 @@ fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
 }
 
 fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
-    let frame = Style::EMPTY
+    let frame = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())
         .bold();
-    let body = Style::EMPTY
+    let body = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into());
-    let hint = Style::EMPTY
+    let hint = Style::default()
         .fg(BasicColor::BrightYellow.into())
         .bg(BasicColor::Blue.into());
 
@@ -188,7 +188,7 @@ fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
         rect.width.saturating_sub(4),
         rect.height.saturating_sub(2),
     );
-    let title = Style::EMPTY
+    let title = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())
         .bold();

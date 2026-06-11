@@ -69,7 +69,7 @@ impl Cell {
     pub fn narrow(content: impl Into<CompactString>) -> Self {
         Cell {
             content: content.into(),
-            style: Style::EMPTY,
+            style: Style::default(),
             kind: Kind::Narrow,
         }
     }
@@ -82,7 +82,7 @@ impl Cell {
     pub fn wide(content: impl Into<CompactString>) -> Self {
         Cell {
             content: content.into(),
-            style: Style::EMPTY,
+            style: Style::default(),
             kind: Kind::Wide,
         }
     }
@@ -94,7 +94,7 @@ impl Cell {
     pub fn continuation() -> Self {
         Cell {
             content: CompactString::default(),
-            style: Style::EMPTY,
+            style: Style::default(),
             kind: Kind::Continuation,
         }
     }
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_cell_with_style() {
-        let c = Cell::narrow("x").with_style(Style::EMPTY.bold());
+        let c = Cell::narrow("x").with_style(Style::default().bold());
         assert!(c.style().attrs.contains(crate::style::AttrFlags::BOLD));
     }
 }

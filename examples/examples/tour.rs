@@ -110,7 +110,7 @@ fn write_link<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: 
 }
 
 fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
-    let dim = Style::EMPTY.fg(BasicColor::BrightBlack.into());
+    let dim = Style::default().fg(BasicColor::BrightBlack.into());
     let label_w = hint.chars().count() as i32;
     let center = a.x as i32 + BOX_W as i32 / 2;
     let lx = (center - label_w / 2).max(0) as u16;
@@ -196,7 +196,11 @@ fn scene_sprinkles<W: Write>(
             let a = anchor(screen);
             if frame_no == 0 {
                 paint_blank(screen);
-                draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
+                draw_box(
+                    screen,
+                    a,
+                    &Style::default().fg(BasicColor::BrightWhite.into()),
+                );
                 footer(screen, a, "scene 1 / 6 — sprinkles");
             }
             let inner_w = (BOX_W - 2) as u32;
@@ -207,7 +211,7 @@ fn scene_sprinkles<W: Write>(
             } else {
                 Color::Basic(BasicColor::BrightYellow)
             };
-            let style = Style::EMPTY.fg(fg);
+            let style = Style::default().fg(fg);
             let cell = Cell::narrow(glyph).with_style(style);
             for _ in 0..40 {
                 let dx = rng.range(inner_w) as u16;
@@ -298,11 +302,15 @@ fn scene_panels<W: Write>(
 
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
+            draw_box(
+                screen,
+                a,
+                &Style::default().fg(BasicColor::BrightWhite.into()),
+            );
             for &(dx, dy, w, h, bg, fg, label, attr) in &panels {
                 let x = a.x + dx;
                 let y = a.y + dy;
-                let style = Style::EMPTY.bg(bg.into()).fg(fg.into());
+                let style = Style::default().bg(bg.into()).fg(fg.into());
                 let cell = Cell::narrow(" ").with_style(style.clone());
                 for yy in y..y + h {
                     for xx in x..x + w {
@@ -359,12 +367,12 @@ fn scene_art<W: Write>(
                 }
                 if last_row == usize::MAX {
                     paint_blank(screen);
-                    fill_inside(screen, a, &Style::EMPTY.bg(BasicColor::Black.into()));
-                    draw_box(screen, a, &Style::EMPTY.fg(BasicColor::Red.into()));
+                    fill_inside(screen, a, &Style::default().bg(BasicColor::Black.into()));
+                    draw_box(screen, a, &Style::default().fg(BasicColor::Red.into()));
                     footer(screen, a, "scene 3 / 6 — line-by-line art");
                 }
                 last_row = row;
-                let style = Style::EMPTY
+                let style = Style::default()
                     .fg(BasicColor::BrightWhite.into())
                     .bg(BasicColor::Black.into());
                 for (i, line) in ART.iter().take(row).enumerate() {
@@ -376,7 +384,7 @@ fn scene_art<W: Write>(
                     return Ok(());
                 }
                 last_phase = Some(phase);
-                let mut style = Style::EMPTY
+                let mut style = Style::default()
                     .fg(BasicColor::BrightWhite.into())
                     .bg(BasicColor::Black.into());
                 if phase {
@@ -407,39 +415,43 @@ fn scene_banner<W: Write>(
             drawn = true;
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightCyan.into()));
+            draw_box(
+                screen,
+                a,
+                &Style::default().fg(BasicColor::BrightCyan.into()),
+            );
 
-            let title = Style::EMPTY.fg(BasicColor::BrightWhite.into()).bold();
+            let title = Style::default().fg(BasicColor::BrightWhite.into()).bold();
             write(screen, a.x + 4, a.y + 1, "Style sampler", &title);
 
             // Underline styles row.
             let row = a.y + 3;
             let col = a.x + 4;
 
-            let single = Style::EMPTY
+            let single = Style::default()
                 .fg(BasicColor::BrightWhite.into())
                 .underline_style(UnderlineStyle::Single);
             write(screen, col, row, "single", &single);
 
-            let double = Style::EMPTY
+            let double = Style::default()
                 .fg(BasicColor::BrightWhite.into())
                 .underline_style(UnderlineStyle::Double)
                 .underline_color(BasicColor::Cyan.into());
             write(screen, col + 10, row, "double", &double);
 
-            let curly = Style::EMPTY
+            let curly = Style::default()
                 .fg(BasicColor::BrightWhite.into())
                 .underline_style(UnderlineStyle::Curly)
                 .underline_color(BasicColor::BrightRed.into());
             write(screen, col + 20, row, "curly", &curly);
 
-            let dotted = Style::EMPTY
+            let dotted = Style::default()
                 .fg(BasicColor::BrightWhite.into())
                 .underline_style(UnderlineStyle::Dotted)
                 .underline_color(BasicColor::BrightYellow.into());
             write(screen, col + 30, row, "dotted", &dotted);
 
-            let dashed = Style::EMPTY
+            let dashed = Style::default()
                 .fg(BasicColor::BrightWhite.into())
                 .underline_style(UnderlineStyle::Dashed)
                 .underline_color(BasicColor::BrightGreen.into());
@@ -447,7 +459,7 @@ fn scene_banner<W: Write>(
 
             // Text attributes row.
             let attr_row = a.y + 5;
-            let white = || Style::EMPTY.fg(BasicColor::BrightWhite.into());
+            let white = || Style::default().fg(BasicColor::BrightWhite.into());
             write(screen, col, attr_row, "bold", &white().bold());
             write(screen, col + 6, attr_row, "italic", &white().italic());
             write(screen, col + 14, attr_row, "faint", &white().faint());
@@ -471,14 +483,14 @@ fn scene_banner<W: Write>(
             write(screen, col + 23, a.y + 7, "quick brown fox", &plain);
 
             // Mixed-style demo line: bold + italic + colored fg.
-            let mixed = Style::EMPTY
+            let mixed = Style::default()
                 .fg(BasicColor::BrightMagenta.into())
                 .bold()
                 .italic();
             write(screen, col, a.y + 9, "bold + italic + magenta", &mixed);
 
             // Hyperlink line.
-            let link_label = Style::EMPTY
+            let link_label = Style::default()
                 .fg(BasicColor::BrightBlue.into())
                 .underline_style(UnderlineStyle::Single)
                 .bold();
@@ -565,7 +577,11 @@ fn scene_marquee<W: Write>(
         if !drawn_box {
             drawn_box = true;
             paint_blank(screen);
-            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
+            draw_box(
+                screen,
+                a,
+                &Style::default().fg(BasicColor::BrightWhite.into()),
+            );
             footer(
                 screen,
                 a,
@@ -580,7 +596,7 @@ fn scene_marquee<W: Write>(
         last_offset = offset;
 
         let row = a.y + BOX_H / 2;
-        let blank = Style::EMPTY;
+        let blank = Style::default();
         let spaces: String = " ".repeat(inner_w);
         write(screen, a.x + 2, row, &spaces, &blank);
 
@@ -591,7 +607,7 @@ fn scene_marquee<W: Write>(
             let ch = chars[idx];
             let mut buf = [0u8; 4];
             let s = ch.encode_utf8(&mut buf);
-            let mut style = Style::EMPTY.fg(BasicColor::BrightWhite.into());
+            let mut style = Style::default().fg(BasicColor::BrightWhite.into());
             for (lo, hi, us, c) in &spans {
                 if idx >= *lo && idx < *hi {
                     style = style.underline_style(*us).underline_color((*c).into());
@@ -655,7 +671,11 @@ fn scene_balls<W: Write>(
         if !box_drawn {
             box_drawn = true;
             paint_blank(screen);
-            draw_box(screen, a, &Style::EMPTY.fg(BasicColor::BrightWhite.into()));
+            draw_box(
+                screen,
+                a,
+                &Style::default().fg(BasicColor::BrightWhite.into()),
+            );
             // Hint sits below the box; full interior is free for bouncing.
             footer(
                 screen,
@@ -663,7 +683,7 @@ fn scene_balls<W: Write>(
                 "scene 6 / 6 — bouncing balls — any key to continue, Q to quit",
             );
         }
-        let blank = Cell::narrow(" ").with_style(Style::EMPTY);
+        let blank = Cell::narrow(" ").with_style(Style::default());
         for y in a.y + 1..a.y + BOX_H - 1 {
             for x in a.x + 1..a.x + BOX_W - 1 {
                 screen.set_cell(Position::new(x, y), &blank);
@@ -692,7 +712,7 @@ fn scene_balls<W: Write>(
         for ball in &balls {
             let cx = a.x + 1 + ball.x as u16;
             let cy = a.y + 1 + ball.y as u16;
-            let style = Style::EMPTY.fg(ball.color.into()).bold();
+            let style = Style::default().fg(ball.color.into()).bold();
             let cell = Cell::narrow(ball.glyph).with_style(style);
             screen.set_cell(Position::new(cx, cy), &cell);
         }

@@ -62,7 +62,7 @@ impl<const N: usize> SmallSeq<N> {
 }
 
 /// SGR-shaped buffer big enough for the worst-case style emission:
-/// `Style::EMPTY` → fully decorated truecolor fg/bg/underline-color
+/// `Style::default()` → fully decorated truecolor fg/bg/underline-color
 /// plus all attrs and underline style, with introducer and final byte.
 pub(super) type SgrSeq = SmallSeq<100>;
 
@@ -236,21 +236,21 @@ mod tests {
     #[test]
     fn test_write_empty_style() {
         let mut buf = Vec::new();
-        write_style(&mut buf, &Style::EMPTY).unwrap();
+        write_style(&mut buf, &Style::default()).unwrap();
         assert_eq!(buf, b"\x1b[m");
     }
 
     #[test]
     fn test_write_bold() {
         let mut buf = Vec::new();
-        write_style(&mut buf, &Style::EMPTY.bold()).unwrap();
+        write_style(&mut buf, &Style::default().bold()).unwrap();
         assert_eq!(buf, b"\x1b[1m");
     }
 
     #[test]
     fn test_write_combined_single_csi() {
         let mut buf = Vec::new();
-        let s = Style::EMPTY
+        let s = Style::default()
             .bold()
             .italic()
             .fg(Color::Basic(BasicColor::Red))
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn test_write_with_curly_underline_and_rgb_fg() {
         let mut buf = Vec::new();
-        let s = Style::EMPTY
+        let s = Style::default()
             .underline_style(UnderlineStyle::Curly)
             .fg(Color::Rgb(10, 20, 30));
         write_style(&mut buf, &s).unwrap();

@@ -186,7 +186,7 @@ fn test_write_string() {
     let mut buf = Buffer::new(20, 1);
     let p = Painter::new(&mut buf)
         .with_mode(WidthMode::Grapheme)
-        .set_str_with((0, 0), "Hello", WrapMode::Truncate, Style::EMPTY);
+        .set_str_with((0, 0), "Hello", WrapMode::Truncate, Style::default());
     assert_eq!(p, Position::new(5, 0));
     assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "H");
     assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
@@ -209,8 +209,12 @@ fn write_string_wc_mode_attaches_combining_marks_to_base() {
     // has width 0 and must attach to the previous cell rather than
     // overwrite it.
     let mut buf = Buffer::new(10, 1);
-    let p =
-        Painter::new(&mut buf).set_str_with((0, 0), "e\u{0301}f", WrapMode::Truncate, Style::EMPTY);
+    let p = Painter::new(&mut buf).set_str_with(
+        (0, 0),
+        "e\u{0301}f",
+        WrapMode::Truncate,
+        Style::default(),
+    );
     assert_eq!(p, Position::new(2, 0));
     assert_eq!(
         buf.cell(Position::new(0, 0)).unwrap().content(),
@@ -224,8 +228,12 @@ fn write_string_wc_mode_skips_leading_combining_mark() {
     // No base character to attach to — the combining mark is dropped
     // rather than corrupting an unrelated cell.
     let mut buf = Buffer::new(10, 1);
-    let p =
-        Painter::new(&mut buf).set_str_with((3, 0), "\u{0301}a", WrapMode::Truncate, Style::EMPTY);
+    let p = Painter::new(&mut buf).set_str_with(
+        (3, 0),
+        "\u{0301}a",
+        WrapMode::Truncate,
+        Style::default(),
+    );
     assert_eq!(p, Position::new(4, 0));
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "a");
 }
@@ -237,7 +245,7 @@ fn write_string_truncates_at_right_edge() {
         (0, 0),
         "Hello, World!",
         WrapMode::Truncate,
-        Style::EMPTY,
+        Style::default(),
     );
     assert_eq!(p, Position::new(5, 0));
     assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
@@ -246,7 +254,8 @@ fn write_string_truncates_at_right_edge() {
 #[test]
 fn write_string_wraps_to_next_row() {
     let mut buf = Buffer::new(5, 3);
-    let p = Painter::new(&mut buf).set_str_with((0, 0), "abcdefghij", WrapMode::Wrap, Style::EMPTY);
+    let p =
+        Painter::new(&mut buf).set_str_with((0, 0), "abcdefghij", WrapMode::Wrap, Style::default());
     assert_eq!(p, Position::new(5, 1));
     assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "e");
     assert_eq!(buf.cell(Position::new(0, 1)).unwrap().content(), "f");
@@ -256,7 +265,8 @@ fn write_string_wraps_to_next_row() {
 #[test]
 fn write_string_wrap_stops_at_bottom() {
     let mut buf = Buffer::new(3, 2);
-    let p = Painter::new(&mut buf).set_str_with((0, 0), "abcdefghi", WrapMode::Wrap, Style::EMPTY);
+    let p =
+        Painter::new(&mut buf).set_str_with((0, 0), "abcdefghi", WrapMode::Wrap, Style::default());
     // Two full rows consumed, then we run out.
     assert_eq!(p, Position::new(0, 2));
     assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "f");
@@ -269,7 +279,7 @@ fn write_string_wrap_inside_view() {
     let mut rb = RenderBuffer::new(20, 5);
     let p = {
         let mut v = View::new(&mut rb, (10, 1, 4, 2));
-        Painter::new(&mut v).set_str_with((10, 1), "abcdefgh", WrapMode::Wrap, Style::EMPTY)
+        Painter::new(&mut v).set_str_with((10, 1), "abcdefgh", WrapMode::Wrap, Style::default())
     };
     assert_eq!(p, Position::new(14, 2));
     assert_eq!(rb.cell(Position::new(10, 1)).unwrap().content(), "a");
@@ -285,7 +295,7 @@ fn write_string_with_link() {
         (0, 0),
         "hi",
         WrapMode::Truncate,
-        Style::EMPTY.link("https://example.com", ""),
+        Style::default().link("https://example.com", ""),
     );
     assert_eq!(
         link_of(buf.cell(Position::new(0, 0)).unwrap().style()),

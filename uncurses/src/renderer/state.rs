@@ -117,8 +117,10 @@ impl Cursor {
         if self.bce_blank_key != Some((bce, want_bg)) {
             self.bce_blank = match want_bg {
                 Some(bg) => {
-                    let mut s = Style::EMPTY;
-                    s.bg = Some(bg);
+                    let s = Style {
+                        bg: Some(bg),
+                        ..Style::default()
+                    };
                     Cell::BLANK.with_style(s)
                 }
                 None => Cell::BLANK,

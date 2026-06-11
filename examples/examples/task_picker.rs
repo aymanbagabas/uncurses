@@ -195,13 +195,13 @@ fn sgr(style: &Style) -> String {
     String::from_utf8(buf).expect("SGR bytes are ASCII")
 }
 
-/// SGR reset (`ESC [ m`) — restores [`Style::EMPTY`] for following cells.
+/// SGR reset (`ESC [ m`) — restores [`Style::default()`] for following cells.
 const RESET: &str = "\x1b[m";
 
 fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
-    let subtle = sgr(&Style::EMPTY.fg(BasicColor::BrightBlack.into()));
-    let checkbox = sgr(&Style::EMPTY.fg(BasicColor::Cyan.into()).bold());
-    let ticks_st = sgr(&Style::EMPTY.fg(BasicColor::Yellow.into()).bold());
+    let subtle = sgr(&Style::default().fg(BasicColor::BrightBlack.into()));
+    let checkbox = sgr(&Style::default().fg(BasicColor::Cyan.into()).bold());
+    let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
 
     let mut last = 0u16;
     let mut y = 1u16;
@@ -234,10 +234,10 @@ fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
 }
 
 fn draw_chosen<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
-    let keyword = sgr(&Style::EMPTY.fg(BasicColor::BrightMagenta.into()).bold());
-    let ticks_st = sgr(&Style::EMPTY.fg(BasicColor::Yellow.into()).bold());
-    let bar_st = sgr(&Style::EMPTY.fg(BasicColor::BrightGreen.into()));
-    let empty_st = sgr(&Style::EMPTY.fg(BasicColor::BrightBlack.into()));
+    let keyword = sgr(&Style::default().fg(BasicColor::BrightMagenta.into()).bold());
+    let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
+    let bar_st = sgr(&Style::default().fg(BasicColor::BrightGreen.into()));
+    let empty_st = sgr(&Style::default().fg(BasicColor::BrightBlack.into()));
 
     let (head, deps): (&str, [&str; 2]) = match s.choice {
         0 => ("Carrot planting?", ["libgarden", "vegeutils"]),
