@@ -69,7 +69,7 @@ pub fn grapheme_width(g: &str, eaw_wide: bool) -> u8 {
 // Code-point width — backend-specific
 // ---------------------------------------------------------------------------
 
-#[cfg(not(feature = "icu"))]
+#[cfg(all(not(feature = "icu"), feature = "unicode-rs"))]
 fn cp_width(c: char, eaw_wide: bool) -> u8 {
     use unicode_width::UnicodeWidthChar;
     let raw = if eaw_wide {
@@ -122,7 +122,7 @@ fn is_default_ignorable(c: char) -> bool {
     CodePointSetData::new::<DefaultIgnorableCodePoint>().contains(c)
 }
 
-#[cfg(not(feature = "icu"))]
+#[cfg(all(not(feature = "icu"), feature = "unicode-rs"))]
 fn is_default_ignorable(c: char) -> bool {
     // Conservative subset that matters for terminal rendering: format
     // controls and the variation-selector blocks. Full coverage would
@@ -157,7 +157,7 @@ fn is_extended_pictographic(c: char) -> bool {
     CodePointSetData::new::<ExtendedPictographic>().contains(c)
 }
 
-#[cfg(not(feature = "icu"))]
+#[cfg(all(not(feature = "icu"), feature = "unicode-rs"))]
 fn is_extended_pictographic(c: char) -> bool {
     // Best-effort coverage of the main Extended_Pictographic ranges
     // (UTS #51 emoji-data). For UAX-strict behaviour use `--features icu`.
@@ -198,7 +198,7 @@ fn is_emoji_presentation(c: char) -> bool {
     CodePointSetData::new::<EmojiPresentation>().contains(c)
 }
 
-#[cfg(not(feature = "icu"))]
+#[cfg(all(not(feature = "icu"), feature = "unicode-rs"))]
 fn is_emoji_presentation(c: char) -> bool {
     // Best-effort: code points whose default presentation is emoji
     // (UTS #51 Emoji_Presentation = Yes). Coarse subset; for the full

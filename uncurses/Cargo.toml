@@ -7,19 +7,23 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+default = ["unicode-rs"]
 bench = []
-# Use `icu_segmenter` for grapheme-cluster segmentation instead of
-# `unicode-segmentation`. Faster on emoji/ZWJ-heavy text; larger
-# binary.
+# Pure-Rust Unicode tables. Small build, conservative coverage on
+# emoji/ZWJ edge cases. Enabled by default.
+unicode-rs = ["dep:unicode-segmentation", "dep:unicode-width"]
+# ICU4X-backed segmentation and Unicode properties. Strictly more
+# correct on emoji/property edge cases at the cost of a larger
+# binary (segmentation/property tables are baked in). Takes
+# precedence over `unicode-rs` when both are enabled.
 icu = ["dep:icu_segmenter", "dep:icu_properties"]
 
 [dependencies]
 bitflags.workspace = true
 compact_str.workspace = true
 rustc-hash.workspace = true
-unicode-segmentation.workspace = true
-unicode-width.workspace = true
+unicode-segmentation = { workspace = true, optional = true }
+unicode-width = { workspace = true, optional = true }
 icu_segmenter = { workspace = true, optional = true }
 icu_properties = { workspace = true, optional = true }
 
