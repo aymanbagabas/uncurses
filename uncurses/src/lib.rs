@@ -48,6 +48,11 @@
 //! # Ok::<_, std::io::Error>(())
 //! ```
 
+#[cfg(not(any(feature = "icu", feature = "unicode-rs")))]
+compile_error!(
+    "uncurses requires one of the `icu` or `unicode-rs` features to be enabled (the default)"
+);
+
 pub mod ansi;
 pub mod buffer;
 pub mod cell;

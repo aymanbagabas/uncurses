@@ -1,14 +1,20 @@
 //! Grapheme-cluster segmentation abstraction.
 //!
-//! By default this uses [`unicode-segmentation`] (a small, pure-Rust UAX #29
-//! implementation). Enabling the `icu` cargo feature switches to
-//! [`icu_segmenter`], which is faster on emoji/ZWJ-heavy text at the cost of
-//! a larger binary (segmentation tables are baked in).
+//! Selecting a backend:
+//!
+//! - default (`unicode-rs` feature): small pure-Rust UAX #29
+//!   implementation.
+//! - `icu`: faster on emoji/ZWJ-heavy text at the cost of a larger
+//!   binary (segmentation tables are baked in). Wins over
+//!   `unicode-rs` when both are enabled.
+//!
+//! At least one of the two features must be enabled — the crate
+//! root emits a `compile_error!` otherwise.
 //!
 //! Both implementations honour Unicode extended grapheme clusters.
 
 /// Iterate over the extended grapheme clusters of `s`.
-#[cfg(not(feature = "icu"))]
+#[cfg(all(not(feature = "icu"), feature = "unicode-rs"))]
 pub fn graphemes(s: &str) -> impl Iterator<Item = &str> {
     use unicode_segmentation::UnicodeSegmentation;
     s.graphemes(true)
