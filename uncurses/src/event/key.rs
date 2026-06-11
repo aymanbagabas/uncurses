@@ -169,12 +169,16 @@ impl Key {
     ///    equals `pattern` byte-for-byte, the match succeeds. Lets
     ///    bindings be written as the produced glyph (`"?"`, `"!"`,
     ///    `"@"`) and hit any keystroke that resolves to that text,
-    ///    independent of keyboard layout.
+    ///    independent of keyboard layout. Note that `text` reflects
+    ///    the user-perceived character, so `CapsLock` *can* shift
+    ///    the matched form (pressing `g` with CapsLock on yields
+    ///    `text == "G"` and matches the pattern `"G"`).
     /// 2. Otherwise, `pattern` is parsed as a [`Key`] with the same
     ///    grammar as [`FromStr`](std::str::FromStr) (for example
     ///    `"ctrl+c"`, `"shift+f1"`, `"alt+plus"`) and compared with
     ///    [`PartialEq`]. Lock state (`CapsLock`, `NumLock`,
-    ///    `ScrollLock`) is ignored by `==`; matching is otherwise
+    ///    `ScrollLock`) is ignored by `==`, so step 2 is layout-
+    ///    sensitive but lock-insensitive. Matching is otherwise
     ///    case-sensitive — `"g"` and `"G"` are distinct (`"G"` is a
     ///    synonym for `"shift+g"`).
     ///
@@ -770,13 +774,19 @@ impl std::str::FromStr for Key {
         // forms like `ctrl++` are also accepted: a trailing `++` means
         // "the `+` key, with the preceding `+` as separator". A single
         // trailing `+` with no preceding `+` is a dangling separator.
+        // A leading `+` (e.g. `"+a"`) is also a dangling separator
+        // since there is no modifier before it.
         let (mod_part, key_part) = if let Some(head) = s.strip_suffix('+') {
             match head.strip_suffix('+') {
                 Some(mods) => (mods, "+"),
                 None => return Err(ParseKeyError::EmptyComponent),
             }
         } else {
-            s.rsplit_once('+').unwrap_or(("", s))
+            match s.rsplit_once('+') {
+                Some(("", _)) => return Err(ParseKeyError::EmptyComponent),
+                Some(parts) => parts,
+                None => ("", s),
+            }
         };
 
         if key_part.is_empty() {
@@ -1335,6 +1345,9 @@ mod tests {
         // `ctrl++a` still errors: the inner `+` produces an empty
         // modifier token. (`ctrl++` alone is the ctrl+literal-`+` form.)
         assert_eq!("ctrl++a".parse::<Key>(), Err(ParseKeyError::EmptyComponent));
+        // Leading `+` is a dangling separator with no modifier before it.
+        assert_eq!("+a".parse::<Key>(), Err(ParseKeyError::EmptyComponent));
+        assert_eq!("+ctrl+a".parse::<Key>(), Err(ParseKeyError::EmptyComponent));
         assert!(matches!(
             "foo+a".parse::<Key>(),
             Err(ParseKeyError::UnknownModifier(_))
