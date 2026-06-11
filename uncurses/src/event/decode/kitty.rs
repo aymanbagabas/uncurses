@@ -52,11 +52,10 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     if let Some(t) = protocol_text {
         key.text = Some(t);
     }
-    // Apply the canonical identity rules (Shift+Tab → BackTab, case
-    // folding, printable text auto-population) once after all
-    // protocol-supplied fields have been set, so the shifted glyph
-    // can back-fill `text` for inputs without a case variant
-    // (e.g. Shift+2 producing '@').
+    // Apply the canonical identity rules (case folding, printable
+    // text auto-population) once after all protocol-supplied fields
+    // have been set, so the shifted glyph can back-fill `text` for
+    // inputs without a case variant (e.g. Shift+2 producing '@').
     key.normalize();
 
     Some(key_event_for_phase(key, phase))

@@ -109,8 +109,7 @@ impl Key {
     /// start empty. Decoder paths populate the optional fields as
     /// needed and then chain [`Key::normalized`] (or call
     /// [`Key::normalize`] in place) to apply the canonical identity
-    /// rules (Shift+Tab → BackTab, case folding, printable text
-    /// auto-population).
+    /// rules (case folding, printable text auto-population).
     pub fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
         Self {
             code,
@@ -218,8 +217,6 @@ impl Key {
     /// [`Key::normalized`]) to produce the canonical form. The rules
     /// applied are:
     ///
-    /// - Shift+Tab collapses to [`KeyCode::BackTab`] with `SHIFT`
-    ///   removed.
     /// - Case folding for printable `Char` codes: uppercase chars are
     ///   lowercased and the original is stored in `shifted_key`;
     ///   `SHIFT` is added only when `CAPS_LOCK` is not set (with
@@ -228,15 +225,6 @@ impl Key {
     /// - Printable text auto-population when `text` is empty and the
     ///   modifier set is a subset of `SHIFT | CAPS_LOCK | NUM_LOCK`.
     pub fn normalize(&mut self) {
-        // Shift+Tab collapses to BackTab with no Shift modifier. This is
-        // a universal convention (legacy `CSI Z`, kitty CSI u, MOK2),
-        // not a protocol detail — apply it once here so every decoder
-        // path emits the same canonical BackTab identity.
-        if self.code == KeyCode::Tab && self.modifiers.contains(KeyModifiers::SHIFT) {
-            self.code = KeyCode::BackTab;
-            self.modifiers.remove(KeyModifiers::SHIFT);
-        }
-
         // Case folding for printable Char codes.
         if let KeyCode::Char(c) = self.code {
             if c.is_uppercase() {
@@ -350,7 +338,6 @@ pub enum KeyCode {
     Delete,
     Insert,
     Tab,
-    BackTab,
     Enter,
     // Whitespace
     Space,
@@ -487,7 +474,6 @@ impl fmt::Display for Key {
             KeyCode::Delete => f.write_str("delete"),
             KeyCode::Insert => f.write_str("insert"),
             KeyCode::Tab => f.write_str("tab"),
-            KeyCode::BackTab => f.write_str("backtab"),
             KeyCode::Enter => f.write_str("enter"),
             KeyCode::Space => f.write_str("space"),
             KeyCode::Escape => f.write_str("escape"),
@@ -663,7 +649,6 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         "delete" | "del" => KeyCode::Delete,
         "insert" | "ins" => KeyCode::Insert,
         "tab" => KeyCode::Tab,
-        "backtab" => KeyCode::BackTab,
         "enter" | "return" | "ret" => KeyCode::Enter,
         // Whitespace / special
         "space" | "spc" => KeyCode::Space,
@@ -794,6 +779,15 @@ impl std::str::FromStr for Key {
                 }
                 modifiers |= parse_modifier(tok)?;
             }
+        }
+
+        // `backtab` is a legacy spelling for `shift+tab`. Accept it as
+        // a key-part alias (also when combined with other modifiers,
+        // e.g. `alt+backtab`) even though there is no
+        // `KeyCode::BackTab` variant; the canonical form is the
+        // uniform `Tab + SHIFT`.
+        if key_part.eq_ignore_ascii_case("backtab") {
+            return Ok(Key::new(KeyCode::Tab, modifiers | KeyModifiers::SHIFT).normalized());
         }
 
         let code = parse_key_code(key_part)?;
@@ -1301,6 +1295,23 @@ mod tests {
         assert_eq!(parse("ret").code, KeyCode::Enter);
         assert_eq!(parse("backspace").code, KeyCode::Backspace);
         assert_eq!(parse("bs").code, KeyCode::Backspace);
+        // `backtab` is an input alias for `shift+tab`. There is no
+        // dedicated `KeyCode::BackTab` variant. The alias also
+        // composes with other modifiers.
+        let backtab = parse("backtab");
+        assert_eq!(backtab.code, KeyCode::Tab);
+        assert_eq!(backtab.modifiers, KeyModifiers::SHIFT);
+        assert_eq!(parse("shift+tab"), backtab);
+        // Display formats this identity as `shift+tab`, never `backtab`.
+        assert_eq!(backtab.to_string(), "shift+tab");
+        let alt_backtab = parse("alt+backtab");
+        assert_eq!(alt_backtab.code, KeyCode::Tab);
+        assert_eq!(
+            alt_backtab.modifiers,
+            KeyModifiers::SHIFT | KeyModifiers::ALT
+        );
+        assert_eq!(parse("alt+shift+tab"), alt_backtab);
+        assert_eq!(alt_backtab.to_string(), "alt+shift+tab");
         assert_eq!(parse("delete").code, KeyCode::Delete);
         assert_eq!(parse("del").code, KeyCode::Delete);
         assert_eq!(parse("space").code, KeyCode::Space);
@@ -1523,7 +1534,7 @@ mod tests {
             (KeyCode::Delete, KeyModifiers::empty()),
             (KeyCode::Insert, KeyModifiers::empty()),
             (KeyCode::Tab, KeyModifiers::empty()),
-            (KeyCode::BackTab, KeyModifiers::empty()),
+            (KeyCode::Tab, KeyModifiers::SHIFT),
             (KeyCode::Enter, KeyModifiers::empty()),
             (KeyCode::Space, KeyModifiers::empty()),
             (KeyCode::Escape, KeyModifiers::empty()),
