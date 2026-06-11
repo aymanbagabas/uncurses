@@ -244,7 +244,10 @@ impl Decoder {
             };
             Some(Event::KeyPress(key))
         } else if is_c1_introducer(b0) {
-            let c = (b0 - 0x40) as char;
+            // 0x80..=0x9F → '@'..'_' (Ctrl+Alt+letter convention).
+            // Lowercase ASCII letters so `Key::new` doesn't synthesize
+            // an extra SHIFT modifier; ctrl is treated case-insensitively.
+            let c = ((b0 - 0x40) as char).to_ascii_lowercase();
             Some(Event::KeyPress(Key::new(
                 KeyCode::Char(c),
                 KeyModifiers::CTRL | KeyModifiers::ALT,
@@ -352,7 +355,10 @@ impl Decoder {
                             continue;
                         }
                         if is_c1_introducer(b0) {
-                            let c = (b0 - 0x40) as char;
+                            // See `expire_leading`: lowercase ASCII
+                            // letters so SHIFT is not synthesized for
+                            // the Ctrl+Alt+letter fallback.
+                            let c = ((b0 - 0x40) as char).to_ascii_lowercase();
                             events.push(Event::KeyPress(Key::new(
                                 KeyCode::Char(c),
                                 KeyModifiers::CTRL | KeyModifiers::ALT,
@@ -476,9 +482,10 @@ impl Decoder {
             0x9e => self.parse_sos_pm_apc(buf, b'^'),
             0x9f => self.parse_apc(buf),
             // Remaining C1 control codes (0x80..=0x9F) — including a stray
-            // ST (0x9C) — are encoded as Ctrl+Alt+<code - 0x40>.
+            // ST (0x9C) — are encoded as Ctrl+Alt+<code - 0x40>. Lowercase
+            // ASCII letters so `Key::new` does not synthesize SHIFT.
             b @ 0x80..=0x9f => {
-                let c = (b - 0x40) as char;
+                let c = ((b - 0x40) as char).to_ascii_lowercase();
                 ParseResult::Event(
                     Event::KeyPress(Key::new(
                         KeyCode::Char(c),
