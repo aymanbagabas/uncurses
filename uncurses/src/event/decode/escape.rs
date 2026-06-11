@@ -19,7 +19,10 @@ impl Decoder {
         // once the caller signals the escape timeout has elapsed.
         if buf.len() < 2 {
             return if self.expired {
-                ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Escape)), 1)
+                ParseResult::Event(
+                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                    1,
+                )
             } else {
                 ParseResult::Incomplete
             };
@@ -43,9 +46,10 @@ impl Decoder {
                     };
                     ParseResult::Event(Event::KeyPress(key), n + 1)
                 }
-                ParseResult::Event(_, _) | ParseResult::None(_) => {
-                    ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Escape)), 1)
-                }
+                ParseResult::Event(_, _) | ParseResult::None(_) => ParseResult::Event(
+                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                    1,
+                ),
                 ParseResult::Incomplete => ParseResult::Incomplete,
             };
         }
@@ -61,13 +65,18 @@ impl Decoder {
             b'_' => self.parse_apc(buf),
             b'X' => self.parse_sos_pm_apc(buf, b'X'),
             b'^' => self.parse_sos_pm_apc(buf, b'^'),
-            b if (0x20..0x7f).contains(&b) => ParseResult::Event(
-                Event::KeyPress(
-                    Key::new(KeyCode::Char(b as char)).with_modifiers(KeyModifiers::ALT),
-                ),
-                2,
+            b if (0x20..0x7f).contains(&b) => {
+                let code = if b == b' ' {
+                    KeyCode::Space
+                } else {
+                    KeyCode::Char(b as char)
+                };
+                ParseResult::Event(Event::KeyPress(Key::new(code, KeyModifiers::ALT)), 2)
+            }
+            _ => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                1,
             ),
-            _ => ParseResult::Event(Event::KeyPress(Key::new(KeyCode::Escape)), 1),
         }
     }
 }

@@ -47,7 +47,7 @@ fn main() -> std::io::Result<()> {
                 ..
             }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
             Event::KeyPress(Key {
-                code: KeyCode::Enter | KeyCode::Char(' '),
+                code: KeyCode::Enter | KeyCode::Space,
                 ..
             }) => {
                 count = count.saturating_add(1);

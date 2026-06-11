@@ -10,7 +10,7 @@ use super::DecoderFlags;
 use super::handlers::Ss3;
 use super::result::ParseResult;
 use super::util::{intro_prefix_len, lookup_legacy_key};
-use crate::event::{Event, Key, KeyCode};
+use crate::event::{Event, Key, KeyCode, KeyModifiers};
 
 impl Decoder {
     pub(super) fn parse_ss3(&self, buf: &[u8]) -> ParseResult {
@@ -66,7 +66,7 @@ fn recognize(view: Ss3, raw_with_intro: &[u8], flags: DecoderFlags) -> Option<Ev
         _ => None,
     };
     if let Some(code) = key {
-        return Some(Event::KeyPress(Key::new(code)));
+        return Some(Event::KeyPress(Key::new(code, KeyModifiers::empty())));
     }
     lookup_legacy_key(raw_with_intro, flags).map(Event::KeyPress)
 }

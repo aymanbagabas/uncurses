@@ -32,7 +32,7 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
 
     let code = kitty_keycode_to_keycode(keycode)?;
 
-    let text: Option<String> = if !text_sub.is_empty() {
+    let protocol_text: Option<String> = if !text_sub.is_empty() {
         let s: String = text_sub
             .iter()
             .filter_map(|cp| cp.and_then(char::from_u32))
@@ -42,13 +42,24 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
         None
     };
 
-    let key = Key {
-        code,
-        modifiers,
-        text,
-        shifted_key: shifted.and_then(char::from_u32),
-        base_key: base.and_then(char::from_u32),
-    };
+    let mut key = Key::new(code, modifiers);
+    if let Some(c) = shifted.and_then(char::from_u32) {
+        key.shifted_key = Some(c);
+        // Reset any text `Key::new` auto-derived from the un-shifted
+        // code so `normalize()` below can re-derive it from the
+        // protocol-reported shifted glyph (e.g. Shift+2 → '@').
+        key.text = None;
+    }
+    if let Some(c) = base.and_then(char::from_u32) {
+        key.base_key = Some(c);
+    }
+    if let Some(t) = protocol_text {
+        key.text = Some(t);
+    }
+    // Re-canonicalize: the protocol-reported shifted glyph may now
+    // back-fill `text` for inputs without a case variant (e.g. Shift+2
+    // producing '@'), which `Key::new` couldn't infer up front.
+    key.normalize();
 
     Some(key_event_for_phase(key, phase))
 }
@@ -89,6 +100,7 @@ fn kitty_keycode_to_keycode(code: u32) -> Option<KeyCode> {
         9 => return Some(KeyCode::Tab),
         13 => return Some(KeyCode::Enter),
         27 => return Some(KeyCode::Escape),
+        32 => return Some(KeyCode::Space),
         127 => return Some(KeyCode::Backspace),
         _ => {}
     }
@@ -253,6 +265,38 @@ mod tests {
         let ev = decode(&[&[97], &[1], &[72, 105]]);
         let key = ev.as_key().unwrap();
         assert_eq!(key.text.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn test_decode_plain_lowercase_populates_text() {
+        // No REPORT_ASSOCIATED_TEXT param group, no shifted/base —
+        // text still surfaces the typed glyph for printable input.
+        let ev = decode(&[&[97]]);
+        let key = ev.as_key().unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert_eq!(key.text.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn test_decode_shift_digit_uses_reported_shifted_glyph_for_text() {
+        // Shift+2 on US: keycode 50 ('2'), shifted 64 ('@'), mods Shift.
+        // Without the terminal-reported shifted glyph we couldn't know
+        // text should be "@" because '2' has no case variant.
+        let ev = decode(&[&[50, 64], &[2]]);
+        let key = ev.as_key().unwrap();
+        assert_eq!(key.code, KeyCode::Char('2'));
+        assert_eq!(key.shifted_key, Some('@'));
+        assert_eq!(key.text.as_deref(), Some("@"));
+    }
+
+    #[test]
+    fn test_decode_ctrl_letter_no_text() {
+        // Ctrl+a: text must stay None (Ctrl suppresses typed input).
+        let ev = decode(&[&[97], &[5]]);
+        let key = ev.as_key().unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.modifiers.contains(KeyModifiers::CTRL));
+        assert!(key.text.is_none());
     }
 
     #[test]
