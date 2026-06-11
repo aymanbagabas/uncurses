@@ -247,7 +247,7 @@ fn flush_pending<S: SurfaceMut + ?Sized>(
         } else {
             Cell::narrow(&*content)
         };
-        target.set_cell(Position::new(px, py), &cell.with_style(style.clone()));
+        target.set_cell(Position::new(px, py), &cell.style(style.clone()));
     }
 }
 
@@ -339,9 +339,9 @@ mod tests {
         let c0 = cell_at(&b, 0, 0);
         let c1 = cell_at(&b, 1, 0);
         let c2 = cell_at(&b, 2, 0);
-        assert!(!c0.style().attrs.contains(AttrFlags::BOLD));
-        assert!(c1.style().attrs.contains(AttrFlags::BOLD));
-        assert!(!c2.style().attrs.contains(AttrFlags::BOLD));
+        assert!(!c0.style.attrs.contains(AttrFlags::BOLD));
+        assert!(c1.style.attrs.contains(AttrFlags::BOLD));
+        assert!(!c2.style.attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         let mut b = buf(5, 1);
         Painter::new(&mut b).set_str((0, 0), "\x1b[31mr", WrapMode::Truncate);
         assert_eq!(
-            cell_at(&b, 0, 0).style().fg,
+            cell_at(&b, 0, 0).style.fg,
             Some(Color::Basic(BasicColor::Red))
         );
     }
@@ -362,8 +362,8 @@ mod tests {
             "\x1b]8;;https://x\x1b\\a\x1b]8;;\x1b\\b",
             WrapMode::Truncate,
         );
-        assert_eq!(link_of(cell_at(&b, 0, 0).style()), Some(("https://x", "")));
-        assert!(cell_at(&b, 1, 0).style().link.is_none());
+        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
+        assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
     #[test]
@@ -377,8 +377,8 @@ mod tests {
             "\x1b]8;;https://x\x1b\\a\x1b]8;garbage\x1b\\b",
             WrapMode::Truncate,
         );
-        assert_eq!(link_of(cell_at(&b, 0, 0).style()), Some(("https://x", "")));
-        assert_eq!(link_of(cell_at(&b, 1, 0).style()), Some(("https://x", "")));
+        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
+        assert_eq!(link_of(&cell_at(&b, 1, 0).style), Some(("https://x", "")));
     }
 
     #[test]
@@ -469,12 +469,12 @@ mod tests {
             WrapMode::Truncate,
             Style::default().bold().link("https://x", ""),
         );
-        assert!(cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert_eq!(link_of(cell_at(&b, 0, 0).style()), Some(("https://x", "")));
+        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
         // Second call with `_with` and an empty style must reset.
         Painter::new(&mut b).set_str_with((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert!(cell_at(&b, 1, 0).style().link.is_none());
+        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
     #[test]
@@ -484,8 +484,8 @@ mod tests {
         p.set_str((0, 0), "\x1b[1ma", WrapMode::Truncate);
         // Style mutation persists into the next call.
         p.set_str((1, 0), "b", WrapMode::Truncate);
-        assert!(cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert!(cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
+        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
@@ -504,8 +504,8 @@ mod tests {
         assert!(p.style().link.is_none());
         // Subsequent paint reflects the reset.
         p.set_str((1, 0), "b", WrapMode::Truncate);
-        assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
-        assert!(cell_at(&b, 1, 0).style().link.is_none());
+        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
     #[test]

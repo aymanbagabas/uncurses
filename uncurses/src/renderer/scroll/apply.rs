@@ -482,7 +482,7 @@ mod tests {
 
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
-        let expected = Cell::BLANK.with_style(bg_style);
+        let expected = Cell::BLANK.style(bg_style);
         assert!(
             bottom_row.iter().all(|c| *c == expected),
             "cur_buf bottom row must be styled-blank, got: {bottom_row:?}",
@@ -523,15 +523,15 @@ mod tests {
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
         let bg_only = Style::default().bg(Color::Basic(BasicColor::Red));
-        let expected = Cell::BLANK.with_style(bg_only);
+        let expected = Cell::BLANK.style(bg_only);
         assert!(
             bottom_row.iter().all(|c| *c == expected),
             "cur_buf bottom row must be bg-only, got: {bottom_row:?}",
         );
         assert!(
-            bottom_row.iter().all(|c| c.style().fg.is_none()
-                && c.style().attrs.is_empty()
-                && c.style().underline_color.is_none()),
+            bottom_row.iter().all(|c| c.style.fg.is_none()
+                && c.style.attrs.is_empty()
+                && c.style.underline_color.is_none()),
             "freed cells must drop fg / attrs / underline_color"
         );
     }

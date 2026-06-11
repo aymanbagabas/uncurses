@@ -344,7 +344,7 @@ fn bce_on_with_colored_blanks_paints_explicit_run() {
     };
     set_text(&mut buf, 0, "HELLO");
     for x in 5..15u16 {
-        buf.set_cell((x, 0), &Cell::narrow(" ").with_style(red_bg.clone()));
+        buf.set_cell((x, 0), &Cell::narrow(" ").style(red_bg.clone()));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\x1b[5C\x1b[48;5;1m          \x1b[m");
@@ -363,7 +363,7 @@ fn bce_off_with_colored_blanks_paints_explicit_run() {
     };
     set_text(&mut buf, 0, "HELLO");
     for x in 5..15u16 {
-        buf.set_cell((x, 0), &Cell::narrow(" ").with_style(red_bg.clone()));
+        buf.set_cell((x, 0), &Cell::narrow(" ").style(red_bg.clone()));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     assert_golden(actual, b"\x1b[5C\x1b[48;5;1m          \x1b[m");

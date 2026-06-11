@@ -298,11 +298,11 @@ fn write_string_with_link() {
         Style::default().link("https://example.com", ""),
     );
     assert_eq!(
-        link_of(buf.cell(Position::new(0, 0)).unwrap().style()),
+        link_of(&buf.cell(Position::new(0, 0)).unwrap().style),
         Some(("https://example.com", ""))
     );
     assert_eq!(
-        link_of(buf.cell(Position::new(1, 0)).unwrap().style()),
+        link_of(&buf.cell(Position::new(1, 0)).unwrap().style),
         Some(("https://example.com", ""))
     );
 }

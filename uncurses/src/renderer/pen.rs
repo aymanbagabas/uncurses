@@ -15,7 +15,7 @@ impl Renderer {
     /// only when the current pen actually has something set).
     pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
         let target_style = match cell {
-            Some(c) => c.style(),
+            Some(c) => &c.style,
             None => &Style::default(),
         };
 

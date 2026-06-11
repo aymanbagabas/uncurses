@@ -36,7 +36,7 @@ pub struct Cell {
     /// hyperlink. The link inside `style` is reference-counted so a
     /// run of identically-linked cells shares a single allocation
     /// without per-cell deep clones.
-    style: Style,
+    pub style: Style,
     /// Structural kind: narrow, wide primary, or wide continuation.
     kind: Kind,
 }
@@ -149,15 +149,8 @@ impl Cell {
         }
     }
 
-    /// The cell's style (colors, attributes, underline, and any
-    /// attached hyperlink).
-    #[inline]
-    pub fn style(&self) -> &Style {
-        &self.style
-    }
-
     /// Return a copy of this cell with the given style.
-    pub fn with_style(mut self, style: Style) -> Self {
+    pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
@@ -173,7 +166,7 @@ mod tests {
         assert!(c.is_narrow());
         assert_eq!(c.width(), 1);
         assert!(c.is_blank());
-        assert!(c.style().is_empty());
+        assert!(c.style.is_empty());
     }
 
     #[test]
@@ -201,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_cell_with_style() {
-        let c = Cell::narrow("x").with_style(Style::default().bold());
-        assert!(c.style().attrs.contains(crate::style::AttrFlags::BOLD));
+        let c = Cell::narrow("x").style(Style::default().bold());
+        assert!(c.style.attrs.contains(crate::style::AttrFlags::BOLD));
     }
 }
