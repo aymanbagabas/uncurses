@@ -107,9 +107,10 @@ impl Key {
     /// This is a transparent constructor: no canonicalization is
     /// performed. Optional fields (`text`, `shifted_key`, `base_key`)
     /// start empty. Decoder paths populate the optional fields as
-    /// needed and then call [`Key::normalize`] to apply the canonical
-    /// identity rules (Shift+Tab → BackTab, case folding, printable
-    /// text auto-population).
+    /// needed and then chain [`Key::normalized`] (or call
+    /// [`Key::normalize`] in place) to apply the canonical identity
+    /// rules (Shift+Tab → BackTab, case folding, printable text
+    /// auto-population).
     pub fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
         Self {
             code,
@@ -120,9 +121,10 @@ impl Key {
         }
     }
 
-    /// Consume `self` and return the canonical form. Equivalent to
-    /// [`Key::normalize`] but composes nicely in expression position
-    /// (e.g. `Key::new(code, mods).normalized()`).
+    /// Consume `self` and return the canonical form. The recommended
+    /// way to build a canonical key in expression position
+    /// (`Key::new(code, mods).normalized()`); see [`Key::normalize`]
+    /// for the in-place equivalent and the full list of rules.
     pub fn normalized(mut self) -> Self {
         self.normalize();
         self
@@ -209,9 +211,23 @@ impl Key {
         patterns.into_iter().any(|p| self.matches(p.as_ref()))
     }
 
-    /// Apply the canonicalization rules described on [`Self::new`].
-    /// Idempotent.
-    pub(crate) fn normalize(&mut self) {
+    /// Apply the canonical identity rules in place. Idempotent.
+    ///
+    /// Decoder paths construct keys via [`Key::new`], populate optional
+    /// fields, and then call this method (or chain
+    /// [`Key::normalized`]) to produce the canonical form. The rules
+    /// applied are:
+    ///
+    /// - Shift+Tab collapses to [`KeyCode::BackTab`] with `SHIFT`
+    ///   removed.
+    /// - Case folding for printable `Char` codes: uppercase chars are
+    ///   lowercased and the original is stored in `shifted_key`;
+    ///   `SHIFT` is added only when `CAPS_LOCK` is not set (with
+    ///   CapsLock the case change is attributed to the lock state, not
+    ///   a Shift press).
+    /// - Printable text auto-population when `text` is empty and the
+    ///   modifier set is a subset of `SHIFT | CAPS_LOCK | NUM_LOCK`.
+    pub fn normalize(&mut self) {
         // Shift+Tab collapses to BackTab with no Shift modifier. This is
         // a universal convention (legacy `CSI Z`, kitty CSI u, MOK2),
         // not a protocol detail — apply it once here so every decoder
