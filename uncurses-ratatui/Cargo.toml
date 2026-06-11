@@ -6,7 +6,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["unicode-rs"]
+unicode-rs = ["uncurses/unicode-rs"]
+icu = ["uncurses/icu"]
+
 [dependencies]
-uncurses = { path = "../uncurses" }
+uncurses = { path = "../uncurses", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["underline-color", "scrolling-regions"] }
 unicode-width = "0.2"
