@@ -470,29 +470,32 @@ fn run() -> std::io::Result<()> {
                 ..
             }) if modifiers.contains(KeyModifiers::CTRL) => break,
 
-            Event::KeyPress(Key {
-                code, modifiers, ..
-            }) => match code {
-                KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
-                KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
-                KeyCode::PageUp => {
-                    app.preview_scroll = app.preview_scroll.saturating_sub(10);
+            Event::KeyPress(Key { code, text, .. }) => {
+                let text = text.as_deref();
+                match code {
+                    KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
+                    KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
+                    KeyCode::PageUp => {
+                        app.preview_scroll = app.preview_scroll.saturating_sub(10);
+                    }
+                    KeyCode::PageDown => {
+                        app.preview_scroll = (app.preview_scroll + 10)
+                            .min(app.preview_lines.len().saturating_sub(1));
+                    }
+                    // Case-distinguished movement: match the resolved
+                    // `text` instead of `code` + Shift so this works
+                    // the same under Shift, CapsLock, or
+                    // Shift+CapsLock — whatever the host convention.
+                    KeyCode::Char(_) if text == Some("g") => app.preview_scroll = 0,
+                    KeyCode::Char(_) if text == Some("G") => {
+                        app.preview_scroll = app.preview_lines.len().saturating_sub(1);
+                    }
+                    KeyCode::Enter => app.enter(),
+                    KeyCode::Backspace => app.go_up(),
+                    KeyCode::Char('r') => app.refresh(),
+                    _ => dirty = false,
                 }
-                KeyCode::PageDown => {
-                    app.preview_scroll =
-                        (app.preview_scroll + 10).min(app.preview_lines.len().saturating_sub(1));
-                }
-                KeyCode::Char('g') if !modifiers.contains(KeyModifiers::SHIFT) => {
-                    app.preview_scroll = 0
-                }
-                KeyCode::Char('g') if modifiers.contains(KeyModifiers::SHIFT) => {
-                    app.preview_scroll = app.preview_lines.len().saturating_sub(1);
-                }
-                KeyCode::Enter => app.enter(),
-                KeyCode::Backspace => app.go_up(),
-                KeyCode::Char('r') => app.refresh(),
-                _ => dirty = false,
-            },
+            }
 
             Event::MouseClick(m) => {
                 let list_w = screen.width() / 3;
