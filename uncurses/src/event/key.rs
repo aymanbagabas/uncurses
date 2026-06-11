@@ -386,6 +386,8 @@ impl fmt::Display for Key {
 
         match self.code {
             KeyCode::Char('+') => f.write_str("plus"),
+            KeyCode::Char('-') => f.write_str("minus"),
+            KeyCode::Char('=') => f.write_str("equals"),
             KeyCode::Char(c) => write!(f, "{c}"),
             KeyCode::F(n) => write!(f, "f{n}"),
             KeyCode::Up => f.write_str("up"),
@@ -589,9 +591,14 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         "printscreen" | "prtsc" => KeyCode::PrintScreen,
         "pause" => KeyCode::Pause,
         "menu" => KeyCode::Menu,
-        // Punctuation aliases. `plus` is the Display form for `Char('+')`;
-        // the literal `+` is also accepted via the single-character path.
+        // Punctuation aliases. `plus`, `minus`, and `equals` are the
+        // Display forms for `Char('+')`, `Char('-')`, and `Char('=')`
+        // respectively; the literal characters are also accepted via
+        // the single-character path. `dash` / `hyphen` and `equal` are
+        // additional spellings for the same two keys.
         "plus" => KeyCode::Char('+'),
+        "minus" | "dash" | "hyphen" => KeyCode::Char('-'),
+        "equals" | "equal" => KeyCode::Char('='),
         // Keypad
         "kpenter" => KeyCode::KpEnter,
         "kpadd" => KeyCode::KpAdd,
@@ -1281,7 +1288,7 @@ mod tests {
 
     #[test]
     fn fromstr_literal_symbols() {
-        // Symbols other than `+` parse literally with no aliases.
+        // Symbol literals are accepted via the single-char path.
         assert_eq!(parse("-").code, KeyCode::Char('-'));
         assert_eq!(parse("*").code, KeyCode::Char('*'));
         assert_eq!(parse("/").code, KeyCode::Char('/'));
@@ -1290,6 +1297,42 @@ mod tests {
         assert_eq!(parse("ctrl+-").code, KeyCode::Char('-'));
         assert_eq!(parse("ctrl+/").code, KeyCode::Char('/'));
         assert_eq!(parse("alt+[").code, KeyCode::Char('['));
+    }
+
+    #[test]
+    fn fromstr_minus_aliases() {
+        assert_eq!(parse("minus").code, KeyCode::Char('-'));
+        assert_eq!(parse("dash").code, KeyCode::Char('-'));
+        assert_eq!(parse("hyphen").code, KeyCode::Char('-'));
+        assert_eq!(parse("ctrl+minus"), parse("ctrl+-"));
+        assert_eq!(parse("ctrl+dash"), parse("ctrl+-"));
+    }
+
+    #[test]
+    fn fromstr_equals_aliases() {
+        assert_eq!(parse("equals").code, KeyCode::Char('='));
+        assert_eq!(parse("equal").code, KeyCode::Char('='));
+        assert_eq!(parse("ctrl+equals"), parse("ctrl+="));
+    }
+
+    #[test]
+    fn display_uses_named_symbol_forms() {
+        assert_eq!(
+            Key::new(KeyCode::Char('-'), KeyModifiers::empty()).to_string(),
+            "minus"
+        );
+        assert_eq!(
+            Key::new(KeyCode::Char('='), KeyModifiers::empty()).to_string(),
+            "equals"
+        );
+        assert_eq!(
+            Key::new(KeyCode::Char('+'), KeyModifiers::empty()).to_string(),
+            "plus"
+        );
+        assert_eq!(
+            Key::new(KeyCode::Char('-'), KeyModifiers::CTRL).to_string(),
+            "ctrl+minus"
+        );
     }
 
     #[test]
@@ -1339,6 +1382,10 @@ mod tests {
                     | KeyModifiers::META,
             ),
             (KeyCode::Char('+'), KeyModifiers::CTRL),
+            (KeyCode::Char('-'), KeyModifiers::CTRL),
+            (KeyCode::Char('='), KeyModifiers::CTRL),
+            (KeyCode::Char('-'), KeyModifiers::empty()),
+            (KeyCode::Char('='), KeyModifiers::empty()),
             (KeyCode::Char('ц'), KeyModifiers::empty()),
             (KeyCode::F(1), KeyModifiers::empty()),
             (KeyCode::F(24), KeyModifiers::CTRL),
