@@ -238,20 +238,20 @@ impl Decoder {
     pub(crate) fn expire_leading(&self, b0: u8) -> Option<Event> {
         if b0 == 0x1b {
             let key = if self.flags.contains(DecoderFlags::CTRL_OPEN_BRACKET) {
-                Key::new(KeyCode::Char('['), KeyModifiers::CTRL)
+                Key::new(KeyCode::Char('['), KeyModifiers::CTRL).normalized()
             } else {
-                Key::new(KeyCode::Escape, KeyModifiers::empty())
+                Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized()
             };
             Some(Event::KeyPress(key))
         } else if is_c1_introducer(b0) {
             // 0x80..=0x9F → '@'..'_' (Ctrl+Alt+letter convention).
-            // Lowercase ASCII letters so `Key::new` doesn't synthesize
-            // an extra SHIFT modifier; ctrl is treated case-insensitively.
+            // Lowercase ASCII letters so `normalize()` doesn't
+            // synthesize an extra SHIFT modifier from the uppercase
+            // form; ctrl is treated case-insensitively.
             let c = ((b0 - 0x40) as char).to_ascii_lowercase();
-            Some(Event::KeyPress(Key::new(
-                KeyCode::Char(c),
-                KeyModifiers::CTRL | KeyModifiers::ALT,
-            )))
+            Some(Event::KeyPress(
+                Key::new(KeyCode::Char(c), KeyModifiers::CTRL | KeyModifiers::ALT).normalized(),
+            ))
         } else {
             None
         }
@@ -347,10 +347,9 @@ impl Decoder {
                         // silently dropped.
                         let b0 = self.buf[0];
                         if b0 == 0x1b {
-                            events.push(Event::KeyPress(Key::new(
-                                KeyCode::Escape,
-                                KeyModifiers::empty(),
-                            )));
+                            events.push(Event::KeyPress(
+                                Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized(),
+                            ));
                             self.buf.drain(..1);
                             continue;
                         }
@@ -359,10 +358,10 @@ impl Decoder {
                             // letters so SHIFT is not synthesized for
                             // the Ctrl+Alt+letter fallback.
                             let c = ((b0 - 0x40) as char).to_ascii_lowercase();
-                            events.push(Event::KeyPress(Key::new(
-                                KeyCode::Char(c),
-                                KeyModifiers::CTRL | KeyModifiers::ALT,
-                            )));
+                            events.push(Event::KeyPress(
+                                Key::new(KeyCode::Char(c), KeyModifiers::CTRL | KeyModifiers::ALT)
+                                    .normalized(),
+                            ));
                             self.buf.drain(..1);
                             continue;
                         }
@@ -405,63 +404,69 @@ impl Decoder {
                 // Ctrl+A through Ctrl+Z (excluding Tab/LF/CR/Esc which have dedicated keys).
                 let c = (buf[0] - 1 + b'a') as char;
                 ParseResult::Event(
-                    Event::KeyPress(Key::new(KeyCode::Char(c), KeyModifiers::CTRL)),
+                    Event::KeyPress(Key::new(KeyCode::Char(c), KeyModifiers::CTRL).normalized()),
                     1,
                 )
             }
             0x09 => {
                 if self.flags.contains(DecoderFlags::CTRL_I) {
                     ParseResult::Event(
-                        Event::KeyPress(Key::new(KeyCode::Char('i'), KeyModifiers::CTRL)),
+                        Event::KeyPress(
+                            Key::new(KeyCode::Char('i'), KeyModifiers::CTRL).normalized(),
+                        ),
                         1,
                     )
                 } else {
                     ParseResult::Event(
-                        Event::KeyPress(Key::new(KeyCode::Tab, KeyModifiers::empty())),
+                        Event::KeyPress(Key::new(KeyCode::Tab, KeyModifiers::empty()).normalized()),
                         1,
                     )
                 }
             }
             0x0a => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Enter, KeyModifiers::empty())),
+                Event::KeyPress(Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized()),
                 1,
             ),
             0x0d => {
                 if self.flags.contains(DecoderFlags::CTRL_M) {
                     ParseResult::Event(
-                        Event::KeyPress(Key::new(KeyCode::Char('m'), KeyModifiers::CTRL)),
+                        Event::KeyPress(
+                            Key::new(KeyCode::Char('m'), KeyModifiers::CTRL).normalized(),
+                        ),
                         1,
                     )
                 } else {
                     ParseResult::Event(
-                        Event::KeyPress(Key::new(KeyCode::Enter, KeyModifiers::empty())),
+                        Event::KeyPress(
+                            Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized(),
+                        ),
                         1,
                     )
                 }
             }
             0x00 => {
                 let key = if self.flags.contains(DecoderFlags::CTRL_AT) {
-                    Key::new(KeyCode::Char('@'), KeyModifiers::CTRL)
+                    Key::new(KeyCode::Char('@'), KeyModifiers::CTRL).normalized()
                 } else {
-                    Key::new(KeyCode::Space, KeyModifiers::CTRL)
+                    Key::new(KeyCode::Space, KeyModifiers::CTRL).normalized()
                 };
                 ParseResult::Event(Event::KeyPress(key), 1)
             }
             // Ctrl+\, Ctrl+], Ctrl+^, Ctrl+_
             0x1c => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char('\\'), KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char('\\'), KeyModifiers::CTRL).normalized()),
                 1,
             ),
             0x1d => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char(']'), KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char(']'), KeyModifiers::CTRL).normalized()),
                 1,
             ),
             0x1e => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char('^'), KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char('^'), KeyModifiers::CTRL).normalized()),
                 1,
             ),
             0x1f => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char('_'), KeyModifiers::CTRL)),
+                Event::KeyPress(Key::new(KeyCode::Char('_'), KeyModifiers::CTRL).normalized()),
                 1,
             ),
             0x7f => {
@@ -470,7 +475,10 @@ impl Decoder {
                 } else {
                     KeyCode::Backspace
                 };
-                ParseResult::Event(Event::KeyPress(Key::new(code, KeyModifiers::empty())), 1)
+                ParseResult::Event(
+                    Event::KeyPress(Key::new(code, KeyModifiers::empty()).normalized()),
+                    1,
+                )
             }
             // 8-bit C1 control codes that introduce a string/control sequence
             // (equivalent to their `ESC X` 7-bit forms).
@@ -483,24 +491,27 @@ impl Decoder {
             0x9f => self.parse_apc(buf),
             // Remaining C1 control codes (0x80..=0x9F) — including a stray
             // ST (0x9C) — are encoded as Ctrl+Alt+<code - 0x40>. Lowercase
-            // ASCII letters so `Key::new` does not synthesize SHIFT.
+            // ASCII letters so `normalize()` does not synthesize SHIFT
+            // from the uppercase form.
             b @ 0x80..=0x9f => {
                 let c = ((b - 0x40) as char).to_ascii_lowercase();
                 ParseResult::Event(
-                    Event::KeyPress(Key::new(
-                        KeyCode::Char(c),
-                        KeyModifiers::CTRL | KeyModifiers::ALT,
-                    )),
+                    Event::KeyPress(
+                        Key::new(KeyCode::Char(c), KeyModifiers::CTRL | KeyModifiers::ALT)
+                            .normalized(),
+                    ),
                     1,
                 )
             }
             b if b >= 0x80 => self.parse_utf8(buf),
             0x20 => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Space, KeyModifiers::empty())),
+                Event::KeyPress(Key::new(KeyCode::Space, KeyModifiers::empty()).normalized()),
                 1,
             ),
             b => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Char(b as char), KeyModifiers::empty())),
+                Event::KeyPress(
+                    Key::new(KeyCode::Char(b as char), KeyModifiers::empty()).normalized(),
+                ),
                 1,
             ),
         }
@@ -2572,5 +2583,359 @@ mod tests {
         let mok2 = first_press(&mut p, b"\x1b[27;1;27~");
         assert_eq!(kitty, mok2);
         assert_eq!(kitty.code, KeyCode::Escape);
+    }
+
+    /// Decode each encoding through a fresh decoder, return all keys
+    /// labelled with their source name, and assert they all compare
+    /// equal to the first one.
+    fn assert_all_equal(cases: &[(&str, &[u8])]) -> Key {
+        assert!(!cases.is_empty());
+        let mut decoded: Vec<(&str, Key)> = Vec::with_capacity(cases.len());
+        for (name, bytes) in cases {
+            let mut p = Decoder::new();
+            decoded.push((name, first_press(&mut p, bytes)));
+        }
+        let (first_name, first) = &decoded[0];
+        for (name, k) in &decoded[1..] {
+            assert_eq!(
+                first, k,
+                "cross-decoder mismatch: {first_name} ({first:?}) != {name} ({k:?})"
+            );
+        }
+        decoded.into_iter().next().unwrap().1
+    }
+
+    fn assert_all_hash_equal(cases: &[(&str, &[u8])]) {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hashes: Vec<(&str, u64)> = Vec::new();
+        for (name, bytes) in cases {
+            let mut p = Decoder::new();
+            let k = first_press(&mut p, bytes);
+            let mut h = DefaultHasher::new();
+            k.hash(&mut h);
+            hashes.push((name, h.finish()));
+        }
+        let (first_name, first_hash) = hashes[0];
+        for (name, h) in &hashes[1..] {
+            assert_eq!(
+                first_hash, *h,
+                "hash mismatch: {first_name} != {name} ({first_hash:x} vs {h:x})"
+            );
+        }
+    }
+
+    // --- Modifier combinations -----------------------------------------
+
+    #[test]
+    fn cross_decoder_ctrl_shift_a_matches() {
+        // Bare encoding cannot distinguish Ctrl+Shift+a from Ctrl+a, so
+        // it is excluded here intentionally.
+        let key = assert_all_equal(&[
+            ("kitty all-keys", b"\x1b[97;6u"),
+            ("kitty alt-keys", b"\x1b[97:65:97;6u"),
+            ("kitty assoc-text", b"\x1b[97;6;65u"),
+            ("mok2", b"\x1b[27;6;97~"),
+        ]);
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.modifiers.contains(KeyModifiers::CTRL));
+        assert!(key.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn cross_decoder_alt_shift_a_matches() {
+        let key = assert_all_equal(&[
+            ("bare", b"\x1bA"),
+            ("kitty all-keys", b"\x1b[97;4u"),
+            ("kitty assoc-text", b"\x1b[97;4;65u"),
+            ("mok2", b"\x1b[27;4;97~"),
+        ]);
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.modifiers.contains(KeyModifiers::ALT));
+        assert!(key.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn cross_decoder_ctrl_alt_a_matches() {
+        let key = assert_all_equal(&[
+            ("bare", b"\x1b\x01"),
+            ("kitty", b"\x1b[97;7u"),
+            ("mok2", b"\x1b[27;7;97~"),
+        ]);
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.modifiers.contains(KeyModifiers::CTRL));
+        assert!(key.modifiers.contains(KeyModifiers::ALT));
+    }
+
+    #[test]
+    fn cross_decoder_ctrl_alt_shift_a_matches() {
+        // No bare encoding can express this combo unambiguously.
+        let key = assert_all_equal(&[("kitty", b"\x1b[97;8u"), ("mok2", b"\x1b[27;8;97~")]);
+        assert!(
+            key.modifiers
+                .contains(KeyModifiers::CTRL | KeyModifiers::ALT | KeyModifiers::SHIFT)
+        );
+    }
+
+    #[test]
+    fn cross_decoder_super_a_matches() {
+        // Super = bit 4 → kitty mod value 9 (1 + 8).
+        let key = assert_all_equal(&[
+            ("kitty all-keys", b"\x1b[97;9u"),
+            ("kitty alt-keys", b"\x1b[97:97:97;9u"),
+        ]);
+        assert!(key.modifiers.contains(KeyModifiers::SUPER));
+    }
+
+    // --- Kitty enhancement-flag variants for the same press -----------
+
+    #[test]
+    fn cross_decoder_kitty_shift_a_variants_match() {
+        // Same press; every kitty enhancement-flag combo must produce
+        // the same binding identity.
+        let key = assert_all_equal(&[
+            ("plain (mods only)", b"\x1b[97;2u"),
+            ("with event-type press", b"\x1b[97;2:1u"),
+            ("with alt-keys", b"\x1b[97:65:97;2u"),
+            ("with assoc-text", b"\x1b[97;2;65u"),
+            ("with alt-keys + assoc-text", b"\x1b[97:65:97;2;65u"),
+            ("with alt-keys + event-type press", b"\x1b[97:65:97;2:1u"),
+        ]);
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn cross_decoder_kitty_repeat_and_release_share_identity() {
+        // Event type changes Event variant (Press/Repeat/Release) but
+        // the underlying Key identity must stay stable.
+        let mut p = Decoder::new();
+        let press = first_press(&mut p, b"\x1b[97;1:1u");
+        let mut p = Decoder::new();
+        let repeat = match p.parse(b"\x1b[97;1:2u").into_iter().next().unwrap() {
+            Event::KeyRepeat(k) => k,
+            other => panic!("expected KeyRepeat, got {other:?}"),
+        };
+        let mut p = Decoder::new();
+        let release = match p.parse(b"\x1b[97;1:3u").into_iter().next().unwrap() {
+            Event::KeyRelease(k) => k,
+            other => panic!("expected KeyRelease, got {other:?}"),
+        };
+        assert_eq!(press, repeat);
+        assert_eq!(press, release);
+    }
+
+    // --- Scripts beyond Latin/Cyrillic --------------------------------
+
+    #[test]
+    fn cross_decoder_greek_alpha_shift_matches() {
+        // Α = U+0391, α = U+03B1.
+        let key = assert_all_equal(&[
+            ("utf8 uppercase", "Α".as_bytes()),
+            ("kitty all-keys", b"\x1b[945;2u"),
+            ("kitty alt-keys", b"\x1b[945:913;2u"),
+        ]);
+        assert_eq!(key.code, KeyCode::Char('α'));
+        assert!(key.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn cross_decoder_german_eszett_matches() {
+        // ß = U+00DF. No simple uppercase mapping that fits a single
+        // codepoint, so normalize leaves the code alone.
+        let key = assert_all_equal(&[("utf8", "ß".as_bytes()), ("kitty", b"\x1b[223u")]);
+        assert_eq!(key.code, KeyCode::Char('ß'));
+        assert!(key.modifiers.is_empty());
+    }
+
+    #[test]
+    fn cross_decoder_hebrew_alef_matches() {
+        // א = U+05D0. No case variant.
+        let key = assert_all_equal(&[("utf8", "א".as_bytes()), ("kitty", b"\x1b[1488u")]);
+        assert_eq!(key.code, KeyCode::Char('א'));
+    }
+
+    #[test]
+    fn cross_decoder_arabic_alef_matches() {
+        // ا = U+0627. No case variant.
+        let key = assert_all_equal(&[("utf8", "ا".as_bytes()), ("kitty", b"\x1b[1575u")]);
+        assert_eq!(key.code, KeyCode::Char('ا'));
+    }
+
+    #[test]
+    fn cross_decoder_turkish_dotted_i_matches() {
+        // İ = U+0130. Multi-codepoint lowercase ("i\u{307}"), so
+        // normalize leaves the code as-is.
+        let key = assert_all_equal(&[("utf8", "İ".as_bytes()), ("kitty", b"\x1b[304u")]);
+        assert_eq!(key.code, KeyCode::Char('İ'));
+    }
+
+    // --- Special / named keys -----------------------------------------
+
+    #[test]
+    fn cross_decoder_up_arrow_matches() {
+        let key = assert_all_equal(&[
+            ("bare CSI A", b"\x1b[A"),
+            ("bare CSI 1;1A", b"\x1b[1;1A"),
+            ("kitty functional", b"\x1b[57352u"),
+        ]);
+        assert_eq!(key.code, KeyCode::Up);
+        assert!(key.modifiers.is_empty());
+    }
+
+    #[test]
+    fn cross_decoder_ctrl_up_arrow_matches() {
+        let key = assert_all_equal(&[
+            ("bare CSI 1;5A", b"\x1b[1;5A"),
+            ("kitty functional", b"\x1b[57352;5u"),
+        ]);
+        assert_eq!(key.code, KeyCode::Up);
+        assert!(key.modifiers.contains(KeyModifiers::CTRL));
+    }
+
+    #[test]
+    fn cross_decoder_page_up_matches() {
+        let key = assert_all_equal(&[
+            ("bare CSI 5~", b"\x1b[5~"),
+            ("kitty functional", b"\x1b[57354u"),
+        ]);
+        assert_eq!(key.code, KeyCode::PageUp);
+    }
+
+    #[test]
+    fn cross_decoder_f1_matches() {
+        let key = assert_all_equal(&[("ss3", b"\x1bOP"), ("kitty functional", b"\x1b[57364u")]);
+        assert_eq!(key.code, KeyCode::F(1));
+    }
+
+    #[test]
+    fn cross_decoder_f5_matches() {
+        let key = assert_all_equal(&[
+            ("bare CSI 15~", b"\x1b[15~"),
+            ("kitty functional", b"\x1b[57368u"),
+        ]);
+        assert_eq!(key.code, KeyCode::F(5));
+    }
+
+    #[test]
+    fn cross_decoder_backspace_matches() {
+        let key = assert_all_equal(&[
+            ("bare 0x7f", b"\x7f"),
+            ("kitty 127", b"\x1b[127u"),
+            ("kitty functional", b"\x1b[57347u"),
+            ("mok2", b"\x1b[27;1;127~"),
+        ]);
+        assert_eq!(key.code, KeyCode::Backspace);
+    }
+
+    #[test]
+    fn cross_decoder_space_matches() {
+        let key = assert_all_equal(&[
+            ("bare", b" "),
+            ("kitty", b"\x1b[32u"),
+            ("mok2", b"\x1b[27;1;32~"),
+        ]);
+        assert_eq!(key.code, KeyCode::Space);
+        assert!(key.modifiers.is_empty());
+    }
+
+    #[test]
+    fn cross_decoder_ctrl_space_matches() {
+        let key = assert_all_equal(&[
+            ("bare NUL", b"\x00"),
+            ("kitty", b"\x1b[32;5u"),
+            ("mok2", b"\x1b[27;5;32~"),
+        ]);
+        assert_eq!(key.code, KeyCode::Space);
+        assert!(key.modifiers.contains(KeyModifiers::CTRL));
+    }
+
+    #[test]
+    fn cross_decoder_delete_matches() {
+        let key = assert_all_equal(&[
+            ("bare CSI 3~", b"\x1b[3~"),
+            ("kitty functional", b"\x1b[57349u"),
+        ]);
+        assert_eq!(key.code, KeyCode::Delete);
+    }
+
+    #[test]
+    fn cross_decoder_insert_matches() {
+        let key = assert_all_equal(&[
+            ("bare CSI 2~", b"\x1b[2~"),
+            ("kitty functional", b"\x1b[57348u"),
+        ]);
+        assert_eq!(key.code, KeyCode::Insert);
+    }
+
+    // --- Hash stability across decoders -------------------------------
+
+    #[test]
+    fn cross_decoder_hash_stability() {
+        // Same press, multiple encodings — must hash to the same value
+        // so HashMap<Key, _> lookups never miss.
+        assert_all_hash_equal(&[
+            ("bare", b"A"),
+            ("kitty all-keys", b"\x1b[97;2u"),
+            ("kitty alt-keys", b"\x1b[97:65:97;2u"),
+            ("kitty assoc-text", b"\x1b[97;2;65u"),
+            ("mok2", b"\x1b[27;2;97~"),
+        ]);
+    }
+
+    #[test]
+    fn cross_decoder_alt_shift_tab_is_alt_backtab() {
+        // `\x1b\x1b[Z` = ESC + (CSI Z). The CSI decoder yields BackTab
+        // (with SHIFT collapsed by normalize); the outer ESC promotes
+        // it to Alt+BackTab. Kitty/MOK2 produce the same identity.
+        let key = assert_all_equal(&[
+            ("bare ESC + CSI Z", b"\x1b\x1b[Z"),
+            ("kitty Tab+Alt+Shift", b"\x1b[9;4u"),
+            ("mok2 Tab+Alt+Shift", b"\x1b[27;4;9~"),
+        ]);
+        assert_eq!(key.code, KeyCode::BackTab);
+        assert_eq!(key.modifiers, KeyModifiers::ALT);
+    }
+
+    // --- Documented pre-existing divergences --------------------------
+    //
+    // These cases are NOT cross-decoder equal. They reflect limitations
+    // of the underlying terminal encodings — the legacy path loses
+    // information that the richer kitty/MOK2 paths preserve. We pin
+    // them with tests so the behavior is intentional and any future
+    // change is deliberate.
+
+    #[test]
+    fn divergence_bare_ctrl_shift_letter_collapses_to_ctrl() {
+        // Terminals send the same byte for Ctrl+a and Ctrl+Shift+a, so
+        // the bare path cannot recover Shift. Richer encodings can.
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"\x01");
+        let mut p = Decoder::new();
+        let kitty = first_press(&mut p, b"\x1b[97;6u");
+        assert_eq!(bare.code, KeyCode::Char('a'));
+        assert!(bare.modifiers.contains(KeyModifiers::CTRL));
+        assert!(!bare.modifiers.contains(KeyModifiers::SHIFT));
+        assert!(
+            kitty
+                .modifiers
+                .contains(KeyModifiers::CTRL | KeyModifiers::SHIFT)
+        );
+        assert_ne!(bare, kitty);
+    }
+
+    #[test]
+    fn divergence_bare_shifted_symbol_uses_glyph_not_base() {
+        // Bare 'Shift+2' is just '@' from the terminal — no way to
+        // recover the underlying '2'. Kitty alt-keys preserves both.
+        let mut p = Decoder::new();
+        let bare = first_press(&mut p, b"@");
+        let mut p = Decoder::new();
+        let kitty_alt = first_press(&mut p, b"\x1b[50:64;2u");
+        assert_eq!(bare.code, KeyCode::Char('@'));
+        assert!(bare.modifiers.is_empty());
+        assert_eq!(kitty_alt.code, KeyCode::Char('2'));
+        assert!(kitty_alt.modifiers.contains(KeyModifiers::SHIFT));
+        assert_ne!(bare, kitty_alt);
     }
 }
