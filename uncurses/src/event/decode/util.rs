@@ -158,7 +158,7 @@ pub(super) fn lookup_legacy_key(seq: &[u8], flags: DecoderFlags) -> Option<Key> 
             _ => None,
         };
         if let Some(c) = code {
-            return Some(Key::new(c, KeyModifiers::SHIFT));
+            return Some(Key::new(c, KeyModifiers::SHIFT).normalized());
         }
     }
     // URxvt ctrl+arrows: ESC O a/b/c/d
@@ -171,7 +171,7 @@ pub(super) fn lookup_legacy_key(seq: &[u8], flags: DecoderFlags) -> Option<Key> 
             _ => None,
         };
         if let Some(c) = code {
-            return Some(Key::new(c, KeyModifiers::CTRL));
+            return Some(Key::new(c, KeyModifiers::CTRL).normalized());
         }
     }
     // URxvt modifier-suffix CSI ~ keys: ESC [ N <suffix>
@@ -189,7 +189,7 @@ pub(super) fn lookup_legacy_key(seq: &[u8], flags: DecoderFlags) -> Option<Key> 
             let num = std::str::from_utf8(&seq[2..seq.len() - 1]).ok()?;
             let n: u16 = num.parse().ok()?;
             let code = tilde_code_to_keycode(n).map(|kc| remap_tilde(n, kc, flags))?;
-            return Some(Key::new(code, m));
+            return Some(Key::new(code, m).normalized());
         }
     }
     None
@@ -258,5 +258,5 @@ pub(super) fn xterm_modifiers(n: u16) -> KeyModifiers {
 }
 
 pub(super) fn key_with_mods(code: KeyCode, mods: KeyModifiers) -> Key {
-    Key::new(code, mods)
+    Key::new(code, mods).normalized()
 }
