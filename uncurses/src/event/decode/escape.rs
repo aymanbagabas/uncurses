@@ -20,7 +20,7 @@ impl Decoder {
         if buf.len() < 2 {
             return if self.expired {
                 ParseResult::Event(
-                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized()),
                     1,
                 )
             } else {
@@ -47,7 +47,7 @@ impl Decoder {
                     ParseResult::Event(Event::KeyPress(key), n + 1)
                 }
                 ParseResult::Event(_, _) | ParseResult::None(_) => ParseResult::Event(
-                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                    Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized()),
                     1,
                 ),
                 ParseResult::Incomplete => ParseResult::Incomplete,
@@ -71,7 +71,10 @@ impl Decoder {
                 } else {
                     KeyCode::Char(b as char)
                 };
-                ParseResult::Event(Event::KeyPress(Key::new(code, KeyModifiers::ALT)), 2)
+                ParseResult::Event(
+                    Event::KeyPress(Key::new(code, KeyModifiers::ALT).normalized()),
+                    2,
+                )
             }
             // `ESC` followed by a Ctrl-letter byte: Alt+Ctrl+<letter>.
             // Mirrors the bare-byte mapping in `mod.rs::parse_byte` so
@@ -80,20 +83,20 @@ impl Decoder {
             b @ (0x01..=0x08 | 0x0b..=0x0c | 0x0e..=0x1a) => {
                 let c = (b - 1 + b'a') as char;
                 ParseResult::Event(
-                    Event::KeyPress(Key::new(
-                        KeyCode::Char(c),
-                        KeyModifiers::ALT | KeyModifiers::CTRL,
-                    )),
+                    Event::KeyPress(
+                        Key::new(KeyCode::Char(c), KeyModifiers::ALT | KeyModifiers::CTRL)
+                            .normalized(),
+                    ),
                     2,
                 )
             }
             // `ESC` followed by 0x7f: Alt+Backspace.
             0x7f => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::ALT)),
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::ALT).normalized()),
                 2,
             ),
             _ => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
+                Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized()),
                 1,
             ),
         }
