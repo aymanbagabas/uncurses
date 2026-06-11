@@ -594,17 +594,38 @@ impl fmt::Display for ParseKeyError {
 impl std::error::Error for ParseKeyError {}
 
 fn parse_modifier(token: &str) -> Result<KeyModifiers, ParseKeyError> {
-    let mods = match token.to_ascii_lowercase().as_str() {
-        "ctrl" | "control" => KeyModifiers::CTRL,
-        "alt" | "opt" | "option" => KeyModifiers::ALT,
-        "shift" => KeyModifiers::SHIFT,
-        "super" | "win" | "cmd" | "command" => KeyModifiers::SUPER,
-        "hyper" => KeyModifiers::HYPER,
-        "meta" => KeyModifiers::META,
-        _ => return Err(ParseKeyError::UnknownModifier(token.to_string())),
+    let mods = if token.eq_ignore_ascii_case("ctrl") || token.eq_ignore_ascii_case("control") {
+        KeyModifiers::CTRL
+    } else if token.eq_ignore_ascii_case("alt")
+        || token.eq_ignore_ascii_case("opt")
+        || token.eq_ignore_ascii_case("option")
+    {
+        KeyModifiers::ALT
+    } else if token.eq_ignore_ascii_case("shift") {
+        KeyModifiers::SHIFT
+    } else if token.eq_ignore_ascii_case("super")
+        || token.eq_ignore_ascii_case("win")
+        || token.eq_ignore_ascii_case("cmd")
+        || token.eq_ignore_ascii_case("command")
+    {
+        KeyModifiers::SUPER
+    } else if token.eq_ignore_ascii_case("hyper") {
+        KeyModifiers::HYPER
+    } else if token.eq_ignore_ascii_case("meta") {
+        KeyModifiers::META
+    } else {
+        return Err(ParseKeyError::UnknownModifier(token.to_string()));
     };
     Ok(mods)
 }
+
+/// Maximum byte length of any recognized key-code keyword. The
+/// longest spellings (`isolevel3shift`, `mediafastforward`) are 14
+/// and 16 bytes respectively, so anything longer than this cap cannot
+/// match a known keyword and parsing can bail out without further
+/// work. The buffer in [`parse_key_code`] is sized to this value so
+/// the ASCII-lowercase conversion stays on the stack.
+const KEY_KEYWORD_MAX_LEN: usize = 16;
 
 fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
     // Single character: treat as Char (case preserved so `Key::new`
@@ -619,11 +640,25 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
         return Ok(KeyCode::Char(first));
     }
 
+    // All recognized keywords are ASCII and fit in KEY_KEYWORD_MAX_LEN
+    // bytes. Tokens longer than that cannot match — bail to the
+    // unknown-key error without touching the allocator. Tokens
+    // containing non-ASCII bytes also can't match a keyword; fall
+    // through to the same error.
+    if token.len() > KEY_KEYWORD_MAX_LEN || !token.is_ascii() {
+        return Err(ParseKeyError::UnknownKey(token.to_string()));
+    }
+    let mut buf = [0u8; KEY_KEYWORD_MAX_LEN];
+    for (i, b) in token.as_bytes().iter().enumerate() {
+        buf[i] = b.to_ascii_lowercase();
+    }
+    let lower = std::str::from_utf8(&buf[..token.len()])
+        .expect("ASCII lowercase of ASCII input is valid UTF-8");
+
     // Function key: f<n> where 1 <= n <= KeyCode::FUNCTION_KEY_MAX.
-    let lower = token.to_ascii_lowercase();
     if let Some(rest) = lower.strip_prefix('f')
-        && rest.chars().all(|c| c.is_ascii_digit())
         && !rest.is_empty()
+        && rest.bytes().all(|c| c.is_ascii_digit())
     {
         let n: u8 = rest
             .parse()
@@ -632,7 +667,7 @@ fn parse_key_code(token: &str) -> Result<KeyCode, ParseKeyError> {
             .ok_or_else(|| ParseKeyError::InvalidFunctionKey(token.to_string()));
     }
 
-    Ok(match lower.as_str() {
+    Ok(match lower {
         // Navigation
         "up" => KeyCode::Up,
         "down" => KeyCode::Down,
