@@ -18,7 +18,7 @@ use std::io::Write;
 use uncurses::SurfaceMut;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
-use uncurses::screen::Screen;
+use uncurses::screen::{Options, Screen};
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
 use uncurses::text::WrapMode;
 
@@ -120,7 +120,13 @@ fn main() -> std::io::Result<()> {
     let size = get_window_size(&output1).unwrap_or_default();
     // Inline status area is two rows tall; insert_above scrolls events
     // into the scrollback above it.
-    let mut screen = Screen::new(output1).with_size(size.col, 2);
+    let mut screen = Screen::with_options(
+        output1,
+        Options {
+            size: (size.col, 2),
+            ..Default::default()
+        },
+    );
 
     screen.set_cursor_visible(false)?;
     screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr)?;

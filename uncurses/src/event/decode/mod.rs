@@ -58,15 +58,15 @@ pub struct Decoder {
 
 impl Default for Decoder {
     fn default() -> Self {
-        Self::new()
+        Self::new(DecoderFlags::empty())
     }
 }
 
 impl Decoder {
-    pub fn new() -> Self {
+    pub fn new(flags: DecoderFlags) -> Self {
         Self {
             buf: Vec::with_capacity(256),
-            flags: DecoderFlags::empty(),
+            flags,
             in_paste: false,
             utf8_mouse: false,
             expired: false,
@@ -75,16 +75,6 @@ impl Decoder {
             win32_high_surrogate: Cell::new([None, None]),
             handlers: Handlers::default(),
         }
-    }
-
-    /// Builder: set the decoder behavior flags. By default no flags are set,
-    /// which preserves historical key mappings (Tab/Enter/Esc/Backspace for
-    /// the ambiguous C0 bytes, Home/End for the VT220 tilde codes). Set
-    /// flags to opt into the alternative readings. See [`DecoderFlags`].
-    #[must_use]
-    pub fn with_flags(mut self, flags: DecoderFlags) -> Self {
-        self.flags = flags;
-        self
     }
 
     /// Returns `true` when the parser holds an unfinished escape sequence
@@ -526,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_char() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"a");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -539,7 +529,7 @@ mod tests {
 
     #[test]
     fn test_parse_ctrl_c() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(&[0x03]);
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -553,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_parse_arrow_up() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[A");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -564,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_parse_shift_arrow() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[1;2A");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -578,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_parse_f5() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[15~");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -589,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_parse_sgr_mouse() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[<0;10;20M");
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], Event::MouseClick(_)));
@@ -597,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_parse_focus() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[I");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0], Event::FocusIn);
@@ -609,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_parse_color_scheme_report() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         assert_eq!(parser.parse(b"\x1b[?997;1n"), vec![Event::DarkColorScheme]);
         assert_eq!(parser.parse(b"\x1b[?997;2n"), vec![Event::LightColorScheme]);
         // Unknown sub-report value: branch returns None; consumer may
@@ -640,7 +630,7 @@ mod tests {
 
     #[test]
     fn test_parse_cursor_position() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[5;10R");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -654,7 +644,7 @@ mod tests {
 
     #[test]
     fn test_parse_csi_z_shift_tab() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[Z");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -668,7 +658,7 @@ mod tests {
 
     #[test]
     fn test_parse_alt_char() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1ba");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -682,7 +672,7 @@ mod tests {
 
     #[test]
     fn test_parse_paste_bracketed() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // Full paste sequence in one feed: start + content + end.
         let events = parser.parse(b"\x1b[200~hello world\x1b[201~");
         assert_eq!(events.len(), 3);
@@ -693,7 +683,7 @@ mod tests {
 
     #[test]
     fn test_parse_paste_split_across_feeds() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let e1 = parser.parse(b"\x1b[200~hello ");
         assert_eq!(
             e1,
@@ -710,7 +700,7 @@ mod tests {
     fn test_parse_paste_escape_inside() {
         // ESC sequences inside paste should be preserved verbatim (no
         // re-interpretation).
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[200~a\x1b[Ab\x1b[201~");
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
@@ -748,7 +738,7 @@ mod tests {
         wire.extend_from_slice(&body);
         wire.extend_from_slice(b"\x1b[201~");
 
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(&wire);
 
         assert_eq!(events.first(), Some(&Event::PasteStart));
@@ -771,7 +761,7 @@ mod tests {
         // byte and treating it as an introducer inside paste content
         // would cause real Cyrillic/CJK paste content to escape paste
         // mode (see `test_paste_body_with_0x9b_is_not_terminated`).
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x9b200~hello\x1b[201~");
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
@@ -787,7 +777,7 @@ mod tests {
         // following `201~` and escape paste mode. The bytes between the
         // 7-bit `\x1b[200~` start and the 7-bit `\x1b[201~` end must be
         // delivered verbatim as paste content.
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[200~hello\xd1\x9b201~world\x1b[201~");
         let chunks: Vec<&[u8]> = events
             .iter()
@@ -821,7 +811,7 @@ mod tests {
         // Same regression as above, but exercising the `parse_one` path
         // (used by `Source::drain_parser`) rather than the
         // streaming `parse` path.
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let mut buf: Vec<u8> = Vec::from(&b"\x1b[200~hello\xd1\x9b201~world\x1b[201~"[..]);
         let mut events = Vec::new();
         loop {
@@ -861,7 +851,7 @@ mod tests {
     fn test_decoder_end_paste_escape_hatch() {
         // end_paste() force-exits paste mode when in paste, returning
         // a PasteEnd event for the caller to enqueue.
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let evs = parser.parse(b"\x1b[200~partial");
         assert_eq!(evs[0], Event::PasteStart);
         assert!(parser.in_paste());
@@ -880,14 +870,14 @@ mod tests {
 
     #[test]
     fn test_decoder_end_paste_noop_when_not_in_paste() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         assert!(!parser.in_paste());
         assert_eq!(parser.end_paste(), None);
     }
 
     #[test]
     fn test_parse_c0_extras() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // 0x1c -> Ctrl+\
         let events = parser.parse(&[0x1c]);
         assert_eq!(events.len(), 1);
@@ -902,7 +892,7 @@ mod tests {
 
     #[test]
     fn test_parse_dcs_xtgettcap() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // DCS 1+r 626f3d31 ST -> bo=1 (hex-encoded)
         let events = parser.parse(b"\x1bP1+r626F=31\x1b\\");
         assert_eq!(events.len(), 1);
@@ -911,7 +901,7 @@ mod tests {
 
     #[test]
     fn test_parse_apc_kitty_graphics() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b_Ga=T,f=32,s=2,v=2;BASE64DATA\x1b\\");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -926,7 +916,7 @@ mod tests {
 
     #[test]
     fn test_parse_sos_pm() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1bXabc\x1b\\");
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], Event::UnknownSos(_)));
@@ -938,7 +928,7 @@ mod tests {
 
     #[test]
     fn test_parse_kitty_key_release() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // CSI 97 ; 1:3 u  -> 'a' release
         let events = parser.parse(b"\x1b[97;1:3u");
         assert_eq!(events.len(), 1);
@@ -950,7 +940,7 @@ mod tests {
 
     #[test]
     fn test_parse_kitty_key_with_alternates() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // CSI 97:65:97 ; 2 u  -> 'a' with shifted='A', base='a', shift mod
         let events = parser.parse(b"\x1b[97:65:97;2u");
         assert_eq!(events.len(), 1);
@@ -967,14 +957,14 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_events() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"abc");
         assert_eq!(events.len(), 3);
     }
 
     #[test]
     fn test_parse_ss3_f1() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1bOP");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -985,7 +975,7 @@ mod tests {
 
     #[test]
     fn test_parse_da1() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[?64;1;2;6;9c");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -998,7 +988,7 @@ mod tests {
 
     #[test]
     fn test_parse_da2() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[>1;95;0c");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1011,7 +1001,7 @@ mod tests {
 
     #[test]
     fn test_parse_decrpm() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // CSI ? 1049 ; 1 $ y  -> alt-screen is Set
         let events = parser.parse(b"\x1b[?1049;1$y");
         assert_eq!(events.len(), 1);
@@ -1026,7 +1016,7 @@ mod tests {
 
     #[test]
     fn test_parse_pixel_size() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // CSI 4 ; 600 ; 800 t
         let events = parser.parse(b"\x1b[4;600;800t");
         assert_eq!(events.len(), 1);
@@ -1041,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_parse_cell_size() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[6;16;8t");
         assert_eq!(events.len(), 1);
         assert_eq!(
@@ -1055,7 +1045,7 @@ mod tests {
 
     #[test]
     fn test_parse_kitty_keyboard_enhancements() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // CSI ? 5 u (DISAMBIGUATE | REPORT_ALT_KEYS)
         let events = parser.parse(b"\x1b[?5u");
         assert_eq!(events.len(), 1);
@@ -1070,7 +1060,7 @@ mod tests {
 
     #[test]
     fn test_parse_osc_fg_color() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b]10;rgb:abcd/0000/ffff\x1b\\");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1083,7 +1073,7 @@ mod tests {
 
     #[test]
     fn test_parse_osc_clipboard() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b]52;c;SGVsbG8=\x07");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1097,7 +1087,7 @@ mod tests {
 
     #[test]
     fn test_parse_modify_other_keys() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[>4;2m");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1110,7 +1100,7 @@ mod tests {
 
     #[test]
     fn test_parse_urxvt_mouse() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         // URxvt: CSI Cb;Cx;Cy M with Cb=32 (left button press), col 11, row 21
         let events = parser.parse(b"\x1b[32;11;21M");
         assert_eq!(events.len(), 1);
@@ -1126,7 +1116,7 @@ mod tests {
 
     #[test]
     fn test_parse_utf8_mouse() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         parser.set_utf8_mouse(true);
         // 3 bytes: cb=32, cx=33, cy=33 → button Left, x=0, y=0
         let events = parser.parse(b"\x1b[M\x20\x21\x21");
@@ -1145,7 +1135,7 @@ mod tests {
         // SGR-Pixel (mode 1016) uses the same wire format as SGR (1006). The
         // parser doesn't distinguish; it just emits 0-based offsets and the
         // caller interprets them as pixels.
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[<0;100;200M");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1159,7 +1149,7 @@ mod tests {
 
     #[test]
     fn test_legacy_key_urxvt_shift_arrows() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[a");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1173,7 +1163,7 @@ mod tests {
 
     #[test]
     fn test_legacy_key_urxvt_shift_f11() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[23$");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1187,7 +1177,7 @@ mod tests {
 
     #[test]
     fn test_legacy_key_urxvt_ctrl_f1() {
-        let mut parser = Decoder::new();
+        let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[11^");
         assert_eq!(events.len(), 1);
         match &events[0] {
@@ -1205,8 +1195,8 @@ mod tests {
     fn test_c1_csi_arrow_equivalent_to_esc_csi() {
         // 0x9B is the 8-bit form of CSI; `0x9B A` should decode to Up arrow,
         // matching the 7-bit `ESC [ A` form.
-        let mut a = Decoder::new();
-        let mut b = Decoder::new();
+        let mut a = Decoder::new(DecoderFlags::empty());
+        let mut b = Decoder::new(DecoderFlags::empty());
         let evs_8bit = a.parse(&[0x9b, b'A']);
         let evs_7bit = b.parse(b"\x1b[A");
         assert_eq!(evs_8bit, evs_7bit);
@@ -1219,7 +1209,7 @@ mod tests {
     #[test]
     fn test_c1_ss3_f1_equivalent_to_esc_o() {
         // 0x8F is the 8-bit form of SS3; `0x8F P` should decode to F1.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(&[0x8f, b'P']);
         assert!(matches!(
             evs.first(),
@@ -1230,7 +1220,7 @@ mod tests {
     #[test]
     fn test_c1_osc_terminated_by_8bit_st() {
         // 0x9D = 8-bit OSC introducer, 0x9C = 8-bit ST terminator.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mut buf = vec![0x9d];
         buf.extend_from_slice(b"10;rgb:1234/5678/9abc");
         buf.push(0x9c);
@@ -1246,7 +1236,7 @@ mod tests {
     fn test_c1_dcs_terminated_by_8bit_st() {
         // 0x90 = 8-bit DCS introducer; payload is an XTGETTCAP-style reply
         // with the cap name and value both hex-encoded (TN=xterm).
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mut buf = vec![0x90];
         buf.extend_from_slice(b"1+r544E=787465726D");
         buf.push(0x9c);
@@ -1261,7 +1251,7 @@ mod tests {
     fn test_bel_does_not_terminate_dcs() {
         // BEL is an OSC-only terminator. Inside a DCS payload it must be
         // treated as part of the body, not as ST.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1bP1$r0\x07more\x1b\\");
         // Single event: a Capability covering the whole payload (with BEL
         // embedded). The parser must NOT split it on BEL.
@@ -1279,7 +1269,7 @@ mod tests {
     #[test]
     fn test_bel_terminates_osc() {
         // OSC keeps its BEL-as-terminator behaviour.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1b]10;rgb:1234/5678/9abc\x07");
         assert!(
             evs.iter().any(|e| matches!(e, Event::ForegroundColor(_))),
@@ -1292,7 +1282,7 @@ mod tests {
     fn test_stray_c1_becomes_ctrl_alt_keypress() {
         // 0x9C (a stray ST byte) and other non-introducer C1 codes fall
         // through to the Ctrl+Alt+<code-0x40> encoding.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(&[0x9c]);
         assert_eq!(evs.len(), 1);
         match &evs[0] {
@@ -1309,7 +1299,7 @@ mod tests {
     fn test_partial_c1_csi_is_incomplete_then_completes() {
         // A buffered 0x9B alone is incomplete (waiting for the final byte);
         // feeding the final byte should resolve it.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs1 = p.parse(&[0x9b]);
         assert!(evs1.is_empty(), "expected no events, got {:?}", evs1);
         assert!(p.has_pending(), "scanner should treat 0x9B as pending");
@@ -1325,7 +1315,7 @@ mod tests {
     fn test_flush_partial_c1_emits_ctrl_alt_fallback() {
         // A timed-out stray 0x9B should resolve to Ctrl+Alt+[ (its C1
         // fallback) so no bytes are silently dropped.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let _ = p.parse(&[0x9b]);
         let evs = p.drain();
         assert_eq!(evs.len(), 1);
@@ -1341,7 +1331,7 @@ mod tests {
 
     #[test]
     fn test_win32_input_mode_press_release() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'A' (vk=0x41), Ctrl+Shift, key down, repeat 1.
         let evs = p.parse(b"\x1b[65;30;65;1;24;1_");
         assert_eq!(evs.len(), 1);
@@ -1362,7 +1352,7 @@ mod tests {
 
     #[test]
     fn test_win32_input_mode_repeat_count() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'a' down, no modifiers, repeat 3.
         let evs = p.parse(b"\x1b[65;30;97;1;0;3_");
         assert_eq!(evs.len(), 3);
@@ -1376,7 +1366,7 @@ mod tests {
 
     #[test]
     fn test_win32_input_mode_arrow() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // VK_LEFT (0x25), no character.
         let evs = p.parse(b"\x1b[37;75;0;1;0;1_");
         assert_eq!(evs.len(), 1);
@@ -1388,7 +1378,7 @@ mod tests {
 
     #[test]
     fn test_win32_input_mode_surrogate_pair() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // High surrogate of U+1F600 (😀): vk=0, ch=0xD83D.
         let evs = p.parse(b"\x1b[0;0;55357;1;0;1_");
         assert!(evs.is_empty(), "high surrogate should buffer silently");
@@ -1403,7 +1393,7 @@ mod tests {
 
     #[test]
     fn test_modify_other_keys_2() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Ctrl+a via modifyOtherKeys-2: CSI 27;5;97~
         let evs = p.parse(b"\x1b[27;5;97~");
         assert_eq!(evs.len(), 1);
@@ -1420,7 +1410,7 @@ mod tests {
     fn test_modify_other_keys_2_astral_codepoint() {
         // 😀 = U+1F600 = 128512 (above u16::MAX); the param must round-trip
         // through the parser without truncation.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1b[27;0;128512~");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
@@ -1431,7 +1421,7 @@ mod tests {
 
     #[test]
     fn test_f3_cpr_ambiguity_emits_multi() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1b[1;5R");
         assert_eq!(evs.len(), 2);
         match &evs[0] {
@@ -1449,7 +1439,7 @@ mod tests {
 
     #[test]
     fn test_csi_8_t_emits_window_cell_size() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1b[8;24;80t");
         assert_eq!(evs.len(), 1);
         assert!(matches!(
@@ -1463,7 +1453,7 @@ mod tests {
 
     #[test]
     fn test_csi_48_t_emits_resize() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 48 ; rows ; cols ; ypixel ; xpixel t (mode 2048 report).
         let evs = p.parse(b"\x1b[48;24;80;480;1600t");
         assert_eq!(evs.len(), 1);
@@ -1480,7 +1470,7 @@ mod tests {
 
     #[test]
     fn test_dcs_xtversion() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1bP>|xterm 380\x1b\\");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
@@ -1491,7 +1481,7 @@ mod tests {
 
     #[test]
     fn test_dcs_tertiary_da() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Hex-encoded "~VTE" (7E 56 54 45).
         let evs = p.parse(b"\x1bP!|7E565445\x1b\\");
         assert_eq!(evs.len(), 1);
@@ -1503,7 +1493,7 @@ mod tests {
 
     #[test]
     fn test_dcs_xtgettcap_hex_decodes_pairs() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 1+r TN=78746572 6D ; Co=323536
         // Hex-encoded "TN=xterm;Co=256".
         let evs = p.parse(b"\x1bP1+r544E=787465726D;436F=323536\x1b\\");
@@ -1516,7 +1506,7 @@ mod tests {
 
     #[test]
     fn test_dcs_xtgettcap_skips_invalid_pairs() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Three entries: invalid hex name, valid pair, valid name-only.
         let evs = p.parse(b"\x1bP1+rZZ=AA;544E=78;6B62\x1b\\");
         assert_eq!(evs.len(), 1);
@@ -1529,7 +1519,7 @@ mod tests {
 
     #[test]
     fn test_kitty_text_astral_codepoint() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'a' key with associated-text "😀" (U+1F600, > 0xFFFF).
         let evs = p.parse(b"\x1b[97;1;128512u");
         assert_eq!(evs.len(), 1);
@@ -1541,7 +1531,7 @@ mod tests {
 
     #[test]
     fn test_win32_lock_modifiers_propagated() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'a' with CapsLock-on (cks=0x80).
         let evs = p.parse(b"\x1b[65;30;97;1;128;1_");
         assert_eq!(evs.len(), 1);
@@ -1555,7 +1545,7 @@ mod tests {
 
     #[test]
     fn test_kitty_lock_modifiers() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'a' with CapsLock (kitty bit 64, encoded as 65 = 64+1).
         let evs = p.parse(b"\x1b[97;65u");
         assert_eq!(evs.len(), 1);
@@ -1571,7 +1561,7 @@ mod tests {
 
     #[test]
     fn test_parse_one_simple_key() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let (n, ev) = p.parse_one(b"a");
         assert_eq!(n, 1);
         match ev {
@@ -1582,7 +1572,7 @@ mod tests {
 
     #[test]
     fn test_parse_one_incomplete_returns_zero() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(p.parse_one(b"\x1b"), (0, None));
         assert_eq!(p.parse_one(b"\x1b["), (0, None));
         assert_eq!(p.parse_one(b"\x1b[2"), (0, None));
@@ -1590,7 +1580,7 @@ mod tests {
 
     #[test]
     fn test_parse_one_expire_leading_esc() {
-        let p = Decoder::new();
+        let p = Decoder::new(DecoderFlags::empty());
         match p.expire_leading(0x1b) {
             Some(Event::KeyPress(k)) => assert_eq!(k.code, KeyCode::Escape),
             other => panic!("expected Escape, got {:?}", other),
@@ -1599,7 +1589,7 @@ mod tests {
 
     #[test]
     fn test_parse_one_paste_stream() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // PasteStart
         let (n, ev) = p.parse_one(b"\x1b[200~");
         assert_eq!(n, 6);
@@ -1630,7 +1620,7 @@ mod tests {
 
     #[test]
     fn test_parse_one_paste_partial_terminator_holdback() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let (_, _) = p.parse_one(b"\x1b[200~"); // PasteStart
         // Buffer ends with the first two bytes of the terminator — the
         // parser must hold them back so it can complete the match on the
@@ -1652,7 +1642,7 @@ mod tests {
     #[test]
     fn test_chunked_csi_focus_then_text() {
         // First chunk is just the CSI introducer; no event yet.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(p.parse(b"\x1b["), vec![]);
 
         // Second chunk completes the focus-in and adds three plain chars.
@@ -1671,7 +1661,7 @@ mod tests {
     /// collected Events. Mirrors how an `Source` would deliver bytes
     /// from a slow tty (one read at a time).
     fn feed_byte_by_byte(data: &[u8]) -> Vec<Event> {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mut events = Vec::new();
         for b in data {
             events.extend(p.parse(std::slice::from_ref(b)));
@@ -1763,7 +1753,7 @@ mod tests {
     #[test]
     fn test_chunked_split_in_middle_of_csi_params() {
         // Ctrl+Up split in the middle of the parameter list.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(p.parse(b"\x1b[1;"), vec![]);
         let events = p.parse(b"5A");
         assert_eq!(events.len(), 1);
@@ -1779,7 +1769,7 @@ mod tests {
     #[test]
     fn test_chunked_split_after_intermediate_only() {
         // Just the ESC by itself should buffer with no event yet.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(p.parse(b"\x1b"), vec![]);
         assert_eq!(p.parse(b"["), vec![]);
         assert_eq!(p.parse(b"I"), vec![Event::FocusIn]);
@@ -1794,10 +1784,10 @@ mod tests {
 
     #[test]
     fn decoder_flag_ctrl_i_swaps_tab() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(press(p.parse(b"\t")).code, KeyCode::Tab);
 
-        let mut p = Decoder::new().with_flags(DecoderFlags::CTRL_I);
+        let mut p = Decoder::new(DecoderFlags::CTRL_I);
         let k = press(p.parse(b"\t"));
         assert_eq!(k.code, KeyCode::Char('i'));
         assert_eq!(k.modifiers, KeyModifiers::CTRL);
@@ -1805,10 +1795,10 @@ mod tests {
 
     #[test]
     fn decoder_flag_ctrl_m_swaps_enter() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(press(p.parse(b"\r")).code, KeyCode::Enter);
 
-        let mut p = Decoder::new().with_flags(DecoderFlags::CTRL_M);
+        let mut p = Decoder::new(DecoderFlags::CTRL_M);
         let k = press(p.parse(b"\r"));
         assert_eq!(k.code, KeyCode::Char('m'));
         assert_eq!(k.modifiers, KeyModifiers::CTRL);
@@ -1816,12 +1806,12 @@ mod tests {
 
     #[test]
     fn decoder_flag_ctrl_at_swaps_ctrl_space() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"\x00"));
         assert_eq!(k.code, KeyCode::Space);
         assert_eq!(k.modifiers, KeyModifiers::CTRL);
 
-        let mut p = Decoder::new().with_flags(DecoderFlags::CTRL_AT);
+        let mut p = Decoder::new(DecoderFlags::CTRL_AT);
         let k = press(p.parse(b"\x00"));
         assert_eq!(k.code, KeyCode::Char('@'));
         assert_eq!(k.modifiers, KeyModifiers::CTRL);
@@ -1829,17 +1819,17 @@ mod tests {
 
     #[test]
     fn decoder_flag_backspace_is_delete() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(press(p.parse(b"\x7f")).code, KeyCode::Backspace);
 
-        let mut p = Decoder::new().with_flags(DecoderFlags::BACKSPACE_IS_DELETE);
+        let mut p = Decoder::new(DecoderFlags::BACKSPACE_IS_DELETE);
         assert_eq!(press(p.parse(b"\x7f")).code, KeyCode::Delete);
     }
 
     #[test]
     fn decoder_flag_ctrl_open_bracket_swaps_lone_esc() {
         // Default: lone ESC -> Escape.
-        let p = Decoder::new();
+        let p = Decoder::new(DecoderFlags::empty());
         let ev = p.expire_leading(0x1b).expect("expire returns event");
         match ev {
             Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Escape),
@@ -1847,7 +1837,7 @@ mod tests {
         }
 
         // With CTRL_OPEN_BRACKET: lone ESC -> Ctrl+[.
-        let p = Decoder::new().with_flags(DecoderFlags::CTRL_OPEN_BRACKET);
+        let p = Decoder::new(DecoderFlags::CTRL_OPEN_BRACKET);
         let ev = p.expire_leading(0x1b).expect("expire returns event");
         match ev {
             Event::KeyPress(k) => {
@@ -1860,34 +1850,34 @@ mod tests {
 
     #[test]
     fn decoder_flag_find_key_swaps_csi_1_tilde() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(press(p.parse(b"\x1b[1~")).code, KeyCode::Home);
 
-        let mut p = Decoder::new().with_flags(DecoderFlags::FIND_KEY);
+        let mut p = Decoder::new(DecoderFlags::FIND_KEY);
         assert_eq!(press(p.parse(b"\x1b[1~")).code, KeyCode::Find);
 
         // Code 7 (Home alias) is unaffected.
-        let mut p = Decoder::new().with_flags(DecoderFlags::FIND_KEY);
+        let mut p = Decoder::new(DecoderFlags::FIND_KEY);
         assert_eq!(press(p.parse(b"\x1b[7~")).code, KeyCode::Home);
     }
 
     #[test]
     fn decoder_flag_select_key_swaps_csi_4_tilde() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(press(p.parse(b"\x1b[4~")).code, KeyCode::End);
 
-        let mut p = Decoder::new().with_flags(DecoderFlags::SELECT_KEY);
+        let mut p = Decoder::new(DecoderFlags::SELECT_KEY);
         assert_eq!(press(p.parse(b"\x1b[4~")).code, KeyCode::Select);
 
         // Code 8 (End alias) is unaffected.
-        let mut p = Decoder::new().with_flags(DecoderFlags::SELECT_KEY);
+        let mut p = Decoder::new(DecoderFlags::SELECT_KEY);
         assert_eq!(press(p.parse(b"\x1b[8~")).code, KeyCode::End);
     }
 
     #[test]
     fn decoder_flag_find_key_swaps_urxvt_modifier_suffix() {
         // URxvt: ESC [ 1 $ -> Shift+Home; with FIND_KEY -> Shift+Find.
-        let mut p = Decoder::new().with_flags(DecoderFlags::FIND_KEY);
+        let mut p = Decoder::new(DecoderFlags::FIND_KEY);
         let k = press(p.parse(b"\x1b[1$"));
         assert_eq!(k.code, KeyCode::Find);
         assert!(k.modifiers.contains(KeyModifiers::SHIFT));
@@ -1895,7 +1885,7 @@ mod tests {
 
     #[test]
     fn esc_esc_alone_waits_for_timeout_then_alt_esc() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Before expiry, holding ESC ESC produces no event.
         assert_eq!(p.parse(b"\x1b\x1b"), vec![]);
         // After drain (timeout) the pair resolves to Alt+Esc.
@@ -1911,7 +1901,7 @@ mod tests {
 
     #[test]
     fn esc_esc_arrow_promotes_to_alt_up() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"\x1b\x1b[A"));
         assert_eq!(k.code, KeyCode::Up);
         assert_eq!(k.modifiers, KeyModifiers::ALT);
@@ -1922,7 +1912,7 @@ mod tests {
         // ESC ESC <printable>: the inner ESC <printable> already
         // resolves to Alt+<printable>, so the outer ESC has nothing
         // new to add and lands as a standalone Esc keypress first.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let events = p.parse(b"\x1b\x1ba");
         match events.as_slice() {
             [Event::KeyPress(esc), Event::KeyPress(alt_a)] => {
@@ -1938,7 +1928,7 @@ mod tests {
     #[test]
     fn esc_esc_modified_arrow_compounds_alt() {
         // Shift+Up via CSI 1;2A, prefixed with another ESC -> Shift+Alt+Up.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"\x1b\x1b[1;2A"));
         assert_eq!(k.code, KeyCode::Up);
         assert!(k.modifiers.contains(KeyModifiers::ALT));
@@ -1950,7 +1940,7 @@ mod tests {
         // ESC followed by a focus-in (CSI I, non-key). The leading ESC has
         // nothing to promote, so it lands as a standalone Esc keypress and
         // FocusIn follows on the next iteration.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let events = p.parse(b"\x1b\x1b[I");
         match events.as_slice() {
             [Event::KeyPress(k), Event::FocusIn] => {
@@ -1963,7 +1953,7 @@ mod tests {
 
     #[test]
     fn triple_esc_then_arrow_yields_lone_esc_then_alt_up() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let events = p.parse(b"\x1b\x1b\x1b[A");
         match events.as_slice() {
             [Event::KeyPress(esc), Event::KeyPress(alt_up)] => {
@@ -1978,7 +1968,7 @@ mod tests {
 
     #[test]
     fn triple_esc_alone_drains_to_lone_esc_then_alt_esc() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(p.parse(b"\x1b\x1b\x1b"), vec![]);
         let events = p.drain();
         match events.as_slice() {
@@ -1996,7 +1986,7 @@ mod tests {
     fn esc_alt_letter_unchanged() {
         // Regression: a single ESC + printable still resolves to Alt+<char>
         // with no extra events.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"\x1ba"));
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.modifiers, KeyModifiers::ALT);
@@ -2006,7 +1996,7 @@ mod tests {
     fn esc_run_drains_letters_and_holds_trailing_esc() {
         // `\x1babc\x1b` (no timeout) drains Alt+a, b, c and leaves the
         // trailing ESC pending for the next event or timeout.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let events = p.parse(b"\x1babc\x1b");
         match events.as_slice() {
             [
@@ -2041,7 +2031,7 @@ mod tests {
     /// shortcut handling on the host application.
     #[test]
     fn kitty_event_type_release_for_csi_tilde_navigation_key() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 6;6:3~  =  PageDown, mods=Ctrl+Shift, event-type=release
         let evs = p.parse(b"\x1b[6;6:3~");
         match evs.as_slice() {
@@ -2055,7 +2045,7 @@ mod tests {
 
     #[test]
     fn kitty_event_type_repeat_for_csi_tilde_navigation_key() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 6;6:2~  =  PageDown, mods=Ctrl+Shift, event-type=repeat
         let evs = p.parse(b"\x1b[6;6:2~");
         match evs.as_slice() {
@@ -2069,7 +2059,7 @@ mod tests {
 
     #[test]
     fn kitty_event_type_release_for_csi_cursor_key() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 1;6:3 A  =  Up, mods=Ctrl+Shift, event-type=release
         let evs = p.parse(b"\x1b[1;6:3A");
         match evs.as_slice() {
@@ -2083,7 +2073,7 @@ mod tests {
 
     #[test]
     fn kitty_event_type_repeat_for_csi_cursor_key() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 1;6:2 A  =  Up, mods=Ctrl+Shift, event-type=repeat
         let evs = p.parse(b"\x1b[1;6:2A");
         match evs.as_slice() {
@@ -2097,7 +2087,7 @@ mod tests {
 
     #[test]
     fn kitty_event_type_release_for_csi_function_key() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 1;3:3 P  =  F1, mods=Alt, event-type=release
         let evs = p.parse(b"\x1b[1;3:3P");
         match evs.as_slice() {
@@ -2111,7 +2101,7 @@ mod tests {
 
     #[test]
     fn kitty_event_type_release_for_csi_z_shift_tab() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 1;2:3 Z  =  Shift+Tab, event-type=release
         let evs = p.parse(b"\x1b[1;2:3Z");
         match evs.as_slice() {
@@ -2128,7 +2118,7 @@ mod tests {
     /// as "release".
     #[test]
     fn kitty_event_type_absent_defaults_to_press() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 6;6~  =  PageDown, mods=Ctrl+Shift, no event-type
         let k = press(p.parse(b"\x1b[6;6~"));
         assert_eq!(k.code, KeyCode::PageDown);
@@ -2147,7 +2137,7 @@ mod tests {
 
     #[test]
     fn bare_ascii_uppercase_letter_canonicalizes() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"A"));
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
@@ -2157,7 +2147,7 @@ mod tests {
 
     #[test]
     fn bare_ascii_lowercase_letter_unshifted() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"a"));
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, None);
@@ -2167,7 +2157,7 @@ mod tests {
 
     #[test]
     fn bare_ascii_digit_no_case_variant() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"1"));
         assert_eq!(k.code, KeyCode::Char('1'));
         assert_eq!(k.shifted_key, None);
@@ -2178,7 +2168,7 @@ mod tests {
 
     #[test]
     fn utf8_cyrillic_uppercase_canonicalizes() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Ц = U+0426 = 0xD0 0xA6
         let k = press(p.parse("Ц".as_bytes()));
         assert_eq!(k.code, KeyCode::Char('ц'));
@@ -2189,7 +2179,7 @@ mod tests {
 
     #[test]
     fn utf8_cyrillic_lowercase_unshifted() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse("ц".as_bytes()));
         assert_eq!(k.code, KeyCode::Char('ц'));
         assert_eq!(k.shifted_key, None);
@@ -2199,7 +2189,7 @@ mod tests {
 
     #[test]
     fn utf8_greek_uppercase_canonicalizes() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse("Α".as_bytes()));
         assert_eq!(k.code, KeyCode::Char('α'));
         assert_eq!(k.shifted_key, Some('Α'));
@@ -2209,7 +2199,7 @@ mod tests {
 
     #[test]
     fn utf8_german_eszett_no_uppercase_single_cp() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'ß' uppercases to "SS" (multi-cp) — helper leaves it alone,
         // but text auto-populates with the original codepoint.
         let k = press(p.parse("ß".as_bytes()));
@@ -2221,7 +2211,7 @@ mod tests {
 
     #[test]
     fn utf8_turkish_i_with_dot_multi_codepoint_lower() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'İ' lowercases to "i\u{307}" (multi-cp); helper bails.
         let k = press(p.parse("İ".as_bytes()));
         assert_eq!(k.code, KeyCode::Char('İ'));
@@ -2231,7 +2221,7 @@ mod tests {
 
     #[test]
     fn utf8_arabic_no_case_variant() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Arabic letter alef — no case folding.
         let k = press(p.parse("ا".as_bytes()));
         assert_eq!(k.code, KeyCode::Char('ا'));
@@ -2242,7 +2232,7 @@ mod tests {
 
     #[test]
     fn utf8_hebrew_no_case_variant() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Hebrew letter alef — no case folding.
         let k = press(p.parse("א".as_bytes()));
         assert_eq!(k.code, KeyCode::Char('א'));
@@ -2255,7 +2245,7 @@ mod tests {
 
     #[test]
     fn kitty_csi_u_cyrillic_uppercase() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'Ц' = 1062. Bare kitty CSI u with no shifted/base reported.
         let k = press(p.parse(b"\x1b[1062u"));
         assert_eq!(k.code, KeyCode::Char('ц'));
@@ -2266,7 +2256,7 @@ mod tests {
 
     #[test]
     fn kitty_csi_u_cyrillic_lowercase_with_shift() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'ц' = 1094, modifiers=Shift (mod value 2 = 1<<0 + 1).
         let k = press(p.parse(b"\x1b[1094;2u"));
         assert_eq!(k.code, KeyCode::Char('ц'));
@@ -2277,7 +2267,7 @@ mod tests {
 
     #[test]
     fn kitty_csi_u_greek_uppercase() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'Α' = 913
         let k = press(p.parse(b"\x1b[913u"));
         assert_eq!(k.code, KeyCode::Char('α'));
@@ -2288,7 +2278,7 @@ mod tests {
 
     #[test]
     fn kitty_csi_u_turkish_multi_cp_lower_passthrough() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'İ' = 304, lowercases to "i\u{307}" — helper leaves it alone.
         let k = press(p.parse(b"\x1b[304u"));
         assert_eq!(k.code, KeyCode::Char('İ'));
@@ -2298,7 +2288,7 @@ mod tests {
 
     #[test]
     fn kitty_csi_u_arabic_with_shift_no_synthesis() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'ا' = 1575, modifiers=Shift. No case variant; shifted_key
         // stays None; text still surfaces the typed glyph.
         let k = press(p.parse(b"\x1b[1575;2u"));
@@ -2312,7 +2302,7 @@ mod tests {
 
     #[test]
     fn mok2_cyrillic_uppercase_letter() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 27 ; 1 ; 1062 ~  (no modifier, codepoint 'Ц')
         let k = press(p.parse(b"\x1b[27;1;1062~"));
         assert_eq!(k.code, KeyCode::Char('ц'));
@@ -2323,7 +2313,7 @@ mod tests {
 
     #[test]
     fn mok2_greek_lowercase_with_shift() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 27 ; 2 ; 945 ~  (Shift, codepoint 'α'); '2' encodes Shift.
         let k = press(p.parse(b"\x1b[27;2;945~"));
         assert_eq!(k.code, KeyCode::Char('α'));
@@ -2334,7 +2324,7 @@ mod tests {
 
     #[test]
     fn mok2_ctrl_cyrillic_suppresses_text() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 27 ; 5 ; 1094 ~  (Ctrl, codepoint 'ц')
         let k = press(p.parse(b"\x1b[27;5;1094~"));
         assert_eq!(k.code, KeyCode::Char('ц'));
@@ -2346,7 +2336,7 @@ mod tests {
 
     #[test]
     fn win32_uppercase_letter_with_shift_only() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'A' (vk=0x41=65), Shift (cks=0x10=16), key down, repeat 1.
         let evs = p.parse(b"\x1b[65;30;65;1;16;1_");
         let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
@@ -2360,7 +2350,7 @@ mod tests {
 
     #[test]
     fn win32_uppercase_letter_via_caps_lock_no_synthetic_shift() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'A' produced by CapsLock alone (cks=0x80=128), key down.
         let evs = p.parse(b"\x1b[65;30;65;1;128;1_");
         let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
@@ -2378,7 +2368,7 @@ mod tests {
 
     #[test]
     fn win32_lowercase_letter_via_shift_plus_caps_lock() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'a' produced by Shift+CapsLock (cks=0x10|0x80=144), key down.
         let evs = p.parse(b"\x1b[65;30;97;1;144;1_");
         let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
@@ -2393,7 +2383,7 @@ mod tests {
 
     #[test]
     fn win32_cyrillic_uppercase_letter_with_shift() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // 'Ц' = U+0426 = 1062, vk arbitrary, cks Shift only.
         let evs = p.parse(b"\x1b[65;30;1062;1;16;1_");
         let Event::KeyPress(k) = evs.into_iter().next().unwrap() else {
@@ -2414,7 +2404,7 @@ mod tests {
 
     #[test]
     fn fixterms_bare_uppercase_letter_canonicalizes() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let k = press(p.parse(b"\x1b[65u"));
         assert_eq!(k.code, KeyCode::Char('a'));
         assert_eq!(k.shifted_key, Some('A'));
@@ -2424,7 +2414,7 @@ mod tests {
 
     #[test]
     fn fixterms_shift_lowercase_letter_synthesizes_shifted() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 97;2 u = 'a' + Shift.
         let k = press(p.parse(b"\x1b[97;2u"));
         assert_eq!(k.code, KeyCode::Char('a'));
@@ -2435,7 +2425,7 @@ mod tests {
 
     #[test]
     fn fixterms_ctrl_letter_suppresses_text() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // CSI 97;5 u = Ctrl+a.
         let k = press(p.parse(b"\x1b[97;5u"));
         assert_eq!(k.code, KeyCode::Char('a'));
@@ -2462,17 +2452,17 @@ mod tests {
 
     #[test]
     fn cross_decoder_plain_a_matches() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"a");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty_bare = first_press(&mut p, b"\x1b[97u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty with associated text (no shifted/base).
         let kitty_text = first_press(&mut p, b"\x1b[97;1;97u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty with alternate keys.
         let kitty_alt = first_press(&mut p, b"\x1b[97:97:97u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mok2 = first_press(&mut p, b"\x1b[27;1;97~");
         assert_eq!(bare, kitty_bare);
         assert_eq!(bare, kitty_text);
@@ -2482,20 +2472,20 @@ mod tests {
 
     #[test]
     fn cross_decoder_shift_a_matches() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"A");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty_bare = first_press(&mut p, b"\x1b[65u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty all-keys: codepoint stays unshifted (97), modifier=2 (Shift).
         let kitty_all = first_press(&mut p, b"\x1b[97;2u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty alt-keys: code:shifted:base.
         let kitty_alt = first_press(&mut p, b"\x1b[97:65:97;2u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty assoc-text: text codepoint 65 ('A').
         let kitty_text = first_press(&mut p, b"\x1b[97;2;65u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mok2 = first_press(&mut p, b"\x1b[27;2;97~");
         assert_eq!(bare, kitty_bare);
         assert_eq!(bare, kitty_all);
@@ -2506,11 +2496,11 @@ mod tests {
 
     #[test]
     fn cross_decoder_ctrl_a_matches() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"\x01");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty = first_press(&mut p, b"\x1b[97;5u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mok2 = first_press(&mut p, b"\x1b[27;5;97~");
         assert_eq!(bare, kitty);
         assert_eq!(bare, mok2);
@@ -2518,11 +2508,11 @@ mod tests {
 
     #[test]
     fn cross_decoder_alt_a_matches() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"\x1ba");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty = first_press(&mut p, b"\x1b[97;3u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mok2 = first_press(&mut p, b"\x1b[27;3;97~");
         assert_eq!(bare, kitty);
         assert_eq!(bare, mok2);
@@ -2531,15 +2521,15 @@ mod tests {
     #[test]
     fn cross_decoder_cyrillic_upper_matches() {
         // 'Ц' = U+0426 = 0xD0 0xA6.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let utf8 = first_press(&mut p, "Ц".as_bytes());
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty bare codepoint for Ц.
         let kitty_bare = first_press(&mut p, b"\x1b[1062u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty all-keys for Shift+ц: code stays lowercase, mod=2.
         let kitty_all = first_press(&mut p, b"\x1b[1094;2u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         // Kitty alt-keys: code:shifted (Ц).
         let kitty_alt = first_press(&mut p, b"\x1b[1094:1062;2u");
         assert_eq!(utf8, kitty_bare);
@@ -2551,11 +2541,11 @@ mod tests {
     fn cross_decoder_shift_tab_matches() {
         // Bare CSI Z, kitty, and MOK2 all decode Shift+Tab to the
         // same canonical form (Tab + SHIFT).
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"\x1b[Z");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty = first_press(&mut p, b"\x1b[9;2u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mok2 = first_press(&mut p, b"\x1b[27;2;9~");
         assert_eq!(bare, kitty);
         assert_eq!(bare, mok2);
@@ -2563,11 +2553,11 @@ mod tests {
 
     #[test]
     fn cross_decoder_enter_matches() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"\r");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty = first_press(&mut p, b"\x1b[13u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mok2 = first_press(&mut p, b"\x1b[27;1;13~");
         assert_eq!(bare, kitty);
         assert_eq!(bare, mok2);
@@ -2575,9 +2565,9 @@ mod tests {
 
     #[test]
     fn cross_decoder_escape_matches() {
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty = first_press(&mut p, b"\x1b[27u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let mok2 = first_press(&mut p, b"\x1b[27;1;27~");
         assert_eq!(kitty, mok2);
         assert_eq!(kitty.code, KeyCode::Escape);
@@ -2590,7 +2580,7 @@ mod tests {
         assert!(!cases.is_empty());
         let mut decoded: Vec<(&str, Key)> = Vec::with_capacity(cases.len());
         for (name, bytes) in cases {
-            let mut p = Decoder::new();
+            let mut p = Decoder::new(DecoderFlags::empty());
             decoded.push((name, first_press(&mut p, bytes)));
         }
         let (first_name, first) = &decoded[0];
@@ -2608,7 +2598,7 @@ mod tests {
         use std::hash::{Hash, Hasher};
         let mut hashes: Vec<(&str, u64)> = Vec::new();
         for (name, bytes) in cases {
-            let mut p = Decoder::new();
+            let mut p = Decoder::new(DecoderFlags::empty());
             let k = first_press(&mut p, bytes);
             let mut h = DefaultHasher::new();
             k.hash(&mut h);
@@ -2707,14 +2697,14 @@ mod tests {
     fn cross_decoder_kitty_repeat_and_release_share_identity() {
         // Event type changes Event variant (Press/Repeat/Release) but
         // the underlying Key identity must stay stable.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let press = first_press(&mut p, b"\x1b[97;1:1u");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let repeat = match p.parse(b"\x1b[97;1:2u").into_iter().next().unwrap() {
             Event::KeyRepeat(k) => k,
             other => panic!("expected KeyRepeat, got {other:?}"),
         };
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let release = match p.parse(b"\x1b[97;1:3u").into_iter().next().unwrap() {
             Event::KeyRelease(k) => k,
             other => panic!("expected KeyRelease, got {other:?}"),
@@ -2907,9 +2897,9 @@ mod tests {
     fn divergence_bare_ctrl_shift_letter_collapses_to_ctrl() {
         // Terminals send the same byte for Ctrl+a and Ctrl+Shift+a, so
         // the bare path cannot recover Shift. Richer encodings can.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"\x01");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty = first_press(&mut p, b"\x1b[97;6u");
         assert_eq!(bare.code, KeyCode::Char('a'));
         assert!(bare.modifiers.contains(KeyModifiers::CTRL));
@@ -2926,9 +2916,9 @@ mod tests {
     fn divergence_bare_shifted_symbol_uses_glyph_not_base() {
         // Bare 'Shift+2' is just '@' from the terminal — no way to
         // recover the underlying '2'. Kitty alt-keys preserves both.
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let bare = first_press(&mut p, b"@");
-        let mut p = Decoder::new();
+        let mut p = Decoder::new(DecoderFlags::empty());
         let kitty_alt = first_press(&mut p, b"\x1b[50:64;2u");
         assert_eq!(bare.code, KeyCode::Char('@'));
         assert!(bare.modifiers.is_empty());

@@ -15,17 +15,17 @@
 #![cfg(test)]
 
 use super::Event;
-use super::decode::Decoder;
+use super::decode::{Decoder, DecoderFlags};
 
 /// Feed all bytes at once.
 fn parse_whole(data: &[u8]) -> Vec<Event> {
-    let mut p = Decoder::new();
+    let mut p = Decoder::new(DecoderFlags::empty());
     p.parse(data)
 }
 
 /// Feed one byte at a time.
 fn parse_byte_by_byte(data: &[u8]) -> Vec<Event> {
-    let mut p = Decoder::new();
+    let mut p = Decoder::new(DecoderFlags::empty());
     let mut events = Vec::new();
     for b in data {
         events.extend(p.parse(std::slice::from_ref(b)));
@@ -35,7 +35,7 @@ fn parse_byte_by_byte(data: &[u8]) -> Vec<Event> {
 
 /// Feed `data[..i]` then `data[i..]`.
 fn parse_split_at(data: &[u8], i: usize) -> Vec<Event> {
-    let mut p = Decoder::new();
+    let mut p = Decoder::new(DecoderFlags::empty());
     let mut events = p.parse(&data[..i]);
     events.extend(p.parse(&data[i..]));
     events
@@ -214,7 +214,7 @@ fn corpus_concatenated_round_trips_under_random_chunking() {
     let chunk_sizes = [1usize, 3, 7, 2, 11, 5, 13, 4, 9, 6];
     let whole = normalize(parse_whole(&joined));
 
-    let mut p = Decoder::new();
+    let mut p = Decoder::new(DecoderFlags::empty());
     let mut chunked = Vec::new();
     let mut i = 0;
     let mut ci = 0;

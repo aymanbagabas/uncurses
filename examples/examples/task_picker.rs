@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use uncurses::SurfaceMut;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
-use uncurses::screen::Screen;
+use uncurses::screen::{Options, Screen};
 use uncurses::style::{Style, write_style};
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::{Painter, WrapMode};
@@ -50,7 +50,13 @@ fn main() -> std::io::Result<()> {
     };
     // Start at a single row; the first redraw will grow the screen to
     // match the first frame's measured height.
-    let mut screen = Screen::new(stdout()).with_size(term_cols, 1);
+    let mut screen = Screen::with_options(
+        stdout(),
+        Options {
+            size: (term_cols, 1),
+            ..Default::default()
+        },
+    );
     screen.set_cursor_visible(false)?;
 
     let mut events = Source::new(stdin())?;
@@ -154,7 +160,7 @@ fn main() -> std::io::Result<()> {
     // returns on its own line below the message.
     screen.resize(term_cols, 3);
     screen.clear();
-    Painter::new(&mut screen).set_str((2, 1), "Bye!", WrapMode::Truncate);
+    screen.painter().set_str((2, 1), "Bye!", WrapMode::Truncate);
     screen.render()?;
 
     screen.reset()?;
@@ -179,7 +185,7 @@ fn fit_and_redraw<W: Write>(screen: &mut Screen<W>, s: &State, cols: u16) {
 }
 
 fn paint<W: Write>(screen: &mut Screen<W>, s: &State) -> u16 {
-    let mut p = Painter::new(screen);
+    let mut p = screen.painter();
     if s.chosen {
         draw_chosen(&mut p, s)
     } else {

@@ -7,7 +7,7 @@
 //! ```ignore
 //! use uncurses::text::{Painter, WrapMode};
 //!
-//! Painter::new(&mut buf)
+//! Painter::new(&mut buf, WidthMode::default(), false)
 //!     .set_str((0, 0), "hello \x1b[1mworld\x1b[m", WrapMode::Truncate);
 //! ```
 //!
@@ -52,33 +52,22 @@ pub enum WrapMode {
 /// [`reset`](Self::reset) to clear it.
 pub struct Painter<'s, S: SurfaceMut + ?Sized> {
     target: &'s mut S,
-    mode: WidthMode,
-    eaw_wide: bool,
-    style: Style,
+    pub mode: WidthMode,
+    pub eaw_wide: bool,
+    pub style: Style,
 }
 
 impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
-    /// New painter writing into `target` with default [`WidthMode`],
-    /// `eaw_wide = false`, and an empty current style.
-    pub fn new(target: &'s mut S) -> Self {
+    /// New painter writing into `target` with the given width-measurement
+    /// policy and East-Asian Ambiguous policy. Starts with an empty
+    /// current style.
+    pub fn new(target: &'s mut S, mode: WidthMode, eaw_wide: bool) -> Self {
         Self {
             target,
-            mode: WidthMode::default(),
-            eaw_wide: false,
+            mode,
+            eaw_wide,
             style: Style::default(),
         }
-    }
-
-    /// Override the width-measurement policy.
-    pub fn with_mode(mut self, mode: WidthMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    /// Override the East-Asian Ambiguous policy.
-    pub fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
-        self.eaw_wide = eaw_wide;
-        self
     }
 
     /// Clear the current style back to [`Style::default()`]. Returns
@@ -86,21 +75,6 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     pub fn reset(&mut self) -> &mut Self {
         self.style = Style::default();
         self
-    }
-
-    /// The bound width-measurement policy.
-    pub fn mode(&self) -> WidthMode {
-        self.mode
-    }
-
-    /// The bound East-Asian Ambiguous policy.
-    pub fn eaw_wide(&self) -> bool {
-        self.eaw_wide
-    }
-
-    /// The painter's current style (mutated by inline SGR and OSC 8).
-    pub fn style(&self) -> &Style {
-        &self.style
     }
 
     /// Paint `s` starting at `pos`, clipped to the target's bounds.
@@ -324,7 +298,11 @@ mod tests {
     #[test]
     fn plain_text() {
         let mut b = buf(10, 1);
-        let end = Painter::new(&mut b).set_str((0, 0), "abc", WrapMode::Truncate);
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str(
+            (0, 0),
+            "abc",
+            WrapMode::Truncate,
+        );
         assert_eq!(end, Position::new(3, 0));
         assert_eq!(cell_at(&b, 0, 0).content(), "a");
         assert_eq!(cell_at(&b, 2, 0).content(), "c");
@@ -333,7 +311,7 @@ mod tests {
     #[test]
     fn sgr_updates_style_mid_stream() {
         let mut b = buf(10, 1);
-        let mut p = Painter::new(&mut b);
+        let mut p = Painter::new(&mut b, WidthMode::default(), false);
         let end = p.set_str((0, 0), "a\x1b[1mb\x1b[mc", WrapMode::Truncate);
         assert_eq!(end, Position::new(3, 0));
         let c0 = cell_at(&b, 0, 0);
@@ -347,7 +325,11 @@ mod tests {
     #[test]
     fn sgr_color() {
         let mut b = buf(5, 1);
-        Painter::new(&mut b).set_str((0, 0), "\x1b[31mr", WrapMode::Truncate);
+        Painter::new(&mut b, WidthMode::default(), false).set_str(
+            (0, 0),
+            "\x1b[31mr",
+            WrapMode::Truncate,
+        );
         assert_eq!(
             cell_at(&b, 0, 0).style.fg,
             Some(Color::Basic(BasicColor::Red))
@@ -357,7 +339,7 @@ mod tests {
     #[test]
     fn osc8_toggles_link() {
         let mut b = buf(10, 1);
-        Painter::new(&mut b).set_str(
+        Painter::new(&mut b, WidthMode::default(), false).set_str(
             (0, 0),
             "\x1b]8;;https://x\x1b\\a\x1b]8;;\x1b\\b",
             WrapMode::Truncate,
@@ -371,7 +353,7 @@ mod tests {
         // Missing the second `;` -> not a valid OSC 8; should not affect
         // the currently active link.
         let mut b = buf(10, 1);
-        let mut p = Painter::new(&mut b);
+        let mut p = Painter::new(&mut b, WidthMode::default(), false);
         p.set_str(
             (0, 0),
             "\x1b]8;;https://x\x1b\\a\x1b]8;garbage\x1b\\b",
@@ -384,7 +366,11 @@ mod tests {
     #[test]
     fn newline_advances_row() {
         let mut b = buf(5, 3);
-        let end = Painter::new(&mut b).set_str((0, 0), "ab\ncd", WrapMode::Truncate);
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str(
+            (0, 0),
+            "ab\ncd",
+            WrapMode::Truncate,
+        );
         assert_eq!(cell_at(&b, 0, 0).content(), "a");
         assert_eq!(cell_at(&b, 1, 0).content(), "b");
         assert_eq!(cell_at(&b, 0, 1).content(), "c");
@@ -395,7 +381,11 @@ mod tests {
     #[test]
     fn cr_returns_to_left() {
         let mut b = buf(5, 1);
-        Painter::new(&mut b).set_str((0, 0), "abc\rXY", WrapMode::Truncate);
+        Painter::new(&mut b, WidthMode::default(), false).set_str(
+            (0, 0),
+            "abc\rXY",
+            WrapMode::Truncate,
+        );
         // 'X' overwrites 'a', 'Y' overwrites 'b', 'c' remains.
         assert_eq!(cell_at(&b, 0, 0).content(), "X");
         assert_eq!(cell_at(&b, 1, 0).content(), "Y");
@@ -405,7 +395,11 @@ mod tests {
     #[test]
     fn newline_past_bottom_returns() {
         let mut b = buf(5, 2);
-        let end = Painter::new(&mut b).set_str((0, 0), "a\nb\nc", WrapMode::Truncate);
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str(
+            (0, 0),
+            "a\nb\nc",
+            WrapMode::Truncate,
+        );
         assert_eq!(end, Position::new(0, 2));
         assert_eq!(cell_at(&b, 0, 0).content(), "a");
         assert_eq!(cell_at(&b, 0, 1).content(), "b");
@@ -415,7 +409,11 @@ mod tests {
     #[test]
     fn truncate_at_right_edge() {
         let mut b = buf(3, 1);
-        let end = Painter::new(&mut b).set_str((0, 0), "abcdef", WrapMode::Truncate);
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str(
+            (0, 0),
+            "abcdef",
+            WrapMode::Truncate,
+        );
         assert_eq!(end, Position::new(3, 0));
         assert_eq!(cell_at(&b, 0, 0).content(), "a");
         assert_eq!(cell_at(&b, 2, 0).content(), "c");
@@ -424,7 +422,11 @@ mod tests {
     #[test]
     fn wrap_at_right_edge() {
         let mut b = buf(3, 3);
-        let end = Painter::new(&mut b).set_str((0, 0), "abcdef", WrapMode::Wrap);
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str(
+            (0, 0),
+            "abcdef",
+            WrapMode::Wrap,
+        );
         assert_eq!(end, Position::new(3, 1));
         assert_eq!(cell_at(&b, 0, 0).content(), "a");
         assert_eq!(cell_at(&b, 2, 0).content(), "c");
@@ -435,8 +437,11 @@ mod tests {
     #[test]
     fn rect_clip_and_origin() {
         let mut b = buf(10, 5);
-        let end =
-            Painter::new(&mut b).set_str_rect(Rect::new(2, 1, 3, 2), "abcdef", WrapMode::Wrap);
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str_rect(
+            Rect::new(2, 1, 3, 2),
+            "abcdef",
+            WrapMode::Wrap,
+        );
         assert_eq!(end, Position::new(5, 2));
         assert_eq!(cell_at(&b, 2, 1).content(), "a");
         assert_eq!(cell_at(&b, 4, 1).content(), "c");
@@ -450,7 +455,11 @@ mod tests {
     #[test]
     fn rect_newline_uses_rect_left() {
         let mut b = buf(10, 5);
-        Painter::new(&mut b).set_str_rect(Rect::new(2, 1, 4, 3), "ab\ncd", WrapMode::Truncate);
+        Painter::new(&mut b, WidthMode::default(), false).set_str_rect(
+            Rect::new(2, 1, 4, 3),
+            "ab\ncd",
+            WrapMode::Truncate,
+        );
         assert_eq!(cell_at(&b, 2, 1).content(), "a");
         assert_eq!(cell_at(&b, 3, 1).content(), "b");
         // Newline returns x to rect.left() = 2, not to 0.
@@ -463,7 +472,7 @@ mod tests {
     fn with_resets_style_and_link() {
         let mut b = buf(10, 1);
         // First call: paint with bold + a link.
-        Painter::new(&mut b).set_str_with(
+        Painter::new(&mut b, WidthMode::default(), false).set_str_with(
             (0, 0),
             "a",
             WrapMode::Truncate,
@@ -472,7 +481,12 @@ mod tests {
         assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
         assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
         // Second call with `_with` and an empty style must reset.
-        Painter::new(&mut b).set_str_with((1, 0), "b", WrapMode::Truncate, Style::default());
+        Painter::new(&mut b, WidthMode::default(), false).set_str_with(
+            (1, 0),
+            "b",
+            WrapMode::Truncate,
+            Style::default(),
+        );
         assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
         assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
@@ -480,7 +494,7 @@ mod tests {
     #[test]
     fn state_persists_across_calls() {
         let mut b = buf(10, 1);
-        let mut p = Painter::new(&mut b);
+        let mut p = Painter::new(&mut b, WidthMode::default(), false);
         p.set_str((0, 0), "\x1b[1ma", WrapMode::Truncate);
         // Style mutation persists into the next call.
         p.set_str((1, 0), "b", WrapMode::Truncate);
@@ -491,17 +505,17 @@ mod tests {
     #[test]
     fn reset_clears_style_and_link() {
         let mut b = buf(10, 1);
-        let mut p = Painter::new(&mut b);
+        let mut p = Painter::new(&mut b, WidthMode::default(), false);
         p.set_str(
             (0, 0),
             "\x1b[1m\x1b]8;;https://x\x1b\\a",
             WrapMode::Truncate,
         );
-        assert!(p.style().attrs.contains(AttrFlags::BOLD));
-        assert_eq!(link_of(p.style()), Some(("https://x", "")));
+        assert!(p.style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(link_of(&p.style), Some(("https://x", "")));
         p.reset();
-        assert!(p.style().is_empty());
-        assert!(p.style().link.is_none());
+        assert!(p.style.is_empty());
+        assert!(p.style.link.is_none());
         // Subsequent paint reflects the reset.
         p.set_str((1, 0), "b", WrapMode::Truncate);
         assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
@@ -512,9 +526,16 @@ mod tests {
     fn position_and_rect_match_when_rect_covers_bounds() {
         let mut a = buf(5, 2);
         let mut b = buf(5, 2);
-        let e1 = Painter::new(&mut a).set_str((0, 0), "abc", WrapMode::Truncate);
-        let e2 =
-            Painter::new(&mut b).set_str_rect(Rect::new(0, 0, 5, 2), "abc", WrapMode::Truncate);
+        let e1 = Painter::new(&mut a, WidthMode::default(), false).set_str(
+            (0, 0),
+            "abc",
+            WrapMode::Truncate,
+        );
+        let e2 = Painter::new(&mut b, WidthMode::default(), false).set_str_rect(
+            Rect::new(0, 0, 5, 2),
+            "abc",
+            WrapMode::Truncate,
+        );
         assert_eq!(e1, e2);
         assert_eq!(cell_at(&a, 2, 0).content(), cell_at(&b, 2, 0).content());
     }

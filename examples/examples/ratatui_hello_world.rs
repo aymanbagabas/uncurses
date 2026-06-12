@@ -9,7 +9,7 @@ use std::time::Duration;
 use ratatui::Terminal;
 use ratatui::widgets::Paragraph;
 use uncurses::event::{Event, KeyCode, Source};
-use uncurses::screen::Screen;
+use uncurses::screen::{Options, Screen};
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
 
@@ -22,7 +22,13 @@ fn main() -> io::Result<()> {
 
 fn run() -> io::Result<()> {
     let size = get_window_size(stdout()).unwrap_or_default();
-    let mut screen = Screen::new(stdout()).with_size(size.col, size.row);
+    let mut screen = Screen::with_options(
+        stdout(),
+        Options {
+            size: (size.col, size.row),
+            ..Default::default()
+        },
+    );
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 

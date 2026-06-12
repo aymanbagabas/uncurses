@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
 fn csi_hook_claims_unknown() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_csi(|view| {
         if view.final_byte == b'q' {
             Some(Event::Termcap(format!("csi/q params={:?}", view.params())))
@@ -31,7 +31,7 @@ fn csi_hook_claims_unknown() {
 
 #[test]
 fn csi_hook_falls_through_when_returning_none() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_csi(|_| None);
     let events = d.parse(b"\x1b[1;2q");
     assert_eq!(events.len(), 1);
@@ -40,7 +40,7 @@ fn csi_hook_falls_through_when_returning_none() {
 
 #[test]
 fn csi_hook_overrides_recognised() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     let hits = std::sync::Arc::new(AtomicUsize::new(0));
     let h = hits.clone();
     d.on_csi(move |_| {
@@ -59,7 +59,7 @@ fn csi_hook_overrides_recognised() {
 
 #[test]
 fn csi_hook_chain_first_some_wins() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_csi(|_| None);
     d.on_csi(|_| Some(Event::Termcap("second".into())));
     d.on_csi(|_| Some(Event::Termcap("third".into())));
@@ -74,7 +74,7 @@ fn csi_hook_chain_first_some_wins() {
 #[test]
 fn csi_view_exposes_private_intermediates_and_subparams() {
     type Captured = (Option<u8>, Vec<u8>, u8, Vec<Vec<Option<u32>>>);
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     let seen: std::sync::Arc<Mutex<Option<Captured>>> = std::sync::Arc::new(Mutex::new(None));
     let s = seen.clone();
     d.on_csi(move |view| {
@@ -99,7 +99,7 @@ fn csi_view_exposes_private_intermediates_and_subparams() {
 
 #[test]
 fn csi_view_distinguishes_missing_param_from_zero() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     let captured: std::sync::Arc<Mutex<Option<Vec<Option<u32>>>>> =
         std::sync::Arc::new(Mutex::new(None));
     let c = captured.clone();
@@ -120,7 +120,7 @@ fn csi_view_distinguishes_missing_param_from_zero() {
 
 #[test]
 fn ss3_hook_claims_unknown_final() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_ss3(|view| {
         if view.final_byte == b'Z' {
             Some(Event::Termcap("ss3/Z".into()))
@@ -138,7 +138,7 @@ fn ss3_hook_claims_unknown_final() {
 
 #[test]
 fn ss3_hook_overrides_recognised() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_ss3(|_| Some(Event::Unknown(b"hijack".to_vec())));
     let events = d.parse(b"\x1bOA"); // Up — recognised default, but hook overrides.
     match &events[0] {
@@ -151,7 +151,7 @@ fn ss3_hook_overrides_recognised() {
 
 #[test]
 fn osc_hook_claims_unknown_command() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_osc(|view| {
         let s = std::str::from_utf8(view.payload).ok()?;
         s.strip_prefix("9001;")
@@ -167,7 +167,7 @@ fn osc_hook_claims_unknown_command() {
 
 #[test]
 fn osc_hook_overrides_recognised() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_osc(|_| Some(Event::Unknown(b"hijack".to_vec())));
     // OSC 10 would normally decode to ForegroundColor; hook overrides it.
     let events = d.parse(b"\x1b]10;rgb:1111/2222/3333\x07");
@@ -178,7 +178,7 @@ fn osc_hook_overrides_recognised() {
 
 #[test]
 fn dcs_hook_claims_with_structured_view() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_dcs(|view| {
         if view.final_byte == b'q' {
             Some(Event::Termcap(format!(
@@ -204,7 +204,7 @@ fn dcs_hook_claims_with_structured_view() {
 
 #[test]
 fn dcs_hook_overrides_xtgettcap() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_dcs(|_| Some(Event::Unknown(b"hijack".to_vec())));
     let events = d.parse(b"\x1bP1+r626F=31\x1b\\");
     assert!(matches!(events[0], Event::Unknown(_)));
@@ -214,7 +214,7 @@ fn dcs_hook_overrides_xtgettcap() {
 
 #[test]
 fn apc_hook_claims_unknown() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_apc(|view| Some(Event::Termcap(format!("apc:{}", view.payload.len()))));
     let events = d.parse(b"\x1b_hello\x1b\\");
     match &events[0] {
@@ -225,7 +225,7 @@ fn apc_hook_claims_unknown() {
 
 #[test]
 fn apc_hook_overrides_kitty_graphics() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_apc(|_| Some(Event::Unknown(b"hijack".to_vec())));
     let events = d.parse(b"\x1b_Ga=T,f=32;DATA\x1b\\");
     assert!(matches!(events[0], Event::Unknown(_)));
@@ -233,7 +233,7 @@ fn apc_hook_overrides_kitty_graphics() {
 
 #[test]
 fn pm_and_sos_hooks_dispatch_separately() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_pm(|v| Some(Event::Termcap(format!("pm:{}", v.payload.len()))));
     d.on_sos(|v| Some(Event::Termcap(format!("sos:{}", v.payload.len()))));
     let events = d.parse(b"\x1b^pm-payload\x1b\\");
@@ -258,7 +258,7 @@ fn unknown_hook_registers_and_removes_cleanly() {
     // `try_parse` produces a typed event). The API is exposed for
     // future-proofing; this test guards the registration / removal
     // contract so the surface stays usable.
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     let id = d.on_unknown(|_| Some(Event::Unknown(b"claimed".to_vec())));
     assert!(d.remove_handler(id));
     assert!(!d.remove_handler(id));
@@ -268,7 +268,7 @@ fn unknown_hook_registers_and_removes_cleanly() {
 
 #[test]
 fn remove_handler_returns_true_then_false() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     let id = d.on_csi(|_| Some(Event::Unknown(b"x".to_vec())));
     assert!(d.remove_handler(id));
     assert!(!d.remove_handler(id));
@@ -278,7 +278,7 @@ fn remove_handler_returns_true_then_false() {
 
 #[test]
 fn clear_handlers_drops_every_chain() {
-    let mut d = Decoder::new();
+    let mut d = Decoder::new(DecoderFlags::empty());
     d.on_csi(|_| Some(Event::Unknown(b"a".to_vec())));
     d.on_osc(|_| Some(Event::Unknown(b"b".to_vec())));
     d.on_unknown(|_| Some(Event::Unknown(b"c".to_vec())));

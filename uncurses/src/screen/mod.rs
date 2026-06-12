@@ -30,6 +30,34 @@ mod tests;
 /// without depending on internal renderer modules.
 pub use crate::renderer::Optimizations;
 
+/// Construction-time options for a [`Screen`].
+///
+/// All fields default to a sensible value; `..Options::default()`
+/// keeps the unspecified ones at their defaults. `color_profile`,
+/// `optimizations`, and `env` use `None` to mean "auto-detect from
+/// the current process environment" (or from `env` when set).
+#[derive(Debug, Default, Clone)]
+pub struct Options {
+    /// Initial `(width, height)`. `(0, 0)` skips the initial resize;
+    /// the screen must then be sized via [`Screen::resize`] before
+    /// rendering. Defaults to `(0, 0)`.
+    pub size: (u16, u16),
+    /// East-Asian Ambiguous policy used when measuring strings: when
+    /// `true`, code points whose East-Asian-Width property is
+    /// `Ambiguous` are measured as 2 cells instead of 1. Defaults to
+    /// `false`.
+    pub eaw_wide: bool,
+    /// Override the [`Profile`] used when emitting cell styles.
+    /// `None` auto-detects from the environment.
+    pub color_profile: Option<Profile>,
+    /// Override the renderer's cell-diff capability set. `None`
+    /// auto-detects from the environment.
+    pub optimizations: Option<Optimizations>,
+    /// Environment used for `None`-defaulted auto-detection. `None`
+    /// reads the current process environment.
+    pub env: Option<Env>,
+}
+
 /// The main screen abstraction — write cells to a buffer, then render
 /// diffs to a terminal.
 ///
@@ -70,31 +98,50 @@ pub struct Screen<W: Write> {
 }
 
 impl<W: Write> Screen<W> {
-    /// Create a new terminal screen with the given writer. The screen
-    /// starts at 0×0; call [`Screen::with_size`] (builder) or
-    /// [`Screen::resize`] to give it a size before rendering.
+    /// Create a new terminal screen with the given writer, sized 0×0
+    /// and using defaults from the process environment.
     ///
-    /// The color profile and renderer optimization set are both seeded
-    /// from the current process environment via
-    /// [`Profile::detect_from`] and
-    /// [`crate::renderer::Optimizations::from_env`]. Override the
-    /// environment with [`Screen::with_environment`], or set either
-    /// piece directly with [`Screen::with_color_profile`] /
-    /// [`Screen::with_optimizations`] when the auto-detected value
-    /// isn't appropriate (e.g. tests that write to a `Vec<u8>`).
+    /// Equivalent to [`Screen::with_options(writer, Options::default())`].
+    /// Call [`Screen::resize`] before rendering, and use
+    /// [`Screen::with_options`] when you need to override sizing,
+    /// the East-Asian Ambiguous policy, the color profile, the
+    /// optimization set, or the environment used for auto-detection.
     pub fn new(writer: W) -> Self {
+        Self::with_options(writer, Options::default())
+    }
+
+    /// Create a new terminal screen with full configuration.
+    ///
+    /// `opts.color_profile` and `opts.optimizations` default to values
+    /// auto-detected from `opts.env` (or the process environment when
+    /// `opts.env` is `None`); set them to `Some(...)` to override.
+    pub fn with_options(writer: W, opts: Options) -> Self {
+        let env_owned;
+        let env: &Env = match opts.env.as_ref() {
+            Some(e) => e,
+            None => {
+                env_owned = Env::from_process();
+                &env_owned
+            }
+        };
+        let color_profile = opts
+            .color_profile
+            .unwrap_or_else(|| Profile::detect_from(env, true));
+        let optimizations = opts
+            .optimizations
+            .unwrap_or_else(|| crate::renderer::Optimizations::from_env(env));
+
         let state = State::default();
         let mut renderer = Renderer::new();
-        let env = Env::from_process();
-        renderer.set_color_profile(Profile::detect_from(&env, true));
-        renderer.set_optimizations(crate::renderer::Optimizations::from_env(&env));
+        renderer.set_color_profile(color_profile);
+        renderer.set_optimizations(optimizations);
         // Defaults match inline (no alt screen): the surface is anchored
         // wherever the cursor sits and may not be at physical (1,1), so
         // moves must stay relative.
         renderer.set_fullscreen(state.alt_screen);
         renderer.set_relative_cursor(!state.alt_screen);
 
-        Self {
+        let mut screen = Self {
             writer,
             front_buf: RenderBuffer::new(0, 0),
             renderer,
@@ -102,55 +149,13 @@ impl<W: Write> Screen<W> {
             state,
             width: 0,
             height: 0,
-            eaw_wide: false,
+            eaw_wide: opts.eaw_wide,
+        };
+        let (w, h) = opts.size;
+        if w != 0 || h != 0 {
+            screen.resize(w, h);
         }
-    }
-
-    /// Builder-style sizing: resize the screen to `width` × `height`.
-    pub fn with_size(mut self, width: u16, height: u16) -> Self {
-        self.resize(width, height);
-        self
-    }
-
-    /// Builder-style setter for the East-Asian Ambiguous policy used
-    /// when measuring strings (see [`Screen::eaw_wide`]).
-    pub fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
-        self.eaw_wide = eaw_wide;
-        self
-    }
-
-    /// Builder-style override for the [`Profile`] used when
-    /// emitting cell styles. Profiles narrower than the cell's color
-    /// downgrade the color (e.g. truecolor → ANSI 256) on the next
-    /// render. The renderer memoizes conversions internally.
-    pub fn with_color_profile(mut self, profile: Profile) -> Self {
-        self.renderer.set_color_profile(profile);
-        self
-    }
-
-    /// Builder-style override for the environment used to detect the
-    /// color profile and the renderer's optimization set. Recomputes
-    /// the profile via [`Profile::detect_from`] with
-    /// `is_tty = true` — the screen always assumes its writer is a
-    /// terminal; pass [`Profile::Disabled`] via
-    /// [`Screen::with_color_profile`] for non-TTY sinks. Recomputes
-    /// the optimization set via
-    /// [`crate::renderer::Optimizations::from_env`]; pass a custom set
-    /// via [`Screen::with_optimizations`] afterward to override.
-    pub fn with_environment(mut self, env: &Env) -> Self {
-        self.renderer
-            .set_color_profile(Profile::detect_from(env, true));
-        self.renderer
-            .set_optimizations(crate::renderer::Optimizations::from_env(env));
-        self
-    }
-
-    /// Builder-style setter for the renderer's cell-diff capability
-    /// set. Pass a narrower set when the target terminal lacks one of
-    /// the optimizations (e.g. no `ECH`, no relative cursor moves).
-    pub fn with_optimizations(mut self, opts: crate::renderer::Optimizations) -> Self {
-        self.renderer.set_optimizations(opts);
-        self
+        screen
     }
 
     /// The active [`Profile`] used when emitting cell styles.

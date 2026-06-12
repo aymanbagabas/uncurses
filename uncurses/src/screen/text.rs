@@ -24,11 +24,7 @@ impl<W: Write> Screen<W> {
         s: &str,
         wrap: WrapMode,
     ) -> crate::Position {
-        let (mode, eaw) = (self.width_mode(), self.eaw_wide);
-        Painter::new(self)
-            .with_mode(mode)
-            .with_eaw_wide(eaw)
-            .set_str(pos, s, wrap)
+        self.painter().set_str(pos, s, wrap)
     }
 
     /// Like [`Self::set_str`] but starts with the given `style` instead
@@ -41,11 +37,7 @@ impl<W: Write> Screen<W> {
         wrap: WrapMode,
         style: Style,
     ) -> crate::Position {
-        let (mode, eaw) = (self.width_mode(), self.eaw_wide);
-        Painter::new(self)
-            .with_mode(mode)
-            .with_eaw_wide(eaw)
-            .set_str_with(pos, s, wrap, style)
+        self.painter().set_str_with(pos, s, wrap, style)
     }
 
     /// Paint `s` clipped to `rect` (in the screen's own coordinate
@@ -57,11 +49,7 @@ impl<W: Write> Screen<W> {
         s: &str,
         wrap: WrapMode,
     ) -> crate::Position {
-        let (mode, eaw) = (self.width_mode(), self.eaw_wide);
-        Painter::new(self)
-            .with_mode(mode)
-            .with_eaw_wide(eaw)
-            .set_str_rect(rect, s, wrap)
+        self.painter().set_str_rect(rect, s, wrap)
     }
 
     /// Like [`Self::set_str_rect`] but starts with the given `style`
@@ -73,11 +61,15 @@ impl<W: Write> Screen<W> {
         wrap: WrapMode,
         style: Style,
     ) -> crate::Position {
+        self.painter().set_str_rect_with(rect, s, wrap, style)
+    }
+
+    /// Construct a [`Painter`] that writes into this screen, wired up
+    /// with the screen's current [width mode](Self::width_mode) and
+    /// [East-Asian Ambiguous policy](Self::eaw_wide).
+    pub fn painter(&mut self) -> Painter<'_, Self> {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide);
-        Painter::new(self)
-            .with_mode(mode)
-            .with_eaw_wide(eaw)
-            .set_str_rect_with(rect, s, wrap, style)
+        Painter::new(self, mode, eaw)
     }
 
     /// The width-calculation mode the screen currently uses. Derived
