@@ -1,30 +1,45 @@
 //! Direct stdio handles that mirror [`std::io::stdout`],
 //! [`std::io::stderr`], and [`std::io::stdin`] but without `std`'s
-//! `LineWriter`.
+//! `LineWriter` / `BufReader`.
 //!
 //! Behavior relative to the `std` counterparts:
 //!
+//! * **Process-wide singletons with a shared lock.** Every call to
+//!   [`stdout`] / [`stderr`] / [`stdin`] returns a fresh handle that
+//!   references the same underlying [`Mutex`]-guarded raw stream.
+//!   Cloning a handle is free; only the [`Mutex`] is shared, so
+//!   concurrent writes from multiple threads are serialised and do
+//!   not interleave at the byte level.
 //! * **No line buffering on writes.** A call to [`Write::write`] is
 //!   forwarded to a single OS write call, regardless of any `\n`
 //!   present in the buffer.
-//! * **No process-wide stdio lock.** Concurrent writes from other
-//!   threads or from `println!` / panic output may interleave with
-//!   ours. Callers that own the screen (alt-screen TUIs) usually want
-//!   this.
+//! * **Unbuffered.** No reads or writes are batched. Wrap in
+//!   [`std::io::BufWriter`] / [`std::io::BufReader`] to coalesce
+//!   syscalls.
 //! * **Same Windows console semantics.** When the inherited handle
 //!   refers to a console, output is transcoded UTF-8 → UTF-16 and
 //!   delivered through `WriteConsoleW`, and input is read with
 //!   `ReadConsoleW` and transcoded UTF-16 → UTF-8 — matching what
 //!   `std::io::Stdout` / `std::io::Stdin` do. UTF-8 sequences split
 //!   across calls are carried forward via a 4-byte per-stream buffer.
-//! * **Unbuffered.** No reads or writes are batched. Wrap in
-//!   [`std::io::BufWriter`] / [`std::io::BufReader`] to coalesce
-//!   syscalls.
+//! * **Independent of `std`'s lock.** The shared [`Mutex`] used here
+//!   is separate from the one inside [`std::io::Stdout`] /
+//!   [`std::io::Stdin`], so concurrent `println!` / panic output may
+//!   still interleave with ours. TUI applications that own the
+//!   screen typically route diagnostic output away from stdout to
+//!   avoid this.
+//! * **Non-reentrant lock.** Writing to the same stream from inside
+//!   a write call (for example, from a panic hook that prints to
+//!   stdout while a write is in progress on the same thread) will
+//!   deadlock. The std counterparts use a reentrant lock to avoid
+//!   this; we accept the limitation in exchange for keeping the
+//!   surface area small.
 //!
 //! Each [`Stdout`] / [`Stderr`] / [`Stdin`] is a borrowed view of the
 //! inherited descriptor; dropping it does not close that descriptor.
 
-use std::io::{self, Read, Write};
+use std::io::{self, IoSlice, Read, Write};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 #[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
@@ -32,142 +47,366 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 
+// ---------------------------------------------------------------------------
+// Process-wide singletons
+// ---------------------------------------------------------------------------
+
+static STDOUT: OnceLock<Mutex<StdoutRaw>> = OnceLock::new();
+static STDERR: OnceLock<Mutex<StderrRaw>> = OnceLock::new();
+static STDIN: OnceLock<Mutex<StdinRaw>> = OnceLock::new();
+
+fn stdout_lock() -> &'static Mutex<StdoutRaw> {
+    STDOUT.get_or_init(|| Mutex::new(StdoutRaw(imp::out())))
+}
+fn stderr_lock() -> &'static Mutex<StderrRaw> {
+    STDERR.get_or_init(|| Mutex::new(StderrRaw(imp::err())))
+}
+fn stdin_lock() -> &'static Mutex<StdinRaw> {
+    STDIN.get_or_init(|| Mutex::new(StdinRaw(imp::input())))
+}
+
 /// Returns a handle to the inherited standard output stream.
 pub fn stdout() -> Stdout {
-    Stdout(imp::out())
+    Stdout {
+        inner: stdout_lock(),
+    }
 }
 
 /// Returns a handle to the inherited standard error stream.
 pub fn stderr() -> Stderr {
-    Stderr(imp::err())
+    Stderr {
+        inner: stderr_lock(),
+    }
 }
 
 /// Returns a handle to the inherited standard input stream.
 pub fn stdin() -> Stdin {
-    Stdin(imp::input())
+    Stdin {
+        inner: stdin_lock(),
+    }
 }
 
-/// A handle to the inherited standard output stream.
-///
-/// See the [module documentation](self) for the behavior relative to
-/// [`std::io::Stdout`].
-pub struct Stdout(imp::Output);
+// ---------------------------------------------------------------------------
+// Raw, unbuffered, unlocked streams (private)
+// ---------------------------------------------------------------------------
 
-/// A handle to the inherited standard error stream.
-///
-/// See the [module documentation](self) for the behavior relative to
-/// [`std::io::Stderr`].
-pub struct Stderr(imp::Output);
+struct StdoutRaw(imp::Output);
+struct StderrRaw(imp::Output);
+struct StdinRaw(imp::Input);
 
-/// A handle to the inherited standard input stream.
-///
-/// See the [module documentation](self) for the behavior relative to
-/// [`std::io::Stdin`].
-pub struct Stdin(imp::Input);
-
-impl Write for Stdout {
+impl Write for StdoutRaw {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.write(buf)
     }
     fn flush(&mut self) -> io::Result<()> {
         self.0.flush()
     }
-    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         self.0.write_vectored(bufs)
     }
 }
 
-impl Write for Stderr {
+impl Write for StderrRaw {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.write(buf)
     }
     fn flush(&mut self) -> io::Result<()> {
         self.0.flush()
     }
-    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         self.0.write_vectored(bufs)
     }
 }
 
-impl Read for Stdin {
+impl Read for StdinRaw {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.0.read(buf)
     }
 }
 
-#[cfg(unix)]
-impl AsFd for Stdout {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
-    }
+// ---------------------------------------------------------------------------
+// Public handle types
+// ---------------------------------------------------------------------------
+
+/// A handle to the inherited standard output stream.
+///
+/// See the [module documentation](self) for the behavior relative to
+/// [`std::io::Stdout`].
+#[derive(Clone, Copy)]
+pub struct Stdout {
+    inner: &'static Mutex<StdoutRaw>,
 }
-#[cfg(unix)]
-impl AsRawFd for Stdout {
-    fn as_raw_fd(&self) -> RawFd {
-        self.0.as_raw_fd()
-    }
+
+/// A handle to the inherited standard error stream.
+///
+/// See the [module documentation](self) for the behavior relative to
+/// [`std::io::Stderr`].
+#[derive(Clone, Copy)]
+pub struct Stderr {
+    inner: &'static Mutex<StderrRaw>,
 }
-#[cfg(unix)]
-impl AsFd for Stderr {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
-    }
+
+/// A handle to the inherited standard input stream.
+///
+/// See the [module documentation](self) for the behavior relative to
+/// [`std::io::Stdin`].
+#[derive(Clone, Copy)]
+pub struct Stdin {
+    inner: &'static Mutex<StdinRaw>,
 }
-#[cfg(unix)]
-impl AsRawFd for Stderr {
-    fn as_raw_fd(&self) -> RawFd {
-        self.0.as_raw_fd()
-    }
-}
-#[cfg(unix)]
-impl AsFd for Stdin {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
-    }
-}
-#[cfg(unix)]
-impl AsRawFd for Stdin {
-    fn as_raw_fd(&self) -> RawFd {
-        self.0.as_raw_fd()
+
+impl Stdout {
+    /// Acquire the shared write lock for the lifetime of the returned
+    /// guard. While the guard is held, no other handle to stdout —
+    /// from any thread — can write through this module.
+    pub fn lock(&self) -> StdoutLock<'static> {
+        StdoutLock {
+            guard: self.inner.lock().unwrap_or_else(|e| e.into_inner()),
+        }
     }
 }
 
-#[cfg(windows)]
-impl AsHandle for Stdout {
-    fn as_handle(&self) -> BorrowedHandle<'_> {
-        self.0.as_handle()
+impl Stderr {
+    /// Acquire the shared write lock for the lifetime of the returned
+    /// guard. While the guard is held, no other handle to stderr —
+    /// from any thread — can write through this module.
+    pub fn lock(&self) -> StderrLock<'static> {
+        StderrLock {
+            guard: self.inner.lock().unwrap_or_else(|e| e.into_inner()),
+        }
     }
 }
-#[cfg(windows)]
-impl AsRawHandle for Stdout {
-    fn as_raw_handle(&self) -> RawHandle {
-        self.0.as_raw_handle()
+
+impl Stdin {
+    /// Acquire the shared read lock for the lifetime of the returned
+    /// guard. While the guard is held, no other handle to stdin —
+    /// from any thread — can read through this module.
+    pub fn lock(&self) -> StdinLock<'static> {
+        StdinLock {
+            guard: self.inner.lock().unwrap_or_else(|e| e.into_inner()),
+        }
     }
 }
-#[cfg(windows)]
-impl AsHandle for Stderr {
-    fn as_handle(&self) -> BorrowedHandle<'_> {
-        self.0.as_handle()
+
+// ---------------------------------------------------------------------------
+// Lock guards
+// ---------------------------------------------------------------------------
+
+/// A locked, exclusive reference to [`Stdout`]. Acquired via
+/// [`Stdout::lock`].
+pub struct StdoutLock<'a> {
+    guard: MutexGuard<'a, StdoutRaw>,
+}
+
+/// A locked, exclusive reference to [`Stderr`]. Acquired via
+/// [`Stderr::lock`].
+pub struct StderrLock<'a> {
+    guard: MutexGuard<'a, StderrRaw>,
+}
+
+/// A locked, exclusive reference to [`Stdin`]. Acquired via
+/// [`Stdin::lock`].
+pub struct StdinLock<'a> {
+    guard: MutexGuard<'a, StdinRaw>,
+}
+
+impl Write for StdoutLock<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.guard.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.guard.flush()
+    }
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.guard.write_vectored(bufs)
     }
 }
-#[cfg(windows)]
-impl AsRawHandle for Stderr {
-    fn as_raw_handle(&self) -> RawHandle {
-        self.0.as_raw_handle()
+
+impl Write for StderrLock<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.guard.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.guard.flush()
+    }
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.guard.write_vectored(bufs)
     }
 }
-#[cfg(windows)]
-impl AsHandle for Stdin {
-    fn as_handle(&self) -> BorrowedHandle<'_> {
-        self.0.as_handle()
+
+impl Read for StdinLock<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.guard.read(buf)
     }
 }
-#[cfg(windows)]
-impl AsRawHandle for Stdin {
-    fn as_raw_handle(&self) -> RawHandle {
-        self.0.as_raw_handle()
+
+// ---------------------------------------------------------------------------
+// Write/Read impls on the handle types
+//
+// Each call locks the shared mutex briefly, performs the I/O, and
+// releases. Both `&mut self` and `&self` impls are provided so the
+// handles can be used with `write!`/`writeln!` macros via either an
+// owned binding or a shared reference.
+// ---------------------------------------------------------------------------
+
+impl Write for Stdout {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.lock().write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.lock().flush()
+    }
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.lock().write_vectored(bufs)
     }
 }
+
+impl Write for &Stdout {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.lock().write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.lock().flush()
+    }
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.lock().write_vectored(bufs)
+    }
+}
+
+impl Write for Stderr {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.lock().write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.lock().flush()
+    }
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.lock().write_vectored(bufs)
+    }
+}
+
+impl Write for &Stderr {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.lock().write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.lock().flush()
+    }
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.lock().write_vectored(bufs)
+    }
+}
+
+impl Read for Stdin {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.lock().read(buf)
+    }
+}
+
+impl Read for &Stdin {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.lock().read(buf)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AsFd / AsRawFd / AsHandle / AsRawHandle
+//
+// Implemented on every handle and guard type. The underlying
+// descriptor / handle is process-stable, so these are lock-free and
+// always reference the inherited stream.
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+const STDOUT_FD: RawFd = libc::STDOUT_FILENO;
+#[cfg(unix)]
+const STDERR_FD: RawFd = libc::STDERR_FILENO;
+#[cfg(unix)]
+const STDIN_FD: RawFd = libc::STDIN_FILENO;
+
+#[cfg(unix)]
+macro_rules! impl_as_fd {
+    ($ty:ty, $fd:expr) => {
+        impl AsFd for $ty {
+            fn as_fd(&self) -> BorrowedFd<'_> {
+                // SAFETY: the standard descriptors are inherited from
+                // the parent and remain valid for the lifetime of the
+                // process; the returned borrow is bounded by `&self`.
+                unsafe { BorrowedFd::borrow_raw($fd) }
+            }
+        }
+        impl AsRawFd for $ty {
+            fn as_raw_fd(&self) -> RawFd {
+                $fd
+            }
+        }
+    };
+}
+
+#[cfg(unix)]
+impl_as_fd!(Stdout, STDOUT_FD);
+#[cfg(unix)]
+impl_as_fd!(Stderr, STDERR_FD);
+#[cfg(unix)]
+impl_as_fd!(Stdin, STDIN_FD);
+#[cfg(unix)]
+impl_as_fd!(StdoutLock<'_>, STDOUT_FD);
+#[cfg(unix)]
+impl_as_fd!(StderrLock<'_>, STDERR_FD);
+#[cfg(unix)]
+impl_as_fd!(StdinLock<'_>, STDIN_FD);
+
+#[cfg(windows)]
+macro_rules! impl_as_handle {
+    ($ty:ty, $which:expr) => {
+        impl AsHandle for $ty {
+            fn as_handle(&self) -> BorrowedHandle<'_> {
+                // SAFETY: the standard handles are inherited from the
+                // parent and remain valid for the lifetime of the
+                // process; the returned borrow is bounded by `&self`.
+                let h = unsafe { ::windows_sys::Win32::System::Console::GetStdHandle($which) };
+                unsafe { BorrowedHandle::borrow_raw(h as _) }
+            }
+        }
+        impl AsRawHandle for $ty {
+            fn as_raw_handle(&self) -> RawHandle {
+                let h = unsafe { ::windows_sys::Win32::System::Console::GetStdHandle($which) };
+                h as RawHandle
+            }
+        }
+    };
+}
+
+#[cfg(windows)]
+impl_as_handle!(
+    Stdout,
+    ::windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE
+);
+#[cfg(windows)]
+impl_as_handle!(
+    Stderr,
+    ::windows_sys::Win32::System::Console::STD_ERROR_HANDLE
+);
+#[cfg(windows)]
+impl_as_handle!(
+    Stdin,
+    ::windows_sys::Win32::System::Console::STD_INPUT_HANDLE
+);
+#[cfg(windows)]
+impl_as_handle!(
+    StdoutLock<'_>,
+    ::windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE
+);
+#[cfg(windows)]
+impl_as_handle!(
+    StderrLock<'_>,
+    ::windows_sys::Win32::System::Console::STD_ERROR_HANDLE
+);
+#[cfg(windows)]
+impl_as_handle!(
+    StdinLock<'_>,
+    ::windows_sys::Win32::System::Console::STD_INPUT_HANDLE
+);
 
 // ---------------------------------------------------------------------------
 // Unix implementation
