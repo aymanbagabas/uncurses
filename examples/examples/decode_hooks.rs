@@ -72,17 +72,14 @@ fn fmt_event(ev: &Event) -> String {
 }
 
 fn main() -> std::io::Result<()> {
-    let (input1, output1) = open_tty()?;
-    let input2 = input1.try_clone()?;
-    let output2 = output1.try_clone()?;
-    let mut query_out = output1.try_clone()?;
+    let (input, output) = open_tty()?;
 
     #[cfg_attr(not(unix), allow(unused_mut))]
-    let state = enable_raw_mode(&input1, &output1)?;
+    let state = enable_raw_mode(input, output)?;
 
-    let size = get_window_size(&output1).unwrap_or_default();
+    let size = get_window_size(output).unwrap_or_default();
     let mut screen = Screen::with_options(
-        output1,
+        output,
         Options {
             size: (size.col, 2),
             ..Default::default()
@@ -91,7 +88,7 @@ fn main() -> std::io::Result<()> {
 
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(input1)?;
+    let mut events = Source::new(input)?;
 
     // Shared log channel for hook-side observations. Hooks run on the
     // decoder thread; the main loop drains the log after each `read()`.
@@ -184,8 +181,8 @@ fn main() -> std::io::Result<()> {
                 modifiers,
                 ..
             }) if modifiers.is_empty() => {
-                query_out.write_all(b"\x1b[6n")?;
-                query_out.flush()?;
+                (&output).write_all(b"\x1b[6n")?;
+                (&output).flush()?;
                 last = "sent: DSR cursor-position (CSI 6 n)".to_string();
             }
             Event::KeyPress(Key {
@@ -193,8 +190,8 @@ fn main() -> std::io::Result<()> {
                 modifiers,
                 ..
             }) if modifiers.is_empty() => {
-                query_out.write_all(b"\x1b[c")?;
-                query_out.flush()?;
+                (&output).write_all(b"\x1b[c")?;
+                (&output).flush()?;
                 last = "sent: Primary DA (CSI c)".to_string();
             }
             Event::KeyPress(Key {
@@ -202,8 +199,8 @@ fn main() -> std::io::Result<()> {
                 modifiers,
                 ..
             }) if modifiers.is_empty() => {
-                query_out.write_all(b"\x1b]11;?\x1b\\")?;
-                query_out.flush()?;
+                (&output).write_all(b"\x1b]11;?\x1b\\")?;
+                (&output).flush()?;
                 last = "sent: OSC 11 background-color query".to_string();
             }
             Event::KeyPress(Key {
@@ -211,8 +208,8 @@ fn main() -> std::io::Result<()> {
                 modifiers,
                 ..
             }) if modifiers.is_empty() => {
-                query_out.write_all(b"\x1b]777;notify;decode_hooks;hello\x1b\\")?;
-                query_out.flush()?;
+                (&output).write_all(b"\x1b]777;notify;decode_hooks;hello\x1b\\")?;
+                (&output).flush()?;
                 last = "sent: OSC 777 notification (terminal likely ignores)".to_string();
             }
             Event::Resize(ws) => {
@@ -230,6 +227,6 @@ fn main() -> std::io::Result<()> {
     drain_log(&mut screen, &hook_log);
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(&input2, &output2, &state)?;
+    disable_raw_mode(input, output, &state)?;
     Ok(())
 }
