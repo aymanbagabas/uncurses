@@ -16,16 +16,20 @@ use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, std
 use uncurses_ratatui::UncursesBackend;
 
 fn main() -> io::Result<()> {
-    let raw_state = enable_raw_mode(stdin(), stdout())?;
+    let stdin = stdin();
+    let stdout = stdout();
+    let raw_state = enable_raw_mode(stdin, stdout)?;
     let result = run();
-    disable_raw_mode(stdin(), stdout(), &raw_state)?;
+    disable_raw_mode(stdin, stdout, &raw_state)?;
     result
 }
 
 fn run() -> io::Result<()> {
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdin = stdin();
+    let stdout = stdout();
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, size.row),
             ..Default::default()
@@ -50,7 +54,7 @@ fn run() -> io::Result<()> {
         f.render_widget(para, f.area());
     })?;
 
-    let mut events = Source::new(stdin())?;
+    let mut events = Source::new(stdin)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if events.poll(Some(Duration::from_millis(100)))?

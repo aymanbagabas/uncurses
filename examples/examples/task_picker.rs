@@ -41,8 +41,10 @@ struct State {
 }
 
 fn main() -> std::io::Result<()> {
-    let state_term = enable_raw_mode(stdin(), stdout())?;
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdin = stdin();
+    let stdout = stdout();
+    let state_term = enable_raw_mode(stdin, stdout)?;
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut term_cols = size.col;
     let mut s = State {
         ticks: 10,
@@ -51,7 +53,7 @@ fn main() -> std::io::Result<()> {
     // Start at a single row; the first redraw will grow the screen to
     // match the first frame's measured height.
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (term_cols, 1),
             ..Default::default()
@@ -59,7 +61,7 @@ fn main() -> std::io::Result<()> {
     );
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin())?;
+    let mut events = Source::new(stdin)?;
     let mut quit = false;
 
     let mut next_tick = Instant::now() + TICK;
@@ -165,7 +167,7 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(stdin(), stdout(), &state_term)?;
+    disable_raw_mode(stdin, stdout, &state_term)?;
     Ok(())
 }
 

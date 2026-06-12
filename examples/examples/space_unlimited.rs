@@ -148,10 +148,12 @@ enum InputMsg {
 }
 
 fn main() -> io::Result<()> {
-    let state = enable_raw_mode(stdin(), stdout())?;
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdin = stdin();
+    let stdout = stdout();
+    let state = enable_raw_mode(stdin, stdout)?;
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, size.row),
             ..Default::default()
@@ -209,7 +211,7 @@ fn main() -> io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(stdin(), stdout(), &state)?;
+    disable_raw_mode(stdin, stdout, &state)?;
 
     // The input thread exits on its next read once stdin returns EOF or
     // the user releases the next key; we do not wait indefinitely.
@@ -218,7 +220,8 @@ fn main() -> io::Result<()> {
 }
 
 fn input_loop(tx: mpsc::Sender<InputMsg>) {
-    let mut events = match Source::new(stdin()) {
+    let stdin = stdin();
+    let mut events = match Source::new(stdin) {
         Ok(r) => r,
         Err(_) => return,
     };

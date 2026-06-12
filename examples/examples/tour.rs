@@ -721,10 +721,12 @@ fn scene_balls<W: Write>(
 }
 
 fn main() -> std::io::Result<()> {
-    let state = enable_raw_mode(stdin(), stdout())?;
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdin = stdin();
+    let stdout = stdout();
+    let state = enable_raw_mode(stdin, stdout)?;
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, size.row),
             ..Default::default()
@@ -733,7 +735,7 @@ fn main() -> std::io::Result<()> {
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin())?;
+    let mut events = Source::new(stdin)?;
 
     type Scene =
         fn(&mut Screen<uncurses::terminal::Stdout>, &mut Source<Stdin>) -> std::io::Result<bool>;
@@ -756,6 +758,6 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(stdin(), stdout(), &state)?;
+    disable_raw_mode(stdin, stdout, &state)?;
     Ok(())
 }
