@@ -34,7 +34,9 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 #[cfg(windows)]
 use std::os::windows::io::AsHandle;
 
-use super::decode::{Apc, Csi, Dcs, Decoder, HandlerId, Osc, Pm, Sos, Ss3, is_c1_introducer};
+use super::decode::{
+    Apc, Csi, Dcs, Decoder, DecoderFlags, HandlerId, Osc, Pm, Sos, Ss3, is_c1_introducer,
+};
 use super::pending::Pending;
 #[cfg(unix)]
 use super::poll::{Poll, PollFd, Poller};
@@ -113,21 +115,6 @@ impl Default for Options {
 impl Options {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn with_esc_timeout(mut self, timeout: Duration) -> Self {
-        self.esc_timeout = timeout;
-        self
-    }
-
-    pub fn with_paste_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.paste_idle_timeout = timeout;
-        self
-    }
-
-    pub fn with_buffer_capacity(mut self, capacity: usize) -> Self {
-        self.buffer_capacity = capacity;
-        self
     }
 }
 
@@ -621,7 +608,7 @@ where
 
         Ok(Self {
             input,
-            parser: Decoder::new(),
+            parser: Decoder::new(DecoderFlags::empty()),
             pending: Pending::with_capacity(capacity),
             esc_timeout: opts.esc_timeout,
             esc_deadline: None,
@@ -801,9 +788,11 @@ mod tests {
     fn new_reader(input: File) -> Source<File> {
         Source::with_options(
             input,
-            Options::default()
-                .with_buffer_capacity(1024)
-                .with_esc_timeout(Duration::from_millis(50)),
+            Options {
+                buffer_capacity: 1024,
+                esc_timeout: Duration::from_millis(50),
+                ..Options::default()
+            },
         )
         .unwrap()
     }
@@ -851,9 +840,11 @@ mod tests {
         let (rx, tx) = make_pipe();
         let mut src = Source::with_options(
             rx,
-            Options::default()
-                .with_buffer_capacity(1024)
-                .with_paste_idle_timeout(Some(Duration::from_millis(40))),
+            Options {
+                buffer_capacity: 1024,
+                paste_idle_timeout: Some(Duration::from_millis(40)),
+                ..Options::default()
+            },
         )
         .unwrap();
         write_bytes(&tx, b"\x1b[200~hello");
@@ -898,9 +889,11 @@ mod tests {
         let (rx, tx) = make_pipe();
         let mut src = Source::with_options(
             rx,
-            Options::default()
-                .with_buffer_capacity(1024)
-                .with_paste_idle_timeout(Some(Duration::from_millis(500))),
+            Options {
+                buffer_capacity: 1024,
+                paste_idle_timeout: Some(Duration::from_millis(500)),
+                ..Options::default()
+            },
         )
         .unwrap();
         write_bytes(&tx, b"\x1b[200~hi");
@@ -933,9 +926,11 @@ mod tests {
         let (rx, tx) = make_pipe();
         let mut src = Source::with_options(
             rx,
-            Options::default()
-                .with_buffer_capacity(1024)
-                .with_paste_idle_timeout(None),
+            Options {
+                buffer_capacity: 1024,
+                paste_idle_timeout: None,
+                ..Options::default()
+            },
         )
         .unwrap();
         write_bytes(&tx, b"\x1b[200~stuck");
@@ -962,9 +957,11 @@ mod tests {
         let (rx, tx) = make_pipe();
         let mut src = Source::with_options(
             rx,
-            Options::default()
-                .with_buffer_capacity(1024)
-                .with_paste_idle_timeout(None),
+            Options {
+                buffer_capacity: 1024,
+                paste_idle_timeout: None,
+                ..Options::default()
+            },
         )
         .unwrap();
         write_bytes(&tx, b"\x1b[200~partial");
@@ -985,10 +982,11 @@ mod tests {
         let (rx, tx) = make_pipe();
         let mut src = Source::with_options(
             rx,
-            Options::default()
-                .with_buffer_capacity(1024)
-                .with_esc_timeout(Duration::from_millis(20))
-                .with_paste_idle_timeout(Some(Duration::from_secs(5))),
+            Options {
+                buffer_capacity: 1024,
+                esc_timeout: Duration::from_millis(20),
+                paste_idle_timeout: Some(Duration::from_secs(5)),
+            },
         )
         .unwrap();
         write_bytes(&tx, b"\x1b[200~body");
@@ -1025,9 +1023,11 @@ mod tests {
         let (rx, tx) = make_pipe();
         let mut src = Source::with_options(
             rx,
-            Options::default()
-                .with_buffer_capacity(1024)
-                .with_esc_timeout(Duration::from_millis(20)),
+            Options {
+                buffer_capacity: 1024,
+                esc_timeout: Duration::from_millis(20),
+                ..Options::default()
+            },
         )
         .unwrap();
         write_byte(&tx, 0x1b);

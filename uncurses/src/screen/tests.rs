@@ -7,7 +7,13 @@ use crate::text::{WidthMode, WrapMode};
 
 #[test]
 fn test_new_screen() {
-    let screen = Screen::new(Vec::new()).with_size(80, 24);
+    let screen = Screen::with_options(
+        Vec::new(),
+        Options {
+            size: (80, 24),
+            ..Default::default()
+        },
+    );
     assert_eq!(screen.width(), 80);
     assert_eq!(screen.height(), 24);
 }
@@ -16,7 +22,13 @@ fn test_new_screen() {
 fn test_write_and_render() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 5),
+                ..Default::default()
+            },
+        );
         {
             screen.set_str((0, 0), "Hello", WrapMode::Truncate);
         };
@@ -30,7 +42,13 @@ fn test_write_and_render() {
 fn test_alt_screen() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(80, 24);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (80, 24),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         assert!(screen.state.alt_screen);
         screen.set_alt_screen(false).unwrap();
@@ -44,14 +62,27 @@ fn test_alt_screen() {
 
 #[test]
 fn default_width_mode_is_wc() {
-    let screen = Screen::new(Vec::new()).with_size(20, 1);
+    let screen = Screen::with_options(
+        Vec::new(),
+        Options {
+            size: (20, 1),
+            ..Default::default()
+        },
+    );
     assert_eq!(screen.width_mode(), WidthMode::Wc);
     assert!(!screen.eaw_wide());
 }
 
 #[test]
 fn with_eaw_wide_sets_eaw_wide() {
-    let screen = Screen::new(Vec::new()).with_size(20, 1).with_eaw_wide(true);
+    let screen = Screen::with_options(
+        Vec::new(),
+        Options {
+            size: (20, 1),
+            eaw_wide: true,
+            ..Default::default()
+        },
+    );
     assert!(screen.eaw_wide());
 }
 
@@ -59,7 +90,13 @@ fn with_eaw_wide_sets_eaw_wide() {
 fn set_color_scheme_updates_emits_decset_2031_and_tracks_state() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         assert!(!screen.color_scheme_updates());
         screen.set_color_scheme_updates(true).unwrap();
         assert!(screen.color_scheme_updates());
@@ -79,7 +116,13 @@ fn set_color_scheme_updates_emits_decset_2031_and_tracks_state() {
 fn set_grapheme_clusters_toggles_width_mode_and_emits_decset() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen.set_grapheme_clusters(true).unwrap();
         assert!(screen.grapheme_clusters());
         // Internal width-mode tracks DEC-2027 so that our segmentation
@@ -101,7 +144,13 @@ fn write_string_widths_follow_current_mode() {
     // that attaches to the base cell; Grapheme collapses both into a
     // single grapheme cluster. In both cases the cell at (0, 0) holds
     // the composed string; only the cursor advance differs.
-    let mut screen = Screen::new(Vec::new()).with_size(10, 1);
+    let mut screen = Screen::with_options(
+        Vec::new(),
+        Options {
+            size: (10, 1),
+            ..Default::default()
+        },
+    );
     {
         screen.set_str((0, 0), "e\u{0301}", WrapMode::Truncate);
     };
@@ -141,7 +190,13 @@ fn write_string_widths_follow_current_mode() {
 fn reset_and_restore_round_trip_grapheme_clusters() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen.set_grapheme_clusters(true).unwrap();
         assert!(screen.grapheme_clusters());
 
@@ -161,7 +216,13 @@ fn reset_and_restore_round_trip_grapheme_clusters() {
 
 #[test]
 fn test_resize() {
-    let mut screen = Screen::new(Vec::new()).with_size(80, 24);
+    let mut screen = Screen::with_options(
+        Vec::new(),
+        Options {
+            size: (80, 24),
+            ..Default::default()
+        },
+    );
     screen.resize(100, 30);
     assert_eq!(screen.width(), 100);
     assert_eq!(screen.height(), 30);
@@ -176,7 +237,13 @@ fn test_screen_clears_stale_chars_after_navigating() {
     let mut frame1: Vec<u8> = Vec::new();
     let mut frame2: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut frame1).with_size(40, 5);
+        let mut screen = Screen::with_options(
+            &mut frame1,
+            Options {
+                size: (40, 5),
+                ..Default::default()
+            },
+        );
         screen.clear();
         {
             screen.set_str(
@@ -272,7 +339,13 @@ fn blank_screen(screen: &mut Screen<&mut Vec<u8>>) {
 fn fullscreen_diagonal_emits_exact_byte_stream() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(5, 3);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (5, 3),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         fill(&mut screen, 0, 0, "X");
         fill(&mut screen, 1, 1, "X");
@@ -292,7 +365,13 @@ fn fullscreen_diagonal_emits_exact_byte_stream() {
 fn inline_hello_world_emits_exact_byte_stream() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(80, 24);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (80, 24),
+                ..Default::default()
+            },
+        );
         screen.set_str((0u16, 0u16), "Hello, World!", WrapMode::Truncate);
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -315,9 +394,14 @@ fn inline_hello_world_emits_exact_byte_stream() {
 fn truecolor_profile_emits_38_2_rgb() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf)
-            .with_size(1, 1)
-            .with_color_profile(Profile::TrueColor);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (1, 1),
+                color_profile: Some(Profile::TrueColor),
+                ..Default::default()
+            },
+        );
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -337,9 +421,14 @@ fn truecolor_profile_emits_38_2_rgb() {
 fn ansi256_profile_emits_38_5_index() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf)
-            .with_size(1, 1)
-            .with_color_profile(Profile::Ansi256);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (1, 1),
+                color_profile: Some(Profile::Ansi256),
+                ..Default::default()
+            },
+        );
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -356,9 +445,14 @@ fn ansi256_profile_emits_38_5_index() {
 fn ansi_profile_emits_basic_sgr_3x_or_9x() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf)
-            .with_size(1, 1)
-            .with_color_profile(Profile::Ansi);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (1, 1),
+                color_profile: Some(Profile::Ansi),
+                ..Default::default()
+            },
+        );
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -380,9 +474,14 @@ fn ansi_profile_emits_basic_sgr_3x_or_9x() {
 fn ascii_profile_emits_no_color_sgr() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf)
-            .with_size(1, 1)
-            .with_color_profile(Profile::Ascii);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (1, 1),
+                color_profile: Some(Profile::Ascii),
+                ..Default::default()
+            },
+        );
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -403,7 +502,13 @@ fn ascii_profile_emits_no_color_sgr() {
 
 #[test]
 fn cursor_position_round_trip() {
-    let mut screen = Screen::new(Vec::new()).with_size(80, 24);
+    let mut screen = Screen::with_options(
+        Vec::new(),
+        Options {
+            size: (80, 24),
+            ..Default::default()
+        },
+    );
     screen.set_cursor_position(5, 10).unwrap();
     let p = screen.cursor_position();
     assert_eq!((p.x, p.y), (5, 10));
@@ -413,7 +518,13 @@ fn cursor_position_round_trip() {
 fn move_to_emits_relative_cursor_sequence() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(80, 24);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (80, 24),
+                ..Default::default()
+            },
+        );
         screen.set_cursor_position(5, 3).unwrap();
         screen.flush().unwrap();
     }
@@ -425,7 +536,13 @@ fn move_to_emits_relative_cursor_sequence() {
 fn screen_write_passes_bytes_verbatim() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 1),
+                ..Default::default()
+            },
+        );
         let n = screen.write(b"Hello, World!").unwrap();
         assert_eq!(n, 13);
         screen.flush().unwrap();
@@ -437,7 +554,13 @@ fn screen_write_passes_bytes_verbatim() {
 fn invalidate_forces_redraw_of_existing_content() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(3, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (3, 1),
+                ..Default::default()
+            },
+        );
         fill(&mut screen, 0, 0, "X");
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -452,7 +575,13 @@ fn invalidate_forces_redraw_of_existing_content() {
 fn resize_does_not_crash_and_renders_blank() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(40, 10);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (40, 10),
+                ..Default::default()
+            },
+        );
         screen.resize(80, 24);
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -465,7 +594,13 @@ fn resize_does_not_crash_and_renders_blank() {
 fn insert_above_emits_il_and_content() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
         screen.insert_above("Prepended line").unwrap();
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -482,7 +617,13 @@ fn insert_above_emits_il_and_content() {
 fn insert_above_renders_styled_line() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
         screen.insert_above("Hello").unwrap();
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -499,7 +640,13 @@ fn insert_above_renders_styled_line() {
 fn multiple_insert_above_emit_one_il_per_call() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 10);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 10),
+                ..Default::default()
+            },
+        );
         screen.insert_above("First line").unwrap();
         screen.insert_above("Second line").unwrap();
         screen.insert_above("Third line\nFourth lin").unwrap();
@@ -527,9 +674,14 @@ fn tab_optimization_on_emits_tab_character() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::TABS);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 1)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         fill(&mut screen, 8, 0, "X");
         fill(&mut screen, 16, 0, "X");
         screen.render().unwrap();
@@ -548,9 +700,14 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::TABS);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 1)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         fill(&mut screen, 8, 0, "X");
         fill(&mut screen, 16, 0, "X");
         screen.render().unwrap();
@@ -569,9 +726,14 @@ fn backspace_optimization_on_emits_bs_for_leftward_move() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::BS);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 5)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 5),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         fill(&mut screen, 5, 0, "A");
         fill(&mut screen, 3, 1, "B");
         screen.render().unwrap();
@@ -590,9 +752,14 @@ fn backspace_optimization_off_emits_cub() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::BS);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 5)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 5),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         fill(&mut screen, 5, 0, "A");
         fill(&mut screen, 3, 1, "B");
         screen.render().unwrap();
@@ -608,9 +775,14 @@ fn onlcr_on_uses_bare_lf_between_rows() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::ONLCR);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(10, 3)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 3),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         for y in 0..3u16 {
             fill(&mut screen, 0, y, "X");
         }
@@ -629,9 +801,14 @@ fn onlcr_off_emits_crlf_between_rows() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::ONLCR);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(10, 3)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 3),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         for y in 0..3u16 {
             fill(&mut screen, 0, y, "X");
         }
@@ -650,9 +827,14 @@ fn rep_on_collapses_run_to_rep_sequence() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::REP);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 1)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         for x in 0..15u16 {
             fill(&mut screen, x, 0, "A");
         }
@@ -668,9 +850,14 @@ fn rep_off_repeats_glyph_literally() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::REP);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 1)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         for x in 0..15u16 {
             fill(&mut screen, x, 0, "A");
         }
@@ -700,9 +887,14 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
         let opts = Optimizations::default().difference(
             Optimizations::SU_SD | Optimizations::IL_DL | Optimizations::CSR | Optimizations::REP,
         );
-        let mut screen = Screen::new(&mut buf)
-            .with_size(10, 5)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         for y in 0..5u16 {
             for x in 0..10u16 {
@@ -746,7 +938,13 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
 fn wide_characters_round_trip_to_output() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 1),
+                ..Default::default()
+            },
+        );
         let wide = ["🌟", "中", "文", "字"];
         for (i, ch) in wide.iter().enumerate() {
             screen.set_cell((i as u16 * 2, 0u16), &Cell::wide(*ch));
@@ -764,7 +962,13 @@ fn wide_characters_round_trip_to_output() {
 fn zero_width_combining_mark_reaches_output() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(5, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (5, 1),
+                ..Default::default()
+            },
+        );
         screen.set_cell((0u16, 0u16), &Cell::narrow("a\u{0301}"));
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -776,7 +980,13 @@ fn zero_width_combining_mark_reaches_output() {
 fn styled_text_emits_specific_sgr_payloads() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(4, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (4, 1),
+                ..Default::default()
+            },
+        );
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().bold()),
@@ -807,7 +1017,13 @@ fn styled_text_emits_specific_sgr_payloads() {
 fn hyperlinks_emit_osc8_with_url() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 1),
+                ..Default::default()
+            },
+        );
         let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
@@ -831,9 +1047,14 @@ fn hyperlinks_emit_osc8_with_url() {
 fn hyperlinks_suppressed_under_disabled_profile() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf)
-            .with_size(10, 1)
-            .with_color_profile(Profile::Disabled);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 1),
+                color_profile: Some(Profile::Disabled),
+                ..Default::default()
+            },
+        );
         let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
@@ -856,7 +1077,13 @@ fn hyperlinks_suppressed_under_disabled_profile() {
 fn switch_buffer_resizes_and_repaints() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(5, 3);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (5, 3),
+                ..Default::default()
+            },
+        );
         fill(&mut screen, 0, 0, "X");
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -874,7 +1101,13 @@ fn switch_buffer_resizes_and_repaints() {
 fn scroll_optimization_default_keeps_bottom_row_glyph() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         for y in 0..5u16 {
             for x in 0..10u16 {
@@ -906,7 +1139,13 @@ fn scroll_optimization_default_keeps_bottom_row_glyph() {
 #[test]
 fn empty_buffer_renders_without_panic() {
     let mut buf: Vec<u8> = Vec::new();
-    let mut screen = Screen::new(&mut buf).with_size(0, 0);
+    let mut screen = Screen::with_options(
+        &mut buf,
+        Options {
+            size: (0, 0),
+            ..Default::default()
+        },
+    );
     screen.render().unwrap();
     screen.flush().unwrap();
 }
@@ -915,7 +1154,13 @@ fn empty_buffer_renders_without_panic() {
 fn large_buffer_renders_bottom_right_glyph() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(1000, 1000);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (1000, 1000),
+                ..Default::default()
+            },
+        );
         screen.set_cell((999u16, 999u16), &Cell::narrow("X"));
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -929,7 +1174,13 @@ fn large_buffer_renders_bottom_right_glyph() {
 fn underline_styles_emit_extended_sgr_params() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 1),
+                ..Default::default()
+            },
+        );
         let styles = [
             UnderlineStyle::Single,
             UnderlineStyle::Double,
@@ -956,7 +1207,13 @@ fn underline_styles_emit_extended_sgr_params() {
 fn text_attribute_variants_emit_matching_sgr_params() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(5, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (5, 1),
+                ..Default::default()
+            },
+        );
         let styles = [
             Style::default().italic(),
             Style::default().faint(),
@@ -1002,9 +1259,14 @@ fn color_downsampling_emits_profile_specific_sgr() {
     for (profile, needle) in cases {
         let mut buf: Vec<u8> = Vec::new();
         {
-            let mut screen = Screen::new(&mut buf)
-                .with_size(3, 1)
-                .with_color_profile(profile);
+            let mut screen = Screen::with_options(
+                &mut buf,
+                Options {
+                    size: (3, 1),
+                    color_profile: Some(profile),
+                    ..Default::default()
+                },
+            );
             let cell = Cell::narrow("C").style(Style::default().fg(Color::rgb(123, 234, 45)));
             screen.set_cell((0u16, 0u16), &cell);
             screen.render().unwrap();
@@ -1028,7 +1290,13 @@ fn color_downsampling_emits_profile_specific_sgr() {
 fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(5, 3);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (5, 3),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         for y in 0..3u16 {
             screen.set_cell((4u16, y), &Cell::narrow("X"));
@@ -1050,7 +1318,13 @@ fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
 fn line_clearing_uses_el_when_row_shrinks() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 3);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 3),
+                ..Default::default()
+            },
+        );
         for x in 0..10u16 {
             fill(&mut screen, x, 0, "X");
         }
@@ -1076,9 +1350,14 @@ fn repeated_character_run_emits_literals_without_rep() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::REP);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 1)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         for x in 0..15u16 {
             fill(&mut screen, x, 0, "A");
         }
@@ -1102,9 +1381,14 @@ fn ech_on_mid_row_blanks_emit_erase_character() {
         let opts = Optimizations::default()
             .union(Optimizations::ECH)
             .difference(Optimizations::TABS | Optimizations::CHT);
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 1)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         for x in 0..20u16 {
             fill(&mut screen, x, 0, "X");
         }
@@ -1133,9 +1417,14 @@ fn ech_off_mid_row_blanks_emit_literal_spaces() {
         let opts = Optimizations::default().difference(
             Optimizations::ECH | Optimizations::REP | Optimizations::TABS | Optimizations::CHT,
         );
-        let mut screen = Screen::new(&mut buf)
-            .with_size(20, 1)
-            .with_optimizations(opts);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                optimizations: Some(opts),
+                ..Default::default()
+            },
+        );
         for x in 0..20u16 {
             fill(&mut screen, x, 0, "X");
         }
@@ -1169,7 +1458,13 @@ fn ech_off_mid_row_blanks_emit_literal_spaces() {
 fn alt_screen_enter_exit_emits_decset_decrst_and_clear() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(3, 3);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (3, 3),
+                ..Default::default()
+            },
+        );
         screen.set_cursor_position(1, 1).unwrap();
         screen.set_alt_screen(true).unwrap();
         screen.render().unwrap();
@@ -1187,9 +1482,14 @@ fn alt_screen_enter_exit_emits_decset_decrst_and_clear() {
 fn renderer_redraws_when_style_changes() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf)
-            .with_size(5, 1)
-            .with_color_profile(Profile::Ansi);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (5, 1),
+                color_profile: Some(Profile::Ansi),
+                ..Default::default()
+            },
+        );
         fill(&mut screen, 0, 0, "A");
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1210,7 +1510,13 @@ fn renderer_redraws_when_style_changes() {
 fn basic_color_fg_emits_sgr_31() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(1, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (1, 1),
+                ..Default::default()
+            },
+        );
         let cell = Cell::narrow("X").style(Style::default().fg(Color::Basic(BasicColor::Red)));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render().unwrap();
@@ -1229,7 +1535,13 @@ fn basic_color_fg_emits_sgr_31() {
 fn scroll_to_bottom_in_inline_mode_renders_both_frames() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
 
         screen.set_str((0u16, 0u16), "ABC", WrapMode::Truncate);
         screen.render().unwrap();
@@ -1249,7 +1561,13 @@ fn alt_screen_scroll_one_line_renders_new_content() {
     const LOREM: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus";
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         screen.invalidate();
 
@@ -1274,7 +1592,13 @@ fn alt_screen_scroll_two_lines_renders_tail_content() {
     const LOREM: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus";
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         screen.invalidate();
 
@@ -1297,7 +1621,13 @@ fn alt_screen_scroll_two_lines_renders_tail_content() {
 fn alt_screen_insert_line_in_middle_renders_both_frames() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         screen.invalidate();
 
@@ -1320,7 +1650,13 @@ fn alt_screen_insert_line_in_middle_renders_both_frames() {
 fn inline_erase_until_end_of_line_clears_trailing_cells() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(10, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (10, 5),
+                ..Default::default()
+            },
+        );
 
         screen.set_str((0u16, 1u16), "ABCEFGHIJK", WrapMode::Truncate);
         screen.render().unwrap();
@@ -1356,7 +1692,13 @@ fn redraw_identical_frame_after_clear_emits_zero_bytes() {
     let mut buf: Vec<u8> = Vec::new();
     let bytes_after_frame_one;
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 4);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 4),
+                ..Default::default()
+            },
+        );
         screen.set_str((0, 0), "Hello", WrapMode::Truncate);
         screen.set_str((0, 1), "World", WrapMode::Truncate);
         screen.set_str((0, 2), "!!!!", WrapMode::Truncate);
@@ -1387,7 +1729,13 @@ fn redraw_identical_frame_after_clear_emits_zero_bytes() {
 fn reset_moves_cursor_to_last_row_inline() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 5),
+                ..Default::default()
+            },
+        );
         screen.set_str((0, 0), "hi", WrapMode::Truncate);
         screen.render().unwrap();
         screen.reset().unwrap();
@@ -1407,7 +1755,13 @@ fn reset_moves_cursor_to_last_row_inline() {
 fn reset_moves_cursor_to_last_row_alt_screen() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 5),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         screen.set_str((0, 0), "hi", WrapMode::Truncate);
         screen.render().unwrap();
@@ -1438,7 +1792,13 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
     // pull the post-quit cursor far below where the user started.
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 5);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 5),
+                ..Default::default()
+            },
+        );
         screen.set_alt_screen(true).unwrap();
         screen.set_str((0, 0), "hi", WrapMode::Truncate);
         screen.render().unwrap();
@@ -1463,7 +1823,13 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
 fn set_foreground_color_emits_osc_10_and_is_idempotent() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_foreground_color(Some(crate::color::Color::Rgb(255, 128, 0)))
             .unwrap();
@@ -1483,7 +1849,13 @@ fn set_foreground_color_emits_osc_10_and_is_idempotent() {
 fn set_background_color_emits_osc_11_and_reset() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_background_color(Some(crate::color::Color::Rgb(0, 0, 255)))
             .unwrap();
@@ -1499,7 +1871,13 @@ fn set_background_color_emits_osc_11_and_reset() {
 fn set_cursor_color_emits_osc_12_and_reset() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_cursor_color(Some(crate::color::Color::Rgb(0, 255, 0)))
             .unwrap();
@@ -1515,7 +1893,13 @@ fn set_cursor_color_emits_osc_12_and_reset() {
 fn reset_clears_color_state_and_restore_reapplies() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_foreground_color(Some(crate::color::Color::Rgb(10, 20, 30)))
             .unwrap();
@@ -1551,7 +1935,13 @@ fn set_kitty_keyboard_flags_emits_set_and_is_idempotent() {
     use crate::ansi::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
             .unwrap();
@@ -1575,7 +1965,13 @@ fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
     use crate::ansi::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
             .unwrap();
@@ -1594,7 +1990,13 @@ fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
     use crate::ansi::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut buf,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
             .unwrap();
@@ -1629,7 +2031,13 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
     let mut setup: Vec<u8> = Vec::new();
     let mut restore_buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut setup).with_size(20, 1);
+        let mut screen = Screen::with_options(
+            &mut setup,
+            Options {
+                size: (20, 1),
+                ..Default::default()
+            },
+        );
         screen
             .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
             .unwrap();

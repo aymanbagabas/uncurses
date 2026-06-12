@@ -30,12 +30,6 @@ impl Window {
         }
     }
 
-    /// Builder-style setter for [`Self::position`].
-    pub fn with_position(mut self, pos: impl Into<Position>) -> Self {
-        self.position = pos.into();
-        self
-    }
-
     /// Where the window's top-left lands on a target surface.
     pub fn position(&self) -> Position {
         self.position
@@ -97,7 +91,8 @@ mod tests {
 
     #[test]
     fn write_then_present_offsets_by_position() {
-        let mut src = Window::new(3, 2).with_position((5, 1));
+        let mut src = Window::new(3, 2);
+        src.set_position((5, 1));
         src.set_cell(Position::new(0, 0), &Cell::narrow("A"));
         src.set_cell(Position::new(2, 1), &Cell::narrow("B"));
 
@@ -112,7 +107,8 @@ mod tests {
 
     #[test]
     fn present_clips_to_target_bounds() {
-        let mut src = Window::new(4, 4).with_position((8, 2));
+        let mut src = Window::new(4, 4);
+        src.set_position((8, 2));
         src.fill(&Cell::narrow("X"));
         // Target is 10x3 — only the top-left 2x1 of src lands.
         let mut dst = Buffer::new(10, 3);

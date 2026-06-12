@@ -121,7 +121,7 @@ where
         let capacity = opts.buffer_capacity.max(64);
         Ok(Self {
             input,
-            parser: Decoder::new(),
+            parser: Decoder::new(DecoderFlags::empty()),
             pending: super::pending::Pending::with_capacity(capacity),
             esc_timeout: opts.esc_timeout,
             esc_deadline: None,
@@ -719,7 +719,7 @@ mod tests {
         assert_eq!(bytes, expected);
 
         // Drive the decoder and reassemble.
-        let mut decoder = Decoder::new();
+        let mut decoder = Decoder::new(DecoderFlags::empty());
         let events = decoder.parse(&bytes);
         assert!(matches!(events.first(), Some(Event::PasteStart)));
         assert!(matches!(events.last(), Some(Event::PasteEnd)));
@@ -769,7 +769,7 @@ mod tests {
             serialize_key_event(&kev, true, &mut pending, &mut suffix);
         }
 
-        let mut decoder = Decoder::new();
+        let mut decoder = Decoder::new(DecoderFlags::empty());
         let mut events = decoder.parse(&prefix);
         events.extend(decoder.parse(&suffix));
         assert!(matches!(events.first(), Some(Event::PasteStart)));

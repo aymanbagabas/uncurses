@@ -21,7 +21,8 @@
 //! use uncurses::color::{Color, BasicColor};
 //! use uncurses::text::WrapMode;
 //!
-//! let mut screen = Screen::new(std::io::stdout()).with_size(80, 24);
+//! let mut screen = Screen::new(std::io::stdout());
+//! screen.resize(80, 24);
 //! let style = Style::default()
 //!     .bold()
 //!     .fg(Color::Basic(BasicColor::Green));
@@ -42,7 +43,8 @@
 //! ```ignore
 //! use std::io::{self, Write};
 //!
-//! let mut screen = uncurses::screen::Screen::new(io::stdout()).with_size(80, 24);
+//! let mut screen = uncurses::screen::Screen::new(io::stdout());
+//! screen.resize(80, 24);
 //! // … screen.render()?; screen.set_alt_screen(true)?; …
 //! screen.flush()?; // explicit: nothing reaches the terminal until here
 //! # Ok::<_, std::io::Error>(())

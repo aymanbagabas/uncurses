@@ -8,7 +8,7 @@ use std::io::Write;
 use uncurses::SurfaceMut;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
-use uncurses::screen::Screen;
+use uncurses::screen::{Options, Screen};
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
@@ -17,7 +17,13 @@ fn main() -> std::io::Result<()> {
     let state = enable_raw_mode(stdin(), stdout())?;
     let size = get_window_size(stdout()).unwrap_or_default();
     // Inline mode: 4 rows is enough for the message + help.
-    let mut screen = Screen::new(stdout()).with_size(size.col, 4);
+    let mut screen = Screen::with_options(
+        stdout(),
+        Options {
+            size: (size.col, 4),
+            ..Default::default()
+        },
+    );
     screen.set_cursor_visible(false)?;
 
     let mut events = Source::new(stdin())?;
