@@ -18,7 +18,7 @@ use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::screen::{Options, Screen};
 use uncurses::style::{Style, write_style};
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
-use uncurses::text::{Painter, WrapMode};
+use uncurses::text::WrapMode;
 
 const CHOICES: &[&str] = &[
     "Plant carrots",
@@ -160,7 +160,7 @@ fn main() -> std::io::Result<()> {
     // returns on its own line below the message.
     screen.resize(term_cols, 3);
     screen.clear();
-    screen.painter().set_str((2, 1), "Bye!", WrapMode::Truncate);
+    screen.set_str((2, 1), "Bye!", WrapMode::Truncate);
     screen.render()?;
 
     screen.reset()?;
@@ -185,16 +185,15 @@ fn fit_and_redraw<W: Write>(screen: &mut Screen<W>, s: &State, cols: u16) {
 }
 
 fn paint<W: Write>(screen: &mut Screen<W>, s: &State) -> u16 {
-    let mut p = screen.painter();
     if s.chosen {
-        draw_chosen(&mut p, s)
+        draw_chosen(screen, s)
     } else {
-        draw_choices(&mut p, s)
+        draw_choices(screen, s)
     }
 }
 
 /// SGR escape sequence for `style`, suitable for embedding in a string
-/// painted by [`Painter`] (which interprets inline `CSI ... m`).
+/// painted by the screen (which interprets inline `CSI ... m`).
 fn sgr(style: &Style) -> String {
     let mut buf = Vec::with_capacity(24);
     write_style(&mut buf, style).expect("write to Vec is infallible");
@@ -204,14 +203,14 @@ fn sgr(style: &Style) -> String {
 /// SGR reset (`ESC [ m`) — restores [`Style::default()`] for following cells.
 const RESET: &str = "\x1b[m";
 
-fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
+fn draw_choices<W: Write>(screen: &mut Screen<W>, s: &State) -> u16 {
     let subtle = sgr(&Style::default().fg(BasicColor::BrightBlack.into()));
     let checkbox = sgr(&Style::default().fg(BasicColor::Cyan.into()).bold());
     let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
 
     let mut last = 0u16;
     let mut y = 1u16;
-    p.set_str((2, y), "What to do today?", WrapMode::Truncate);
+    screen.set_str((2, y), "What to do today?", WrapMode::Truncate);
     last = last.max(y);
     y += 2;
 
@@ -222,24 +221,24 @@ fn draw_choices<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
         } else {
             format!("{subtle}[ ] {choice}{RESET}")
         };
-        p.set_str((2, row), &line, WrapMode::Truncate);
+        screen.set_str((2, row), &line, WrapMode::Truncate);
         last = last.max(row);
     }
 
     y += CHOICES.len() as u16 + 1;
     let line = format!("Program quits in {ticks_st}{RESET} seconds");
-    p.set_str((2, y), &line, WrapMode::Truncate);
+    screen.set_str((2, y), &line, WrapMode::Truncate);
     last = last.max(y);
 
     y += 2;
     let line = format!("{subtle}j/k or up/down: select  •  enter: choose  •  q: quit{RESET}");
-    p.set_str((2, y), &line, WrapMode::Truncate);
+    screen.set_str((2, y), &line, WrapMode::Truncate);
     last = last.max(y);
 
     last + 1
 }
 
-fn draw_chosen<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
+fn draw_chosen<W: Write>(screen: &mut Screen<W>, s: &State) -> u16 {
     let keyword = sgr(&Style::default().fg(BasicColor::BrightMagenta.into()).bold());
     let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
     let bar_st = sgr(&Style::default().fg(BasicColor::BrightGreen.into()));
@@ -257,7 +256,7 @@ fn draw_chosen<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
 
     let mut last = 0u16;
     let mut y = 1u16;
-    p.set_str((2, y), head, WrapMode::Truncate);
+    screen.set_str((2, y), head, WrapMode::Truncate);
     last = last.max(y);
     y += 2;
 
@@ -265,12 +264,12 @@ fn draw_chosen<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
         "Need {keyword}{}{RESET} and {keyword}{}{RESET}...",
         deps[0], deps[1]
     );
-    p.set_str((2, y), &line, WrapMode::Truncate);
+    screen.set_str((2, y), &line, WrapMode::Truncate);
     last = last.max(y);
     y += 2;
 
     let label = if s.loaded { "Done." } else { "Downloading..." };
-    p.set_str((2, y), label, WrapMode::Truncate);
+    screen.set_str((2, y), label, WrapMode::Truncate);
     last = last.max(y);
     y += 1;
 
@@ -279,13 +278,13 @@ fn draw_chosen<W: Write>(p: &mut Painter<'_, Screen<W>>, s: &State) -> u16 {
     let empty_str = "░".repeat((BAR_WIDTH - filled) as usize);
     let pct = format!(" {:>3.0}%", s.progress * 100.0);
     let bar = format!("{bar_st}{filled_str}{empty_st}{empty_str}{RESET}{pct}");
-    p.set_str((2, y), &bar, WrapMode::Truncate);
+    screen.set_str((2, y), &bar, WrapMode::Truncate);
     last = last.max(y);
 
     if s.loaded {
         y += 2;
         let line = format!("Exiting in {ticks_st}{}{RESET} seconds", s.ticks);
-        p.set_str((2, y), &line, WrapMode::Truncate);
+        screen.set_str((2, y), &line, WrapMode::Truncate);
         last = last.max(y);
     }
 
