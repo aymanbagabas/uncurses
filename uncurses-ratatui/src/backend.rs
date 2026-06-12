@@ -176,7 +176,7 @@ impl<W: Write> Backend for UncursesBackend<W> {
     fn window_size(&mut self) -> io::Result<WindowSize> {
         let b = self.screen.bounds();
         let (_, out) = tty::open_tty()?;
-        let w = size_mod::get_window_size(&out).ok();
+        let w = size_mod::get_window_size(out).ok();
         Ok(WindowSize {
             columns_rows: RtSize {
                 width: b.width(),
