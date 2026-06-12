@@ -410,11 +410,13 @@ fn run() -> std::io::Result<()> {
 
     let mut app = App::new(start_dir);
 
-    let state = enable_raw_mode(stdin(), stdout())?;
+    let stdin = stdin();
+    let stdout = stdout();
+    let state = enable_raw_mode(stdin, stdout)?;
 
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, size.row),
             ..Default::default()
@@ -436,7 +438,7 @@ fn run() -> std::io::Result<()> {
     screen.render()?;
     screen.flush()?;
 
-    let mut events = Source::new(stdin())?;
+    let mut events = Source::new(stdin)?;
     let waker = events.waker();
 
     let (tx, rx) = mpsc::channel::<Event>();
@@ -561,7 +563,7 @@ fn run() -> std::io::Result<()> {
     // Restore terminal.
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(stdin(), stdout(), &state)?;
+    disable_raw_mode(stdin, stdout, &state)?;
     Ok(())
 }
 

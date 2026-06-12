@@ -72,10 +72,12 @@ fn build_patterns(width: u16, height: u16, rng: &mut Rng) -> Vec<Vec<Cell>> {
 }
 
 fn main() -> std::io::Result<()> {
-    let state = enable_raw_mode(stdin(), stdout())?;
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdin = stdin();
+    let stdout = stdout();
+    let state = enable_raw_mode(stdin, stdout)?;
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, size.row),
             ..Default::default()
@@ -85,7 +87,7 @@ fn main() -> std::io::Result<()> {
     screen.set_cursor_visible(false)?;
     screen.flush()?;
 
-    let mut events = Source::new(stdin())?;
+    let mut events = Source::new(stdin)?;
     let mut rng = Rng::new(seed_from_clock());
     let (mut w, mut h) = (screen.width(), screen.height());
     let mut patterns = build_patterns(w, h, &mut rng);
@@ -146,7 +148,7 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(stdin(), stdout(), &state)?;
+    disable_raw_mode(stdin, stdout, &state)?;
     println!("Frames: {frames} in {elapsed:.2}s — {fps:.0} FPS");
     Ok(())
 }

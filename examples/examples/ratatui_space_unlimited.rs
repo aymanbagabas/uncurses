@@ -178,16 +178,19 @@ enum InputMsg {
 }
 
 fn main() -> io::Result<()> {
-    let raw_state = enable_raw_mode(stdin(), stdout())?;
+    let stdin = stdin();
+    let stdout = stdout();
+    let raw_state = enable_raw_mode(stdin, stdout)?;
     let result = run();
-    disable_raw_mode(stdin(), stdout(), &raw_state)?;
+    disable_raw_mode(stdin, stdout, &raw_state)?;
     result
 }
 
 fn run() -> io::Result<()> {
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdout = stdout();
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, size.row),
             ..Default::default()
@@ -269,7 +272,8 @@ fn run() -> io::Result<()> {
 }
 
 fn input_loop(tx: mpsc::Sender<InputMsg>) {
-    let mut events = match Source::new(stdin()) {
+    let stdin = stdin();
+    let mut events = match Source::new(stdin) {
         Ok(r) => r,
         Err(_) => return,
     };

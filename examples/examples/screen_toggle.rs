@@ -14,11 +14,13 @@ use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, std
 use uncurses::text::WrapMode;
 
 fn main() -> std::io::Result<()> {
-    let state = enable_raw_mode(stdin(), stdout())?;
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdin = stdin();
+    let stdout = stdout();
+    let state = enable_raw_mode(stdin, stdout)?;
+    let size = get_window_size(stdout).unwrap_or_default();
     // Inline mode: 4 rows is enough for the message + help.
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, 4),
             ..Default::default()
@@ -26,7 +28,7 @@ fn main() -> std::io::Result<()> {
     );
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin())?;
+    let mut events = Source::new(stdin)?;
     let mut alt = false;
     let mut quit = false;
     redraw(&mut screen, alt);
@@ -78,7 +80,7 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(stdin(), stdout(), &state)?;
+    disable_raw_mode(stdin, stdout, &state)?;
     Ok(())
 }
 

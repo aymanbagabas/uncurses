@@ -42,10 +42,12 @@ fn clamp_to_screen<W: Write>(screen: &Screen<W>, x: u16, y: u16) -> (u16, u16) {
 }
 
 fn main() -> std::io::Result<()> {
-    let state = enable_raw_mode(stdin(), stdout())?;
-    let size = get_window_size(stdout()).unwrap_or_default();
+    let stdin = stdin();
+    let stdout = stdout();
+    let state = enable_raw_mode(stdin, stdout)?;
+    let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::with_options(
-        stdout(),
+        stdout,
         Options {
             size: (size.col, size.row),
             ..Default::default()
@@ -64,7 +66,7 @@ fn main() -> std::io::Result<()> {
     screen.render()?;
     screen.flush()?;
 
-    let mut events = Source::new(stdin())?;
+    let mut events = Source::new(stdin)?;
     let mut quit = false;
     while !quit {
         let ev = events.read()?;
@@ -142,6 +144,6 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(stdin(), stdout(), &state)?;
+    disable_raw_mode(stdin, stdout, &state)?;
     Ok(())
 }
