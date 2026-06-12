@@ -110,18 +110,16 @@ fn truncate(s: &str, width: u16) -> String {
 }
 
 fn main() -> std::io::Result<()> {
-    let (input1, output1) = open_tty()?;
-    let input2 = input1.try_clone()?;
-    let output2 = output1.try_clone()?;
+    let (input, output) = open_tty()?;
 
     #[cfg_attr(not(unix), allow(unused_mut))]
-    let mut state = enable_raw_mode(&input1, &output1)?;
+    let mut state = enable_raw_mode(input, output)?;
 
-    let size = get_window_size(&output1).unwrap_or_default();
+    let size = get_window_size(output).unwrap_or_default();
     // Inline status area is two rows tall; insert_above scrolls events
     // into the scrollback above it.
     let mut screen = Screen::with_options(
-        output1,
+        output,
         Options {
             size: (size.col, 2),
             ..Default::default()
@@ -134,7 +132,7 @@ fn main() -> std::io::Result<()> {
     screen.set_bracketed_paste(true)?;
     screen.set_title("📺 keylog — events 🎹🖱️")?;
 
-    let mut events = Source::new(input1)?;
+    let mut events = Source::new(input)?;
 
     redraw(&mut screen, "(waiting for input)")?;
     screen.render()?;
@@ -167,15 +165,15 @@ fn main() -> std::io::Result<()> {
                 // brings it back; control returns here on resume.
                 screen.reset()?;
                 screen.flush()?;
-                disable_raw_mode(&input2, &output2, &state)?;
+                disable_raw_mode(input, output, &state)?;
 
                 // SAFETY: raise is async-signal-safe.
                 unsafe { libc::raise(libc::SIGTSTP) };
 
                 // Resumed: re-acquire raw mode, refit to the current window
                 // size, and reinstate the screen modes we had before.
-                state = enable_raw_mode(&input2, &output2)?;
-                if let Ok(size) = get_window_size(&output2) {
+                state = enable_raw_mode(input, output)?;
+                if let Ok(size) = get_window_size(output) {
                     screen.resize(size.col, 2);
                 }
                 screen.restore()?;
@@ -200,6 +198,6 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(&input2, &output2, &state)?;
+    disable_raw_mode(input, output, &state)?;
     Ok(())
 }

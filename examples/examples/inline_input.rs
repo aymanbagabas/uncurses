@@ -187,12 +187,10 @@ fn redraw<W: std::io::Write>(screen: &mut Screen<W>, buf: &Buffer) {
 
 fn main() -> std::io::Result<()> {
     let (input, output) = open_tty()?;
-    let input_close = input.try_clone()?;
-    let output_close = output.try_clone()?;
 
-    let state = enable_raw_mode(&input, &output)?;
+    let state = enable_raw_mode(input, output)?;
 
-    let size = get_window_size(&output).unwrap_or_default();
+    let size = get_window_size(output).unwrap_or_default();
     let mut screen = Screen::with_options(
         output,
         Options {
@@ -269,6 +267,6 @@ fn main() -> std::io::Result<()> {
 
     screen.reset()?;
     screen.flush()?;
-    disable_raw_mode(&input_close, &output_close, &state)?;
+    disable_raw_mode(input, output, &state)?;
     Ok(())
 }
