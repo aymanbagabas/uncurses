@@ -13,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListItem, Paragraph};
 use uncurses::event::{Event, KeyCode, Source};
-use uncurses::screen::{Options, Screen};
+use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
 
@@ -96,13 +96,7 @@ fn run() -> io::Result<()> {
     let stdin = stdin();
     let stdout = stdout();
     let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::with_options(
-        stdout,
-        Options {
-            size: (size.col, size.row),
-            ..Default::default()
-        },
-    );
+    let mut screen = Screen::new(stdout, (size.col, size.row));
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 
