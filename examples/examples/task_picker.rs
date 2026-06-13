@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use uncurses::SurfaceMut;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
-use uncurses::screen::{Options, Screen};
+use uncurses::screen::Screen;
 use uncurses::style::{Style, write_style};
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
@@ -52,13 +52,7 @@ fn main() -> std::io::Result<()> {
     };
     // Start at a single row; the first redraw will grow the screen to
     // match the first frame's measured height.
-    let mut screen = Screen::with_options(
-        stdout,
-        Options {
-            size: (term_cols, 1),
-            ..Default::default()
-        },
-    );
+    let mut screen = Screen::new(stdout, (term_cols, 1));
     screen.set_cursor_visible(false)?;
 
     let mut events = Source::new(stdin)?;

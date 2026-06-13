@@ -86,15 +86,10 @@ impl<W: Write> Screen<W> {
     /// East-Asian Ambiguous policy: when `true`, code points whose
     /// East-Asian-Width property is `Ambiguous` are measured as 2
     /// cells instead of 1. Terminals configured for CJK locales
-    /// typically want `true`. See [`crate::text::char_width`].
+    /// typically want `true`. See [`crate::text::char_width`]. Set at
+    /// construction with [`Screen::with_eaw_wide`].
     pub fn eaw_wide(&self) -> bool {
         self.eaw_wide
-    }
-
-    /// Replace the East-Asian Ambiguous policy (see [`Self::eaw_wide`]).
-    /// Affects subsequent string writes and width measurements.
-    pub fn set_eaw_wide(&mut self, eaw_wide: bool) {
-        self.eaw_wide = eaw_wide;
     }
 
     /// Whether Unicode core / grapheme-cluster mode (DEC 2027) is on.

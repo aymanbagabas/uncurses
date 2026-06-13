@@ -20,7 +20,7 @@ use std::io::Write;
 
 use uncurses::SurfaceMut;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, PasteBuffer, Source};
-use uncurses::screen::{Options, Screen};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
 use uncurses::text::{WrapMode, char_width};
@@ -191,13 +191,7 @@ fn main() -> std::io::Result<()> {
     let state = enable_raw_mode(input, output)?;
 
     let size = get_window_size(output).unwrap_or_default();
-    let mut screen = Screen::with_options(
-        output,
-        Options {
-            size: (size.col, 1),
-            ..Default::default()
-        },
-    );
+    let mut screen = Screen::new(output, (size.col, 1));
 
     screen.set_cursor_visible(false)?;
     screen.set_bracketed_paste(true)?;

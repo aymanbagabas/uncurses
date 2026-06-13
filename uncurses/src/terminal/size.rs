@@ -37,6 +37,14 @@ impl Default for Winsize {
     }
 }
 
+impl From<Winsize> for (u16, u16) {
+    /// Convert to a `(width, height)` cell pair: `(col, row)`. Pixel
+    /// fields are dropped.
+    fn from(ws: Winsize) -> Self {
+        (ws.col, ws.row)
+    }
+}
+
 /// Get the terminal size attached to `fd`.
 #[cfg(unix)]
 pub fn get_window_size<F: AsFd>(fd: F) -> io::Result<Winsize> {

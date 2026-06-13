@@ -13,7 +13,7 @@ use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
 use uncurses::layout::Rect;
-use uncurses::screen::{Options, Screen};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
@@ -30,13 +30,7 @@ fn main() -> std::io::Result<()> {
     let term = get_window_size(stdout).unwrap_or_default();
     let w = SURFACE_W.min(term.col.max(1));
     let h = SURFACE_H.min(term.row.max(1));
-    let mut screen = Screen::with_options(
-        stdout,
-        Options {
-            size: (w, h),
-            ..Default::default()
-        },
-    );
+    let mut screen = Screen::new(stdout, (w, h));
     screen.set_cursor_visible(false)?;
 
     let mut events = Source::new(stdin)?;
