@@ -20,9 +20,9 @@
 //! use uncurses::style::Style;
 //! use uncurses::color::{Color, BasicColor};
 //! use uncurses::text::WrapMode;
+//! use uncurses::terminal::stdout;
 //!
-//! let mut screen = Screen::new(std::io::stdout());
-//! screen.resize(80, 24);
+//! let mut screen = Screen::new(stdout(), (80, 24));
 //! let style = Style::default()
 //!     .bold()
 //!     .fg(Color::Basic(BasicColor::Green));
@@ -41,10 +41,10 @@
 //! the wire.
 //!
 //! ```ignore
-//! use std::io::{self, Write};
+//! use std::io::Write;
+//! use uncurses::terminal::stdout;
 //!
-//! let mut screen = uncurses::screen::Screen::new(io::stdout());
-//! screen.resize(80, 24);
+//! let mut screen = uncurses::screen::Screen::new(stdout(), (80, 24));
 //! // … screen.render()?; screen.set_alt_screen(true)?; …
 //! screen.flush()?; // explicit: nothing reaches the terminal until here
 //! # Ok::<_, std::io::Error>(())
