@@ -3,7 +3,7 @@
 //! A scrolling field of half-block "stars" rendered at one cell per
 //! two vertical pixels via the `▀` glyph (background = lower pixel).
 //! The frame loop runs at ~60 Hz: between frames the loop blocks on
-//! `Source::poll` so input is consumed without busy-waiting.
+//! `EventSource::poll` so input is consumed without busy-waiting.
 //!
 //! Run with `cargo run --release --example space`. Press `q` or
 //! `Ctrl-C` to quit.
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use uncurses::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -125,7 +125,7 @@ fn main() -> std::io::Result<()> {
     screen.set_cursor_visible(false)?;
     screen.flush()?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let mut rng = Rng::new(seed_from_clock());
     let mut field = Field::new();
     let mut fps = Fps::new();

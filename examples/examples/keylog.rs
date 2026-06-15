@@ -17,7 +17,7 @@ use std::io::Write;
 
 use uncurses::SurfaceMut;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
 use uncurses::text::WrapMode;
@@ -126,7 +126,7 @@ fn main() -> std::io::Result<()> {
     screen.set_bracketed_paste(true)?;
     screen.set_title("📺 keylog — events 🎹🖱️")?;
 
-    let mut events = Source::new(input)?;
+    let mut events = EventSource::new(input)?;
 
     redraw(&mut screen, "(waiting for input)")?;
     screen.render()?;

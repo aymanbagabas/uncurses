@@ -10,7 +10,7 @@ use std::io::Write;
 use uncurses::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, Key, Source};
+use uncurses::event::{Event, EventSource, Key};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -48,7 +48,7 @@ fn main() -> std::io::Result<()> {
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let mut modal_open = true;
     let mut quit = false;
 

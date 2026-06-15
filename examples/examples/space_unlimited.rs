@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use uncurses::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -215,7 +215,7 @@ fn main() -> io::Result<()> {
 
 fn input_loop(tx: mpsc::Sender<InputMsg>) {
     let stdin = stdin();
-    let mut events = match Source::new(stdin) {
+    let mut events = match EventSource::new(stdin) {
         Ok(r) => r,
         Err(_) => return,
     };

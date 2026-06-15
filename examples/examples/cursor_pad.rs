@@ -15,7 +15,7 @@
 use std::io::Write;
 
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, MouseButton};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -60,7 +60,7 @@ fn main() -> std::io::Result<()> {
     screen.render()?;
     screen.flush()?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let mut quit = false;
     while !quit {
         let ev = events.read()?;

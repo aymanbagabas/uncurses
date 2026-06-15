@@ -6,7 +6,7 @@
 use std::io::{self, Write};
 
 use ratatui::Terminal;
-use uncurses::event::{Event, Source};
+use uncurses::event::{Event, EventSource};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
@@ -29,7 +29,7 @@ fn run() -> io::Result<()> {
     screen.set_cursor_visible(false)?;
 
     let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
 
     loop {
         terminal.draw(|frame| frame.render_widget("Hello World!", frame.area()))?;

@@ -19,7 +19,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Stylize};
 use ratatui::widgets::{Paragraph, Widget};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
@@ -267,7 +267,7 @@ fn run() -> io::Result<()> {
 
 fn input_loop(tx: mpsc::Sender<InputMsg>) {
     let stdin = stdin();
-    let mut events = match Source::new(stdin) {
+    let mut events = match EventSource::new(stdin) {
         Ok(r) => r,
         Err(_) => return,
     };

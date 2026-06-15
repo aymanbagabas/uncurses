@@ -2,7 +2,7 @@
 //!
 //! The starfield from the [`space`] native example, drawn through a
 //! ratatui `Widget` over the uncurses backend. Frame pacing matches the
-//! native example: between frames the loop blocks on `Source::poll` so
+//! native example: between frames the loop blocks on `EventSource::poll` so
 //! input is consumed without busy-waiting.
 //!
 //! Run with `cargo run --release --example ratatui_space`. Press `q` or
@@ -16,7 +16,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Stylize};
 use ratatui::widgets::{Paragraph, Widget};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
@@ -173,7 +173,7 @@ fn run() -> io::Result<()> {
     screen.set_cursor_visible(false)?;
 
     let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
 
     let mut rng = Rng::new(seed_from_clock());
     let mut field = Field::new();

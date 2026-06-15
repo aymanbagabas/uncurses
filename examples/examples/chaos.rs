@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -81,7 +81,7 @@ fn main() -> std::io::Result<()> {
     screen.set_cursor_visible(false)?;
     screen.flush()?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let mut rng = Rng::new(seed_from_clock());
     let (mut w, mut h) = (screen.width(), screen.height());
     let mut patterns = build_patterns(w, h, &mut rng);

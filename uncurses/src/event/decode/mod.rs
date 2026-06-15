@@ -188,7 +188,7 @@ impl Decoder {
 
     /// `true` while the decoder is between `PasteStart` and `PasteEnd`.
     /// Useful for embedders implementing their own watchdog or
-    /// idle-timeout policy on top of `Source`.
+    /// idle-timeout policy on top of `EventSource`.
     pub fn in_paste(&self) -> bool {
         self.in_paste
     }
@@ -213,7 +213,7 @@ impl Decoder {
     /// Toggle the escape-timeout flag. When `true`, the decoder
     /// commits buffered partial escape sequences as best-effort key
     /// events instead of returning `Incomplete`. Embedders driving the
-    /// decoder against an external buffer (e.g. [`crate::event::Source`])
+    /// decoder against an external buffer (e.g. [`crate::event::EventSource`])
     /// set this before draining once the escape deadline elapses.
     pub(crate) fn set_expired(&mut self, value: bool) {
         self.expired = value;
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn test_paste_body_with_0x9b_via_parse_one() {
         // Same regression as above, but exercising the `parse_one` path
-        // (used by `Source::drain_parser`) rather than the
+        // (used by `EventSource::drain_parser`) rather than the
         // streaming `parse` path.
         let mut parser = Decoder::new(DecoderFlags::empty());
         let mut buf: Vec<u8> = Vec::from(&b"\x1b[200~hello\xd1\x9b201~world\x1b[201~"[..]);
@@ -1635,7 +1635,7 @@ mod tests {
 
     // --- chunked-input tests --------------------------------------------
     //
-    // The decoder is fed in arbitrary fragments by callers (Source).
+    // The decoder is fed in arbitrary fragments by callers (EventSource).
     // These tests verify that splitting any byte sequence at any boundary
     // produces the same Events as feeding it whole.
 
@@ -1658,7 +1658,7 @@ mod tests {
     }
 
     /// Feed `data` to a fresh decoder one byte at a time, returning the
-    /// collected Events. Mirrors how an `Source` would deliver bytes
+    /// collected Events. Mirrors how an `EventSource` would deliver bytes
     /// from a slow tty (one read at a time).
     fn feed_byte_by_byte(data: &[u8]) -> Vec<Event> {
         let mut p = Decoder::new(DecoderFlags::empty());

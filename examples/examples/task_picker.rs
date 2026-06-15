@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::{Style, write_style};
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -55,7 +55,7 @@ fn main() -> std::io::Result<()> {
     let mut screen = Screen::new(stdout, (term_cols, 1));
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let mut quit = false;
 
     let mut next_tick = Instant::now() + TICK;

@@ -1,7 +1,7 @@
-//! Unified, wakeable [`Source`].
+//! Unified, wakeable [`EventSource`].
 //!
 //! Owns the input handle, decodes raw bytes into [`Event`]s with the
-//! [`Decoder`], and serves them through [`Source::try_read`]
+//! [`Decoder`], and serves them through [`EventSource::try_read`]
 //! which blocks up to a caller-supplied timeout. Each source is paired
 //! with a cheaply-clonable [`Waker`] that interrupts an in-progress
 //! `try_read` from another thread.
@@ -84,7 +84,7 @@ pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 /// that never arrive (truncated stream, malformed input).
 pub const DEFAULT_PASTE_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Construction-time options for an [`Source`].
+/// Construction-time options for an [`EventSource`].
 ///
 /// All fields are optional knobs with documented defaults.
 #[derive(Debug, Clone)]
@@ -118,7 +118,7 @@ impl Options {
     }
 }
 
-/// Cloneable handle that interrupts an in-progress [`Source::try_read`].
+/// Cloneable handle that interrupts an in-progress [`EventSource::try_read`].
 ///
 /// `Send + Sync`; multiple wakes coalesce.
 #[derive(Clone)]
@@ -142,7 +142,7 @@ impl Waker {
         Self { inner }
     }
 
-    /// Interrupt the [`Source`] this waker is bound to.
+    /// Interrupt the [`EventSource`] this waker is bound to.
     pub fn wake(&self) -> io::Result<()> {
         #[cfg(any(unix, windows))]
         {
@@ -188,9 +188,9 @@ impl UnixWakerInner {
 /// Wakeable event source backed by a platform readiness primitive.
 ///
 /// Single public type across platforms; per-target state and methods
-/// are cfg-gated. Construct with [`Source::new`] and drive with
-/// [`Source::try_read`].
-pub struct Source<I>
+/// are cfg-gated. Construct with [`EventSource::new`] and drive with
+/// [`EventSource::try_read`].
+pub struct EventSource<I>
 where
     I: Input,
 {
@@ -274,7 +274,7 @@ pub(super) enum DeadlineKind {
 // Shared methods (platform-agnostic)
 // ---------------------------------------------------------------------------
 
-impl<I> Source<I>
+impl<I> EventSource<I>
 where
     I: Input,
 {
@@ -296,7 +296,7 @@ where
 
     /// Read-only access to the underlying [`Decoder`] (for state queries
     /// like [`Decoder::in_paste`]). Handler registration goes through the
-    /// `on_*` methods on `Source` directly.
+    /// `on_*` methods on `EventSource` directly.
     pub fn decoder(&self) -> &Decoder {
         &self.parser
     }
@@ -516,7 +516,7 @@ where
     /// `PasteEnd` and clears the decoder's paste state.
     ///
     /// Called from `pump` when the paste-idle deadline elapses, and
-    /// from the public [`Source::end_paste`] escape hatch.
+    /// from the public [`EventSource::end_paste`] escape hatch.
     pub(super) fn expire_paste(&mut self) {
         self.paste_deadline = None;
         if !self.parser.in_paste() {
@@ -582,12 +582,12 @@ where
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
-impl<I> Source<I>
+impl<I> EventSource<I>
 where
     I: Input,
 {
     /// Build a new event source for `input` with default [`Options`].
-    /// See [`Source::with_options`] for the knob-configurable variant.
+    /// See [`EventSource::with_options`] for the knob-configurable variant.
     pub fn new(input: I) -> io::Result<Self> {
         Self::with_options(input, Options::default())
     }
@@ -785,8 +785,8 @@ mod tests {
         assert_eq!(n, bytes.len() as isize);
     }
 
-    fn new_reader(input: File) -> Source<File> {
-        Source::with_options(
+    fn new_reader(input: File) -> EventSource<File> {
+        EventSource::with_options(
             input,
             Options {
                 buffer_capacity: 1024,
@@ -838,7 +838,7 @@ mod tests {
     #[test]
     fn paste_idle_timeout_synthesizes_paste_end() {
         let (rx, tx) = make_pipe();
-        let mut src = Source::with_options(
+        let mut src = EventSource::with_options(
             rx,
             Options {
                 buffer_capacity: 1024,
@@ -887,7 +887,7 @@ mod tests {
     #[test]
     fn paste_completes_when_terminator_arrives_within_idle_window() {
         let (rx, tx) = make_pipe();
-        let mut src = Source::with_options(
+        let mut src = EventSource::with_options(
             rx,
             Options {
                 buffer_capacity: 1024,
@@ -924,7 +924,7 @@ mod tests {
     #[test]
     fn explicit_end_paste_recovers_stream() {
         let (rx, tx) = make_pipe();
-        let mut src = Source::with_options(
+        let mut src = EventSource::with_options(
             rx,
             Options {
                 buffer_capacity: 1024,
@@ -955,7 +955,7 @@ mod tests {
     #[test]
     fn paste_idle_timeout_disabled_blocks_indefinitely() {
         let (rx, tx) = make_pipe();
-        let mut src = Source::with_options(
+        let mut src = EventSource::with_options(
             rx,
             Options {
                 buffer_capacity: 1024,
@@ -980,7 +980,7 @@ mod tests {
         // Pre-fix latent bug: while in paste, a partial ESC at the
         // head of the pending buffer must not synthesise Key(Esc).
         let (rx, tx) = make_pipe();
-        let mut src = Source::with_options(
+        let mut src = EventSource::with_options(
             rx,
             Options {
                 buffer_capacity: 1024,
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn esc_deadline_tightens_long_caller_timeout() {
         let (rx, tx) = make_pipe();
-        let mut src = Source::with_options(
+        let mut src = EventSource::with_options(
             rx,
             Options {
                 buffer_capacity: 1024,
