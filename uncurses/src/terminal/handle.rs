@@ -183,7 +183,7 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     /// Put the terminal into raw mode. Caches the prior state for
     /// [`restore`](Self::restore) and also returns it.
     pub fn make_raw(&mut self) -> io::Result<State> {
-        let prev = raw::enable_raw_mode(&self.input, &self.output)?;
+        let prev = raw::make_raw_mode(&self.input, &self.output)?;
         self.saved = Some(prev.clone());
         Ok(prev)
     }
@@ -242,7 +242,7 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     /// Put the terminal into raw mode. Caches the prior state for
     /// [`restore`](Self::restore) and also returns it.
     pub fn make_raw(&mut self) -> io::Result<State> {
-        let prev = raw::enable_raw_mode(&self.input, &self.output)?;
+        let prev = raw::make_raw_mode(&self.input, &self.output)?;
         self.saved = Some(prev.clone());
         Ok(prev)
     }

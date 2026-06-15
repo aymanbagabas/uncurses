@@ -12,15 +12,15 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use uncurses::event::{Event, EventSource};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{get_window_size, make_raw_mode, set_state, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
 
 fn main() -> io::Result<()> {
     let stdin = stdin();
     let stdout = stdout();
-    let raw_state = enable_raw_mode(stdin, stdout)?;
+    let raw_state = make_raw_mode(stdin, stdout)?;
     let result = run();
-    disable_raw_mode(stdin, stdout, &raw_state)?;
+    set_state(stdin, stdout, &raw_state)?;
     result
 }
 
