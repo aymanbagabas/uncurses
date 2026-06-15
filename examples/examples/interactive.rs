@@ -3,7 +3,7 @@
 //! Run with `cargo run --example interactive`. Press any key to see events;
 //! press `q` or Ctrl-C to exit. Resize the terminal to see Resize events.
 //!
-//! Demonstrates the non-blocking [`Source::poll`] / [`Source::try_read`]
+//! Demonstrates the non-blocking [`EventSource::poll`] / [`EventSource::try_read`]
 //! style: every 500 ms the main loop wakes up to advance a clock in the
 //! header, even when no input has arrived.
 
@@ -12,7 +12,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses::text::WrapMode;
@@ -30,7 +30,7 @@ fn main() -> std::io::Result<()> {
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
 
     let started = Instant::now();
     let mut log: VecDeque<String> = VecDeque::with_capacity(64);

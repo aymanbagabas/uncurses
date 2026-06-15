@@ -2,7 +2,7 @@
 //!
 //! This module owns the core [`Event`] enum together with the
 //! [`Decoder`] that parses raw terminal bytes into events, the
-//! platform-specific [`Source`] that drives the decoder from a
+//! platform-specific [`EventSource`] that drives the decoder from a
 //! tty, and the key/mouse types that events carry.
 
 pub mod decode;

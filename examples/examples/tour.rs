@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use uncurses::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Position;
 use uncurses::screen::Screen;
 use uncurses::style::{Style, UnderlineStyle};
@@ -123,7 +123,7 @@ fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
 /// to quit. Any non-quit key advances early.
 fn run_scene<W: Write>(
     screen: &mut Screen<W>,
-    events: &mut Source<Stdin>,
+    events: &mut EventSource<Stdin>,
     dur: Option<Duration>,
     mut tick: impl FnMut(&mut Screen<W>, Duration) -> std::io::Result<()>,
 ) -> std::io::Result<bool> {
@@ -183,7 +183,7 @@ fn run_scene<W: Write>(
 
 fn scene_sprinkles<W: Write>(
     screen: &mut Screen<W>,
-    events: &mut Source<Stdin>,
+    events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut rng = Rng::new(0x9E37_79B9_7F4A_7C15);
     let mut frame_no = 0u32;
@@ -228,7 +228,7 @@ fn scene_sprinkles<W: Write>(
 
 fn scene_panels<W: Write>(
     screen: &mut Screen<W>,
-    events: &mut Source<Stdin>,
+    events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut rng = Rng::new(0x243F_6A88_85A3_08D3);
     let mut last_tick = u64::MAX;
@@ -343,7 +343,7 @@ const ART: &[&str] = &[
 
 fn scene_art<W: Write>(
     screen: &mut Screen<W>,
-    events: &mut Source<Stdin>,
+    events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let draw_ms: u64 = 2200;
     let flash_ms: u64 = 2200;
@@ -401,7 +401,7 @@ fn scene_art<W: Write>(
 
 fn scene_banner<W: Write>(
     screen: &mut Screen<W>,
-    events: &mut Source<Stdin>,
+    events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut drawn = false;
     run_scene(
@@ -540,7 +540,7 @@ const MARQUEE: &[(&str, UnderlineStyle, BasicColor)] = &[
 
 fn scene_marquee<W: Write>(
     screen: &mut Screen<W>,
-    events: &mut Source<Stdin>,
+    events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut drawn_box = false;
     let mut last_offset = i32::MIN;
@@ -631,7 +631,7 @@ struct Ball {
 
 fn scene_balls<W: Write>(
     screen: &mut Screen<W>,
-    events: &mut Source<Stdin>,
+    events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut balls = vec![
         Ball {
@@ -729,10 +729,12 @@ fn main() -> std::io::Result<()> {
     screen.set_alt_screen(true)?;
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
 
-    type Scene =
-        fn(&mut Screen<uncurses::terminal::Stdout>, &mut Source<Stdin>) -> std::io::Result<bool>;
+    type Scene = fn(
+        &mut Screen<uncurses::terminal::Stdout>,
+        &mut EventSource<Stdin>,
+    ) -> std::io::Result<bool>;
     let scenes: [Scene; 6] = [
         scene_sprinkles,
         scene_panels,

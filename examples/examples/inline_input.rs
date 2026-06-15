@@ -19,7 +19,7 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, PasteBuffer, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, PasteBuffer};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
@@ -196,7 +196,7 @@ fn main() -> std::io::Result<()> {
     screen.set_cursor_visible(false)?;
     screen.set_bracketed_paste(true)?;
 
-    let mut events = Source::new(input)?;
+    let mut events = EventSource::new(input)?;
     let mut buffer = Buffer::new();
     let mut paste: Option<PasteBuffer> = None;
 

@@ -7,7 +7,7 @@ use std::io::Write;
 
 use uncurses::SurfaceMut;
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -22,7 +22,7 @@ fn main() -> std::io::Result<()> {
     let mut screen = Screen::new(stdout, (size.col, 4));
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let mut alt = false;
     let mut quit = false;
     redraw(&mut screen, alt);

@@ -11,7 +11,7 @@
 //!   and terminal resize events.
 //!
 //! Input is read on a dedicated background thread doing blocking
-//! [`Source::read`] calls; events are forwarded to the main thread
+//! [`EventSource::read`] calls; events are forwarded to the main thread
 //! through an [`mpsc::channel`]. On exit, the main thread fires the
 //! reader's paired [`Waker`](uncurses::event::Waker) so the blocking
 //! read returns [`io::ErrorKind::Interrupted`] and the thread shuts
@@ -38,7 +38,7 @@ use std::thread;
 
 use uncurses::SurfaceMut;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, Key, MouseButton, Source};
+use uncurses::event::{Event, EventSource, Key, MouseButton};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
@@ -432,7 +432,7 @@ fn run() -> std::io::Result<()> {
     screen.render()?;
     screen.flush()?;
 
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let waker = events.waker();
 
     let (tx, rx) = mpsc::channel::<Event>();

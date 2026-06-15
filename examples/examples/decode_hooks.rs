@@ -1,7 +1,7 @@
 //! Decoder hook playground.
 //!
 //! Run with `cargo run --example decode_hooks`. Demonstrates the
-//! per-class hook API on [`Source`]:
+//! per-class hook API on [`EventSource`]:
 //!
 //! * **Override a recognised sequence.** A CSI hook claims cursor
 //!   position reports (`CSI <r>;<c> R`) before the builtin recogniser
@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use uncurses::SurfaceMut;
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, Source};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
 use uncurses::text::WrapMode;
@@ -82,7 +82,7 @@ fn main() -> std::io::Result<()> {
 
     screen.set_cursor_visible(false)?;
 
-    let mut events = Source::new(input)?;
+    let mut events = EventSource::new(input)?;
 
     // Shared log channel for hook-side observations. Hooks run on the
     // decoder thread; the main loop drains the log after each `read()`.

@@ -1,8 +1,8 @@
-//! Windows-specific construction and event-pump for [`Source`].
+//! Windows-specific construction and event-pump for [`EventSource`].
 //!
 //! Provides the Windows `impl` block on the unified
-//! [`super::source::Source`] type: [`Source::new`], the
-//! `WaitForMultipleObjects`-backed [`Source::try_read`], and the
+//! [`super::source::EventSource`] type: [`EventSource::new`], the
+//! `WaitForMultipleObjects`-backed [`EventSource::try_read`], and the
 //! `INPUT_RECORD` → VT-byte serialiser. Resize events arrive as
 //! `WINDOW_BUFFER_SIZE_EVENT` records on the input handle, so no
 //! sibling pipe / signal plumbing is needed on this target.
@@ -37,13 +37,13 @@ use windows_sys::Win32::System::Console::{
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::Decoder;
-use super::source::{DeadlineKind, Input, Source, Waker};
+use super::source::{DeadlineKind, EventSource, Input, Waker};
 
 const READ_BATCH: usize = 64;
 
 /// Inner waker state. Owns a Win32 `Event` HANDLE that signals the
 /// cancellation slot of [`WaitForMultipleObjects`]. The `HANDLE` value
-/// is also copied into [`Source::wake_event`] so the wait array
+/// is also copied into [`EventSource::wake_event`] so the wait array
 /// can reference it without an `Arc` indirection; ownership remains
 /// with the waker (its `Drop` calls [`CloseHandle`]).
 pub(super) struct WindowsWakerInner {
@@ -72,10 +72,10 @@ impl Drop for WindowsWakerInner {
 unsafe impl Send for WindowsWakerInner {}
 unsafe impl Sync for WindowsWakerInner {}
 
-// SAFETY: the contained HANDLE in `Source::wake_event` is a kernel
+// SAFETY: the contained HANDLE in `EventSource::wake_event` is a kernel
 // object, not a pointer into thread-local memory; the underlying read
 // handle is also thread-safe to use.
-unsafe impl<I> Send for Source<I> where I: Input {}
+unsafe impl<I> Send for EventSource<I> where I: Input {}
 
 enum WaitOutcome {
     Input,
@@ -83,12 +83,12 @@ enum WaitOutcome {
     Timeout,
 }
 
-impl<I> Source<I>
+impl<I> EventSource<I>
 where
     I: Input,
 {
     /// Build a new source reading from `input` with default [`Options`].
-    /// See [`Source::with_options`] for the knob-configurable variant.
+    /// See [`EventSource::with_options`] for the knob-configurable variant.
     pub fn new(input: I) -> io::Result<Self> {
         Self::with_options(input, super::source::Options::default())
     }

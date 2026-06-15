@@ -16,7 +16,7 @@
 /// writeable tail. The cursor pair removes the per-event `Vec::drain`
 /// memmove from the parse loop, and `spare_mut` lets the caller pass
 /// the writable slice straight to `Read::read` without a borrow conflict
-/// with the surrounding `Source`.
+/// with the surrounding `EventSource`.
 pub(super) struct Pending {
     buf: Vec<u8>,
     head: usize,

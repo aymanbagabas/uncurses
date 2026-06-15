@@ -12,7 +12,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph};
-use uncurses::event::{Event, KeyCode, Source};
+use uncurses::event::{Event, EventSource, KeyCode};
 use uncurses::screen::Screen;
 use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
@@ -35,7 +35,7 @@ fn run() -> io::Result<()> {
     screen.set_cursor_visible(false)?;
 
     let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
-    let mut events = Source::new(stdin)?;
+    let mut events = EventSource::new(stdin)?;
     let mut show_popup = false;
 
     loop {
