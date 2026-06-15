@@ -13,11 +13,12 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::{Style, write_style};
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const CHOICES: &[&str] = &[
@@ -40,129 +41,162 @@ struct State {
     ticks: u32,
 }
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state_term = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut term_cols = size.col;
-    let mut s = State {
-        ticks: 10,
-        ..Default::default()
-    };
-    // Start at a single row; the first redraw will grow the screen to
-    // match the first frame's measured height.
-    let mut screen = Screen::new(stdout, (term_cols, 1));
-    screen.set_cursor_visible(false)?;
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    state: State,
+    term_cols: u16,
+}
 
-    let mut events = EventSource::new(stdin)?;
-    let mut quit = false;
-
-    let mut next_tick = Instant::now() + TICK;
-    let mut next_frame = Instant::now() + FRAME;
-
-    fit_and_redraw(&mut screen, &s, term_cols);
-    screen.render()?;
-    screen.flush()?;
-
-    while !quit {
-        let now = Instant::now();
-        let next = if s.chosen && !s.loaded {
-            next_frame.min(next_tick)
-        } else {
-            next_tick
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let size = term.window_size().unwrap_or_default();
+        let term_cols = size.col;
+        let state = State {
+            ticks: 10,
+            ..Default::default()
         };
-        let timeout = next.saturating_duration_since(now);
+        // Start at a single row; the first redraw will grow the screen to
+        // match the first frame's measured height.
+        let mut screen = Screen::new(term.output(), (term_cols, 1));
+        screen.set_cursor_visible(false)?;
+        let events = EventSource::new(term.input())?;
 
-        let mut dirty = false;
-        if events.poll(Some(timeout))? {
-            while let Some(ev) = events.try_read() {
-                match ev {
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('q') | KeyCode::Escape,
-                        modifiers,
-                        ..
-                    }) if modifiers.is_empty() => quit = true,
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('c'),
-                        modifiers,
-                        ..
-                    }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-                    Event::KeyPress(Key { code, .. }) if !s.chosen => match code {
-                        KeyCode::Char('j') | KeyCode::Down if s.choice + 1 < CHOICES.len() => {
-                            s.choice += 1;
-                            dirty = true;
-                        }
-                        KeyCode::Char('k') | KeyCode::Up if s.choice > 0 => {
-                            s.choice -= 1;
-                            dirty = true;
-                        }
-                        KeyCode::Enter => {
-                            s.chosen = true;
-                            s.progress = 0.0;
-                            next_frame = Instant::now() + FRAME;
+        Ok(Self {
+            term,
+            screen,
+            events,
+            state,
+            term_cols,
+        })
+    }
+
+    fn render(&mut self) {
+        fit_and_redraw(&mut self.screen, &self.state, self.term_cols);
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        let mut next_tick = Instant::now() + TICK;
+        let mut next_frame = Instant::now() + FRAME;
+
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        'running: loop {
+            let now = Instant::now();
+            let next = if self.state.chosen && !self.state.loaded {
+                next_frame.min(next_tick)
+            } else {
+                next_tick
+            };
+            let timeout = next.saturating_duration_since(now);
+
+            let mut dirty = false;
+            if self.events.poll(Some(timeout))? {
+                while let Some(ev) = self.events.try_read() {
+                    match ev {
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('q') | KeyCode::Escape,
+                            modifiers,
+                            ..
+                        }) if modifiers.is_empty() => break 'running,
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('c'),
+                            modifiers,
+                            ..
+                        }) if modifiers.contains(KeyModifiers::CTRL) => break 'running,
+                        Event::KeyPress(Key { code, .. }) if !self.state.chosen => match code {
+                            KeyCode::Char('j') | KeyCode::Down
+                                if self.state.choice + 1 < CHOICES.len() =>
+                            {
+                                self.state.choice += 1;
+                                dirty = true;
+                            }
+                            KeyCode::Char('k') | KeyCode::Up if self.state.choice > 0 => {
+                                self.state.choice -= 1;
+                                dirty = true;
+                            }
+                            KeyCode::Enter => {
+                                self.state.chosen = true;
+                                self.state.progress = 0.0;
+                                next_frame = Instant::now() + FRAME;
+                                dirty = true;
+                            }
+                            _ => {}
+                        },
+                        Event::Resize(ws) => {
+                            self.term_cols = ws.col;
                             dirty = true;
                         }
                         _ => {}
-                    },
-                    Event::Resize(ws) => {
-                        term_cols = ws.col;
-                        dirty = true;
                     }
-                    _ => {}
                 }
             }
-        }
 
-        let now = Instant::now();
-        if s.chosen && !s.loaded && now >= next_frame {
-            next_frame += FRAME;
-            if next_frame < now {
-                next_frame = now + FRAME;
-            }
-            s.progress = (s.progress + 0.01).min(1.0);
-            if s.progress >= 1.0 {
-                s.loaded = true;
-                s.ticks = 3;
-                next_tick = now + TICK;
-            }
-            dirty = true;
-        }
-        if now >= next_tick {
-            next_tick += TICK;
-            if next_tick < now {
-                next_tick = now + TICK;
-            }
-            // Tick fires for the choice-screen countdown, and again after
-            // loading completes (exit countdown).
-            if !s.chosen || s.loaded {
-                if s.ticks == 0 {
-                    quit = true;
-                } else {
-                    s.ticks -= 1;
+            let now = Instant::now();
+            if self.state.chosen && !self.state.loaded && now >= next_frame {
+                next_frame += FRAME;
+                if next_frame < now {
+                    next_frame = now + FRAME;
+                }
+                self.state.progress = (self.state.progress + 0.01).min(1.0);
+                if self.state.progress >= 1.0 {
+                    self.state.loaded = true;
+                    self.state.ticks = 3;
+                    next_tick = now + TICK;
                 }
                 dirty = true;
             }
+            if now >= next_tick {
+                next_tick += TICK;
+                if next_tick < now {
+                    next_tick = now + TICK;
+                }
+                // Tick fires for the choice-screen countdown, and again after
+                // loading completes (exit countdown).
+                if !self.state.chosen || self.state.loaded {
+                    if self.state.ticks == 0 {
+                        break 'running;
+                    } else {
+                        self.state.ticks -= 1;
+                    }
+                    dirty = true;
+                }
+            }
+
+            if dirty {
+                self.render();
+                self.screen.render()?;
+                self.screen.flush()?;
+            }
         }
 
-        if dirty && !quit {
-            fit_and_redraw(&mut screen, &s, term_cols);
-            screen.render()?;
-            screen.flush()?;
-        }
+        // Bye: "Bye!" on row 1 plus a trailing blank row so the prompt
+        // returns on its own line below the message.
+        self.screen.resize(self.term_cols, 3);
+        self.screen.clear();
+        self.screen.set_str((2, 1), "Bye!", WrapMode::Truncate);
+        self.screen.render()?;
+
+        Ok(())
     }
 
-    // Bye: "Bye!" on row 1 plus a trailing blank row so the prompt
-    // returns on its own line below the message.
-    screen.resize(term_cols, 3);
-    screen.clear();
-    screen.set_str((2, 1), "Bye!", WrapMode::Truncate);
-    screen.render()?;
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state_term)?;
-    Ok(())
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 /// Paint the current frame and size the screen to the rows it used.

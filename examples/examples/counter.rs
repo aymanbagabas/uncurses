@@ -6,71 +6,104 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, MouseButton};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
-    screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr)?;
+/// Click-counter app: owns the terminal, screen, and event source, plus
+/// its own UI state. `start` enters raw mode and configures the screen,
+/// `run` drives the event loop, and `stop` restores the terminal.
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    count: u32,
+    button_rect: Option<(u16, u16, u16)>,
+    quit_keys: [Key; 3],
+    click_keys: [Key; 2],
+}
 
-    let mut events = EventSource::new(stdin)?;
-    let mut count: u32 = 0;
-    let mut quit = false;
-    let mut button_rect;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
+        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr)?;
+        let events = EventSource::new(term.input())?;
 
-    // Parse key bindings once. `Key: FromStr`, and `==` compares on
-    // the canonical chord identity — so plain equality is the right
-    // operator for keyboard-shortcut matching.
-    let quit_keys: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
-    let click_keys: [Key; 2] = ["enter", "space"].map(|s| s.parse().unwrap());
-
-    redraw(&mut screen, count);
-    button_rect = button_bounds(&screen, count);
-    screen.render()?;
-    screen.flush()?;
-
-    while !quit {
-        let ev = events.read()?;
-        let mut dirty = false;
-        match ev {
-            Event::KeyPress(ref key) if quit_keys.contains(key) => quit = true,
-            Event::KeyPress(ref key) if click_keys.contains(key) => {
-                count = count.saturating_add(1);
-                dirty = true;
-            }
-            Event::MouseClick(m) if m.button == MouseButton::Left && hit(button_rect, m.x, m.y) => {
-                count = count.saturating_add(1);
-                dirty = true;
-            }
-            Event::Resize(ws) => {
-                screen.resize(ws.col, ws.row);
-                dirty = true;
-            }
-            _ => {}
-        }
-        if dirty && !quit {
-            redraw(&mut screen, count);
-            button_rect = button_bounds(&screen, count);
-            screen.render()?;
-            screen.flush()?;
-        }
+        // Parse key bindings once. `Key: FromStr`, and `==` compares on
+        // the canonical chord identity — so plain equality is the right
+        // operator for keyboard-shortcut matching.
+        Ok(Self {
+            term,
+            screen,
+            events,
+            count: 0,
+            button_rect: None,
+            quit_keys: ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap()),
+            click_keys: ["enter", "space"].map(|s| s.parse().unwrap()),
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        redraw(&mut self.screen, self.count);
+        self.button_rect = button_bounds(&self.screen, self.count);
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        loop {
+            let ev = self.events.read()?;
+            let mut dirty = false;
+            match ev {
+                Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
+                Event::KeyPress(ref key) if self.click_keys.contains(key) => {
+                    self.count = self.count.saturating_add(1);
+                    dirty = true;
+                }
+                Event::MouseClick(m)
+                    if m.button == MouseButton::Left && hit(self.button_rect, m.x, m.y) =>
+                {
+                    self.count = self.count.saturating_add(1);
+                    dirty = true;
+                }
+                Event::Resize(ws) => {
+                    self.screen.resize(ws.col, ws.row);
+                    dirty = true;
+                }
+                _ => {}
+            }
+            if dirty {
+                self.render();
+                self.screen.render()?;
+                self.screen.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn button_label(count: u32) -> String {

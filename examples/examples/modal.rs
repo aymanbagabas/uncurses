@@ -8,13 +8,14 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const MODAL_W: u16 = 44;
@@ -39,55 +40,84 @@ const BACKGROUND: &[&str] = &[
     "risus a quam. Maecenas fermentum consequat mi.",
 ];
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
+/// Modal-toggle app. `start` enters raw mode and the alternate screen,
+/// `run` drives the event loop, and `stop` restores the terminal.
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    modal_open: bool,
+    quit_keys: [Key; 3],
+    toggle_keys: [Key; 2],
+}
 
-    let mut events = EventSource::new(stdin)?;
-    let mut modal_open = true;
-    let mut quit = false;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
+        let events = EventSource::new(term.input())?;
 
-    // Parse key bindings once. `Key: FromStr`, and `==` compares on
-    // the canonical chord identity — so plain equality is the right
-    // operator for keyboard-shortcut matching.
-    let quit_keys: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
-    let toggle_keys: [Key; 2] = ["space", "m"].map(|s| s.parse().unwrap());
-
-    redraw(&mut screen, modal_open);
-    screen.render()?;
-    screen.flush()?;
-
-    while !quit {
-        let ev = events.read()?;
-        let mut dirty = false;
-        match ev {
-            Event::KeyPress(ref key) if quit_keys.contains(key) => quit = true,
-            Event::KeyPress(ref key) if toggle_keys.contains(key) => {
-                modal_open = !modal_open;
-                dirty = true;
-            }
-            Event::Resize(ws) => {
-                screen.resize(ws.col, ws.row);
-                dirty = true;
-            }
-            _ => {}
-        }
-        if dirty && !quit {
-            redraw(&mut screen, modal_open);
-            screen.render()?;
-            screen.flush()?;
-        }
+        // Parse key bindings once. `Key: FromStr`, and `==` compares on
+        // the canonical chord identity — so plain equality is the right
+        // operator for keyboard-shortcut matching.
+        Ok(Self {
+            term,
+            screen,
+            events,
+            modal_open: true,
+            quit_keys: ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap()),
+            toggle_keys: ["space", "m"].map(|s| s.parse().unwrap()),
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        redraw(&mut self.screen, self.modal_open);
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        loop {
+            let ev = self.events.read()?;
+            let mut dirty = false;
+            match ev {
+                Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
+                Event::KeyPress(ref key) if self.toggle_keys.contains(key) => {
+                    self.modal_open = !self.modal_open;
+                    dirty = true;
+                }
+                Event::Resize(ws) => {
+                    self.screen.resize(ws.col, ws.row);
+                    dirty = true;
+                }
+                _ => {}
+            }
+            if dirty {
+                self.render();
+                self.screen.render()?;
+                self.screen.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
