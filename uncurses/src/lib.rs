@@ -75,3 +75,4 @@ mod trace;
 
 pub use buffer::{Bounded, Surface, SurfaceMut};
 pub use layout::{Position, Rect};
+pub use terminal::Terminal;
