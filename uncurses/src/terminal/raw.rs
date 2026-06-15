@@ -1,9 +1,9 @@
 //! Raw mode and terminal state helpers.
 //!
 //! Free functions that operate directly on a file descriptor (Unix) or
-//! a console handle (Windows). [`enable_raw_mode`] returns a [`State`]
-//! capturing the previous configuration; pass it back to
-//! [`disable_raw_mode`] (along with the same handles) to restore.
+//! a console handle (Windows). [`make_raw_mode`] returns a [`State`]
+//! capturing the previous configuration; pass it back to [`set_state`]
+//! (along with the same handles) to restore.
 //!
 //! [`get_state`] / [`set_state`] expose the same snapshot type for
 //! arbitrary save/restore use outside of raw mode.
@@ -121,10 +121,9 @@ pub fn set_state<I: AsHandle, O: AsHandle>(input: I, output: O, state: &State) -
 /// handle has `ENABLE_VIRTUAL_TERMINAL_PROCESSING |
 /// DISABLE_NEWLINE_AUTO_RETURN` ORed in.
 ///
-/// Returns the pre-call [`State`]; pass it to [`disable_raw_mode`] (or
-/// [`set_state`]) to restore.
+/// Returns the pre-call [`State`]; pass it to [`set_state`] to restore.
 #[cfg(unix)]
-pub fn enable_raw_mode<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<State> {
+pub fn make_raw_mode<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<State> {
     let original = get_state(&input, &output)?;
     let mut raw = original.termios;
     raw.c_iflag &= !(libc::IGNBRK
@@ -146,14 +145,8 @@ pub fn enable_raw_mode<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<Stat
     Ok(original)
 }
 
-/// Restore the terminal to the configuration captured in `state`.
-#[cfg(unix)]
-pub fn disable_raw_mode<I: AsFd, O: AsFd>(input: I, output: O, state: &State) -> io::Result<()> {
-    set_state(input, output, state)
-}
-
 #[cfg(windows)]
-pub fn enable_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<State> {
+pub fn make_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<State> {
     use windows_sys::Win32::System::Console::{
         DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT,
         ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
@@ -178,15 +171,6 @@ pub fn enable_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Res
         },
     )?;
     Ok(original)
-}
-
-#[cfg(windows)]
-pub fn disable_raw_mode<I: AsHandle, O: AsHandle>(
-    input: I,
-    output: O,
-    state: &State,
-) -> io::Result<()> {
-    set_state(input, output, state)
 }
 
 /// Is the descriptor connected to a terminal?

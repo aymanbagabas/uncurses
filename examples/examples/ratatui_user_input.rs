@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListItem, Paragraph};
 use uncurses::event::{Event, EventSource, KeyCode};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{get_window_size, make_raw_mode, set_state, stdin, stdout};
 use uncurses_ratatui::UncursesBackend;
 
 enum InputMode {
@@ -86,9 +86,9 @@ impl App {
 fn main() -> io::Result<()> {
     let stdin = stdin();
     let stdout = stdout();
-    let raw_state = enable_raw_mode(stdin, stdout)?;
+    let raw_state = make_raw_mode(stdin, stdout)?;
     let result = run();
-    disable_raw_mode(stdin, stdout, &raw_state)?;
+    set_state(stdin, stdout, &raw_state)?;
     result
 }
 
