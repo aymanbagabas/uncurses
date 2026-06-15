@@ -12,6 +12,7 @@ mod key;
 mod mouse;
 mod pending;
 pub mod poll;
+pub mod query;
 mod sigwinch;
 pub mod source;
 #[cfg(windows)]
