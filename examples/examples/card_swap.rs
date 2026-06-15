@@ -4,11 +4,12 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const CARD_W: u16 = 20;
@@ -16,57 +17,86 @@ const CARD_H: u16 = 10;
 // Fits two stacked cards (rows 1..13) + footer row.
 const VIEW_H: u16 = 15;
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, VIEW_H));
-    screen.set_cursor_visible(false)?;
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    flip: bool,
+}
 
-    let mut events = EventSource::new(stdin)?;
-    let mut flip = false;
-    let mut quit = false;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(
+            term.output(),
+            (term.window_size().unwrap_or_default().col, VIEW_H),
+        );
+        screen.set_cursor_visible(false)?;
+        let events = EventSource::new(term.input())?;
 
-    redraw(&mut screen, flip);
-    screen.render()?;
-    screen.flush()?;
-
-    while !quit {
-        let ev = events.read()?;
-        let mut dirty = false;
-        match ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q') | KeyCode::Escape,
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-            Event::KeyPress(_) => {
-                flip = !flip;
-                dirty = true;
-            }
-            Event::Resize(ws) => {
-                screen.resize(ws.col, VIEW_H);
-                dirty = true;
-            }
-            _ => {}
-        }
-        if dirty && !quit {
-            redraw(&mut screen, flip);
-            screen.render()?;
-            screen.flush()?;
-        }
+        Ok(Self {
+            term,
+            screen,
+            events,
+            flip: false,
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        redraw(&mut self.screen, self.flip);
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        loop {
+            let ev = self.events.read()?;
+            let mut dirty = false;
+            match ev {
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('q') | KeyCode::Escape,
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => break,
+                Event::KeyPress(_) => {
+                    self.flip = !self.flip;
+                    dirty = true;
+                }
+                Event::Resize(ws) => {
+                    self.screen.resize(ws.col, VIEW_H);
+                    dirty = true;
+                }
+                _ => {}
+            }
+            if dirty {
+                self.render();
+                self.screen.render()?;
+                self.screen.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {

@@ -19,10 +19,11 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, PasteBuffer};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
+use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::{WrapMode, char_width};
 
 /// Editable multiline buffer with a single cursor.
@@ -185,82 +186,116 @@ fn redraw<W: std::io::Write>(screen: &mut Screen<W>, buf: &Buffer) {
     );
 }
 
-fn main() -> std::io::Result<()> {
-    let (input, output) = open_tty()?;
+struct App {
+    term: Terminal<TtyInput, TtyOutput>,
+    screen: Screen<TtyOutput>,
+    events: EventSource<TtyInput>,
+    buffer: Buffer,
+    paste: Option<PasteBuffer>,
+}
 
-    let state = enable_raw_mode(input, output)?;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::open()?;
+        term.make_raw()?;
+        let mut screen = Screen::new(
+            term.output(),
+            (term.window_size().unwrap_or_default().col, 1),
+        );
 
-    let size = get_window_size(output).unwrap_or_default();
-    let mut screen = Screen::new(output, (size.col, 1));
+        screen.set_cursor_visible(false)?;
+        screen.set_bracketed_paste(true)?;
 
-    screen.set_cursor_visible(false)?;
-    screen.set_bracketed_paste(true)?;
+        let events = EventSource::new(term.input())?;
+        let buffer = Buffer::new();
+        let paste = None;
 
-    let mut events = EventSource::new(input)?;
-    let mut buffer = Buffer::new();
-    let mut paste: Option<PasteBuffer> = None;
-
-    screen.resize(size.col, buffer.lines.len() as u16);
-    redraw(&mut screen, &buffer);
-    screen.render()?;
-    screen.flush()?;
-
-    while let Ok(ev) = events.read() {
-        match ev {
-            Event::KeyPress(Key {
-                code, modifiers, ..
-            }) => match code {
-                KeyCode::Escape => break,
-                KeyCode::Char('c') if modifiers.contains(KeyModifiers::CTRL) => break,
-                KeyCode::Char('d')
-                    if modifiers.contains(KeyModifiers::CTRL) && !buffer.is_blank() =>
-                {
-                    let text = buffer.as_text();
-                    screen.insert_above(&text)?;
-                    buffer.clear();
-                }
-                KeyCode::Enter => buffer.insert_newline(),
-                KeyCode::Backspace => buffer.backspace(),
-                KeyCode::Left => buffer.move_left(),
-                KeyCode::Right => buffer.move_right(),
-                KeyCode::Up => buffer.move_up(),
-                KeyCode::Down => buffer.move_down(),
-                KeyCode::Char(c)
-                    if !modifiers.intersects(KeyModifiers::CTRL | KeyModifiers::ALT) =>
-                {
-                    buffer.insert_char(c);
-                }
-                _ => {}
-            },
-            Event::PasteStart => {
-                paste = Some(PasteBuffer::new());
-            }
-            Event::PasteChunk(bytes) => {
-                if let Some(p) = paste.as_mut() {
-                    p.push(&bytes);
-                }
-            }
-            Event::PasteEnd => {
-                if let Some(p) = paste.take() {
-                    let text = p.into_string_lossy();
-                    buffer.insert_str(&text);
-                }
-            }
-            Event::Resize(ws) => {
-                screen.resize(ws.col, buffer.lines.len() as u16);
-            }
-            _ => {}
-        }
-
-        let w = screen.width();
-        screen.resize(w, buffer.lines.len() as u16);
-        redraw(&mut screen, &buffer);
-        screen.render()?;
-        screen.flush()?;
+        Ok(Self {
+            term,
+            screen,
+            events,
+            buffer,
+            paste,
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(input, output, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        redraw(&mut self.screen, &self.buffer);
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.screen
+            .resize(self.screen.width(), self.buffer.lines.len() as u16);
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        while let Ok(ev) = self.events.read() {
+            match ev {
+                Event::KeyPress(Key {
+                    code, modifiers, ..
+                }) => match code {
+                    KeyCode::Escape => break,
+                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CTRL) => break,
+                    KeyCode::Char('d')
+                        if modifiers.contains(KeyModifiers::CTRL) && !self.buffer.is_blank() =>
+                    {
+                        let text = self.buffer.as_text();
+                        self.screen.insert_above(&text)?;
+                        self.buffer.clear();
+                    }
+                    KeyCode::Enter => self.buffer.insert_newline(),
+                    KeyCode::Backspace => self.buffer.backspace(),
+                    KeyCode::Left => self.buffer.move_left(),
+                    KeyCode::Right => self.buffer.move_right(),
+                    KeyCode::Up => self.buffer.move_up(),
+                    KeyCode::Down => self.buffer.move_down(),
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CTRL | KeyModifiers::ALT) =>
+                    {
+                        self.buffer.insert_char(c);
+                    }
+                    _ => {}
+                },
+                Event::PasteStart => {
+                    self.paste = Some(PasteBuffer::new());
+                }
+                Event::PasteChunk(bytes) => {
+                    if let Some(p) = self.paste.as_mut() {
+                        p.push(&bytes);
+                    }
+                }
+                Event::PasteEnd => {
+                    if let Some(p) = self.paste.take() {
+                        let text = p.into_string_lossy();
+                        self.buffer.insert_str(&text);
+                    }
+                }
+                Event::Resize(ws) => {
+                    self.screen.resize(ws.col, self.buffer.lines.len() as u16);
+                }
+                _ => {}
+            }
+
+            let w = self.screen.width();
+            self.screen.resize(w, self.buffer.lines.len() as u16);
+            self.render();
+            self.screen.render()?;
+            self.screen.flush()?;
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }

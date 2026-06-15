@@ -9,13 +9,14 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const SURFACE_W: u16 = 60;
@@ -23,75 +24,102 @@ const SURFACE_H: u16 = 16;
 const MODAL_W: u16 = 36;
 const MODAL_H: u16 = 7;
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let term = get_window_size(stdout).unwrap_or_default();
-    let w = SURFACE_W.min(term.col.max(1));
-    let h = SURFACE_H.min(term.row.max(1));
-    let mut screen = Screen::new(stdout, (w, h));
-    screen.set_cursor_visible(false)?;
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    modal_open: bool,
+}
 
-    let mut events = EventSource::new(stdin)?;
-    let mut modal_open = false;
-    let mut quit = false;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let size = term.window_size().unwrap_or_default();
+        let w = SURFACE_W.min(size.col.max(1));
+        let h = SURFACE_H.min(size.row.max(1));
+        let mut screen = Screen::new(term.output(), (w, h));
+        screen.set_cursor_visible(false)?;
+        let events = EventSource::new(term.input())?;
 
-    redraw(&mut screen, modal_open);
-    screen.render()?;
-    screen.flush()?;
-
-    while !quit {
-        let ev = events.read()?;
-        let mut dirty = false;
-        match ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Escape,
-                ..
-            }) => {
-                if modal_open {
-                    modal_open = false;
-                    dirty = true;
-                } else {
-                    quit = true;
-                }
-            }
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('m'),
-                ..
-            }) => {
-                modal_open = !modal_open;
-                dirty = true;
-            }
-            Event::Resize(ws) => {
-                let nw = SURFACE_W.min(ws.col.max(1));
-                let nh = SURFACE_H.min(ws.row.max(1));
-                screen.resize(nw, nh);
-                dirty = true;
-            }
-            _ => {}
-        }
-        if dirty && !quit {
-            redraw(&mut screen, modal_open);
-            screen.render()?;
-            screen.flush()?;
-        }
+        Ok(Self {
+            term,
+            screen,
+            events,
+            modal_open: false,
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        redraw(&mut self.screen, self.modal_open);
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        loop {
+            let ev = self.events.read()?;
+            let mut dirty = false;
+            match ev {
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('q'),
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Escape,
+                    ..
+                }) => {
+                    if self.modal_open {
+                        self.modal_open = false;
+                        dirty = true;
+                    } else {
+                        break;
+                    }
+                }
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('m'),
+                    ..
+                }) => {
+                    self.modal_open = !self.modal_open;
+                    dirty = true;
+                }
+                Event::Resize(ws) => {
+                    let nw = SURFACE_W.min(ws.col.max(1));
+                    let nh = SURFACE_H.min(ws.row.max(1));
+                    self.screen.resize(nw, nh);
+                    dirty = true;
+                }
+                _ => {}
+            }
+            if dirty {
+                self.render();
+                self.screen.render()?;
+                self.screen.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {

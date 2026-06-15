@@ -37,11 +37,12 @@ use std::sync::mpsc;
 use std::thread;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, EventSource, Key, MouseButton};
+use uncurses::event::{Event, EventSource, Key, MouseButton, Waker};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const PREVIEW_LIMIT: usize = 64 * 1024;
@@ -54,7 +55,7 @@ struct Entry {
     size: u64,
 }
 
-struct App {
+struct ExplorerState {
     cwd: PathBuf,
     entries: Vec<Entry>,
     selected: usize,
@@ -67,7 +68,7 @@ struct App {
     status: String,
 }
 
-impl App {
+impl ExplorerState {
     fn new(cwd: PathBuf) -> Self {
         let mut app = Self {
             cwd,
@@ -254,7 +255,7 @@ fn hex_dump(bytes: &[u8]) -> String {
 
 // -- Rendering ---------------------------------------------------------------
 
-fn draw<W: std::io::Write>(app: &App, screen: &mut Screen<W>) {
+fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
     let w = screen.width();
     let h = screen.height();
     if w < 20 || h < 5 {
@@ -401,169 +402,237 @@ fn unicode_char_width(ch: char) -> usize {
 
 // -- Main loop ---------------------------------------------------------------
 
-fn run() -> std::io::Result<()> {
-    let start_dir = env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let start_dir = fs::canonicalize(&start_dir).unwrap_or(start_dir);
-
-    let mut app = App::new(start_dir);
-
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-
-    // Enter the alt screen, hide the cursor, and enable SGR-encoded
-    // mouse tracking via the screen API so internal state stays in
-    // sync with the actual terminal mode flags.
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
-    screen.set_mouse_mode(
-        uncurses::ansi::mode::MouseMode::Normal,
-        uncurses::ansi::mode::MouseEncoding::Sgr,
-    )?;
-    screen.flush()?;
-
-    draw(&app, &mut screen);
-    screen.render()?;
-    screen.flush()?;
-
-    let mut events = EventSource::new(stdin)?;
-    let waker = events.waker();
-
-    let (tx, rx) = mpsc::channel::<Event>();
-    let reader_thread = thread::spawn(move || {
-        loop {
-            match events.read() {
-                Ok(ev) => {
-                    if tx.send(ev).is_err() {
-                        // Main thread dropped the receiver.
-                        break;
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {
-                    // Woken by the main thread for shutdown.
-                    break;
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    // Parse key bindings once. `Key` implements `FromStr`, so
-    // `"ctrl+c".parse::<Key>()` produces a canonical `Key` value, and
-    // `PartialEq` compares only the chord identity (`code` +
-    // `modifiers`, with `CAPS_LOCK`/`NUM_LOCK` ignored) — so plain
-    // `==` is the right operator for keyboard-shortcut matching.
-    let quit_keys: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
-    let up_keys: [Key; 2] = ["up", "k"].map(|s| s.parse().unwrap());
-    let down_keys: [Key; 2] = ["down", "j"].map(|s| s.parse().unwrap());
-    let pgup_key: Key = "pageup".parse().unwrap();
-    let pgdn_key: Key = "pagedown".parse().unwrap();
-    // `g` and `G` parse to different canonical chords: `g` is the
-    // bare lowercase code, `G` normalizes to `g + SHIFT`. `==`
-    // distinguishes them, which is what vim-style `g`/`G` bindings
-    // want.
-    let top_key: Key = "g".parse().unwrap();
-    let bottom_key: Key = "G".parse().unwrap();
-    let enter_key: Key = "enter".parse().unwrap();
-    let backspace_key: Key = "backspace".parse().unwrap();
-    let refresh_key: Key = "r".parse().unwrap();
-
-    while let Ok(ev) = rx.recv() {
-        let mut dirty = true;
-        match ev {
-            Event::KeyPress(ref key) if quit_keys.contains(key) => break,
-
-            Event::KeyPress(key) => {
-                if up_keys.contains(&key) {
-                    app.move_selection(-1);
-                } else if down_keys.contains(&key) {
-                    app.move_selection(1);
-                } else if key == pgup_key {
-                    app.preview_scroll = app.preview_scroll.saturating_sub(10);
-                } else if key == pgdn_key {
-                    app.preview_scroll =
-                        (app.preview_scroll + 10).min(app.preview_lines.len().saturating_sub(1));
-                } else if key == top_key {
-                    app.preview_scroll = 0;
-                } else if key == bottom_key {
-                    app.preview_scroll = app.preview_lines.len().saturating_sub(1);
-                } else if key == enter_key {
-                    app.enter();
-                } else if key == backspace_key {
-                    app.go_up();
-                } else if key == refresh_key {
-                    app.refresh();
-                } else {
-                    dirty = false;
-                }
-            }
-
-            Event::MouseClick(m) => {
-                let list_w = screen.width() / 3;
-                if m.x < list_w && m.y >= 1 {
-                    let row = (m.y - 1) as usize;
-                    // Recompute scroll the same way draw() does so clicks land.
-                    let body_h = screen.height().saturating_sub(2) as usize;
-                    let scroll = app
-                        .selected
-                        .saturating_sub(body_h.saturating_sub(1))
-                        .max(app.list_scroll);
-                    let idx = scroll + row;
-                    if idx < app.entries.len() {
-                        app.selected = idx;
-                        app.load_preview();
-                    }
-                } else {
-                    dirty = false;
-                }
-            }
-            Event::MouseWheel(m) => match m.button {
-                MouseButton::WheelUp => {
-                    app.preview_scroll = app.preview_scroll.saturating_sub(3);
-                }
-                MouseButton::WheelDown => {
-                    app.preview_scroll =
-                        (app.preview_scroll + 3).min(app.preview_lines.len().saturating_sub(1));
-                }
-                _ => dirty = false,
-            },
-
-            Event::Resize(ws) => {
-                screen.resize(ws.col, ws.row);
-            }
-
-            _ => dirty = false,
-        }
-
-        if dirty {
-            draw(&app, &mut screen);
-            screen.render()?;
-            screen.flush()?;
-        }
-    }
-
-    // Wake the reader thread out of its blocking read, drop the
-    // receiver so the channel send fails if the wake races, and join.
-    waker.wake().ok();
-    drop(rx);
-    reader_thread.join().ok();
-
-    // Restore terminal.
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    rx: Option<mpsc::Receiver<Event>>,
+    waker: Waker,
+    reader_thread: Option<thread::JoinHandle<()>>,
+    state: ExplorerState,
+    quit_keys: [Key; 3],
+    up_keys: [Key; 2],
+    down_keys: [Key; 2],
+    pgup_key: Key,
+    pgdn_key: Key,
+    top_key: Key,
+    bottom_key: Key,
+    enter_key: Key,
+    backspace_key: Key,
+    refresh_key: Key,
 }
 
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("file_explorer: {e}");
-        std::process::exit(1);
+impl App {
+    fn start() -> io::Result<Self> {
+        let start_dir = env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let start_dir = fs::canonicalize(&start_dir).unwrap_or(start_dir);
+
+        let state = ExplorerState::new(start_dir);
+
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+
+        // Enter the alt screen, hide the cursor, and enable SGR-encoded
+        // mouse tracking via the screen API so internal state stays in
+        // sync with the actual terminal mode flags.
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
+        screen.set_mouse_mode(
+            uncurses::ansi::mode::MouseMode::Normal,
+            uncurses::ansi::mode::MouseEncoding::Sgr,
+        )?;
+        screen.flush()?;
+
+        let (tx, rx) = mpsc::channel::<Event>();
+        let (waker_tx, waker_rx) = mpsc::channel::<io::Result<Waker>>();
+        let input = term.input();
+        let reader_thread = thread::spawn(move || input_loop(input, tx, waker_tx));
+        let waker = match waker_rx.recv() {
+            Ok(Ok(waker)) => waker,
+            Ok(Err(e)) => return Err(e),
+            Err(e) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, e)),
+        };
+
+        // Parse key bindings once. `Key` implements `FromStr`, so
+        // `"ctrl+c".parse::<Key>()` produces a canonical `Key` value, and
+        // `PartialEq` compares only the chord identity (`code` +
+        // `modifiers`, with `CAPS_LOCK`/`NUM_LOCK` ignored) — so plain
+        // `==` is the right operator for keyboard-shortcut matching.
+        let quit_keys: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
+        let up_keys: [Key; 2] = ["up", "k"].map(|s| s.parse().unwrap());
+        let down_keys: [Key; 2] = ["down", "j"].map(|s| s.parse().unwrap());
+        let pgup_key: Key = "pageup".parse().unwrap();
+        let pgdn_key: Key = "pagedown".parse().unwrap();
+        // `g` and `G` parse to different canonical chords: `g` is the
+        // bare lowercase code, `G` normalizes to `g + SHIFT`. `==`
+        // distinguishes them, which is what vim-style `g`/`G` bindings
+        // want.
+        let top_key: Key = "g".parse().unwrap();
+        let bottom_key: Key = "G".parse().unwrap();
+        let enter_key: Key = "enter".parse().unwrap();
+        let backspace_key: Key = "backspace".parse().unwrap();
+        let refresh_key: Key = "r".parse().unwrap();
+
+        Ok(Self {
+            term,
+            screen,
+            rx: Some(rx),
+            waker,
+            reader_thread: Some(reader_thread),
+            state,
+            quit_keys,
+            up_keys,
+            down_keys,
+            pgup_key,
+            pgdn_key,
+            top_key,
+            bottom_key,
+            enter_key,
+            backspace_key,
+            refresh_key,
+        })
     }
+
+    fn render(&mut self) {
+        draw(&self.state, &mut self.screen);
+    }
+
+    fn run(&mut self) -> io::Result<()> {
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        while let Ok(ev) = self.rx.as_ref().expect("receiver").recv() {
+            let mut dirty = true;
+            match ev {
+                Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
+
+                Event::KeyPress(key) => {
+                    if self.up_keys.contains(&key) {
+                        self.state.move_selection(-1);
+                    } else if self.down_keys.contains(&key) {
+                        self.state.move_selection(1);
+                    } else if key == self.pgup_key {
+                        self.state.preview_scroll = self.state.preview_scroll.saturating_sub(10);
+                    } else if key == self.pgdn_key {
+                        self.state.preview_scroll = (self.state.preview_scroll + 10)
+                            .min(self.state.preview_lines.len().saturating_sub(1));
+                    } else if key == self.top_key {
+                        self.state.preview_scroll = 0;
+                    } else if key == self.bottom_key {
+                        self.state.preview_scroll =
+                            self.state.preview_lines.len().saturating_sub(1);
+                    } else if key == self.enter_key {
+                        self.state.enter();
+                    } else if key == self.backspace_key {
+                        self.state.go_up();
+                    } else if key == self.refresh_key {
+                        self.state.refresh();
+                    } else {
+                        dirty = false;
+                    }
+                }
+
+                Event::MouseClick(m) => {
+                    let list_w = self.screen.width() / 3;
+                    if m.x < list_w && m.y >= 1 {
+                        let row = (m.y - 1) as usize;
+                        // Recompute scroll the same way draw() does so clicks land.
+                        let body_h = self.screen.height().saturating_sub(2) as usize;
+                        let scroll = self
+                            .state
+                            .selected
+                            .saturating_sub(body_h.saturating_sub(1))
+                            .max(self.state.list_scroll);
+                        let idx = scroll + row;
+                        if idx < self.state.entries.len() {
+                            self.state.selected = idx;
+                            self.state.load_preview();
+                        }
+                    } else {
+                        dirty = false;
+                    }
+                }
+                Event::MouseWheel(m) => match m.button {
+                    MouseButton::WheelUp => {
+                        self.state.preview_scroll = self.state.preview_scroll.saturating_sub(3);
+                    }
+                    MouseButton::WheelDown => {
+                        self.state.preview_scroll = (self.state.preview_scroll + 3)
+                            .min(self.state.preview_lines.len().saturating_sub(1));
+                    }
+                    _ => dirty = false,
+                },
+
+                Event::Resize(ws) => {
+                    self.screen.resize(ws.col, ws.row);
+                }
+
+                _ => dirty = false,
+            }
+
+            if dirty {
+                self.render();
+                self.screen.render()?;
+                self.screen.flush()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn stop(&mut self) -> io::Result<()> {
+        // Wake the reader thread out of its blocking read, drop the
+        // receiver so the channel send fails if the wake races, and join.
+        self.waker.wake().ok();
+        drop(self.rx.take());
+        if let Some(reader_thread) = self.reader_thread.take() {
+            reader_thread.join().ok();
+        }
+
+        // Restore terminal.
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn input_loop(input: Stdin, tx: mpsc::Sender<Event>, waker_tx: mpsc::Sender<io::Result<Waker>>) {
+    let mut events = match EventSource::new(input) {
+        Ok(events) => events,
+        Err(e) => {
+            let _ = waker_tx.send(Err(e));
+            return;
+        }
+    };
+    if waker_tx.send(Ok(events.waker())).is_err() {
+        return;
+    }
+
+    loop {
+        match events.read() {
+            Ok(ev) => {
+                if tx.send(ev).is_err() {
+                    // Main thread dropped the receiver.
+                    break;
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                // Woken by the main thread for shutdown.
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+fn main() -> io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }

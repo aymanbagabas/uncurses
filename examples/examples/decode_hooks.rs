@@ -34,9 +34,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
+use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::WrapMode;
 
 fn truncate(s: &str, width: u16) -> String {
@@ -71,156 +72,190 @@ fn fmt_event(ev: &Event) -> String {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let (input, output) = open_tty()?;
+struct App {
+    term: Terminal<TtyInput, TtyOutput>,
+    screen: Screen<TtyOutput>,
+    events: EventSource<TtyInput>,
+    hook_log: Arc<Mutex<Vec<String>>>,
+    last: String,
+}
 
-    #[cfg_attr(not(unix), allow(unused_mut))]
-    let state = enable_raw_mode(input, output)?;
-
-    let size = get_window_size(output).unwrap_or_default();
-    let mut screen = Screen::new(output, (size.col, 2));
-
-    screen.set_cursor_visible(false)?;
-
-    let mut events = EventSource::new(input)?;
-
-    // Shared log channel for hook-side observations. Hooks run on the
-    // decoder thread; the main loop drains the log after each `read()`.
-    let hook_log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-
-    // 1. Override-style CSI hook: claim cursor-position reports and
-    //    emit a custom `Event::Unknown` payload. Because user hooks
-    //    run before the builtin recogniser, this pre-empts the usual
-    //    `Event::CursorPosition`.
-    let log_cpr = hook_log.clone();
-    events.on_csi(move |view| {
-        if view.final_byte == b'R' && view.private.is_none() {
-            let params = view.params();
-            let r = params.get(0).unwrap_or(0);
-            let c = params.get(1).unwrap_or(0);
-            let msg = format!("[hook] claim CPR row={} col={}", r, c);
-            log_cpr.lock().unwrap().push(msg.clone());
-            return Some(Event::Unknown(msg.into_bytes()));
-        }
-        None
-    });
-
-    // 2. Pass-through CSI hook: log every CSI we see and return None,
-    //    letting the builtin recogniser run. The earlier hook still
-    //    short-circuits CPR before this one is consulted only when it
-    //    returns `Some(_)` — for everything else, both hooks see the
-    //    sequence in registration order.
-    let log_csi = hook_log.clone();
-    events.on_csi(move |view| {
-        let summary = format!(
-            "[hook] csi private={:?} params={:?} intermediates={:?} final={:?}",
-            view.private.map(|b| b as char),
-            view.params(),
-            std::str::from_utf8(view.intermediates).unwrap_or("?"),
-            view.final_byte as char,
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::open()?;
+        term.make_raw()?;
+        let mut screen = Screen::new(
+            term.output(),
+            (term.window_size().unwrap_or_default().col, 2),
         );
-        log_csi.lock().unwrap().push(summary);
-        None
-    });
 
-    // 3. OSC hook for a payload the library doesn't recognise. OSC 777
-    //    is a de-facto extension used by some terminals for desktop
-    //    notifications (`OSC 777;notify;title;body`). Returning `Some`
-    //    surfaces it instead of `Event::UnknownOsc`.
-    let log_osc = hook_log.clone();
-    events.on_osc(move |view| {
-        let mut parts = view.payload.splitn(2, |&b| b == b';');
-        let code = parts.next().unwrap_or(&[]);
-        if code == b"777" {
-            let rest = parts.next().unwrap_or(&[]);
-            let msg = format!(
-                "[hook] claim OSC 777 payload={:?}",
-                String::from_utf8_lossy(rest)
+        screen.set_cursor_visible(false)?;
+
+        let mut events = EventSource::new(term.input())?;
+
+        // Shared log channel for hook-side observations. Hooks run on the
+        // decoder thread; the main loop drains the log after each `read()`.
+        let hook_log: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+        // 1. Override-style CSI hook: claim cursor-position reports and
+        //    emit a custom `Event::Unknown` payload. Because user hooks
+        //    run before the builtin recogniser, this pre-empts the usual
+        //    `Event::CursorPosition`.
+        let log_cpr = hook_log.clone();
+        events.on_csi(move |view| {
+            if view.final_byte == b'R' && view.private.is_none() {
+                let params = view.params();
+                let r = params.get(0).unwrap_or(0);
+                let c = params.get(1).unwrap_or(0);
+                let msg = format!("[hook] claim CPR row={} col={}", r, c);
+                log_cpr.lock().unwrap().push(msg.clone());
+                return Some(Event::Unknown(msg.into_bytes()));
+            }
+            None
+        });
+
+        // 2. Pass-through CSI hook: log every CSI we see and return None,
+        //    letting the builtin recogniser run. The earlier hook still
+        //    short-circuits CPR before this one is consulted only when it
+        //    returns `Some(_)` — for everything else, both hooks see the
+        //    sequence in registration order.
+        let log_csi = hook_log.clone();
+        events.on_csi(move |view| {
+            let summary = format!(
+                "[hook] csi private={:?} params={:?} intermediates={:?} final={:?}",
+                view.private.map(|b| b as char),
+                view.params(),
+                std::str::from_utf8(view.intermediates).unwrap_or("?"),
+                view.final_byte as char,
             );
-            log_osc.lock().unwrap().push(msg.clone());
-            return Some(Event::Unknown(msg.into_bytes()));
-        }
-        None
-    });
+            log_csi.lock().unwrap().push(summary);
+            None
+        });
 
-    redraw(&mut screen, "(waiting for input — press p / d / b / n)");
-    screen.render()?;
-    screen.flush()?;
+        // 3. OSC hook for a payload the library doesn't recognise. OSC 777
+        //    is a de-facto extension used by some terminals for desktop
+        //    notifications (`OSC 777;notify;title;body`). Returning `Some`
+        //    surfaces it instead of `Event::UnknownOsc`.
+        let log_osc = hook_log.clone();
+        events.on_osc(move |view| {
+            let mut parts = view.payload.splitn(2, |&b| b == b';');
+            let code = parts.next().unwrap_or(&[]);
+            if code == b"777" {
+                let rest = parts.next().unwrap_or(&[]);
+                let msg = format!(
+                    "[hook] claim OSC 777 payload={:?}",
+                    String::from_utf8_lossy(rest)
+                );
+                log_osc.lock().unwrap().push(msg.clone());
+                return Some(Event::Unknown(msg.into_bytes()));
+            }
+            None
+        });
 
-    let drain_log = |screen: &mut Screen<_>, hook_log: &Arc<Mutex<Vec<String>>>| {
-        let mut buf = hook_log.lock().unwrap();
-        for line in buf.drain(..) {
-            let _ = screen.insert_above(&line);
-        }
-    };
-
-    while let Ok(ev) = events.read() {
-        // Surface hook-side observations that happened during decode.
-        drain_log(&mut screen, &hook_log);
-
-        let mut last = fmt_event(&ev);
-        match &ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => break,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => break,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('p'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => {
-                (&output).write_all(b"\x1b[6n")?;
-                (&output).flush()?;
-                last = "sent: DSR cursor-position (CSI 6 n)".to_string();
-            }
-            Event::KeyPress(Key {
-                code: KeyCode::Char('d'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => {
-                (&output).write_all(b"\x1b[c")?;
-                (&output).flush()?;
-                last = "sent: Primary DA (CSI c)".to_string();
-            }
-            Event::KeyPress(Key {
-                code: KeyCode::Char('b'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => {
-                (&output).write_all(b"\x1b]11;?\x1b\\")?;
-                (&output).flush()?;
-                last = "sent: OSC 11 background-color query".to_string();
-            }
-            Event::KeyPress(Key {
-                code: KeyCode::Char('n'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => {
-                (&output).write_all(b"\x1b]777;notify;decode_hooks;hello\x1b\\")?;
-                (&output).flush()?;
-                last = "sent: OSC 777 notification (terminal likely ignores)".to_string();
-            }
-            Event::Resize(ws) => {
-                screen.resize(ws.col, 2);
-            }
-            _ => {}
-        }
-
-        screen.insert_above(&last)?;
-        redraw(&mut screen, &last);
-        screen.render()?;
-        screen.flush()?;
+        Ok(Self {
+            term,
+            screen,
+            events,
+            hook_log,
+            last: "(waiting for input — press p / d / b / n)".to_string(),
+        })
     }
 
-    drain_log(&mut screen, &hook_log);
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(input, output, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        redraw(&mut self.screen, &self.last);
+    }
+
+    fn drain_log(&mut self) {
+        let mut buf = self.hook_log.lock().unwrap();
+        for line in buf.drain(..) {
+            let _ = self.screen.insert_above(&line);
+        }
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        while let Ok(ev) = self.events.read() {
+            // Surface hook-side observations that happened during decode.
+            self.drain_log();
+
+            let mut last = fmt_event(&ev);
+            match &ev {
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('q'),
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('p'),
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => {
+                    (&self.term.output()).write_all(b"\x1b[6n")?;
+                    (&self.term.output()).flush()?;
+                    last = "sent: DSR cursor-position (CSI 6 n)".to_string();
+                }
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('d'),
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => {
+                    (&self.term.output()).write_all(b"\x1b[c")?;
+                    (&self.term.output()).flush()?;
+                    last = "sent: Primary DA (CSI c)".to_string();
+                }
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('b'),
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => {
+                    (&self.term.output()).write_all(b"\x1b]11;?\x1b\\")?;
+                    (&self.term.output()).flush()?;
+                    last = "sent: OSC 11 background-color query".to_string();
+                }
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('n'),
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => {
+                    (&self.term.output()).write_all(b"\x1b]777;notify;decode_hooks;hello\x1b\\")?;
+                    (&self.term.output()).flush()?;
+                    last = "sent: OSC 777 notification (terminal likely ignores)".to_string();
+                }
+                Event::Resize(ws) => {
+                    self.screen.resize(ws.col, 2);
+                }
+                _ => {}
+            }
+
+            self.screen.insert_above(&last)?;
+            self.last = last;
+            self.render();
+            self.screen.render()?;
+            self.screen.flush()?;
+        }
+
+        self.drain_log();
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }

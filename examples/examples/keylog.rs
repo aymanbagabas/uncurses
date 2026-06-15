@@ -16,10 +16,11 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, open_tty};
+use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::WrapMode;
 
 fn format_modifiers(m: KeyModifiers) -> String {
@@ -109,89 +110,116 @@ fn truncate(s: &str, width: u16) -> String {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let (input, output) = open_tty()?;
+/// Event-logger app. Runs inline (no alt screen) on the controlling
+/// tty. `start` enters raw mode and configures the inline status area,
+/// `run` logs every event into the scrollback, and `stop` restores the
+/// terminal. On Unix, Ctrl-Z suspends and resumes cleanly.
+struct App {
+    term: Terminal<TtyInput, TtyOutput>,
+    screen: Screen<TtyOutput>,
+    events: EventSource<TtyInput>,
+    last: String,
+}
 
-    #[cfg_attr(not(unix), allow(unused_mut))]
-    let mut state = enable_raw_mode(input, output)?;
-
-    let size = get_window_size(output).unwrap_or_default();
-    // Inline status area is two rows tall; insert_above scrolls events
-    // into the scrollback above it.
-    let mut screen = Screen::new(output, (size.col, 2));
-
-    screen.set_cursor_visible(false)?;
-    screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr)?;
-    screen.set_focus_events(true)?;
-    screen.set_bracketed_paste(true)?;
-    screen.set_title("📺 keylog — events 🎹🖱️")?;
-
-    let mut events = EventSource::new(input)?;
-
-    redraw(&mut screen, "(waiting for input)")?;
-    screen.render()?;
-    screen.flush()?;
-
-    while let Ok(ev) = events.read() {
-        match &ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q'),
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => {
-                break;
-            }
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => {
-                break;
-            }
-            #[cfg(unix)]
-            Event::KeyPress(Key {
-                code: KeyCode::Char('z'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => {
-                // Tear down the screen, drop raw mode, then send SIGTSTP to
-                // ourselves. The kernel pauses the process until a SIGCONT
-                // brings it back; control returns here on resume.
-                screen.reset()?;
-                screen.flush()?;
-                disable_raw_mode(input, output, &state)?;
-
-                // SAFETY: raise is async-signal-safe.
-                unsafe { libc::raise(libc::SIGTSTP) };
-
-                // Resumed: re-acquire raw mode, refit to the current window
-                // size, and reinstate the screen modes we had before.
-                state = enable_raw_mode(input, output)?;
-                if let Ok(size) = get_window_size(output) {
-                    screen.resize(size.col, 2);
-                }
-                screen.restore()?;
-                screen.invalidate();
-                redraw(&mut screen, "(resumed)")?;
-                screen.render()?;
-                screen.flush()?;
-                continue;
-            }
-            Event::Resize(ws) => {
-                screen.resize(ws.col, 2);
-            }
-            _ => {}
-        }
-
-        let line = format_event(&ev);
-        screen.insert_above(&line)?;
-        redraw(&mut screen, &line)?;
-        screen.render()?;
-        screen.flush()?;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::open()?;
+        term.make_raw()?;
+        // Inline status area is two rows tall; insert_above scrolls events
+        // into the scrollback above it.
+        let cols = term.window_size().unwrap_or_default().col;
+        let mut screen = Screen::new(term.output(), (cols, 2));
+        screen.set_cursor_visible(false)?;
+        screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr)?;
+        screen.set_focus_events(true)?;
+        screen.set_bracketed_paste(true)?;
+        screen.set_title("📺 keylog — events 🎹🖱️")?;
+        let events = EventSource::new(term.input())?;
+        Ok(Self {
+            term,
+            screen,
+            events,
+            last: String::from("(waiting for input)"),
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(input, output, &state)?;
-    Ok(())
+    fn render(&mut self) -> std::io::Result<()> {
+        redraw(&mut self.screen, &self.last)
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render()?;
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        while let Ok(ev) = self.events.read() {
+            match &ev {
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('q'),
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => break,
+                #[cfg(unix)]
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('z'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => {
+                    // Tear down the screen, drop raw mode, then send SIGTSTP
+                    // to ourselves. The kernel pauses the process until a
+                    // SIGCONT brings it back; control returns here on resume.
+                    self.screen.reset()?;
+                    self.screen.flush()?;
+                    self.term.restore()?;
+
+                    // SAFETY: raise is async-signal-safe.
+                    unsafe { libc::raise(libc::SIGTSTP) };
+
+                    // Resumed: re-acquire raw mode, refit to the current
+                    // window size, and reinstate the screen modes.
+                    self.term.make_raw()?;
+                    if let Ok(size) = self.term.window_size() {
+                        self.screen.resize(size.col, 2);
+                    }
+                    self.screen.restore()?;
+                    self.screen.invalidate();
+                    self.last = String::from("(resumed)");
+                    self.render()?;
+                    self.screen.render()?;
+                    self.screen.flush()?;
+                    continue;
+                }
+                Event::Resize(ws) => {
+                    self.screen.resize(ws.col, 2);
+                }
+                _ => {}
+            }
+
+            let line = format_event(&ev);
+            self.screen.insert_above(&line)?;
+            self.last = line;
+            self.render()?;
+            self.screen.render()?;
+            self.screen.flush()?;
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }

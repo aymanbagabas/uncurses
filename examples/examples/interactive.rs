@@ -12,93 +12,114 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const TICK: Duration = Duration::from_millis(500);
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
+/// Event-polling demo app. `start` enters raw mode + alternate screen,
+/// `run` polls on a 500 ms tick to advance the clock even when idle, and
+/// `stop` restores the terminal.
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    started: Instant,
+    log: VecDeque<String>,
+}
 
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
+        let events = EventSource::new(term.input())?;
+        Ok(Self {
+            term,
+            screen,
+            events,
+            started: Instant::now(),
+            log: VecDeque::with_capacity(64),
+        })
+    }
 
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
+    fn render(&mut self) -> std::io::Result<()> {
+        redraw(&mut self.screen, &self.log, self.started.elapsed())
+    }
 
-    let mut events = EventSource::new(stdin)?;
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render()?;
+        self.screen.render()?;
+        self.screen.flush()?;
 
-    let started = Instant::now();
-    let mut log: VecDeque<String> = VecDeque::with_capacity(64);
-    redraw(&mut screen, &log, started.elapsed())?;
-    screen.render()?;
-    screen.flush()?;
+        let mut next_tick = Instant::now() + TICK;
+        loop {
+            let remaining = next_tick.saturating_duration_since(Instant::now());
+            let got = self.events.poll(Some(remaining))?;
+            let mut dirty = false;
 
-    let mut next_tick = Instant::now() + TICK;
-    let mut quit = false;
-    while !quit {
-        let remaining = next_tick.saturating_duration_since(Instant::now());
-        let got = events.poll(Some(remaining))?;
-        let mut dirty = false;
-
-        if got {
-            while let Some(ev) = events.try_read() {
-                match &ev {
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('q'),
-                        modifiers,
-                        ..
-                    }) if modifiers.is_empty() => {
-                        quit = true;
-                        break;
+            if got {
+                while let Some(ev) = self.events.try_read() {
+                    match &ev {
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('q'),
+                            modifiers,
+                            ..
+                        }) if modifiers.is_empty() => return Ok(()),
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('c'),
+                            modifiers,
+                            ..
+                        }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(()),
+                        Event::Resize(ws) => {
+                            self.screen.resize(ws.col, ws.row);
+                            let h = self.screen.height();
+                            push(&mut self.log, format!("Resize {}x{}", ws.col, ws.row), h);
+                        }
+                        _ => {
+                            let h = self.screen.height();
+                            push(&mut self.log, format!("{:?}", ev), h);
+                        }
                     }
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('c'),
-                        modifiers,
-                        ..
-                    }) if modifiers.contains(KeyModifiers::CTRL) => {
-                        quit = true;
-                        break;
-                    }
-                    Event::Resize(ws) => {
-                        screen.resize(ws.col, ws.row);
-                        push(
-                            &mut log,
-                            format!("Resize {}x{}", ws.col, ws.row),
-                            screen.height(),
-                        );
-                    }
-                    _ => push(&mut log, format!("{:?}", ev), screen.height()),
+                    dirty = true;
+                }
+            }
+
+            if Instant::now() >= next_tick {
+                next_tick += TICK;
+                // Skip ticks if we fell behind so we don't busy-spin catching up.
+                let now = Instant::now();
+                if next_tick < now {
+                    next_tick = now + TICK;
                 }
                 dirty = true;
             }
-        }
 
-        if Instant::now() >= next_tick {
-            next_tick += TICK;
-            // Skip ticks if we fell behind so we don't busy-spin catching up.
-            let now = Instant::now();
-            if next_tick < now {
-                next_tick = now + TICK;
+            if dirty {
+                self.render()?;
+                self.screen.render()?;
+                self.screen.flush()?;
             }
-            dirty = true;
-        }
-
-        if dirty {
-            redraw(&mut screen, &log, started.elapsed())?;
-            screen.render()?;
-            screen.flush()?;
         }
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn push(log: &mut VecDeque<String>, line: String, height: u16) {

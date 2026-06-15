@@ -5,12 +5,13 @@
 use std::io::Write;
 use std::time::Instant;
 
+use uncurses::Terminal;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 
 const NUM_PATTERNS: usize = 100;
 const GLYPHS: &[&str] = &["@", "#", "&", "*", "=", "%", "Z", "A"];
@@ -71,80 +72,127 @@ fn build_patterns(width: u16, height: u16, rng: &mut Rng) -> Vec<Vec<Cell>> {
         .collect()
 }
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
-    screen.flush()?;
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    rng: Rng,
+    w: u16,
+    h: u16,
+    patterns: Vec<Vec<Cell>>,
+    start: Instant,
+    frames: u64,
+    summary: Option<(u64, f64, f64)>,
+}
 
-    let mut events = EventSource::new(stdin)?;
-    let mut rng = Rng::new(seed_from_clock());
-    let (mut w, mut h) = (screen.width(), screen.height());
-    let mut patterns = build_patterns(w, h, &mut rng);
-
-    let start = Instant::now();
-    let mut frames: u64 = 0;
-    let mut quit = false;
-
-    while !quit {
-        while let Some(ev) = {
-            if events.poll(Some(std::time::Duration::ZERO))? {
-                events.try_read()
-            } else {
-                None
-            }
-        } {
-            match ev {
-                Event::KeyPress(Key {
-                    code: KeyCode::Escape,
-                    ..
-                }) => quit = true,
-                Event::KeyPress(Key {
-                    code: KeyCode::Char('c'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-                Event::Resize(ws) => {
-                    screen.resize(ws.col, ws.row);
-                    w = screen.width();
-                    h = screen.height();
-                    patterns = build_patterns(w, h, &mut rng);
-                }
-                _ => {}
-            }
-        }
-        if quit {
-            break;
-        }
-
-        let pattern = &patterns[(frames as usize) % NUM_PATTERNS];
-        for y in 0..h {
-            for x in 0..w {
-                let idx = y as usize * w as usize + x as usize;
-                screen.set_cell((x, y), &pattern[idx]);
-            }
-        }
-        screen.render()?;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
         screen.flush()?;
-        frames += 1;
+
+        let events = EventSource::new(term.input())?;
+        let mut rng = Rng::new(seed_from_clock());
+        let (w, h) = (screen.width(), screen.height());
+        let patterns = build_patterns(w, h, &mut rng);
+
+        Ok(Self {
+            term,
+            screen,
+            events,
+            rng,
+            w,
+            h,
+            patterns,
+            start: Instant::now(),
+            frames: 0,
+            summary: None,
+        })
     }
 
-    let elapsed = start.elapsed().as_secs_f64();
-    let fps = if elapsed > 0.0 {
-        frames as f64 / elapsed
-    } else {
-        0.0
-    };
+    fn render(&mut self) {
+        let pattern = &self.patterns[(self.frames as usize) % NUM_PATTERNS];
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let idx = y as usize * self.w as usize + x as usize;
+                self.screen.set_cell((x, y), &pattern[idx]);
+            }
+        }
+    }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    println!("Frames: {frames} in {elapsed:.2}s — {fps:.0} FPS");
-    Ok(())
+    fn run(&mut self) -> std::io::Result<()> {
+        loop {
+            let mut quit = false;
+            while let Some(ev) = {
+                if self.events.poll(Some(std::time::Duration::ZERO))? {
+                    self.events.try_read()
+                } else {
+                    None
+                }
+            } {
+                match ev {
+                    Event::KeyPress(Key {
+                        code: KeyCode::Escape,
+                        ..
+                    }) => quit = true,
+                    Event::KeyPress(Key {
+                        code: KeyCode::Char('c'),
+                        modifiers,
+                        ..
+                    }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
+                    Event::Resize(ws) => {
+                        self.screen.resize(ws.col, ws.row);
+                        self.w = self.screen.width();
+                        self.h = self.screen.height();
+                        self.patterns = build_patterns(self.w, self.h, &mut self.rng);
+                    }
+                    _ => {}
+                }
+            }
+            if quit {
+                break;
+            }
+
+            self.render();
+            self.screen.render()?;
+            self.screen.flush()?;
+            self.frames += 1;
+        }
+
+        let elapsed = self.start.elapsed().as_secs_f64();
+        let fps = if elapsed > 0.0 {
+            self.frames as f64 / elapsed
+        } else {
+            0.0
+        };
+        self.summary = Some((self.frames, elapsed, fps));
+
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some((frames, elapsed, fps)) = self.summary {
+            println!("Frames: {frames} in {elapsed:.2}s — {fps:.0} FPS");
+        }
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn seed_from_clock() -> u64 {

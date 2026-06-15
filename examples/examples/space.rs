@@ -12,12 +12,13 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const FRAME: Duration = Duration::from_micros(16_667); // ~60 FPS
@@ -114,76 +115,121 @@ impl Field {
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    rng: Rng,
+    field: Field,
+    fps: Fps,
+    frame_count: u32,
+}
 
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
-    screen.flush()?;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
 
-    let mut events = EventSource::new(stdin)?;
-    let mut rng = Rng::new(seed_from_clock());
-    let mut field = Field::new();
-    let mut fps = Fps::new();
-    let mut frame_count: u32 = 0;
-    let mut next_frame = Instant::now() + FRAME;
-    let mut quit = false;
-    let mut needs_redraw = true;
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
+        screen.flush()?;
 
-    while !quit {
-        let now = Instant::now();
-        let remaining = next_frame.saturating_duration_since(now);
+        let events = EventSource::new(term.input())?;
+        let rng = Rng::new(seed_from_clock());
+        let field = Field::new();
+        let fps = Fps::new();
 
-        if !remaining.is_zero() && events.poll(Some(remaining))? {
-            while let Some(ev) = events.try_read() {
-                match ev {
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('q'),
-                        modifiers,
-                        ..
-                    }) if modifiers.is_empty() => quit = true,
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('c'),
-                        modifiers,
-                        ..
-                    }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-                    Event::Resize(ws) => {
-                        screen.resize(ws.col, ws.row);
-                        field = Field::new();
-                        needs_redraw = true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if Instant::now() >= next_frame {
-            next_frame += FRAME;
-            let now = Instant::now();
-            if next_frame < now {
-                next_frame = now + FRAME;
-            }
-            frame_count = frame_count.wrapping_add(1);
-            fps.tick();
-            needs_redraw = true;
-        }
-
-        if needs_redraw && !quit {
-            draw(&mut screen, &mut field, &mut rng, &fps, frame_count);
-            screen.render()?;
-            screen.flush()?;
-            needs_redraw = false;
-        }
+        Ok(Self {
+            term,
+            screen,
+            events,
+            rng,
+            field,
+            fps,
+            frame_count: 0,
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        draw(
+            &mut self.screen,
+            &mut self.field,
+            &mut self.rng,
+            &self.fps,
+            self.frame_count,
+        );
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        let mut next_frame = Instant::now() + FRAME;
+        let mut needs_redraw = true;
+
+        loop {
+            let now = Instant::now();
+            let remaining = next_frame.saturating_duration_since(now);
+            let mut quit = false;
+
+            if !remaining.is_zero() && self.events.poll(Some(remaining))? {
+                while let Some(ev) = self.events.try_read() {
+                    match ev {
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('q'),
+                            modifiers,
+                            ..
+                        }) if modifiers.is_empty() => quit = true,
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('c'),
+                            modifiers,
+                            ..
+                        }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
+                        Event::Resize(ws) => {
+                            self.screen.resize(ws.col, ws.row);
+                            self.field = Field::new();
+                            needs_redraw = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            if Instant::now() >= next_frame {
+                next_frame += FRAME;
+                let now = Instant::now();
+                if next_frame < now {
+                    next_frame = now + FRAME;
+                }
+                self.frame_count = self.frame_count.wrapping_add(1);
+                self.fps.tick();
+                needs_redraw = true;
+            }
+
+            if needs_redraw && !quit {
+                self.render();
+                self.screen.render()?;
+                self.screen.flush()?;
+                needs_redraw = false;
+            }
+
+            if quit {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn draw<W: Write>(

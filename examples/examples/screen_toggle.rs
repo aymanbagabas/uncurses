@@ -6,76 +6,109 @@
 use std::io::Write;
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    // Inline mode: 4 rows is enough for the message + help.
-    let mut screen = Screen::new(stdout, (size.col, 4));
-    screen.set_cursor_visible(false)?;
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+    alt: bool,
+    size_col: u16,
+    size_row: u16,
+}
 
-    let mut events = EventSource::new(stdin)?;
-    let mut alt = false;
-    let mut quit = false;
-    redraw(&mut screen, alt);
-    screen.render()?;
-    screen.flush()?;
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let size = term.window_size().unwrap_or_default();
+        // Inline mode: 4 rows is enough for the message + help.
+        let mut screen = Screen::new(term.output(), (size.col, 4));
+        screen.set_cursor_visible(false)?;
+        let events = EventSource::new(term.input())?;
 
-    while !quit {
-        let ev = events.read()?;
-        match ev {
-            Event::KeyPress(Key {
-                code: KeyCode::Char('q') | KeyCode::Escape,
-                modifiers,
-                ..
-            }) if modifiers.is_empty() => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Char('c'),
-                modifiers,
-                ..
-            }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-            Event::KeyPress(Key {
-                code: KeyCode::Space,
-                ..
-            }) => {
-                alt = !alt;
-                if alt {
-                    screen.resize(size.col, size.row.max(4));
-                    screen.set_alt_screen(true)?;
-                } else {
-                    screen.set_alt_screen(false)?;
-                    screen.resize(size.col, 4);
-                }
-                redraw(&mut screen, alt);
-                screen.render()?;
-                screen.flush()?;
-            }
-            Event::Resize(ws) => {
-                if alt {
-                    screen.resize(ws.col, ws.row);
-                } else {
-                    screen.resize(ws.col, 4);
-                }
-                redraw(&mut screen, alt);
-                screen.render()?;
-                screen.flush()?;
-            }
-            _ => {}
-        }
+        Ok(Self {
+            term,
+            screen,
+            events,
+            alt: false,
+            size_col: size.col,
+            size_row: size.row,
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn render(&mut self) {
+        redraw(&mut self.screen, self.alt);
+    }
+
+    fn run(&mut self) -> std::io::Result<()> {
+        self.render();
+        self.screen.render()?;
+        self.screen.flush()?;
+
+        loop {
+            let ev = self.events.read()?;
+            match ev {
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('q') | KeyCode::Escape,
+                    modifiers,
+                    ..
+                }) if modifiers.is_empty() => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => break,
+                Event::KeyPress(Key {
+                    code: KeyCode::Space,
+                    ..
+                }) => {
+                    self.alt = !self.alt;
+                    if self.alt {
+                        self.screen.resize(self.size_col, self.size_row.max(4));
+                        self.screen.set_alt_screen(true)?;
+                    } else {
+                        self.screen.set_alt_screen(false)?;
+                        self.screen.resize(self.size_col, 4);
+                    }
+                    self.render();
+                    self.screen.render()?;
+                    self.screen.flush()?;
+                }
+                Event::Resize(ws) => {
+                    if self.alt {
+                        self.screen.resize(ws.col, ws.row);
+                    } else {
+                        self.screen.resize(ws.col, 4);
+                    }
+                    self.render();
+                    self.screen.render()?;
+                    self.screen.flush()?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 
 fn redraw<W: Write>(screen: &mut Screen<W>, alt: bool) {

@@ -13,15 +13,14 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Position;
 use uncurses::screen::Screen;
 use uncurses::style::{Style, UnderlineStyle};
-use uncurses::terminal::{
-    Stdin, disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout,
-};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const BOX_W: u16 = 56;
@@ -720,40 +719,61 @@ fn scene_balls<W: Write>(
     })
 }
 
-fn main() -> std::io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
+/// Scene-runner app. `start` enters raw mode + the alternate screen,
+/// `run` cycles through the scenes until one returns `false` (quit), and
+/// `stop` restores the terminal. Each scene owns its own rendering.
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    events: EventSource<Stdin>,
+}
 
-    let mut events = EventSource::new(stdin)?;
-
-    type Scene = fn(
-        &mut Screen<uncurses::terminal::Stdout>,
-        &mut EventSource<Stdin>,
-    ) -> std::io::Result<bool>;
-    let scenes: [Scene; 6] = [
-        scene_sprinkles,
-        scene_panels,
-        scene_art,
-        scene_banner,
-        scene_marquee,
-        scene_balls,
-    ];
-
-    'outer: loop {
-        for scene in scenes {
-            if !scene(&mut screen, &mut events)? {
-                break 'outer;
-            }
-        }
+impl App {
+    fn start() -> std::io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
+        let events = EventSource::new(term.input())?;
+        Ok(Self {
+            term,
+            screen,
+            events,
+        })
     }
 
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-    Ok(())
+    fn run(&mut self) -> std::io::Result<()> {
+        type Scene = fn(&mut Screen<Stdout>, &mut EventSource<Stdin>) -> std::io::Result<bool>;
+        let scenes: [Scene; 6] = [
+            scene_sprinkles,
+            scene_panels,
+            scene_art,
+            scene_banner,
+            scene_marquee,
+            scene_balls,
+        ];
+
+        'outer: loop {
+            for scene in scenes {
+                if !scene(&mut self.screen, &mut self.events)? {
+                    break 'outer;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn stop(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }

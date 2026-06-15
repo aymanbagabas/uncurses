@@ -14,12 +14,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use uncurses::SurfaceMut;
+use uncurses::Terminal;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{disable_raw_mode, enable_raw_mode, get_window_size, stdin, stdout};
+use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
 const GLYPH: &str = "\u{2580}";
@@ -147,75 +148,104 @@ enum InputMsg {
     Quit,
 }
 
-fn main() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let state = enable_raw_mode(stdin, stdout)?;
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
-    screen.flush()?;
-
-    let (tx, rx) = mpsc::channel::<InputMsg>();
-    let input_handle = thread::Builder::new()
-        .name("input".into())
-        .spawn(move || input_loop(tx))
-        .expect("spawn input thread");
-
-    let mut rng = Rng::new(seed_from_clock());
-    let mut field = Field::new();
-    let mut fps = Fps::new();
-    let mut frame_count: u32 = 0;
-    let mut quit = false;
-
-    while !quit {
-        loop {
-            match rx.try_recv() {
-                Ok(InputMsg::Quit) => {
-                    quit = true;
-                    break;
-                }
-                Ok(InputMsg::Resize(cols, rows)) => {
-                    screen.resize(cols, rows);
-                    field = Field::new();
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    quit = true;
-                    break;
-                }
-            }
-        }
-        if quit {
-            break;
-        }
-
-        frame_count = frame_count.wrapping_add(1);
-        let t0 = Instant::now();
-        draw(&mut screen, &mut field, &mut rng, &fps, frame_count);
-        let t1 = Instant::now();
-        screen.render()?;
-        let t2 = Instant::now();
-        screen.flush()?;
-        let t3 = Instant::now();
-        fps.record(t1 - t0, t2 - t1, t3 - t2);
-    }
-
-    screen.reset()?;
-    screen.flush()?;
-    disable_raw_mode(stdin, stdout, &state)?;
-
-    // The input thread exits on its next read once stdin returns EOF or
-    // the user releases the next key; we do not wait indefinitely.
-    drop(input_handle);
-    Ok(())
+/// Uncapped starfield app. `start` enters raw mode + alternate screen
+/// and spawns the input thread, `run` renders frames as fast as possible
+/// while draining input from the channel, and `stop` restores the
+/// terminal.
+struct App {
+    term: Terminal<Stdin, Stdout>,
+    screen: Screen<Stdout>,
+    rx: mpsc::Receiver<InputMsg>,
+    rng: Rng,
+    field: Field,
+    fps: Fps,
+    frame_count: u32,
 }
 
-fn input_loop(tx: mpsc::Sender<InputMsg>) {
-    let stdin = stdin();
-    let mut events = match EventSource::new(stdin) {
+impl App {
+    fn start() -> io::Result<Self> {
+        let mut term = Terminal::stdio();
+        term.make_raw()?;
+        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        screen.set_alt_screen(true)?;
+        screen.set_cursor_visible(false)?;
+        screen.flush()?;
+
+        // Input runs on a dedicated thread so the render loop never
+        // blocks on the keyboard; events arrive over a channel.
+        let (tx, rx) = mpsc::channel::<InputMsg>();
+        let input = term.input();
+        thread::Builder::new()
+            .name("input".into())
+            .spawn(move || input_loop(input, tx))
+            .expect("spawn input thread");
+
+        Ok(Self {
+            term,
+            screen,
+            rx,
+            rng: Rng::new(seed_from_clock()),
+            field: Field::new(),
+            fps: Fps::new(),
+            frame_count: 0,
+        })
+    }
+
+    fn render(&mut self) -> io::Result<()> {
+        self.frame_count = self.frame_count.wrapping_add(1);
+        let t0 = Instant::now();
+        draw(
+            &mut self.screen,
+            &mut self.field,
+            &mut self.rng,
+            &self.fps,
+            self.frame_count,
+        );
+        let t1 = Instant::now();
+        self.screen.render()?;
+        let t2 = Instant::now();
+        self.screen.flush()?;
+        let t3 = Instant::now();
+        self.fps.record(t1 - t0, t2 - t1, t3 - t2);
+        Ok(())
+    }
+
+    fn run(&mut self) -> io::Result<()> {
+        loop {
+            // Drain pending input without blocking the render loop.
+            loop {
+                match self.rx.try_recv() {
+                    Ok(InputMsg::Quit) => return Ok(()),
+                    Ok(InputMsg::Resize(cols, rows)) => {
+                        self.screen.resize(cols, rows);
+                        self.field = Field::new();
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                }
+            }
+            self.render()?;
+        }
+    }
+
+    fn stop(&mut self) -> io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        // The input thread exits on its next read once stdin returns EOF
+        // or the user releases the next key; we do not wait for it.
+        self.term.restore()
+    }
+}
+
+fn main() -> io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
+}
+
+fn input_loop(input: Stdin, tx: mpsc::Sender<InputMsg>) {
+    let mut events = match EventSource::new(input) {
         Ok(r) => r,
         Err(_) => return,
     };
