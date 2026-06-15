@@ -438,6 +438,50 @@ where
         }
     }
 
+    /// Remove and return the first queued event satisfying `predicate`,
+    /// leaving every other event in place and in order. Returns `None`
+    /// if no queued event matches. Does not perform I/O.
+    ///
+    /// The non-blocking counterpart to [`read_matching`](Self::read_matching),
+    /// used to pluck a specific reply (e.g. a query response) out of the
+    /// stream without disturbing pending user input.
+    pub fn try_read_matching(&mut self, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
+        let pos = self.queue.iter().position(predicate)?;
+        self.queue.remove(pos)
+    }
+
+    /// Block up to `timeout` for an event satisfying `predicate`, remove
+    /// it from the queue, and return it. Events that do not match are left
+    /// queued, in order, for a later [`read`](Self::read).
+    ///
+    /// Returns `Ok(None)` on timeout or a paired [`Waker`] wake. `None`
+    /// for `timeout` blocks until a match arrives or a wake fires.
+    pub fn read_matching(
+        &mut self,
+        predicate: impl Fn(&Event) -> bool,
+        timeout: Option<Duration>,
+    ) -> io::Result<Option<Event>> {
+        if let Some(ev) = self.try_read_matching(&predicate) {
+            return Ok(Some(ev));
+        }
+        let deadline = timeout.map(|t| Instant::now() + t);
+        loop {
+            let remaining = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+            if !self.poll(remaining)? {
+                // Timeout elapsed or a waker fired; nothing new arrived.
+                return Ok(None);
+            }
+            if let Some(ev) = self.try_read_matching(&predicate) {
+                return Ok(Some(ev));
+            }
+            if let Some(left) = remaining
+                && left.is_zero()
+            {
+                return Ok(None);
+            }
+        }
+    }
+
     /// Drive the parser as far as it will go against the bytes
     /// currently in `pending`, pushing extracted events onto the
     /// queue and arming the appropriate timeout deadline.
@@ -808,6 +852,61 @@ mod tests {
             Event::KeyPress(k) => assert_eq!(k.code, KeyCode::Char('a')),
             other => panic!("unexpected event {:?}", other),
         }
+    }
+
+    #[test]
+    fn try_read_matching_plucks_and_preserves_order() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx);
+        write_bytes(&tx, b"ab");
+        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        let b = src
+            .try_read_matching(
+                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('b')),
+            )
+            .expect("b should be pluckable");
+        assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
+        // 'a' is still queued, in order; the matched 'b' is gone.
+        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+        assert!(
+            src.try_read_matching(
+                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('b'))
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn read_matching_blocks_then_plucks_leaving_others() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx);
+        write_bytes(&tx, b"ab");
+        let b = src
+            .read_matching(
+                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('b')),
+                Some(Duration::from_secs(1)),
+            )
+            .unwrap()
+            .expect("b arrives within timeout");
+        assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
+        // 'a' remained queued for a normal read.
+        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+    }
+
+    #[test]
+    fn read_matching_times_out_and_preserves_non_matching() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx);
+        write_bytes(&tx, b"a");
+        let got = src
+            .read_matching(
+                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('z')),
+                Some(Duration::from_millis(30)),
+            )
+            .unwrap();
+        assert!(got.is_none());
+        // The non-matching 'a' is preserved for a normal read.
+        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('a')));
     }
 
     #[test]
