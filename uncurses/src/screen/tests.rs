@@ -160,6 +160,48 @@ fn reset_and_restore_round_trip_grapheme_clusters() {
 }
 
 #[test]
+fn set_in_band_resize_emits_decset_2048_and_tracks_state() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf, (20, 1));
+        assert!(!screen.in_band_resize());
+        screen.set_in_band_resize(true);
+        assert!(screen.in_band_resize());
+        // Idempotent: second enable doesn't write again.
+        screen.set_in_band_resize(true);
+        screen.set_in_band_resize(false);
+        assert!(!screen.in_band_resize());
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    assert!(out.contains("\x1b[?2048h"));
+    assert!(out.contains("\x1b[?2048l"));
+    assert_eq!(out.matches("\x1b[?2048h").count(), 1);
+}
+
+#[test]
+fn reset_and_restore_round_trip_in_band_resize() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::new(&mut buf, (20, 1));
+        screen.set_in_band_resize(true);
+        assert!(screen.in_band_resize());
+
+        // reset: state preserved, teardown writes RM
+        screen.reset();
+        assert!(screen.in_band_resize());
+
+        // restore: re-emits SM
+        screen.restore();
+        screen.flush().unwrap();
+    }
+    let out = String::from_utf8_lossy(&buf);
+    // Enable SM, reset emits RM, restore emits SM again.
+    assert!(out.matches("\x1b[?2048h").count() >= 2);
+    assert!(out.contains("\x1b[?2048l"));
+}
+
+#[test]
 fn test_resize() {
     let mut screen = Screen::new(Vec::new(), (80, 24));
     screen.resize(100, 30);

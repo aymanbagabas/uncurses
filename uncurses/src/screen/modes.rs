@@ -160,6 +160,29 @@ impl<W: Write> Screen<W> {
         self.state.color_scheme_updates
     }
 
+    /// Enable or disable in-band resize notifications (DEC private mode
+    /// 2048). When enabled, the terminal reports every surface size
+    /// change in-band as a `CSI 48 ; height ; width ; ypixel ; xpixel t`
+    /// sequence, which the decoder surfaces as [`Event::Resize`] — no
+    /// `SIGWINCH` handler required.
+    ///
+    /// [`Event::Resize`]: crate::event::Event::Resize
+    pub fn set_in_band_resize(&mut self, enable: bool) {
+        if self.state.in_band_resize != enable {
+            if enable {
+                mode::Mode::IN_BAND_RESIZE.set(&mut self.buf).unwrap();
+            } else {
+                mode::Mode::IN_BAND_RESIZE.reset(&mut self.buf).unwrap();
+            }
+            self.state.in_band_resize = enable;
+        }
+    }
+
+    /// Whether in-band resize notifications (DEC 2048) are enabled.
+    pub fn in_band_resize(&self) -> bool {
+        self.state.in_band_resize
+    }
+
     /// Set window title.
     pub fn set_title(&mut self, title: &str) {
         ansi::write_window_title(&mut self.buf, title).unwrap();

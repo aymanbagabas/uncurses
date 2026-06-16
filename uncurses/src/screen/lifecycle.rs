@@ -90,6 +90,9 @@ impl<W: Write> Screen<W> {
         if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.reset(&mut self.buf).unwrap();
         }
+        if self.state.in_band_resize {
+            mode::Mode::IN_BAND_RESIZE.reset(&mut self.buf).unwrap();
+        }
         if self.state.foreground_color.is_some() {
             self.buf
                 .write_all(background::RESET_FOREGROUND_COLOR)
@@ -150,6 +153,9 @@ impl<W: Write> Screen<W> {
         }
         if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.set(&mut self.buf).unwrap();
+        }
+        if self.state.in_band_resize {
+            mode::Mode::IN_BAND_RESIZE.set(&mut self.buf).unwrap();
         }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
