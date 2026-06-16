@@ -1,8 +1,13 @@
 //! Terminal-mode toggles for [`Screen`] — alt screen, cursor, mouse,
 //! bracketed paste, focus reporting, synchronized output, grapheme
 //! clusters (DEC 2027), and window title.
+//!
+//! These setters only stage escape bytes into the screen's in-memory
+//! buffer, so they are infallible and return `()`. The bytes reach the
+//! terminal when the caller invokes [`Screen::flush`] (or
+//! [`Screen::present`]), which is the sole fallible I/O boundary.
 
-use std::io::{self, Write};
+use std::io::Write;
 
 use crate::ansi::{self, cursor, kitty, mode};
 
@@ -12,19 +17,23 @@ impl<W: Write> Screen<W> {
     /// Toggle alternate screen mode. Entering saves the cursor and
     /// switches to the alternate buffer; exiting restores both. No-op
     /// when already in the requested state.
-    pub fn set_alt_screen(&mut self, alt_screen: bool) -> io::Result<()> {
+    pub fn set_alt_screen(&mut self, alt_screen: bool) {
         if self.state.alt_screen == alt_screen {
-            return Ok(());
+            return;
         }
         if alt_screen {
             self.renderer.save_cursor();
-            mode::Mode::ALT_SCREEN_SAVE_CURSOR.set(&mut self.buf)?;
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR
+                .set(&mut self.buf)
+                .unwrap();
             self.state.alt_screen = true;
             self.renderer.set_fullscreen(true);
             self.renderer.set_relative_cursor(false);
             self.renderer.request_clear();
         } else {
-            mode::Mode::ALT_SCREEN_SAVE_CURSOR.reset(&mut self.buf)?;
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR
+                .reset(&mut self.buf)
+                .unwrap();
             self.state.alt_screen = false;
             self.renderer.set_fullscreen(false);
             self.renderer.set_relative_cursor(true);
@@ -38,80 +47,72 @@ impl<W: Write> Screen<W> {
                 &mut self.buf,
                 self.state.kitty_keyboard,
                 kitty::KittyKeyboardMode::Set,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(())
     }
 
     /// Set cursor visibility.
-    pub fn set_cursor_visible(&mut self, visible: bool) -> io::Result<()> {
+    pub fn set_cursor_visible(&mut self, visible: bool) {
         if self.state.cursor_visible != visible {
             if visible {
-                mode::Mode::CURSOR_VISIBLE.set(&mut self.buf)?;
+                mode::Mode::CURSOR_VISIBLE.set(&mut self.buf).unwrap();
             } else {
-                mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf)?;
+                mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
             }
             self.state.cursor_visible = visible;
         }
-        Ok(())
     }
 
     /// Set cursor style.
-    pub fn set_cursor_style(&mut self, style: cursor::CursorStyle) -> io::Result<()> {
+    pub fn set_cursor_style(&mut self, style: cursor::CursorStyle) {
         if self.state.cursor_style != style {
-            cursor::write_cursor_style(&mut self.buf, style)?;
+            cursor::write_cursor_style(&mut self.buf, style).unwrap();
             self.state.cursor_style = style;
         }
-        Ok(())
     }
 
     /// Enable/disable bracketed paste mode.
-    pub fn set_bracketed_paste(&mut self, enable: bool) -> io::Result<()> {
+    pub fn set_bracketed_paste(&mut self, enable: bool) {
         if self.state.bracketed_paste != enable {
             if enable {
-                mode::Mode::BRACKETED_PASTE.set(&mut self.buf)?;
+                mode::Mode::BRACKETED_PASTE.set(&mut self.buf).unwrap();
             } else {
-                mode::Mode::BRACKETED_PASTE.reset(&mut self.buf)?;
+                mode::Mode::BRACKETED_PASTE.reset(&mut self.buf).unwrap();
             }
             self.state.bracketed_paste = enable;
         }
-        Ok(())
     }
 
     /// Enable/disable focus in/out reporting.
-    pub fn set_focus_events(&mut self, enable: bool) -> io::Result<()> {
+    pub fn set_focus_events(&mut self, enable: bool) {
         if self.state.focus_events != enable {
             if enable {
-                mode::Mode::FOCUS.set(&mut self.buf)?;
+                mode::Mode::FOCUS.set(&mut self.buf).unwrap();
             } else {
-                mode::Mode::FOCUS.reset(&mut self.buf)?;
+                mode::Mode::FOCUS.reset(&mut self.buf).unwrap();
             }
             self.state.focus_events = enable;
         }
-        Ok(())
     }
 
     /// Set mouse tracking mode.
-    pub fn set_mouse_mode(
-        &mut self,
-        mouse_mode: mode::MouseMode,
-        encoding: mode::MouseEncoding,
-    ) -> io::Result<()> {
+    pub fn set_mouse_mode(&mut self, mouse_mode: mode::MouseMode, encoding: mode::MouseEncoding) {
         // Disable old mode
         if self.state.mouse_mode != mode::MouseMode::None {
             mode::write_disable_mouse(
                 &mut self.buf,
                 self.state.mouse_mode,
                 self.state.mouse_encoding,
-            )?;
+            )
+            .unwrap();
         }
         // Enable new mode
         if mouse_mode != mode::MouseMode::None {
-            mode::write_enable_mouse(&mut self.buf, mouse_mode, encoding)?;
+            mode::write_enable_mouse(&mut self.buf, mouse_mode, encoding).unwrap();
         }
         self.state.mouse_mode = mouse_mode;
         self.state.mouse_encoding = encoding;
-        Ok(())
     }
 
     /// Set synchronized updates.
@@ -124,16 +125,15 @@ impl<W: Write> Screen<W> {
     /// and [`Screen::insert_above`] calculate cell widths per grapheme
     /// cluster (UTS-29 + emoji presentation rules). When disabled,
     /// widths fall back to per-codepoint wcwidth-style.
-    pub fn set_grapheme_clusters(&mut self, enable: bool) -> io::Result<()> {
+    pub fn set_grapheme_clusters(&mut self, enable: bool) {
         if self.state.grapheme_clusters != enable {
             if enable {
-                mode::Mode::UNICODE_CORE.set(&mut self.buf)?;
+                mode::Mode::UNICODE_CORE.set(&mut self.buf).unwrap();
             } else {
-                mode::Mode::UNICODE_CORE.reset(&mut self.buf)?;
+                mode::Mode::UNICODE_CORE.reset(&mut self.buf).unwrap();
             }
             self.state.grapheme_clusters = enable;
         }
-        Ok(())
     }
 
     /// Enable or disable color scheme update notifications
@@ -144,16 +144,15 @@ impl<W: Write> Screen<W> {
     ///
     /// [`Event::DarkColorScheme`]: crate::event::Event::DarkColorScheme
     /// [`Event::LightColorScheme`]: crate::event::Event::LightColorScheme
-    pub fn set_color_scheme_updates(&mut self, enable: bool) -> io::Result<()> {
+    pub fn set_color_scheme_updates(&mut self, enable: bool) {
         if self.state.color_scheme_updates != enable {
             if enable {
-                mode::Mode::LIGHT_DARK.set(&mut self.buf)?;
+                mode::Mode::LIGHT_DARK.set(&mut self.buf).unwrap();
             } else {
-                mode::Mode::LIGHT_DARK.reset(&mut self.buf)?;
+                mode::Mode::LIGHT_DARK.reset(&mut self.buf).unwrap();
             }
             self.state.color_scheme_updates = enable;
         }
-        Ok(())
     }
 
     /// Whether color scheme update notifications (DEC 2031) are enabled.
@@ -162,9 +161,8 @@ impl<W: Write> Screen<W> {
     }
 
     /// Set window title.
-    pub fn set_title(&mut self, title: &str) -> io::Result<()> {
-        ansi::write_window_title(&mut self.buf, title)?;
+    pub fn set_title(&mut self, title: &str) {
+        ansi::write_window_title(&mut self.buf, title).unwrap();
         self.state.title = Some(title.to_string());
-        Ok(())
     }
 }

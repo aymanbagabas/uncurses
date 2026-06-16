@@ -39,7 +39,7 @@ impl App {
         let w = SURFACE_W.min(size.col.max(1));
         let h = SURFACE_H.min(size.row.max(1));
         let mut screen = Screen::new(term.output(), (w, h));
-        screen.set_cursor_visible(false)?;
+        screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
 
         Ok(Self {

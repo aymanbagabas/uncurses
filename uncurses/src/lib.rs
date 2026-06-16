@@ -45,7 +45,7 @@
 //! use uncurses::terminal::stdout;
 //!
 //! let mut screen = uncurses::screen::Screen::new(stdout(), (80, 24));
-//! // … screen.render()?; screen.set_alt_screen(true)?; …
+//! // … screen.render()?; screen.set_alt_screen(true); …
 //! screen.flush()?; // explicit: nothing reaches the terminal until here
 //! # Ok::<_, std::io::Error>(())
 //! ```

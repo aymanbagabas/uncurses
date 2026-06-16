@@ -435,12 +435,12 @@ impl App {
         // Enter the alt screen, hide the cursor, and enable SGR-encoded
         // mouse tracking via the screen API so internal state stays in
         // sync with the actual terminal mode flags.
-        screen.set_alt_screen(true)?;
-        screen.set_cursor_visible(false)?;
+        screen.set_alt_screen(true);
+        screen.set_cursor_visible(false);
         screen.set_mouse_mode(
             uncurses::ansi::mode::MouseMode::Normal,
             uncurses::ansi::mode::MouseEncoding::Sgr,
-        )?;
+        );
         screen.flush()?;
 
         let events = EventSource::new(term.input())?.into_stream();

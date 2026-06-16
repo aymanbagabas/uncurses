@@ -56,9 +56,9 @@ impl App {
         term.make_raw()?;
         let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
 
-        screen.set_alt_screen(true)?;
-        screen.set_cursor_visible(true)?;
-        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr)?;
+        screen.set_alt_screen(true);
+        screen.set_cursor_visible(true);
+        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr);
 
         let events = EventSource::new(term.input())?;
 
@@ -74,7 +74,7 @@ impl App {
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen)?;
         self.screen.render()?;
-        self.screen.set_cursor_position(self.cx, self.cy)?;
+        self.screen.set_cursor_position(self.cx, self.cy);
         self.screen.flush()
     }
 

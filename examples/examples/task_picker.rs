@@ -62,7 +62,7 @@ impl App {
         // Start at a single row; the first redraw will grow the screen to
         // match the first frame's measured height.
         let mut screen = Screen::new(term.output(), (term_cols, 1));
-        screen.set_cursor_visible(false)?;
+        screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
 
         Ok(Self {
