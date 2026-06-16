@@ -6,6 +6,7 @@ pub use diff::*;
 pub use parse::*;
 pub use sgr::*;
 
+use std::io::{self, Write};
 use std::sync::Arc;
 
 use bitflags::bitflags;
@@ -212,6 +213,22 @@ impl Style {
         }
         self
     }
+
+    /// Write this style's SGR sequence (`CSI ... m`) to `w`. An empty
+    /// style writes the reset sequence (`CSI m`). Does not reset
+    /// afterwards — following output stays in this style until changed.
+    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        sgr::write_style(w, self)
+    }
+
+    /// Write `text` wrapped in this style: the style's SGR sequence,
+    /// then `text`, then an SGR reset (`CSI m`) so subsequent output is
+    /// unstyled.
+    pub fn write_styled<W: Write>(&self, w: &mut W, text: &str) -> io::Result<()> {
+        sgr::write_style(w, self)?;
+        w.write_all(text.as_bytes())?;
+        w.write_all(sgr::RESET)
+    }
 }
 
 #[cfg(test)]
@@ -250,5 +267,30 @@ mod tests {
 
         let s = Style::EMPTY.link("", "");
         assert!(s.link.is_none());
+    }
+
+    #[test]
+    fn write_emits_sgr_without_reset() {
+        let mut buf = Vec::new();
+        Style::EMPTY
+            .bold()
+            .fg(Color::Basic(BasicColor::Red))
+            .write(&mut buf)
+            .unwrap();
+        assert_eq!(buf, b"\x1b[1;31m");
+    }
+
+    #[test]
+    fn write_empty_style_emits_reset() {
+        let mut buf = Vec::new();
+        Style::EMPTY.write(&mut buf).unwrap();
+        assert_eq!(buf, b"\x1b[m");
+    }
+
+    #[test]
+    fn write_styled_wraps_text_in_style_and_reset() {
+        let mut buf = Vec::new();
+        Style::EMPTY.bold().write_styled(&mut buf, "hi").unwrap();
+        assert_eq!(buf, b"\x1b[1mhi\x1b[m");
     }
 }
