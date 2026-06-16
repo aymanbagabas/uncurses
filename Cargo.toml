@@ -17,6 +17,7 @@ unicode-width = "0.2"
 icu_segmenter = { version = "2", default-features = false, features = ["compiled_data"] }
 icu_properties = { version = "2", default-features = false, features = ["compiled_data"] }
 libc = "0.2"
+futures-core = "0.3"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",

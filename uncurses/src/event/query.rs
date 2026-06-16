@@ -73,6 +73,13 @@ impl<T> Query<T> {
     pub fn matches(&self, event: &Event) -> Option<T> {
         (self.reply)(event)
     }
+
+    /// The reply matcher as a plain function pointer (`Copy`, `Send`,
+    /// `'static`), for dispatching a query to the async reader thread.
+    #[cfg(feature = "async")]
+    pub(crate) fn reply_fn(&self) -> fn(&Event) -> Option<T> {
+        self.reply
+    }
 }
 
 /// Query the terminal's default background color (`OSC 11`).

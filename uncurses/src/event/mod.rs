@@ -17,11 +17,15 @@ mod sigwinch;
 pub mod source;
 #[cfg(windows)]
 pub mod source_windows;
+#[cfg(feature = "async")]
+pub mod stream;
 
 pub use decode::*;
 pub use key::*;
 pub use mouse::*;
 pub use source::*;
+#[cfg(feature = "async")]
+pub use stream::EventStream;
 
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
