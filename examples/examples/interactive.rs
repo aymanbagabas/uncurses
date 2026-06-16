@@ -49,13 +49,12 @@ impl App {
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, &self.log, self.started.elapsed())
+        redraw(&mut self.screen, &self.log, self.started.elapsed())?;
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
-        self.screen.render()?;
-        self.screen.flush()?;
 
         let mut next_tick = Instant::now() + TICK;
         loop {
@@ -102,8 +101,6 @@ impl App {
 
             if dirty {
                 self.render()?;
-                self.screen.render()?;
-                self.screen.flush()?;
             }
         }
     }

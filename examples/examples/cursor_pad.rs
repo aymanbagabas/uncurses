@@ -72,14 +72,14 @@ impl App {
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen)
+        redraw(&mut self.screen)?;
+        self.screen.render()?;
+        self.screen.set_cursor_position(self.cx, self.cy)?;
+        self.screen.flush()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
-        self.screen.set_cursor_position(self.cx, self.cy)?;
-        self.screen.render()?;
-        self.screen.flush()?;
 
         loop {
             let ev = self.events.read()?;
@@ -154,14 +154,11 @@ impl App {
                     let (nx, ny) = clamp_to_screen(&self.screen, self.cx, self.cy);
                     self.cx = nx;
                     self.cy = ny;
-                    self.render()?;
                 }
                 _ => {}
             }
 
-            self.screen.render()?;
-            self.screen.set_cursor_position(self.cx, self.cy)?;
-            self.screen.flush()?;
+            self.render()?;
         }
         Ok(())
     }

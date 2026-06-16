@@ -73,14 +73,13 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen, self.modal_open);
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
-        self.render();
-        self.screen.render()?;
-        self.screen.flush()?;
+        self.render()?;
 
         loop {
             let ev = self.events.read()?;
@@ -98,9 +97,7 @@ impl App {
                 _ => {}
             }
             if dirty {
-                self.render();
-                self.screen.render()?;
-                self.screen.flush()?;
+                self.render()?;
             }
         }
         Ok(())

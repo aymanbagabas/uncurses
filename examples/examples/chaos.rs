@@ -113,7 +113,7 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> std::io::Result<()> {
         let pattern = &self.patterns[(self.frames as usize) % NUM_PATTERNS];
         for y in 0..self.h {
             for x in 0..self.w {
@@ -121,6 +121,7 @@ impl App {
                 self.screen.set_cell((x, y), &pattern[idx]);
             }
         }
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
@@ -156,9 +157,7 @@ impl App {
                 break;
             }
 
-            self.render();
-            self.screen.render()?;
-            self.screen.flush()?;
+            self.render()?;
             self.frames += 1;
         }
 
