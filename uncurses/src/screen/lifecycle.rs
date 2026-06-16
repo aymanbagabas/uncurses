@@ -2,7 +2,7 @@
 //! tear down and re-apply held modes around a shell handoff, and
 //! `insert_above` injects content into the scrollback above the screen.
 
-use std::io::{self, Write};
+use std::io::Write;
 
 use crate::ansi::{self, background, cursor, kitty, mode};
 
@@ -19,10 +19,6 @@ impl<W: Write> Screen<W> {
     /// Only stages into the buffer, so it is infallible; the bytes reach
     /// the terminal on the next [`Screen::flush`].
     pub fn reset(&mut self) {
-        self.write_reset().unwrap();
-    }
-
-    fn write_reset(&mut self) -> io::Result<()> {
         // Walk to the bottom of the *last rendered* surface before any
         // mode teardown. Use the renderer's last-render height rather
         // than the live screen height: a terminal that grew between
@@ -39,26 +35,28 @@ impl<W: Write> Screen<W> {
         let (_, last_height) = self.renderer.last_size();
         if last_height > 0 {
             self.renderer
-                .move_to(&mut self.buf, &self.front_buf, last_height - 1, 0)?;
+                .move_to(&mut self.buf, &self.front_buf, last_height - 1, 0)
+                .unwrap();
         }
         if !self.state.cursor_visible {
-            mode::Mode::CURSOR_VISIBLE.set(&mut self.buf)?;
+            mode::Mode::CURSOR_VISIBLE.set(&mut self.buf).unwrap();
         }
         if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.buf, cursor::CursorStyle::Default)?;
+            cursor::write_cursor_style(&mut self.buf, cursor::CursorStyle::Default).unwrap();
         }
         if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.reset(&mut self.buf)?;
+            mode::Mode::BRACKETED_PASTE.reset(&mut self.buf).unwrap();
         }
         if self.state.focus_events {
-            mode::Mode::FOCUS.reset(&mut self.buf)?;
+            mode::Mode::FOCUS.reset(&mut self.buf).unwrap();
         }
         if self.state.mouse_mode != mode::MouseMode::None {
             mode::write_disable_mouse(
                 &mut self.buf,
                 self.state.mouse_mode,
                 self.state.mouse_encoding,
-            )?;
+            )
+            .unwrap();
         }
         // Clear the alt screen's kitty keyboard frame *before* leaving
         // the alt screen — the stack is per-screen-buffer, so the
@@ -68,10 +66,13 @@ impl<W: Write> Screen<W> {
                 &mut self.buf,
                 kitty::KittyKeyboardFlags::NONE,
                 kitty::KittyKeyboardMode::Set,
-            )?;
+            )
+            .unwrap();
         }
         if self.state.alt_screen {
-            mode::Mode::ALT_SCREEN_SAVE_CURSOR.reset(&mut self.buf)?;
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR
+                .reset(&mut self.buf)
+                .unwrap();
             self.renderer.restore_cursor();
         }
         // Now on the main screen — clear its frame too.
@@ -80,27 +81,31 @@ impl<W: Write> Screen<W> {
                 &mut self.buf,
                 kitty::KittyKeyboardFlags::NONE,
                 kitty::KittyKeyboardMode::Set,
-            )?;
+            )
+            .unwrap();
         }
         if self.state.grapheme_clusters {
-            mode::Mode::UNICODE_CORE.reset(&mut self.buf)?;
+            mode::Mode::UNICODE_CORE.reset(&mut self.buf).unwrap();
         }
         if self.state.color_scheme_updates {
-            mode::Mode::LIGHT_DARK.reset(&mut self.buf)?;
+            mode::Mode::LIGHT_DARK.reset(&mut self.buf).unwrap();
         }
         if self.state.foreground_color.is_some() {
-            self.buf.write_all(background::RESET_FOREGROUND_COLOR)?;
+            self.buf
+                .write_all(background::RESET_FOREGROUND_COLOR)
+                .unwrap();
         }
         if self.state.background_color.is_some() {
-            self.buf.write_all(background::RESET_BACKGROUND_COLOR)?;
+            self.buf
+                .write_all(background::RESET_BACKGROUND_COLOR)
+                .unwrap();
         }
         if self.state.cursor_color.is_some() {
-            self.buf.write_all(background::RESET_CURSOR_COLOR)?;
+            self.buf.write_all(background::RESET_CURSOR_COLOR).unwrap();
         }
         if self.state.title.is_some() {
-            ansi::write_window_title(&mut self.buf, "")?;
+            ansi::write_window_title(&mut self.buf, "").unwrap();
         }
-        Ok(())
     }
 
     /// Re-emit every non-default mode held in `self.state` to `w`.
@@ -112,10 +117,6 @@ impl<W: Write> Screen<W> {
     /// Only stages into the buffer, so it is infallible; the bytes reach
     /// the terminal on the next [`Screen::flush`].
     pub fn restore(&mut self) {
-        self.write_restore().unwrap();
-    }
-
-    fn write_restore(&mut self) -> io::Result<()> {
         // Re-apply the desired kitty keyboard flags on the main
         // screen *before* entering the alt screen — the stack is
         // per-buffer, so a set targeting main must happen while main
@@ -125,11 +126,14 @@ impl<W: Write> Screen<W> {
                 &mut self.buf,
                 self.state.kitty_keyboard,
                 kitty::KittyKeyboardMode::Set,
-            )?;
+            )
+            .unwrap();
         }
         if self.state.alt_screen {
             self.renderer.save_cursor();
-            mode::Mode::ALT_SCREEN_SAVE_CURSOR.set(&mut self.buf)?;
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR
+                .set(&mut self.buf)
+                .unwrap();
         }
         // Now on the alt screen (if alt was active) — re-apply on
         // the alt buffer too, since its stack is independent.
@@ -138,55 +142,53 @@ impl<W: Write> Screen<W> {
                 &mut self.buf,
                 self.state.kitty_keyboard,
                 kitty::KittyKeyboardMode::Set,
-            )?;
+            )
+            .unwrap();
         }
         if self.state.grapheme_clusters {
-            mode::Mode::UNICODE_CORE.set(&mut self.buf)?;
+            mode::Mode::UNICODE_CORE.set(&mut self.buf).unwrap();
         }
         if self.state.color_scheme_updates {
-            mode::Mode::LIGHT_DARK.set(&mut self.buf)?;
+            mode::Mode::LIGHT_DARK.set(&mut self.buf).unwrap();
         }
         if !self.state.cursor_visible {
-            mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf)?;
+            mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
         }
         if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.buf, self.state.cursor_style)?;
+            cursor::write_cursor_style(&mut self.buf, self.state.cursor_style).unwrap();
         }
         if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.set(&mut self.buf)?;
+            mode::Mode::BRACKETED_PASTE.set(&mut self.buf).unwrap();
         }
         if self.state.focus_events {
-            mode::Mode::FOCUS.set(&mut self.buf)?;
+            mode::Mode::FOCUS.set(&mut self.buf).unwrap();
         }
         if self.state.mouse_mode != mode::MouseMode::None {
             mode::write_enable_mouse(
                 &mut self.buf,
                 self.state.mouse_mode,
                 self.state.mouse_encoding,
-            )?;
+            )
+            .unwrap();
         }
         if let Some(c) = self.state.foreground_color {
             let (r, g, b) = c.to_rgb();
-            background::write_set_foreground_color(
-                &mut self.buf,
-                &background::xparse_rgb(r, g, b),
-            )?;
+            background::write_set_foreground_color(&mut self.buf, &background::xparse_rgb(r, g, b))
+                .unwrap();
         }
         if let Some(c) = self.state.background_color {
             let (r, g, b) = c.to_rgb();
-            background::write_set_background_color(
-                &mut self.buf,
-                &background::xparse_rgb(r, g, b),
-            )?;
+            background::write_set_background_color(&mut self.buf, &background::xparse_rgb(r, g, b))
+                .unwrap();
         }
         if let Some(c) = self.state.cursor_color {
             let (r, g, b) = c.to_rgb();
-            background::write_set_cursor_color(&mut self.buf, &background::xparse_rgb(r, g, b))?;
+            background::write_set_cursor_color(&mut self.buf, &background::xparse_rgb(r, g, b))
+                .unwrap();
         }
         if let Some(ref title) = self.state.title {
-            ansi::write_window_title(&mut self.buf, title)?;
+            ansi::write_window_title(&mut self.buf, title).unwrap();
         }
-        Ok(())
     }
 
     /// Insert `content` above the screen, scrolling the screen down to
@@ -204,22 +206,18 @@ impl<W: Write> Screen<W> {
     /// Only stages into the buffer, so it is infallible; the bytes reach
     /// the terminal on the next [`Screen::flush`].
     pub fn insert_above(&mut self, content: &str) {
-        self.write_insert_above(content).unwrap();
-    }
-
-    fn write_insert_above(&mut self, content: &str) -> io::Result<()> {
         if content.is_empty() {
-            return Ok(());
+            return;
         }
 
         let width = self.width;
         let height = self.height;
         let y = self.renderer.cursor_position().y;
 
-        self.buf.write_all(b"\r")?;
+        self.buf.write_all(b"\r").unwrap();
         let down = height.saturating_sub(y).saturating_sub(1);
         if down > 0 {
-            cursor::write_cud(&mut self.buf, down)?;
+            cursor::write_cud(&mut self.buf, down).unwrap();
         }
 
         let lines: Vec<&str> = content.split('\n').collect();
@@ -233,23 +231,22 @@ impl<W: Write> Screen<W> {
         }
 
         for _ in 0..offset {
-            self.buf.write_all(b"\n")?;
+            self.buf.write_all(b"\n").unwrap();
         }
 
         let up = offset.saturating_add(height).saturating_sub(1);
         if up > 0 {
-            cursor::write_cuu(&mut self.buf, up)?;
+            cursor::write_cuu(&mut self.buf, up).unwrap();
         }
-        ansi::screen::write_insert_lines(&mut self.buf, offset)?;
+        ansi::screen::write_insert_lines(&mut self.buf, offset).unwrap();
         for line in &lines {
-            self.buf.write_all(line.as_bytes())?;
-            self.buf.write_all(ansi::screen::ERASE_LINE_RIGHT)?;
-            self.buf.write_all(b"\r\n")?;
+            self.buf.write_all(line.as_bytes()).unwrap();
+            self.buf.write_all(ansi::screen::ERASE_LINE_RIGHT).unwrap();
+            self.buf.write_all(b"\r\n").unwrap();
         }
 
         self.renderer
             .set_cursor_position(crate::Position { y: 0, x: 0 });
         self.renderer.request_clear();
-        Ok(())
     }
 }
