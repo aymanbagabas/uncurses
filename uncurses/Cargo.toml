@@ -9,6 +9,10 @@ repository.workspace = true
 [features]
 default = ["unicode-rs"]
 bench = []
+# Asynchronous event streaming. Adds `EventStream`, a `futures_core::Stream`
+# of decoded events backed by a reader thread. Runtime-agnostic: depends
+# only on `futures-core`, no executor or reactor.
+async = ["dep:futures-core"]
 # Pure-Rust Unicode tables. Small build, conservative coverage on
 # emoji/ZWJ edge cases. Enabled by default.
 unicode-rs = ["dep:unicode-segmentation", "dep:unicode-width"]
@@ -22,6 +26,7 @@ icu = ["dep:icu_segmenter", "dep:icu_properties"]
 bitflags.workspace = true
 compact_str.workspace = true
 rustc-hash.workspace = true
+futures-core = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 unicode-width = { workspace = true, optional = true }
 icu_segmenter = { workspace = true, optional = true }
