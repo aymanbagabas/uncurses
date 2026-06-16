@@ -1,85 +1,30 @@
 //! BSD/macOS `kqueue` readiness backend.
 //!
-//! Holds a long-lived kqueue so registrations persist across `poll`
-//! calls. Each call diffs the caller's `&mut [PollFd]` against the
-//! currently-registered set and adds or removes fds as needed. Events
-//! are registered with `EVFILT_READ` without `EV_CLEAR` (i.e.
-//! level-triggered) and `EV_EOF` folds into readiness so the read
-//! path surfaces the underlying error.
+//! Registers its watched fds once at construction and keeps the kqueue
+//! for its lifetime, so [`Kqueue::poll`] only waits — it takes `&self`
+//! and holds no mutable state, which lets the poller be shared (e.g.
+//! behind `Arc`) and waited on concurrently. Events are registered with
+//! `EVFILT_READ` without `EV_CLEAR` (i.e. level-triggered) and `EV_EOF`
+//! folds into readiness so the read path surfaces the underlying error.
 //!
-//! Note: on macOS, `EVFILT_READ` against a tty character device
-//! returns immediately with `data == 0` in a tight loop. Callers that
-//! may watch tty fds on Darwin should use the top-level [`super::Poll`]
-//! wrapper, which transparently falls back to
-//! [`super::select::SelectPoller`] in that case.
+//! Note: on macOS, `EVFILT_READ` against a tty character device returns
+//! immediately with `data == 0` in a tight loop. A caller watching a tty
+//! input fd on Darwin should use [`super::Select`] instead.
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::time::{Duration, Instant};
 
-use super::{Poll, PollFd, remaining, reset, validate};
+use super::{PollFd, Poller, check_ready_len, remaining, reset, validate};
 
-pub(crate) struct KqueuePoller {
+pub(crate) struct Kqueue {
     kq: OwnedFd,
-    registered: Vec<RawFd>,
+    count: usize,
 }
 
-impl KqueuePoller {
-    fn add(kq: RawFd, fd: RawFd) -> io::Result<()> {
-        let ev = libc::kevent {
-            ident: fd as usize,
-            filter: libc::EVFILT_READ,
-            flags: libc::EV_ADD,
-            fflags: 0,
-            data: 0,
-            udata: fd_to_udata(fd),
-        };
-        let rc = unsafe { libc::kevent(kq, &ev, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
-        if rc < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn del(kq: RawFd, fd: RawFd) {
-        let ev = libc::kevent {
-            ident: fd as usize,
-            filter: libc::EVFILT_READ,
-            flags: libc::EV_DELETE,
-            fflags: 0,
-            data: 0,
-            udata: fd_to_udata(fd),
-        };
-        // Best-effort: a closed fd is already gone from the kqueue.
-        unsafe {
-            libc::kevent(kq, &ev, 1, std::ptr::null_mut(), 0, std::ptr::null());
-        }
-    }
-
-    fn sync(&mut self, fds: &[PollFd]) -> io::Result<()> {
-        let kq = self.kq.as_raw_fd();
-        let mut i = 0;
-        while i < self.registered.len() {
-            let fd = self.registered[i];
-            if !fds.iter().any(|p| p.fd == fd) {
-                Self::del(kq, fd);
-                self.registered.swap_remove(i);
-            } else {
-                i += 1;
-            }
-        }
-        for p in fds {
-            if !self.registered.contains(&p.fd) {
-                Self::add(kq, p.fd)?;
-                self.registered.push(p.fd);
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Poll for KqueuePoller {
-    fn new() -> io::Result<Self> {
+impl Poller for Kqueue {
+    fn new(fds: &[PollFd]) -> io::Result<Self> {
+        validate(fds)?;
         let raw = unsafe { libc::kqueue() };
         if raw < 0 {
             return Err(io::Error::last_os_error());
@@ -94,19 +39,43 @@ impl Poll for KqueuePoller {
                 let _ = libc::fcntl(kq.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC);
             }
         }
+        for (i, &fd) in fds.iter().enumerate() {
+            // Carry the registration index in `udata` so `poll` maps a
+            // ready event straight to `ready[i]`.
+            let ev = libc::kevent {
+                ident: fd as usize,
+                filter: libc::EVFILT_READ,
+                flags: libc::EV_ADD,
+                fflags: 0,
+                data: 0,
+                udata: index_to_udata(i),
+            };
+            let rc = unsafe {
+                libc::kevent(
+                    kq.as_raw_fd(),
+                    &ev,
+                    1,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if rc < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
         Ok(Self {
             kq,
-            registered: Vec::new(),
+            count: fds.len(),
         })
     }
 
-    fn poll(&mut self, fds: &mut [PollFd], timeout: Option<Duration>) -> io::Result<usize> {
-        validate(fds)?;
-        reset(fds);
-        self.sync(fds)?;
+    fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize> {
+        check_ready_len(ready, self.count)?;
+        reset(ready);
 
         let deadline = timeout.map(|t| Instant::now() + t);
-        let mut events: Vec<libc::kevent> = (0..fds.len())
+        let mut events: Vec<libc::kevent> = (0..self.count)
             .map(|_| unsafe { std::mem::zeroed() })
             .collect();
         loop {
@@ -140,12 +109,12 @@ impl Poll for KqueuePoller {
             }
             let mut count = 0usize;
             for ev in &events[..n as usize] {
-                let fd = udata_to_fd(ev.udata);
-                if let Some(p) = fds.iter_mut().find(|p| p.fd == fd) {
-                    if !p.ready {
-                        p.ready = true;
-                        count += 1;
-                    }
+                let i = udata_to_index(ev.udata);
+                if let Some(slot) = ready.get_mut(i)
+                    && !*slot
+                {
+                    *slot = true;
+                    count += 1;
                 }
             }
             return Ok(count);
@@ -153,13 +122,11 @@ impl Poll for KqueuePoller {
     }
 }
 
-// Round-trip an `i32` fd through a `*mut c_void` udata field
-// losslessly: zero-extend through `u32` so negative-cast values
-// survive.
-fn fd_to_udata(fd: RawFd) -> *mut libc::c_void {
-    (fd as u32 as usize) as *mut libc::c_void
+// Round-trip a registration index through the `*mut c_void` udata field.
+fn index_to_udata(i: usize) -> *mut libc::c_void {
+    i as *mut libc::c_void
 }
 
-fn udata_to_fd(p: *mut libc::c_void) -> RawFd {
-    (p as usize) as u32 as i32
+fn udata_to_index(p: *mut libc::c_void) -> usize {
+    p as usize
 }
