@@ -1,18 +1,22 @@
 //! Asynchronous event streaming (`async` feature).
 //!
 //! [`EventStream`] turns a blocking [`EventSource`] into a
-//! [`futures_core::Stream`] of decoded events. Because there is no reactor
-//! to register the terminal handle with, the source is moved onto a
-//! dedicated reader thread; the thread does the blocking reads and hands
-//! events to the async side through a small lock-protected queue plus a
-//! single stored task waker (a hand-rolled bridge — no executor or channel
-//! crate is pulled in, only `futures-core` for the [`Stream`] trait).
+//! [`futures_core::Stream`] of decoded events. There is no reactor to
+//! register the terminal handle with, so a dedicated reader thread does
+//! the blocking readiness waits; decoded events flow through the source's
+//! own queue and the consumer is woken through a single stored task
+//! waker (a hand-rolled bridge — no executor or channel crate, only
+//! `futures-core` for the [`Stream`] trait).
 //!
-//! Queries keep working after the switch to async: [`EventStream::query`]
-//! dispatches the same [`read_matching`](EventSource::read_matching) the
-//! synchronous path uses onto the reader thread (where the timeout is
-//! enforced by the source's own poller — no async timer needed) and awaits
-//! the reply.
+//! The source is **shared**, not moved: the stream holds
+//! `Arc<Mutex<EventSource>>` and the reader thread holds a clone, so a
+//! synchronous caller (e.g. a `ratatui` backend's cursor-position probe)
+//! can still lock the same source and run a [`query`](EventSource::query)
+//! while the stream is live. The reader waits for readiness lock-free
+//! (through a cloned [`Poller`], which polls by shared reference) and only
+//! takes the source lock to drain what is ready — re-checking readiness
+//! under the lock so a blocking input fd never stalls the lock even if a
+//! concurrent query consumed the bytes first.
 
 use std::future::Future;
 use std::io::{self, Write};
@@ -25,12 +29,11 @@ use std::time::{Duration, Instant};
 use futures_core::Stream;
 
 use super::Event;
+use super::poll::Poller;
 use super::query::Query;
 use super::source::{EventSource, Input, Waker};
 
-/// Type-erased reply matcher dispatched to the reader thread. The matcher
-/// itself is a function pointer; only the per-call closure that drops the
-/// result type is boxed.
+/// Type-erased reply matcher dispatched to the reader thread.
 type Predicate = Box<dyn Fn(&Event) -> bool + Send>;
 
 /// A query handed from the async side to the reader thread.
@@ -39,22 +42,24 @@ struct QueryRequest {
     timeout: Duration,
 }
 
-/// State shared between the reader thread and the [`EventStream`].
+/// Coordination state between the reader thread and the consumer.
 ///
-/// `query` and `next` are never awaited concurrently (both take
-/// `&mut self`), so a single `task` waker slot serves both.
+/// Decoded events live in the source's own queue, not here; this only
+/// carries the consumer waker, the terminal error/closed signal, and the
+/// query hand-off. `query` and `next` are never awaited concurrently
+/// (both take `&mut self`), so a single `task` slot serves both.
 #[derive(Default)]
 struct Inner {
-    /// Decoded events waiting to be yielded by the stream.
-    events: std::collections::VecDeque<io::Result<Event>>,
     /// Consumer task waker, stored while the consumer is parked.
     task: Option<TaskWaker>,
+    /// A fatal reader error, surfaced once to the consumer.
+    error: Option<io::Error>,
+    /// Set once the source is closed (EOF/error) or the stream is dropped.
+    closed: bool,
     /// Pending query for the reader thread to run.
     query: Option<QueryRequest>,
     /// Result of the most recent query, for the awaiting consumer.
     query_result: Option<io::Result<Option<Event>>>,
-    /// Set once the source is closed (EOF/error) or the stream is dropped.
-    closed: bool,
 }
 
 struct Shared {
@@ -67,14 +72,19 @@ fn wake_task(inner: &mut Inner) {
     }
 }
 
-/// A [`Stream`] of decoded terminal events, backed by a reader thread.
+/// A [`Stream`] of decoded terminal events, backed by a reader thread
+/// over a shared [`EventSource`].
 ///
-/// Build one with [`EventSource::into_stream`]. Dropping the stream stops
-/// and joins the reader thread.
-pub struct EventStream {
+/// Build one with [`EventSource::into_stream`] (standalone) or
+/// [`EventStream::from_shared`] (sharing a source kept elsewhere, e.g. by
+/// a backend that also needs synchronous queries). Dropping the stream
+/// stops and joins the reader thread; the source itself lives as long as
+/// any `Arc` to it remains.
+pub struct EventStream<I: Input> {
+    source: Arc<Mutex<EventSource<I>>>,
     shared: Arc<Shared>,
-    /// Wakes the reader thread out of its blocking read (for a pending
-    /// query or for shutdown).
+    /// Wakes the reader thread out of its lock-free readiness wait (for a
+    /// pending query or for shutdown).
     waker: Waker,
     handle: Option<JoinHandle<()>>,
 }
@@ -85,30 +95,40 @@ where
 {
     /// Convert this source into an asynchronous [`EventStream`].
     ///
-    /// The source moves onto a dedicated reader thread; the returned
-    /// stream yields `io::Result<Event>`. Run any synchronous
-    /// [`query`](EventSource::query) calls before converting — or use
-    /// [`EventStream::query`] afterwards.
-    pub fn into_stream(self) -> EventStream {
-        EventStream::spawn(self)
+    /// The source is wrapped in `Arc<Mutex<_>>` and shared with a reader
+    /// thread; the returned stream yields `io::Result<Event>`. To keep a
+    /// handle to the source for synchronous queries, build the
+    /// `Arc<Mutex<_>>` yourself and use [`EventStream::from_shared`].
+    pub fn into_stream(self) -> EventStream<I> {
+        EventStream::from_shared(Arc::new(Mutex::new(self)))
     }
 }
 
-impl EventStream {
-    fn spawn<I>(source: EventSource<I>) -> Self
-    where
-        I: Input + 'static,
-    {
-        let waker = source.waker();
+impl<I> EventStream<I>
+where
+    I: Input + 'static,
+{
+    /// Build a stream over a source shared via `Arc<Mutex<_>>`.
+    ///
+    /// The caller may keep its own clone of the `Arc` to run synchronous
+    /// [`EventSource::query`] calls (locking the same source) while the
+    /// stream is live.
+    pub fn from_shared(source: Arc<Mutex<EventSource<I>>>) -> Self {
+        let (waker, poller, slots) = {
+            let s = source.lock().unwrap();
+            (s.waker(), s.poller(), s.poll_slot_count())
+        };
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner::default()),
         });
-        let thread_shared = Arc::clone(&shared);
+        let reader_source = Arc::clone(&source);
+        let reader_shared = Arc::clone(&shared);
         let handle = std::thread::Builder::new()
             .name("uncurses-event-reader".to_string())
-            .spawn(move || reader_loop(source, thread_shared))
+            .spawn(move || reader_loop(reader_source, poller, slots, reader_shared))
             .expect("spawn event reader thread");
         Self {
+            source,
             shared,
             waker,
             handle: Some(handle),
@@ -146,7 +166,7 @@ impl EventStream {
             }
             inner.query = Some(QueryRequest { predicate, timeout });
         }
-        // Interrupt the reader thread's blocking read so it picks up the
+        // Interrupt the reader thread's readiness wait so it picks up the
         // pending query.
         let _ = self.waker.wake();
 
@@ -156,25 +176,53 @@ impl EventStream {
         .await?;
         Ok(ev.and_then(|e| reply(&e)))
     }
+
+    /// Whether the backing source delivers [`Event::Resize`] from the
+    /// kernel's out-of-band window-resize notification (`SIGWINCH` on
+    /// Unix). See [`EventSource::set_handle_resize`].
+    pub fn handle_resize(&self) -> bool {
+        self.source.lock().unwrap().handle_resize()
+    }
+
+    /// Control whether the backing source delivers [`Event::Resize`]
+    /// from the kernel's out-of-band window-resize notification
+    /// (`SIGWINCH` on Unix). Set to `false` after enabling in-band
+    /// resize reports (DEC mode 2048) to avoid duplicate resize events.
+    /// See [`EventSource::set_handle_resize`].
+    pub fn set_handle_resize(&self, enable: bool) {
+        self.source.lock().unwrap().set_handle_resize(enable);
+    }
 }
 
-impl Stream for EventStream {
+impl<I: Input> Stream for EventStream<I> {
     type Item = io::Result<Event>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut inner = self.shared.inner.lock().unwrap();
-        if let Some(item) = inner.events.pop_front() {
-            return Poll::Ready(Some(item));
+        // Events live in the shared source's queue.
+        if let Some(ev) = self.source.lock().unwrap().try_read() {
+            return Poll::Ready(Some(Ok(ev)));
         }
-        if inner.closed {
-            return Poll::Ready(None);
+        // Arm the waker, then re-check the queue: the reader thread may
+        // have ingested between the check above and arming here, and its
+        // wake would otherwise be lost.
+        {
+            let mut inner = self.shared.inner.lock().unwrap();
+            if let Some(e) = inner.error.take() {
+                return Poll::Ready(Some(Err(e)));
+            }
+            if inner.closed {
+                return Poll::Ready(None);
+            }
+            inner.task = Some(cx.waker().clone());
         }
-        inner.task = Some(cx.waker().clone());
+        if let Some(ev) = self.source.lock().unwrap().try_read() {
+            return Poll::Ready(Some(Ok(ev)));
+        }
         Poll::Pending
     }
 }
 
-impl Drop for EventStream {
+impl<I: Input> Drop for EventStream<I> {
     fn drop(&mut self) {
         {
             let mut inner = self.shared.inner.lock().unwrap();
@@ -213,8 +261,22 @@ fn closed_err() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "event stream closed")
 }
 
-fn reader_loop<I: Input>(mut source: EventSource<I>, shared: Arc<Shared>) {
+fn fail(shared: &Shared, e: io::Error) {
+    let mut inner = shared.inner.lock().unwrap();
+    inner.error = Some(e);
+    inner.closed = true;
+    wake_task(&mut inner);
+}
+
+fn reader_loop<I: Input>(
+    source: Arc<Mutex<EventSource<I>>>,
+    poller: Arc<dyn Poller>,
+    slots: usize,
+    shared: Arc<Shared>,
+) {
+    let mut scratch = vec![false; slots];
     loop {
+        // 1. Shutdown or a pending query takes priority.
         let job = {
             let mut inner = shared.inner.lock().unwrap();
             if inner.closed {
@@ -222,49 +284,70 @@ fn reader_loop<I: Input>(mut source: EventSource<I>, shared: Arc<Shared>) {
             }
             inner.query.take()
         };
-
         if let Some(job) = job {
-            let result = run_query(&mut source, &job, &shared);
+            let result = run_query(&source, &job, &shared);
             let mut inner = shared.inner.lock().unwrap();
             inner.query_result = Some(result);
             wake_task(&mut inner);
             continue;
         }
 
-        match source.read() {
-            Ok(ev) => {
-                let mut inner = shared.inner.lock().unwrap();
-                inner.events.push_back(Ok(ev));
-                wake_task(&mut inner);
-            }
-            // Woken for a pending query or for shutdown; loop to re-check.
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+        // 2. Decide how long to wait (reads the source's decode deadlines).
+        let (timeout, kind) = {
+            let s = source.lock().unwrap();
+            s.next_timeout()
+        };
+
+        // 3. Block for readiness without holding the source lock, so a
+        //    synchronous query can take the lock meanwhile.
+        let n = match poller.poll(&mut scratch, timeout) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => {
-                let mut inner = shared.inner.lock().unwrap();
-                inner.events.push_back(Err(e));
-                inner.closed = true;
-                wake_task(&mut inner);
+                fail(&shared, e);
                 return;
             }
+        };
+
+        // 4. Take the lock and drain (re-checking readiness) or expire.
+        let has_events = {
+            let mut s = source.lock().unwrap();
+            if n == 0 {
+                s.expire(kind);
+            } else if let Err(e) = s.drain_after_wait()
+                && e.kind() != io::ErrorKind::Interrupted
+            {
+                drop(s);
+                fail(&shared, e);
+                return;
+            }
+            s.has_events()
+        };
+        if has_events {
+            let mut inner = shared.inner.lock().unwrap();
+            wake_task(&mut inner);
         }
     }
 }
 
 fn run_query<I: Input>(
-    source: &mut EventSource<I>,
+    source: &Arc<Mutex<EventSource<I>>>,
     job: &QueryRequest,
     shared: &Shared,
 ) -> io::Result<Option<Event>> {
     let deadline = Instant::now() + job.timeout;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        if let Some(ev) = source.read_matching(|ev| (job.predicate)(ev), Some(remaining))? {
+        let matched = {
+            let mut s = source.lock().unwrap();
+            s.read_matching(|ev| (job.predicate)(ev), Some(remaining))?
+        };
+        if let Some(ev) = matched {
             return Ok(Some(ev));
         }
-        // `read_matching` returns `None` on a real timeout or on a
-        // spurious wake (the query-submission wake, or shutdown). Retry
-        // until the deadline; non-matching events stay queued in the
-        // source for later delivery.
+        // `read_matching` returns `None` on a real timeout or a spurious
+        // wake (the query-submission wake, or shutdown). Retry until the
+        // deadline; non-matching events stay queued in the source.
         if shared.inner.lock().unwrap().closed || Instant::now() >= deadline {
             return Ok(None);
         }
@@ -324,7 +407,7 @@ mod tests {
         }
     }
 
-    async fn next(stream: &mut EventStream) -> Option<io::Result<Event>> {
+    async fn next<I: Input>(stream: &mut EventStream<I>) -> Option<io::Result<Event>> {
         poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
     }
 
@@ -377,6 +460,33 @@ mod tests {
         let got = block_on(stream.query(&mut out, &KEY_B, Duration::from_millis(30))).unwrap();
         assert!(got.is_none());
         // The user input survives the failed query.
+        let ev = block_on(next(&mut stream)).unwrap().unwrap();
+        assert!(matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+    }
+
+    // Path A: a synchronous query on the shared source runs while the
+    // stream's reader thread is live (the get_cursor_position scenario).
+    // The query locks the same source the reader uses; whichever side
+    // reads the reply byte first, read_matching finds it (queue or fd),
+    // and unrelated input is still delivered by the stream afterward.
+    #[test]
+    fn shared_source_sync_query_while_streaming() {
+        let (rx, tx) = make_pipe();
+        let source = Arc::new(Mutex::new(EventSource::new(rx).unwrap()));
+        let mut stream = EventStream::from_shared(Arc::clone(&source));
+
+        // The awaited reply 'b' arrives on the shared input.
+        write_bytes(&tx, b"b");
+        let mut out: Vec<u8> = Vec::new();
+        let got = {
+            let mut s = source.lock().unwrap();
+            s.query(&mut out, &KEY_B, Duration::from_secs(1)).unwrap()
+        };
+        assert!(got.is_some(), "sync query should find the reply");
+        assert_eq!(out, b"REQ");
+
+        // A later user event still flows through the stream.
+        write_bytes(&tx, b"a");
         let ev = block_on(next(&mut stream)).unwrap().unwrap();
         assert!(matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
     }

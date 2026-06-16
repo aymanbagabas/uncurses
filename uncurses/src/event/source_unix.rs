@@ -144,6 +144,21 @@ where
         Ok(())
     }
 
+    /// Re-check readiness with a zero-timeout poll and ingest whatever is
+    /// ready, all under the caller's lock. A reader thread calls this
+    /// after a separate lock-free [`Poller::poll`] has already blocked for
+    /// readiness: re-polling here (instead of trusting the lock-free
+    /// result) means the input read only runs when bytes are still
+    /// present, so a blocking input fd never stalls the lock — even if a
+    /// concurrent query drained the bytes in between. Deadline expiry is
+    /// the caller's responsibility (see [`EventSource::expire`]).
+    #[cfg(feature = "async")]
+    pub(super) fn drain_after_wait(&mut self) -> io::Result<()> {
+        let mut ready = [false; 3];
+        self.poller.poll(&mut ready, Some(Duration::ZERO))?;
+        self.ingest(ready, DeadlineKind::None)
+    }
+
     fn handle_input_ready(&mut self) -> io::Result<()> {
         // If the buffer is full and the parser still couldn't extract
         // an event, the contract says the buffer size is the hard cap

@@ -292,6 +292,49 @@ where
         self.handle_resize = enable;
     }
 
+    /// Shared readiness poller for this source. Cloning the `Arc` lets a
+    /// reader thread wait on readiness without holding a lock on the
+    /// source's decode state (see [`super::EventStream`]).
+    #[cfg(all(feature = "async", any(unix, windows)))]
+    pub(super) fn poller(&self) -> Arc<dyn Poller> {
+        self.poller.clone()
+    }
+
+    /// Number of fds the [`poller`](Self::poller) watches, i.e. the length
+    /// of the readiness slice [`Poller::poll`] expects.
+    #[cfg(all(feature = "async", unix))]
+    pub(super) fn poll_slot_count(&self) -> usize {
+        3
+    }
+    /// Number of handles the [`poller`](Self::poller) watches.
+    #[cfg(all(feature = "async", windows))]
+    pub(super) fn poll_slot_count(&self) -> usize {
+        2
+    }
+
+    /// Effective wait for the next readiness poll, plus which deadline (if
+    /// any) governs it, so a timeout can be routed to the right expiry.
+    #[cfg(all(feature = "async", any(unix, windows)))]
+    pub(super) fn next_timeout(&self) -> (Option<Duration>, DeadlineKind) {
+        self.effective_timeout(None)
+    }
+
+    /// Run the expiry a readiness wait timed out on.
+    #[cfg(all(feature = "async", any(unix, windows)))]
+    pub(super) fn expire(&mut self, kind: DeadlineKind) {
+        match kind {
+            DeadlineKind::Esc => self.expire_partial(),
+            DeadlineKind::Paste => self.expire_paste(),
+            DeadlineKind::None => {}
+        }
+    }
+
+    /// Whether at least one decoded event is queued.
+    #[cfg(all(feature = "async", any(unix, windows)))]
+    pub(super) fn has_events(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
     /// Block up to `timeout` for at least one event to become available.
     ///
     /// * `Ok(true)` — the event queue has at least one event; [`Self::try_read`]
