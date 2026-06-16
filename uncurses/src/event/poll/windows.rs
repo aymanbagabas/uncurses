@@ -1,4 +1,4 @@
-//! `WaitForMultipleObjects`-backed [`Poll`] implementation.
+//! `WaitForMultipleObjects`-backed [`Poller`] implementation.
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -6,38 +6,45 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObject};
 
-use super::{Poll, PollFd, remaining, reset, validate};
+use super::{PollFd, Poller, check_ready_len, remaining, reset, validate};
 
 const INFINITE: u32 = u32::MAX;
 /// `WaitForMultipleObjects` accepts up to `MAXIMUM_WAIT_OBJECTS` (64) handles.
 const MAX_WAIT: usize = 64;
 
-pub struct WindowsPoller;
+pub struct Windows {
+    handles: Vec<HANDLE>,
+}
 
-impl Poll for WindowsPoller {
-    fn new() -> io::Result<Self> {
-        Ok(Self)
-    }
+// `HANDLE` is a raw pointer; the watched handles are owned elsewhere for
+// the poller's lifetime and only waited on, never dereferenced, so the
+// poller is safe to share across threads.
+unsafe impl Send for Windows {}
+unsafe impl Sync for Windows {}
 
-    fn poll(&mut self, fds: &mut [PollFd], timeout: Option<Duration>) -> io::Result<usize> {
+impl Poller for Windows {
+    fn new(fds: &[PollFd]) -> io::Result<Self> {
         validate(fds)?;
-        reset(fds);
         if fds.len() > MAX_WAIT {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "too many handles for WaitForMultipleObjects",
             ));
         }
+        Ok(Self {
+            handles: fds.iter().map(|&h| h as HANDLE).collect(),
+        })
+    }
+
+    fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize> {
+        check_ready_len(ready, self.handles.len())?;
+        reset(ready);
 
         let deadline = timeout.map(|t| Instant::now() + t);
-        let mut handles: [HANDLE; MAX_WAIT] = [0 as HANDLE; MAX_WAIT];
-        for (i, p) in fds.iter().enumerate() {
-            handles[i] = p.fd as HANDLE;
-        }
-        let n = fds.len() as u32;
+        let n = self.handles.len() as u32;
 
         let ms = duration_to_ms(remaining(deadline).or(timeout));
-        let rc = unsafe { WaitForMultipleObjects(n, handles.as_ptr(), 0, ms) };
+        let rc = unsafe { WaitForMultipleObjects(n, self.handles.as_ptr(), 0, ms) };
         if rc == WAIT_TIMEOUT {
             return Ok(0);
         }
@@ -51,21 +58,21 @@ impl Poll for WindowsPoller {
         }
 
         let first = (rc - WAIT_OBJECT_0) as usize;
-        fds[first].ready = true;
-        let mut ready = 1usize;
+        ready[first] = true;
+        let mut count = 1usize;
         // Probe remaining handles with zero-timeout single waits so all
         // simultaneously signaled handles are reported in one call.
-        for (i, p) in fds.iter_mut().enumerate() {
+        for (i, &h) in self.handles.iter().enumerate() {
             if i == first {
                 continue;
             }
-            let rc2 = unsafe { WaitForSingleObject(p.fd as HANDLE, 0) };
+            let rc2 = unsafe { WaitForSingleObject(h, 0) };
             if rc2 == WAIT_OBJECT_0 {
-                p.ready = true;
-                ready += 1;
+                ready[i] = true;
+                count += 1;
             }
         }
-        Ok(ready)
+        Ok(count)
     }
 }
 

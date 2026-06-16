@@ -29,46 +29,49 @@ use std::os::fd::RawFd;
 use std::os::windows::io::RawHandle;
 use std::time::{Duration, Instant};
 
-/// A handle to wait on plus the readiness bit [`Poller::poll`] writes
-/// back. The caller constructs these with [`PollFd::new`], passes a
-/// mutable slice to [`Poller::poll`], and reads `ready` per entry on
-/// return.
-#[derive(Debug, Clone, Copy)]
-pub struct PollFd {
-    #[cfg(unix)]
-    pub fd: RawFd,
-    #[cfg(windows)]
-    pub fd: RawHandle,
-    pub ready: bool,
-}
+/// A watched handle: a raw fd on unix, a raw `HANDLE` on Windows. The
+/// caller registers a slice of these once via [`Poller::new`]; readiness
+/// is reported separately by [`Poller::poll`] into a caller-owned
+/// `&mut [bool]`, indexed by registration order.
+#[cfg(unix)]
+pub type PollFd = RawFd;
+/// A watched handle: a raw fd on unix, a raw `HANDLE` on Windows. The
+/// caller registers a slice of these once via [`Poller::new`]; readiness
+/// is reported separately by [`Poller::poll`] into a caller-owned
+/// `&mut [bool]`, indexed by registration order.
+#[cfg(windows)]
+pub type PollFd = RawHandle;
 
-impl PollFd {
-    #[cfg(unix)]
-    pub fn new(fd: RawFd) -> Self {
-        Self { fd, ready: false }
-    }
-    #[cfg(windows)]
-    pub fn new(fd: RawHandle) -> Self {
-        Self { fd, ready: false }
-    }
-}
-
-/// Reset every entry's `ready` flag to `false`. Called by each backend
-/// at the top of `poll` so stale bits never leak from a previous call.
+/// Reset every readiness flag to `false`. Called by each backend at the
+/// top of `poll` so stale bits never leak from a previous call.
 #[allow(dead_code)]
-fn reset(fds: &mut [PollFd]) {
-    for p in fds.iter_mut() {
-        p.ready = false;
+fn reset(ready: &mut [bool]) {
+    for r in ready.iter_mut() {
+        *r = false;
     }
 }
 
-/// Validate the input slice common to every backend.
+/// Validate the registered fd slice common to every backend: it must be
+/// non-empty.
 #[allow(dead_code)]
 fn validate(fds: &[PollFd]) -> io::Result<()> {
     if fds.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "poll requires at least one fd",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate that the caller's readiness buffer matches the registered fd
+/// count, so per-index reporting stays in lockstep.
+#[allow(dead_code)]
+fn check_ready_len(ready: &[bool], registered: usize) -> io::Result<()> {
+    if ready.len() != registered {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "readiness buffer length does not match registered fd count",
         ));
     }
     Ok(())
@@ -88,24 +91,50 @@ fn remaining(deadline: Option<Instant>) -> Option<Duration> {
 /// Common contract every backend implements.
 ///
 /// ```ignore
-/// let mut p = Poller::new()?;
-/// let mut input = PollFd::new(input_fd);
-/// let mut wake  = PollFd::new(wake_fd);
-/// let n = p.poll(&mut [input, wake], Some(Duration::from_millis(50)))?;
+/// let fds = [input_fd, wake_fd];
+/// let p = Epoll::new(&fds)?;
+/// let mut ready = [false; 2];
+/// let n = p.poll(&mut ready, Some(Duration::from_millis(50)))?;
+/// if ready[0] { /* input fd ready */ }
 /// ```
+///
+/// The watched fd set is fixed at construction: [`Poller::new`]
+/// registers exactly the fds it is given, once, for the poller's
+/// lifetime. Readiness is reported separately into a caller-owned
+/// `&mut [bool]` indexed by registration order, so the fds themselves
+/// are passed only once. Because registration is done at construction,
+/// `poll` takes `&self` and holds no per-call mutable state, so a single
+/// poller can be wrapped in [`std::sync::Arc`] (including as
+/// `Arc<dyn Poller>`) and waited on concurrently from several threads —
+/// the readiness syscalls are thread-safe.
 ///
 /// `poll` must:
 ///
-/// * write `ready = true` on every entry whose fd was ready at return
-///   time (an all-`false` slice means the wait timed out),
+/// * write `true` into `ready[i]` for every registered fd `i` that was
+///   ready at return time (an all-`false` slice means the wait timed
+///   out),
 /// * honour the caller's timeout to within syscall resolution,
 /// * treat `HUP`/`ERR`/`EOF` on any watched fd as readiness so the
 ///   read path can surface the underlying error,
 /// * loop on `EINTR` against an absolute deadline derived from the
 ///   first call.
-pub trait Poll: Sized {
-    fn new() -> io::Result<Self>;
-    fn poll(&mut self, fds: &mut [PollFd], timeout: Option<Duration>) -> io::Result<usize>;
+///
+/// There is deliberately no platform-dispatch wrapper: the concrete
+/// implementations are exposed per target and the caller picks one. On
+/// Darwin, `kqueue` spins on tty character devices, so a caller watching
+/// a tty input fd selects [`Select`] over [`Kqueue`].
+pub trait Poller: Send + Sync {
+    /// Construct a poller watching exactly `fds`, registered once for
+    /// the poller's lifetime.
+    fn new(fds: &[PollFd]) -> io::Result<Self>
+    where
+        Self: Sized;
+    /// Wait until one of the registered fds is ready or `timeout`
+    /// elapses, writing readiness into `ready` (indexed by the order the
+    /// fds were registered; its length must equal the registered fd
+    /// count). Takes `&self` so the poller can be shared and waited on
+    /// concurrently.
+    fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize>;
 }
 
 #[cfg(target_os = "linux")]
@@ -121,100 +150,95 @@ pub(crate) mod epoll;
 pub(crate) mod kqueue;
 
 #[cfg(unix)]
-pub(crate) mod poll_sys;
+#[allow(clippy::module_inception)]
+pub(crate) mod poll;
 #[cfg(unix)]
 pub(crate) mod select;
 #[cfg(windows)]
 pub(crate) mod windows;
 
-/// Platform-default readiness wait. Picks the best-available backend
-/// at compile time. On macOS, swaps between [`kqueue::KqueuePoller`]
-/// and [`select::SelectPoller`] on the fly based on whether the
-/// current fd slice contains any tty fd (Darwin's kqueue spins on tty
-/// character devices).
-pub struct Poller {
-    inner: Inner,
-}
-
 #[cfg(target_os = "linux")]
-type Inner = epoll::EpollPoller;
-
+pub(crate) use epoll::Epoll;
 #[cfg(any(
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly",
-))]
-type Inner = kqueue::KqueuePoller;
-
-#[cfg(target_os = "macos")]
-enum Inner {
-    Kqueue(kqueue::KqueuePoller),
-    Select(select::SelectPoller),
-}
-
-#[cfg(windows)]
-type Inner = windows::WindowsPoller;
-
-#[cfg(not(any(
-    target_os = "linux",
     target_os = "macos",
     target_os = "freebsd",
     target_os = "netbsd",
     target_os = "openbsd",
     target_os = "dragonfly",
-    windows,
-)))]
-type Inner = poll_sys::PollPoller;
+))]
+pub(crate) use kqueue::Kqueue;
+#[cfg(unix)]
+pub(crate) use poll::Poll;
+#[cfg(unix)]
+pub(crate) use select::Select;
+#[cfg(windows)]
+pub(crate) use windows::Windows;
 
-impl Poll for Poller {
-    fn new() -> io::Result<Self> {
-        #[cfg(target_os = "macos")]
-        let inner = Inner::Kqueue(kqueue::KqueuePoller::new()?);
-        #[cfg(not(target_os = "macos"))]
-        let inner = Inner::new()?;
-        Ok(Self { inner })
+/// Construct the platform's default poller watching `fds`, as a shared
+/// trait object. `input_is_tty` only matters on Darwin, where `kqueue`
+/// spins on tty character devices: a tty input fd selects [`Select`],
+/// otherwise [`Kqueue`]. The choice is made once here, at construction,
+/// so the returned poller's `poll` stays stateless and `&self`.
+#[allow(unused_variables)]
+pub(crate) fn new_poller(
+    fds: &[PollFd],
+    input_is_tty: bool,
+) -> io::Result<std::sync::Arc<dyn Poller>> {
+    #[cfg(target_os = "linux")]
+    {
+        Ok(std::sync::Arc::new(Epoll::new(fds)?))
     }
-
-    fn poll(&mut self, fds: &mut [PollFd], timeout: Option<Duration>) -> io::Result<usize> {
-        #[cfg(target_os = "macos")]
-        {
-            let needs_select = fds.iter().any(|p| unsafe { libc::isatty(p.fd) } == 1);
-            match (&self.inner, needs_select) {
-                (Inner::Kqueue(_), true) => {
-                    self.inner = Inner::Select(select::SelectPoller::new()?);
-                }
-                (Inner::Select(_), false) => {
-                    self.inner = Inner::Kqueue(kqueue::KqueuePoller::new()?);
-                }
-                _ => {}
-            }
-            return match &mut self.inner {
-                Inner::Kqueue(k) => k.poll(fds, timeout),
-                Inner::Select(s) => s.poll(fds, timeout),
-            };
+    #[cfg(target_os = "macos")]
+    {
+        if input_is_tty {
+            Ok(std::sync::Arc::new(Select::new(fds)?))
+        } else {
+            Ok(std::sync::Arc::new(Kqueue::new(fds)?))
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.inner.poll(fds, timeout)
-        }
+    }
+    #[cfg(any(
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly",
+    ))]
+    {
+        Ok(std::sync::Arc::new(Kqueue::new(fds)?))
+    }
+    #[cfg(windows)]
+    {
+        Ok(std::sync::Arc::new(Windows::new(fds)?))
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly",
+        windows,
+    )))]
+    {
+        Ok(std::sync::Arc::new(Poll::new(fds)?))
     }
 }
 
-// Compile-time assertion that every backend implements the contract.
+// Compile-time assertion that every backend implements the contract and
+// is usable as a shared trait object.
 #[allow(dead_code)]
-fn _assert_poll<T: Poll>() {}
+fn _assert_poller<T: Poller>() {}
+#[allow(dead_code)]
+fn _assert_obj(_: &dyn Poller) {}
 #[allow(dead_code)]
 fn _assert() {
-    _assert_poll::<Poller>();
     #[cfg(unix)]
-    _assert_poll::<select::SelectPoller>();
+    _assert_poller::<Select>();
     #[cfg(unix)]
-    _assert_poll::<poll_sys::PollPoller>();
+    _assert_poller::<Poll>();
     #[cfg(windows)]
-    _assert_poll::<windows::WindowsPoller>();
+    _assert_poller::<Windows>();
     #[cfg(target_os = "linux")]
-    _assert_poll::<epoll::EpollPoller>();
+    _assert_poller::<Epoll>();
     #[cfg(any(
         target_os = "macos",
         target_os = "freebsd",
@@ -222,5 +246,5 @@ fn _assert() {
         target_os = "openbsd",
         target_os = "dragonfly",
     ))]
-    _assert_poll::<kqueue::KqueuePoller>();
+    _assert_poller::<Kqueue>();
 }

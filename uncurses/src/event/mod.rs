@@ -15,6 +15,8 @@ pub mod poll;
 pub mod query;
 mod sigwinch;
 pub mod source;
+#[cfg(unix)]
+pub mod source_unix;
 #[cfg(windows)]
 pub mod source_windows;
 #[cfg(feature = "async")]

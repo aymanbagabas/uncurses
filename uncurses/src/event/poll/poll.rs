@@ -1,31 +1,34 @@
 //! `poll(2)` readiness backend.
 //!
-//! Stateless: each [`PollPoller::poll`] call rebuilds a fresh
-//! `pollfd` array from the caller's slice. `POLLIN | POLLHUP | POLLERR
-//! | POLLNVAL` all fold into readiness so the read path surfaces the
-//! underlying error.
+//! Stores the registered fds and rebuilds a fresh `pollfd` array each
+//! [`Poll::poll`] call. `POLLIN | POLLHUP | POLLERR | POLLNVAL` all fold
+//! into readiness so the read path surfaces the underlying error.
 
 use std::io;
 use std::time::{Duration, Instant};
 
-use super::{Poll, PollFd, remaining, reset, validate};
+use super::{PollFd, Poller, check_ready_len, remaining, reset, validate};
 
-pub(crate) struct PollPoller;
+pub(crate) struct Poll {
+    fds: Vec<PollFd>,
+}
 
-impl Poll for PollPoller {
-    fn new() -> io::Result<Self> {
-        Ok(Self)
+impl Poller for Poll {
+    fn new(fds: &[PollFd]) -> io::Result<Self> {
+        validate(fds)?;
+        Ok(Self { fds: fds.to_vec() })
     }
 
-    fn poll(&mut self, fds: &mut [PollFd], timeout: Option<Duration>) -> io::Result<usize> {
-        validate(fds)?;
-        reset(fds);
+    fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize> {
+        check_ready_len(ready, self.fds.len())?;
+        reset(ready);
 
         let deadline = timeout.map(|t| Instant::now() + t);
-        let mut pfds: Vec<libc::pollfd> = fds
+        let mut pfds: Vec<libc::pollfd> = self
+            .fds
             .iter()
-            .map(|p| libc::pollfd {
-                fd: p.fd,
+            .map(|&fd| libc::pollfd {
+                fd,
                 events: libc::POLLIN,
                 revents: 0,
             })
@@ -45,9 +48,9 @@ impl Poll for PollPoller {
             }
             let mut count = 0usize;
             let mask = libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL;
-            for (out, pfd) in fds.iter_mut().zip(pfds.iter()) {
+            for (slot, pfd) in ready.iter_mut().zip(pfds.iter()) {
                 if (pfd.revents & mask) != 0 {
-                    out.ready = true;
+                    *slot = true;
                     count += 1;
                 }
             }

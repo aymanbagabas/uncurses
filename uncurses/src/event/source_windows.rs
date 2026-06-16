@@ -36,7 +36,7 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
-use super::decode::Decoder;
+use super::decode::{Decoder, DecoderFlags};
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DeadlineKind,
     EventSource, Input, Waker,
@@ -80,12 +80,6 @@ unsafe impl Sync for WindowsWakerInner {}
 // handle is also thread-safe to use.
 unsafe impl<I> Send for EventSource<I> where I: Input {}
 
-enum WaitOutcome {
-    Input,
-    Wake,
-    Timeout,
-}
-
 impl<I> EventSource<I>
 where
     I: Input,
@@ -113,6 +107,16 @@ where
         let vt_input = unsafe { GetConsoleMode(input_handle, &mut mode) } != 0
             && (mode & ENABLE_VIRTUAL_TERMINAL_INPUT) != 0;
 
+        // Watch input and wake handles — in the fixed index order the
+        // wait path relies on. `input_is_tty` is meaningless on Windows
+        // and ignored by the poller there.
+        use std::os::windows::io::RawHandle;
+        let fds = [
+            input_handle as *mut _ as RawHandle,
+            wake_event as *mut _ as RawHandle,
+        ];
+        let poller = super::poll::new_poller(&fds, false)?;
+
         Ok(Self {
             input,
             parser: Decoder::new(DecoderFlags::empty()),
@@ -123,6 +127,7 @@ where
             paste_deadline: None,
             queue: VecDeque::with_capacity(16),
             waker,
+            poller,
             wake_event,
             vt_input,
             pending_high_surrogate: [None, None],
@@ -133,22 +138,37 @@ where
 
     pub(super) fn pump(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         let (effective, kind) = self.effective_timeout(timeout);
+        let mut ready = [false; 2];
+        self.poller.poll(&mut ready, effective)?;
+        self.ingest(ready, kind)
+    }
 
-        match self.wait(effective)? {
-            WaitOutcome::Input => {
-                self.read_records()?;
+    /// Act on a readiness result `[input, wake]` (the poller's fixed
+    /// index order): surface a wake as `Interrupted`, drain ready console
+    /// records, or run a deadline expiry when nothing was ready. Performs
+    /// no blocking wait of its own, so it is safe to call under a lock
+    /// after a separate lock-free [`Poller::poll`] — the path an
+    /// [`super::EventStream`] reader thread takes. Resize arrives as a
+    /// console record, so there is no separate winch fd here.
+    pub(super) fn ingest(&mut self, ready: [bool; 2], kind: DeadlineKind) -> io::Result<()> {
+        let input_ready = ready[0];
+        let wake_ready = ready[1];
+
+        if wake_ready {
+            unsafe {
+                ResetEvent(self.wake_event);
             }
-            WaitOutcome::Wake => {
-                unsafe {
-                    ResetEvent(self.wake_event);
-                }
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
-            }
-            WaitOutcome::Timeout => match kind {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
+        }
+
+        if input_ready {
+            self.read_records()?;
+        } else {
+            match kind {
                 DeadlineKind::Esc => self.expire_partial(),
                 DeadlineKind::Paste => self.expire_paste(),
                 DeadlineKind::None => {}
-            },
+            }
         }
 
         Ok(())
@@ -157,27 +177,6 @@ where
     fn input_handle(&self) -> HANDLE {
         use std::os::windows::io::AsRawHandle;
         self.input.as_handle().as_raw_handle() as HANDLE
-    }
-
-    fn wait(&self, timeout: Option<Duration>) -> io::Result<WaitOutcome> {
-        use super::poll::{Poll, PollFd, Poller};
-        let input = self.input_handle();
-        let mut fds = [
-            PollFd::new(input as *mut _ as std::os::windows::io::RawHandle),
-            PollFd::new(self.wake_event as *mut _ as std::os::windows::io::RawHandle),
-        ];
-        let mut poller = Poller::new()?;
-        let n = poller.poll(&mut fds, timeout)?;
-        if n == 0 {
-            return Ok(WaitOutcome::Timeout);
-        }
-        if fds[0].ready {
-            return Ok(WaitOutcome::Input);
-        }
-        if fds[1].ready {
-            return Ok(WaitOutcome::Wake);
-        }
-        Ok(WaitOutcome::Timeout)
     }
 
     fn read_records(&mut self) -> io::Result<()> {

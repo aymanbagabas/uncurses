@@ -1,41 +1,49 @@
 //! `select(2)` readiness backend.
 //!
-//! Stateless: each [`SelectPoller::poll`] call rebuilds the `fd_set`
-//! from the caller's slice. Subject to the usual `FD_SETSIZE` cap; the
+//! Stores the registered fds and rebuilds the `fd_set` each
+//! [`Select::poll`] call. Subject to the usual `FD_SETSIZE` cap; the
 //! backend rejects fds that are out of range with `InvalidInput`.
 
 use std::time::{Duration, Instant};
 use std::{io, os::fd::RawFd};
 
-use super::{Poll, PollFd, remaining, reset, validate};
+use super::{PollFd, Poller, check_ready_len, remaining, reset, validate};
 
-pub(crate) struct SelectPoller;
+pub(crate) struct Select {
+    fds: Vec<PollFd>,
+}
 
-impl Poll for SelectPoller {
-    fn new() -> io::Result<Self> {
-        Ok(Self)
+fn check_fd_range(fds: &[PollFd]) -> io::Result<()> {
+    for &fd in fds.iter() {
+        if fd < 0 || fd >= libc::FD_SETSIZE as RawFd {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fd exceeds FD_SETSIZE for select(2) backend",
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl Poller for Select {
+    fn new(fds: &[PollFd]) -> io::Result<Self> {
+        validate(fds)?;
+        check_fd_range(fds)?;
+        Ok(Self { fds: fds.to_vec() })
     }
 
-    fn poll(&mut self, fds: &mut [PollFd], timeout: Option<Duration>) -> io::Result<usize> {
-        validate(fds)?;
-        for p in fds.iter() {
-            if p.fd < 0 || p.fd >= libc::FD_SETSIZE as RawFd {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "fd exceeds FD_SETSIZE for select(2) backend",
-                ));
-            }
-        }
-        reset(fds);
+    fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize> {
+        check_ready_len(ready, self.fds.len())?;
+        reset(ready);
 
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
             let mut rfds: libc::fd_set = unsafe { std::mem::zeroed() };
             let mut nfds: RawFd = 0;
-            for p in fds.iter() {
-                unsafe { libc::FD_SET(p.fd, &mut rfds) };
-                if p.fd + 1 > nfds {
-                    nfds = p.fd + 1;
+            for &fd in self.fds.iter() {
+                unsafe { libc::FD_SET(fd, &mut rfds) };
+                if fd + 1 > nfds {
+                    nfds = fd + 1;
                 }
             }
 
@@ -68,9 +76,9 @@ impl Poll for SelectPoller {
                 return Err(err);
             }
             let mut count = 0usize;
-            for p in fds.iter_mut() {
-                if unsafe { libc::FD_ISSET(p.fd, &rfds) } {
-                    p.ready = true;
+            for (slot, &fd) in ready.iter_mut().zip(self.fds.iter()) {
+                if unsafe { libc::FD_ISSET(fd, &rfds) } {
+                    *slot = true;
                     count += 1;
                 }
             }
