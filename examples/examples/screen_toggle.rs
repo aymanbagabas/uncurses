@@ -108,7 +108,7 @@ impl App {
     /// process until a `SIGCONT` (e.g. `fg`) returns control here.
     #[cfg(unix)]
     fn suspend(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()?;
         // SAFETY: raise is async-signal-safe.
@@ -132,13 +132,13 @@ impl App {
                 self.screen.resize(size.col, 4);
             }
         }
-        self.screen.restore()?;
+        self.screen.restore();
         self.screen.invalidate();
         Ok(())
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }

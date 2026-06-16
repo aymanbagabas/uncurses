@@ -28,7 +28,7 @@
 //!     .fg(Color::Basic(BasicColor::Green));
 //! screen.set_str_with((0, 0), "Hello, terminal!", WrapMode::Truncate, style);
 //!
-//! screen.render().unwrap();
+//! screen.render();
 //! screen.flush().unwrap();
 //! ```
 
@@ -45,7 +45,7 @@
 //! use uncurses::terminal::stdout;
 //!
 //! let mut screen = uncurses::screen::Screen::new(stdout(), (80, 24));
-//! // … screen.render()?; screen.set_alt_screen(true); …
+//! // … screen.render(); screen.set_alt_screen(true); …
 //! screen.flush()?; // explicit: nothing reaches the terminal until here
 //! # Ok::<_, std::io::Error>(())
 //! ```

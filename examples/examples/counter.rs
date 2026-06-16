@@ -90,7 +90,7 @@ impl App {
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }

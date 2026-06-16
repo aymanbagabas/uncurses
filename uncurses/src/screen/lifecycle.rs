@@ -15,7 +15,14 @@ impl<W: Write> Screen<W> {
     /// suspending the process or exec-ing a child). Pure write — does
     /// not mutate `self.state`, so a subsequent [`Screen::restore`]
     /// can re-apply the same modes verbatim.
-    pub fn reset(&mut self) -> io::Result<()> {
+    ///
+    /// Only stages into the buffer, so it is infallible; the bytes reach
+    /// the terminal on the next [`Screen::flush`].
+    pub fn reset(&mut self) {
+        self.write_reset().unwrap();
+    }
+
+    fn write_reset(&mut self) -> io::Result<()> {
         // Walk to the bottom of the *last rendered* surface before any
         // mode teardown. Use the renderer's last-render height rather
         // than the live screen height: a terminal that grew between
@@ -101,7 +108,14 @@ impl<W: Write> Screen<W> {
     /// terminal was temporarily handed back to the shell. Pure write —
     /// does not mutate `self.state`. Call [`Screen::invalidate`]
     /// afterwards if the screen contents also need to be repainted.
-    pub fn restore(&mut self) -> io::Result<()> {
+    ///
+    /// Only stages into the buffer, so it is infallible; the bytes reach
+    /// the terminal on the next [`Screen::flush`].
+    pub fn restore(&mut self) {
+        self.write_restore().unwrap();
+    }
+
+    fn write_restore(&mut self) -> io::Result<()> {
         // Re-apply the desired kitty keyboard flags on the main
         // screen *before* entering the alt screen — the stack is
         // per-buffer, so a set targeting main must happen while main
@@ -186,7 +200,14 @@ impl<W: Write> Screen<W> {
     ///
     /// Only writes — does not flush. Forces a full redraw on the next
     /// [`Screen::render`].
-    pub fn insert_above(&mut self, content: &str) -> io::Result<()> {
+    ///
+    /// Only stages into the buffer, so it is infallible; the bytes reach
+    /// the terminal on the next [`Screen::flush`].
+    pub fn insert_above(&mut self, content: &str) {
+        self.write_insert_above(content).unwrap();
+    }
+
+    fn write_insert_above(&mut self, content: &str) -> io::Result<()> {
         if content.is_empty() {
             return Ok(());
         }

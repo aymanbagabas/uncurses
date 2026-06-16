@@ -350,12 +350,11 @@ impl<W: Write> Screen<W> {
     ///
     /// Only writes — never flushes. Call [`std::io::Write::flush`] on
     /// the writer when the frame should reach the terminal.
-    pub fn render(&mut self) -> io::Result<()> {
+    pub fn render(&mut self) {
         if !self.renderer.sync_front(&mut self.front_buf) {
-            return Ok(());
+            return;
         }
-
-        self.write_frame()
+        self.write_frame();
     }
 
     /// Render the next frame and flush it to the writer in one call.
@@ -365,7 +364,7 @@ impl<W: Write> Screen<W> {
     /// commits it to the terminal. Like [`Screen::render`], a no-op
     /// frame emits zero bytes.
     pub fn present(&mut self) -> io::Result<()> {
-        self.render()?;
+        self.render();
         self.flush()
     }
 
@@ -379,23 +378,27 @@ impl<W: Write> Screen<W> {
     /// so terminals that support DECSET 2026 treat the whole frame as
     /// atomic. The wrap is skipped entirely when the caller has already
     /// hidden the cursor via [`Screen::set_cursor_visible`].
-    fn write_frame(&mut self) -> io::Result<()> {
+    ///
+    /// Only stages into the buffer, so it is infallible; the bytes reach
+    /// the terminal on the next [`Screen::flush`].
+    fn write_frame(&mut self) {
         if self.state.sync_updates {
-            mode::Mode::SYNCHRONIZED_OUTPUT.set(&mut self.buf)?;
+            mode::Mode::SYNCHRONIZED_OUTPUT.set(&mut self.buf).unwrap();
         }
         if self.state.cursor_visible {
-            mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf)?;
+            mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
         }
 
-        self.renderer.render_back(&mut self.buf)?;
+        self.renderer.render_back(&mut self.buf).unwrap();
 
         if self.state.cursor_visible {
-            mode::Mode::CURSOR_VISIBLE.set(&mut self.buf)?;
+            mode::Mode::CURSOR_VISIBLE.set(&mut self.buf).unwrap();
         }
         if self.state.sync_updates {
-            mode::Mode::SYNCHRONIZED_OUTPUT.reset(&mut self.buf)?;
+            mode::Mode::SYNCHRONIZED_OUTPUT
+                .reset(&mut self.buf)
+                .unwrap();
         }
-        Ok(())
     }
 
     /// Resize the screen.
