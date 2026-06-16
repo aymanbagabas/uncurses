@@ -6,9 +6,6 @@ mod csi;
 mod dcs;
 mod escape;
 mod flags;
-pub mod handlers;
-#[cfg(test)]
-mod handlers_tests;
 mod kitty;
 mod osc;
 mod paste;
@@ -20,8 +17,6 @@ mod util;
 mod win32;
 use super::Event;
 pub use flags::DecoderFlags;
-use handlers::Handlers;
-pub use handlers::{Apc, Csi, Dcs, HandlerId, Osc, Pm, Sos, Ss3};
 use result::ParseResult;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -51,9 +46,6 @@ pub struct Decoder {
     /// High UTF-16 surrogate buffered from a `vk == 0` win32-input-mode
     /// record, indexed by `bKeyDown` (0 = release, 1 = press).
     pub(super) win32_high_surrogate: Cell<[Option<u16>; 2]>,
-    /// Caller-registered hooks for unrecognised sequences. Empty by
-    /// default; see [`Decoder::on_csi`] and siblings.
-    pub(in crate::event::decode) handlers: Handlers,
 }
 
 impl Default for Decoder {
@@ -73,7 +65,6 @@ impl Decoder {
             pending: RefCell::new(VecDeque::new()),
             win32_last_cks: Cell::new(0),
             win32_high_surrogate: Cell::new([None, None]),
-            handlers: Handlers::default(),
         }
     }
 
@@ -176,11 +167,7 @@ impl Decoder {
                     (consumed, None)
                 } else {
                     let bytes = &data[..1];
-                    let evt = self
-                        .handlers
-                        .dispatch_unknown(bytes)
-                        .unwrap_or_else(|| Event::Unknown(bytes.to_vec()));
-                    (1, Some(evt))
+                    (1, Some(Event::Unknown(bytes.to_vec())))
                 }
             }
         }
@@ -355,11 +342,7 @@ impl Decoder {
                             self.buf.drain(..1);
                             continue;
                         }
-                        events.push(
-                            self.handlers
-                                .dispatch_unknown(&self.buf)
-                                .unwrap_or_else(|| Event::Unknown(self.buf.clone())),
-                        );
+                        events.push(Event::Unknown(self.buf.clone()));
                         self.buf.clear();
                     }
                     break;
@@ -369,11 +352,7 @@ impl Decoder {
                         self.buf.drain(..consumed);
                     } else {
                         let byte = self.buf[0];
-                        let evt = self
-                            .handlers
-                            .dispatch_unknown(&[byte])
-                            .unwrap_or_else(|| Event::Unknown(vec![byte]));
-                        events.push(evt);
+                        events.push(Event::Unknown(vec![byte]));
                         self.buf.drain(..1);
                     }
                 }

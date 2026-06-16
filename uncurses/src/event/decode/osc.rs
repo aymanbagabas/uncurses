@@ -17,25 +17,21 @@ impl Decoder {
         for i in prefix_len..buf.len() {
             if buf[i] == 0x07 || buf[i] == 0x9c {
                 let payload = &buf[prefix_len..i];
-                return ParseResult::Event(self.finalize_osc(payload), i + 1);
+                return ParseResult::Event(finalize_osc(payload), i + 1);
             }
             if buf[i] == 0x1b && i + 1 < buf.len() && buf[i + 1] == b'\\' {
                 let payload = &buf[prefix_len..i];
-                return ParseResult::Event(self.finalize_osc(payload), i + 2);
+                return ParseResult::Event(finalize_osc(payload), i + 2);
             }
         }
         ParseResult::Incomplete
     }
+}
 
-    /// Dispatch order: user hooks first, then the builtin OSC recogniser,
-    /// then [`Event::UnknownOsc`] as a last resort. Hooks run first so a
-    /// consumer can override defaults (e.g. reinterpret OSC 10).
-    fn finalize_osc(&self, payload: &[u8]) -> Event {
-        self.handlers
-            .dispatch_osc(super::handlers::Osc { payload })
-            .or_else(|| recognize(payload))
-            .unwrap_or_else(|| Event::UnknownOsc(payload.to_vec()))
-    }
+/// Resolve an OSC payload: the builtin recogniser, then
+/// [`Event::UnknownOsc`] as a last resort.
+fn finalize_osc(payload: &[u8]) -> Event {
+    recognize(payload).unwrap_or_else(|| Event::UnknownOsc(payload.to_vec()))
 }
 
 /// Builtin OSC recogniser. Returns `None` for unrecognised payloads so the

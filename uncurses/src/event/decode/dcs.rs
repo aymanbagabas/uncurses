@@ -6,7 +6,6 @@
 //! device attributes.
 
 use super::Decoder;
-use super::handlers::{self, Dcs};
 use super::result::ParseResult;
 use super::util::{decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len};
 use crate::event::Event;
@@ -24,44 +23,64 @@ impl Decoder {
         let payload = &buf[prefix_len..prefix_len + payload_end];
         let consumed = prefix_len + payload_end + st_len;
 
-        let evt = match handlers::split_dcs(payload) {
-            Some(view) => self
-                .handlers
-                .dispatch_dcs(&view)
-                .or_else(|| recognize(&view))
-                .unwrap_or_else(|| Event::UnknownDcs(payload.to_vec())),
-            None => Event::UnknownDcs(payload.to_vec()),
-        };
+        let evt = recognize(payload).unwrap_or_else(|| Event::UnknownDcs(payload.to_vec()));
         ParseResult::Event(evt, consumed)
     }
 }
 
 /// Builtin DCS recogniser: XTGETTCAP, DECRQSS, XTVersion, tertiary DA.
-fn recognize(view: &Dcs<'_>) -> Option<Event> {
-    let payload = view.raw;
+///
+/// Splits the payload into its private prefix / parameter / intermediate /
+/// final-byte / data regions and matches the known reply shapes. Returns
+/// `None` for anything unrecognised or malformed so the caller falls back
+/// to [`Event::UnknownDcs`].
+fn recognize(payload: &[u8]) -> Option<Event> {
+    let (private, head_start) = match payload.first() {
+        Some(&b) if matches!(b, b'?' | b'<' | b'>' | b'=') => (Some(b), 1),
+        _ => (None, 0),
+    };
+    let mut i = head_start;
+    let final_pos = loop {
+        let b = *payload.get(i)?;
+        if (0x40..=0x7e).contains(&b) {
+            break i;
+        }
+        if !((0x30..=0x3f).contains(&b) || (0x20..=0x2f).contains(&b) || b == b';' || b == b':') {
+            return None;
+        }
+        i += 1;
+    };
+    let head = &payload[head_start..final_pos];
+    let mid = head
+        .iter()
+        .position(|&x| (0x20..=0x2f).contains(&x))
+        .unwrap_or(head.len());
+    let (params_raw, intermediates) = head.split_at(mid);
+    let final_byte = payload[final_pos];
+    let data = &payload[final_pos + 1..];
 
     // XTGETTCAP response: DCS 1 + r Pt ST  /  DCS 0 + r ST (failure).
     // Pt is `cap_hex=value_hex` pairs separated by `;`. Decode each
     // hex-encoded `cap=value` pair and rebuild a `;`-joined string of
     // the decoded form so consumers see human-readable capabilities.
-    if view.params_raw == b"1" && view.intermediates == b"+" && view.final_byte == b'r' {
-        return Some(Event::Termcap(decode_termcap_payload(view.data)));
+    if params_raw == b"1" && intermediates == b"+" && final_byte == b'r' {
+        return Some(Event::Termcap(decode_termcap_payload(data)));
     }
 
     // DECRQSS response: DCS 1$r ... ST (valid) or DCS 0$r ... ST (invalid).
     // We expose these as Capability as well.
-    if (view.params_raw == b"1" || view.params_raw == b"0")
-        && view.intermediates == b"$"
-        && view.final_byte == b'r'
+    if (params_raw == b"1" || params_raw == b"0")
+        && intermediates == b"$"
+        && final_byte == b'r'
         && let Ok(s) = std::str::from_utf8(payload)
     {
         return Some(Event::Termcap(s.to_string()));
     }
 
     // XTVersion reply: DCS > | <name version> ST
-    if view.private == Some(b'>') && view.final_byte == b'|' {
+    if private == Some(b'>') && final_byte == b'|' {
         return Some(Event::TerminalVersion(
-            String::from_utf8_lossy(view.data).into_owned(),
+            String::from_utf8_lossy(data).into_owned(),
         ));
     }
 
@@ -69,10 +88,10 @@ fn recognize(view: &Dcs<'_>) -> Option<Event> {
     // hex-encoded byte string identifying the terminal; decode it so the
     // event carries the raw identifier bytes (as a UTF-8 string when
     // possible, otherwise the lossy decoding).
-    if view.intermediates == b"!" && view.final_byte == b'|' {
-        let decoded = match hex_decode(view.data) {
+    if intermediates == b"!" && final_byte == b'|' {
+        let decoded = match hex_decode(data) {
             Some(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            None => String::from_utf8_lossy(view.data).into_owned(),
+            None => String::from_utf8_lossy(data).into_owned(),
         };
         return Some(Event::TertiaryDeviceAttributes(decoded));
     }

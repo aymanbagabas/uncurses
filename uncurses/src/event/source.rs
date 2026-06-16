@@ -34,9 +34,7 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 #[cfg(windows)]
 use std::os::windows::io::AsHandle;
 
-use super::decode::{
-    Apc, Csi, Dcs, Decoder, DecoderFlags, HandlerId, Osc, Pm, Sos, Ss3, is_c1_introducer,
-};
+use super::decode::{Decoder, DecoderFlags, is_c1_introducer};
 use super::pending::Pending;
 #[cfg(unix)]
 use super::poll::{Poll, PollFd, Poller};
@@ -292,96 +290,6 @@ where
     /// Cloneable [`Waker`] bound to this source.
     pub fn waker(&self) -> Waker {
         self.waker.clone()
-    }
-
-    /// Read-only access to the underlying [`Decoder`] (for state queries
-    /// like [`Decoder::in_paste`]). Handler registration goes through the
-    /// `on_*` methods on `EventSource` directly.
-    pub fn decoder(&self) -> &Decoder {
-        &self.parser
-    }
-
-    /// Register a hook for unrecognised CSI sequences. See
-    /// [`Decoder::on_csi`].
-    pub fn on_csi<F>(&mut self, f: F) -> HandlerId
-    where
-        F: for<'a, 'b> Fn(&'b Csi<'a>) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_csi(f)
-    }
-
-    /// Register a hook for unrecognised SS3 sequences. See
-    /// [`Decoder::on_ss3`].
-    pub fn on_ss3<F>(&mut self, f: F) -> HandlerId
-    where
-        F: Fn(Ss3) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_ss3(f)
-    }
-
-    /// Register a hook for unrecognised OSC payloads. See
-    /// [`Decoder::on_osc`].
-    pub fn on_osc<F>(&mut self, f: F) -> HandlerId
-    where
-        F: for<'a> Fn(Osc<'a>) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_osc(f)
-    }
-
-    /// Register a hook for unrecognised DCS payloads. See
-    /// [`Decoder::on_dcs`].
-    pub fn on_dcs<F>(&mut self, f: F) -> HandlerId
-    where
-        F: for<'a, 'b> Fn(&'b Dcs<'a>) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_dcs(f)
-    }
-
-    /// Register a hook for unrecognised APC payloads. See
-    /// [`Decoder::on_apc`].
-    pub fn on_apc<F>(&mut self, f: F) -> HandlerId
-    where
-        F: for<'a> Fn(Apc<'a>) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_apc(f)
-    }
-
-    /// Register a hook for PM (Privacy Message) payloads. See
-    /// [`Decoder::on_pm`].
-    pub fn on_pm<F>(&mut self, f: F) -> HandlerId
-    where
-        F: for<'a> Fn(Pm<'a>) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_pm(f)
-    }
-
-    /// Register a hook for SOS (Start Of String) payloads. See
-    /// [`Decoder::on_sos`].
-    pub fn on_sos<F>(&mut self, f: F) -> HandlerId
-    where
-        F: for<'a> Fn(Sos<'a>) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_sos(f)
-    }
-
-    /// Register a hook for raw bytes that don't begin any recognised
-    /// sequence. See [`Decoder::on_unknown`].
-    pub fn on_unknown<F>(&mut self, f: F) -> HandlerId
-    where
-        F: Fn(&[u8]) -> Option<Event> + Send + Sync + 'static,
-    {
-        self.parser.on_unknown(f)
-    }
-
-    /// Deregister a previously-registered hook by id. Returns `true` when
-    /// a handler with that id was found and removed.
-    pub fn remove_handler(&mut self, id: HandlerId) -> bool {
-        self.parser.remove_handler(id)
-    }
-
-    /// Remove every registered hook across all categories.
-    pub fn clear_handlers(&mut self) {
-        self.parser.clear_handlers();
     }
 
     /// Block up to `timeout` for at least one event to become available.

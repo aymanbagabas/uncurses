@@ -5,7 +5,6 @@
 //! as [`Event::UnknownApc`].
 
 use super::Decoder;
-use super::handlers::Apc;
 use super::result::ParseResult;
 use super::util::{find_string_terminator, intro_prefix_len, parse_kitty_options};
 use crate::event::Event;
@@ -22,20 +21,15 @@ impl Decoder {
         };
         let payload = &buf[prefix_len..prefix_len + payload_end];
         let consumed = prefix_len + payload_end + st_len;
-        let view = Apc { payload };
-        let evt = self
-            .handlers
-            .dispatch_apc(view)
-            .or_else(|| recognize(view))
-            .unwrap_or_else(|| Event::UnknownApc(payload.to_vec()));
+        let evt = recognize(payload).unwrap_or_else(|| Event::UnknownApc(payload.to_vec()));
         ParseResult::Event(evt, consumed)
     }
 }
 
 /// Builtin APC recogniser: currently just the Kitty graphics protocol.
-fn recognize(view: Apc<'_>) -> Option<Event> {
+fn recognize(payload: &[u8]) -> Option<Event> {
     // Kitty graphics: APC G <options>;<payload> ST
-    let rest = view.payload.strip_prefix(b"G")?;
+    let rest = payload.strip_prefix(b"G")?;
     let (opts_bytes, gpayload) = match rest.iter().position(|&b| b == b';') {
         Some(i) => (&rest[..i], &rest[i + 1..]),
         None => (rest, &[][..]),
