@@ -37,7 +37,10 @@ use windows_sys::Win32::System::Console::{
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::Decoder;
-use super::source::{DeadlineKind, EventSource, Input, Waker};
+use super::source::{
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DeadlineKind,
+    EventSource, Input, Waker,
+};
 
 const READ_BATCH: usize = 64;
 
@@ -87,22 +90,14 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Build a new source reading from `input` with default [`Options`].
-    /// See [`EventSource::with_options`] for the knob-configurable variant.
-    pub fn new(input: I) -> io::Result<Self> {
-        Self::with_options(input, super::source::Options::default())
-    }
-
     /// Build a new source reading from `input`. Resize events arrive
     /// as `WINDOW_BUFFER_SIZE_EVENT` records on the input handle, so
     /// no separate winch plumbing is needed.
     ///
-    /// `opts.buffer_capacity` caps the read buffer; any single
-    /// sequence larger than the cap is dropped silently.
-    /// `opts.esc_timeout` is how long the source waits for a
-    /// continuation byte before resolving a buffered partial
-    /// `ESC`-prefixed sequence as a bare Escape keypress.
-    pub fn with_options(input: I, opts: super::source::Options) -> io::Result<Self> {
+    /// Timeouts start at their documented defaults; override them with
+    /// [`EventSource::with_esc_timeout`] and
+    /// [`EventSource::with_paste_idle_timeout`].
+    pub fn new(input: I) -> io::Result<Self> {
         let input_handle = {
             use std::os::windows::io::AsRawHandle;
             input.as_handle().as_raw_handle() as HANDLE
@@ -118,14 +113,13 @@ where
         let vt_input = unsafe { GetConsoleMode(input_handle, &mut mode) } != 0
             && (mode & ENABLE_VIRTUAL_TERMINAL_INPUT) != 0;
 
-        let capacity = opts.buffer_capacity.max(64);
         Ok(Self {
             input,
             parser: Decoder::new(DecoderFlags::empty()),
-            pending: super::pending::Pending::with_capacity(capacity),
-            esc_timeout: opts.esc_timeout,
+            pending: super::pending::Pending::with_capacity(DEFAULT_BUFFER_CAPACITY),
+            esc_timeout: DEFAULT_ESC_TIMEOUT,
             esc_deadline: None,
-            paste_idle_timeout: opts.paste_idle_timeout,
+            paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
             queue: VecDeque::with_capacity(16),
             waker,
