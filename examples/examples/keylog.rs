@@ -144,13 +144,12 @@ impl App {
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, &self.last)
+        redraw(&mut self.screen, &self.last)?;
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
-        self.screen.render()?;
-        self.screen.flush()?;
 
         while let Ok(ev) = self.events.read() {
             match &ev {
@@ -170,28 +169,10 @@ impl App {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => {
-                    // Tear down the screen, drop raw mode, then send SIGTSTP
-                    // to ourselves. The kernel pauses the process until a
-                    // SIGCONT brings it back; control returns here on resume.
-                    self.screen.reset()?;
-                    self.screen.flush()?;
-                    self.term.restore()?;
-
-                    // SAFETY: raise is async-signal-safe.
-                    unsafe { libc::raise(libc::SIGTSTP) };
-
-                    // Resumed: re-acquire raw mode, refit to the current
-                    // window size, and reinstate the screen modes.
-                    self.term.make_raw()?;
-                    if let Ok(size) = self.term.window_size() {
-                        self.screen.resize(size.col, 2);
-                    }
-                    self.screen.restore()?;
-                    self.screen.invalidate();
+                    self.suspend()?;
+                    self.resume()?;
                     self.last = String::from("(resumed)");
                     self.render()?;
-                    self.screen.render()?;
-                    self.screen.flush()?;
                     continue;
                 }
                 Event::Resize(ws) => {
@@ -204,9 +185,34 @@ impl App {
             self.screen.insert_above(&line)?;
             self.last = line;
             self.render()?;
-            self.screen.render()?;
-            self.screen.flush()?;
         }
+        Ok(())
+    }
+
+    /// Suspend to job control (Unix-only): tear down the screen, drop
+    /// raw mode, then send `SIGTSTP` to ourselves. The kernel pauses the
+    /// process until a `SIGCONT` (e.g. `fg`) returns control here.
+    #[cfg(unix)]
+    fn suspend(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()?;
+        // SAFETY: raise is async-signal-safe.
+        unsafe { libc::raise(libc::SIGTSTP) };
+        Ok(())
+    }
+
+    /// Resume after [`suspend`](Self::suspend): re-acquire raw mode,
+    /// refit to the current window size, and reinstate the screen modes,
+    /// then force a full repaint.
+    #[cfg(unix)]
+    fn resume(&mut self) -> std::io::Result<()> {
+        self.term.make_raw()?;
+        if let Ok(size) = self.term.window_size() {
+            self.screen.resize(size.col, 2);
+        }
+        self.screen.restore()?;
+        self.screen.invalidate();
         Ok(())
     }
 
