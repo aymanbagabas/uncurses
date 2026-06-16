@@ -11,7 +11,7 @@
 //!   skeleton and delegates to `dispatch_csi`.
 //! * `dispatch_csi` — runs the state-dependent inline paths (X10/UTF-8
 //!   mouse, Win32 input) that need access to `&Decoder` and bytes past
-//!   the sequence, then hands off to user hooks and `recognize`.
+//!   the sequence, then hands off to `recognize`.
 //! * `recognize` / `recognize_tilde` — pure builtin decoders that turn
 //!   a parsed CSI into the corresponding [`Event`], or `None` so a
 //!   caller can fall back to `Event::UnknownCsi`.
@@ -85,15 +85,14 @@ impl Decoder {
         has_private: bool,
         consumed: usize,
     ) -> ParseResult {
-        let view = super::handlers::split_csi(seq);
+        let view = split_csi(seq);
         let final_byte = view.final_byte;
 
         // X10 / UTF-8 mouse: CSI M followed by 3 raw bytes (or 3 UTF-8
         // codepoints in mode 1005). Needs access to the input buffer
-        // beyond `consumed`, which can't be expressed via the hook API,
-        // so it stays inline above hook dispatch. The byte-level
-        // `params_raw.is_empty()` check avoids a parameter allocation
-        // on every CSI.
+        // beyond `consumed`, so it stays inline above `recognize`. The
+        // byte-level `params_raw.is_empty()` check avoids a parameter
+        // allocation on every CSI.
         if !has_private && final_byte == b'M' && view.params_raw.is_empty() {
             if self.utf8_mouse {
                 if let Some((event, n)) = decode_utf8_mouse(&buf[consumed..]) {
@@ -113,7 +112,7 @@ impl Decoder {
         }
 
         // Win32 input mode: CSI vk;sc;ch;kd;cks;rep _ . Mutates
-        // `self.pending` so it stays inline above the hook layer. Pre-check
+        // `self.pending` so it stays inline above `recognize`. Pre-check
         // the body shape (5 `;` separators, no private prefix) before
         // allocating to parse the parameter list.
         if final_byte == b'_'
@@ -123,15 +122,10 @@ impl Decoder {
             return self.dispatch_win32_input(view.params(), consumed);
         }
 
-        // User hooks first (can override recognised defaults), then the
-        // builtin recogniser, then `Event::UnknownCsi`. The lazy
-        // [`Params`] walker is stateless and cheap to re-create across
-        // hooks and the builtin recogniser.
+        // The builtin recogniser, then `Event::UnknownCsi`. The lazy
+        // [`Params`] walker is stateless and cheap to re-create.
         let raw_with_intro = &buf[..consumed];
-        let evt = self
-            .handlers
-            .dispatch_csi(&view)
-            .or_else(|| recognize(&view, raw_with_intro, self.flags))
+        let evt = recognize(&view, raw_with_intro, self.flags)
             .unwrap_or_else(|| Event::UnknownCsi(raw_with_intro.to_vec()));
         ParseResult::Event(evt, consumed)
     }
@@ -141,11 +135,7 @@ impl Decoder {
 /// CSI view, or `None` when the sequence isn't one this library knows
 /// about. `raw_with_intro` is the original byte slice including the
 /// `ESC [` introducer, used by the legacy-key lookup table.
-fn recognize(
-    view: &super::handlers::Csi<'_>,
-    raw_with_intro: &[u8],
-    flags: DecoderFlags,
-) -> Option<Event> {
+fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Option<Event> {
     let final_byte = view.final_byte;
     let params = view.params();
     // Currently the spec uses at most one intermediate; expose it as
@@ -435,4 +425,47 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
         key_with_mods(key_code, mods),
         csi_kitty_phase(params),
     ))
+}
+
+/// Structured view over a CSI body: the private prefix, parameter and
+/// intermediate regions, and final byte split out so the recogniser can
+/// match on shape. The parameter body is exposed lazily via [`Csi::params`];
+/// no parameter `Vec` is ever materialised.
+struct Csi<'a> {
+    private: Option<u8>,
+    params_raw: &'a [u8],
+    intermediates: &'a [u8],
+    final_byte: u8,
+}
+
+impl<'a> Csi<'a> {
+    /// Lazy walker over the `;`-separated parameter list. Each group
+    /// may carry colon-separated sub-parameters; see
+    /// [`crate::ansi::params::Params`].
+    #[inline]
+    fn params(&self) -> Params<'a> {
+        Params::from_raw(self.params_raw)
+    }
+}
+
+/// Split a CSI body (private prefix + params + intermediates + final byte)
+/// into a structured view. `seq` must end with the final byte.
+fn split_csi(seq: &[u8]) -> Csi<'_> {
+    let final_byte = *seq.last().unwrap_or(&0);
+    let body = &seq[..seq.len().saturating_sub(1)];
+    let (private, rest) = match body.first() {
+        Some(&b) if matches!(b, b'?' | b'<' | b'>' | b'=') => (Some(b), &body[1..]),
+        _ => (None, body),
+    };
+    let mid = rest
+        .iter()
+        .position(|&b| (0x20..=0x2f).contains(&b))
+        .unwrap_or(rest.len());
+    let (params_raw, intermediates) = rest.split_at(mid);
+    Csi {
+        private,
+        params_raw,
+        intermediates,
+        final_byte,
+    }
 }

@@ -7,7 +7,6 @@
 
 use super::Decoder;
 use super::DecoderFlags;
-use super::handlers::Ss3;
 use super::result::ParseResult;
 use super::util::{intro_prefix_len, lookup_legacy_key};
 use crate::event::{Event, Key, KeyCode, KeyModifiers};
@@ -20,14 +19,9 @@ impl Decoder {
         }
 
         let consumed = prefix_len + 1;
-        let view = Ss3 {
-            final_byte: buf[prefix_len],
-        };
+        let final_byte = buf[prefix_len];
         let raw = &buf[..consumed];
-        let evt = self
-            .handlers
-            .dispatch_ss3(view)
-            .or_else(|| recognize(view, raw, self.flags))
+        let evt = recognize(final_byte, raw, self.flags)
             .unwrap_or_else(|| Event::UnknownSs3(raw.to_vec()));
         ParseResult::Event(evt, consumed)
     }
@@ -35,8 +29,8 @@ impl Decoder {
 
 /// Builtin SS3 recogniser: the keypad / cursor-key final-byte table and
 /// the URxvt legacy-key fallback.
-fn recognize(view: Ss3, raw_with_intro: &[u8], flags: DecoderFlags) -> Option<Event> {
-    let key = match view.final_byte {
+fn recognize(final_byte: u8, raw_with_intro: &[u8], flags: DecoderFlags) -> Option<Event> {
+    let key = match final_byte {
         b'A' => Some(KeyCode::Up),
         b'B' => Some(KeyCode::Down),
         b'C' => Some(KeyCode::Right),

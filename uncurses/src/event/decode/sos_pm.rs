@@ -23,14 +23,8 @@ impl Decoder {
         let payload = &buf[prefix_len..prefix_len + payload_end];
         let consumed = prefix_len + payload_end + st_len;
         let evt = match kind {
-            b'X' => self
-                .handlers
-                .dispatch_sos(super::handlers::Sos { payload })
-                .unwrap_or_else(|| Event::UnknownSos(payload.to_vec())),
-            _ => self
-                .handlers
-                .dispatch_pm(super::handlers::Pm { payload })
-                .unwrap_or_else(|| Event::UnknownPm(payload.to_vec())),
+            b'X' => Event::UnknownSos(payload.to_vec()),
+            _ => Event::UnknownPm(payload.to_vec()),
         };
         ParseResult::Event(evt, consumed)
     }
