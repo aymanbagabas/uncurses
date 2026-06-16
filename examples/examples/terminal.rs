@@ -32,7 +32,11 @@ fn main() -> io::Result<()> {
     // One-shot capability query at startup (100ms budget): the request is
     // written through the screen's output and the reply is plucked off
     // the source; any user input meanwhile stays queued.
-    let bg = query::background_color(&mut screen, &mut source, Duration::from_millis(100))?;
+    let bg = source.query(
+        &mut screen,
+        &query::BACKGROUND_COLOR,
+        Duration::from_millis(100),
+    )?;
 
     // Drive the loop in a closure so teardown always runs, even on error.
     let result = (|| -> io::Result<()> {

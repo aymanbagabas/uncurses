@@ -1,14 +1,17 @@
-//! Terminal query helpers: send a request, await the reply.
+//! Terminal queries: send a request, await the reply.
 //!
-//! A query writes a request sequence to an output, then reads the
-//! terminal's reply off an input [`EventSource`]. The reply is plucked out of
-//! the source's event queue with [`EventSource::read_matching`], so any user
-//! input that arrives meanwhile stays queued, in order, for a later
-//! [`EventSource::read`] — querying never drops input.
+//! A [`Query`] pairs a request sequence with a function that recognises
+//! its reply, so the two can never drift apart. Run one with
+//! [`EventSource::query`] (synchronous) or, behind the `async` feature,
+//! [`EventStream::query`](crate::event::EventStream::query). The reply is
+//! plucked out of the event stream with [`EventSource::read_matching`], so
+//! any user input that arrives meanwhile stays queued, in order, for a
+//! later [`EventSource::read`] — querying never drops input.
 //!
 //! The writer is any [`Write`]: a [`Terminal`](crate::Terminal) handle, a
 //! [`Screen`](crate::screen::Screen) (writes are staged and flushed), or
-//! a bare stdout. Pair it with the [`EventSource`] reading the same terminal.
+//! a bare stdout. Pair it with the [`EventSource`] reading the same
+//! terminal.
 //!
 //! ```no_run
 //! use std::time::Duration;
@@ -20,7 +23,7 @@
 //! let _prev = term.make_raw()?;
 //! let mut out = term.output();
 //! let mut source = EventSource::new(term.input())?;
-//! let bg = query::background_color(&mut out, &mut source, Duration::from_millis(100))?;
+//! let bg = source.query(&mut out, &query::BACKGROUND_COLOR, Duration::from_millis(100))?;
 //! println!("background: {bg:?}");
 //! # Ok(())
 //! # }
@@ -33,80 +36,93 @@ use super::{Event, EventSource, Input};
 use crate::ansi::{background, ctrl};
 use crate::color::Color;
 
-/// Write `request`, then wait up to `timeout` for an event that `matcher`
-/// accepts, returning its mapped value.
+/// A terminal query: the request sequence to send, and how to recognise
+/// the terminal's reply.
 ///
-/// Events that do not match are left queued in `source`, in order, for a
-/// later [`EventSource::read`]. Returns `Ok(None)` if the terminal does not
-/// reply within `timeout` (a late reply is ignored).
+/// Bundling the request bytes with their reply matcher keeps the two in
+/// sync and lets a single query value drive both the synchronous
+/// [`EventSource::query`] and the asynchronous
+/// [`EventStream::query`](crate::event::EventStream::query).
 ///
-/// This is the building block for the typed helpers in this module and
-/// for queries they do not cover.
-pub fn request<W, I, T>(
-    out: &mut W,
-    source: &mut EventSource<I>,
-    request: &[u8],
-    matcher: impl Fn(&Event) -> Option<T>,
-    timeout: Duration,
-) -> io::Result<Option<T>>
-where
-    W: Write,
-    I: Input,
-{
-    out.write_all(request)?;
-    out.flush()?;
-    match source.read_matching(|ev| matcher(ev).is_some(), Some(timeout))? {
-        Some(ev) => Ok(matcher(&ev)),
-        None => Ok(None),
+/// Predefined queries are provided as constants ([`BACKGROUND_COLOR`],
+/// [`PRIMARY_DEVICE_ATTRIBUTES`]). Construct a custom one with
+/// [`Query::new`].
+pub struct Query<T> {
+    /// Request sequence written to the terminal.
+    request: &'static [u8],
+    /// Maps an event to the query result, or `None` if the event is not
+    /// this query's reply. A plain `fn` pointer so the value is `Copy`,
+    /// `Send`, and `'static` — usable from the async reader thread
+    /// without boxing the matcher itself.
+    reply: fn(&Event) -> Option<T>,
+}
+
+impl<T> Query<T> {
+    /// Build a query from a request sequence and a reply matcher.
+    pub const fn new(request: &'static [u8], reply: fn(&Event) -> Option<T>) -> Self {
+        Self { request, reply }
+    }
+
+    /// The request sequence this query writes to the terminal.
+    pub fn request(&self) -> &'static [u8] {
+        self.request
+    }
+
+    /// Apply the reply matcher to `event`, returning the result when the
+    /// event is this query's reply.
+    pub fn matches(&self, event: &Event) -> Option<T> {
+        (self.reply)(event)
     }
 }
 
 /// Query the terminal's default background color (`OSC 11`).
-///
-/// Returns `None` if the terminal does not reply within `timeout`.
-pub fn background_color<W, I>(
-    out: &mut W,
-    source: &mut EventSource<I>,
-    timeout: Duration,
-) -> io::Result<Option<Color>>
-where
-    W: Write,
-    I: Input,
-{
-    request(
-        out,
-        source,
-        background::REQUEST_BACKGROUND_COLOR,
-        |ev| match ev {
-            Event::BackgroundColor(c) => Some(*c),
-            _ => None,
-        },
-        timeout,
-    )
-}
+pub const BACKGROUND_COLOR: Query<Color> =
+    Query::new(background::REQUEST_BACKGROUND_COLOR, reply_background_color);
 
 /// Query the terminal's primary device attributes (`CSI c`).
-///
-/// Returns `None` if the terminal does not reply within `timeout`.
-pub fn primary_device_attributes<W, I>(
-    out: &mut W,
-    source: &mut EventSource<I>,
-    timeout: Duration,
-) -> io::Result<Option<Vec<Option<u32>>>>
+pub const PRIMARY_DEVICE_ATTRIBUTES: Query<Vec<Option<u32>>> =
+    Query::new(ctrl::REQUEST_PRIMARY_DA, reply_primary_da);
+
+fn reply_background_color(event: &Event) -> Option<Color> {
+    match event {
+        Event::BackgroundColor(c) => Some(*c),
+        _ => None,
+    }
+}
+
+fn reply_primary_da(event: &Event) -> Option<Vec<Option<u32>>> {
+    match event {
+        Event::PrimaryDeviceAttributes(v) => Some(v.clone()),
+        _ => None,
+    }
+}
+
+impl<I> EventSource<I>
 where
-    W: Write,
     I: Input,
 {
-    request(
-        out,
-        source,
-        ctrl::REQUEST_PRIMARY_DA,
-        |ev| match ev {
-            Event::PrimaryDeviceAttributes(v) => Some(v.clone()),
-            _ => None,
-        },
-        timeout,
-    )
+    /// Run `query`: write its request to `out`, then wait up to `timeout`
+    /// for the reply, returning its mapped value.
+    ///
+    /// Events that are not the reply are left queued, in order, for a
+    /// later [`read`](EventSource::read). Returns `Ok(None)` if the
+    /// terminal does not reply within `timeout` (a late reply is ignored).
+    pub fn query<W, T>(
+        &mut self,
+        out: &mut W,
+        query: &Query<T>,
+        timeout: Duration,
+    ) -> io::Result<Option<T>>
+    where
+        W: Write,
+    {
+        out.write_all(query.request)?;
+        out.flush()?;
+        match self.read_matching(|ev| query.matches(ev).is_some(), Some(timeout))? {
+            Some(ev) => Ok(query.matches(&ev)),
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -116,7 +132,7 @@ mod tests {
     use std::os::unix::io::AsRawFd;
 
     use super::*;
-    use crate::event::KeyCode;
+    use crate::event::{Key, KeyCode};
 
     fn make_pipe() -> (File, File) {
         let mut fds = [0i32; 2];
@@ -133,21 +149,30 @@ mod tests {
         assert_eq!(n, bytes.len() as isize);
     }
 
+    /// A query that resolves on a `KeyPress('b')`, for deterministic
+    /// pipe-driven tests without a real terminal reply.
+    const KEY_B: Query<()> = Query::new(b"REQ", reply_key_b);
+    fn reply_key_b(ev: &Event) -> Option<()> {
+        matches!(
+            ev,
+            Event::KeyPress(Key {
+                code: KeyCode::Char('b'),
+                ..
+            })
+        )
+        .then_some(())
+    }
+
     #[test]
-    fn request_writes_then_plucks_matching_leaving_others() {
+    fn query_writes_then_plucks_reply_leaving_others() {
         let (rx, tx) = make_pipe();
         let mut source = EventSource::new(rx).unwrap();
         // A user keypress 'a' arrives before the awaited reply 'b'.
         write_bytes(&tx, b"ab");
         let mut out: Vec<u8> = Vec::new();
-        let got = request(
-            &mut out,
-            &mut source,
-            b"REQ",
-            |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('b')).then_some(()),
-            Duration::from_secs(1),
-        )
-        .unwrap();
+        let got = source
+            .query(&mut out, &KEY_B, Duration::from_secs(1))
+            .unwrap();
         assert!(got.is_some(), "reply should be found");
         // The request was written to the output and flushed.
         assert_eq!(out, b"REQ");
@@ -157,19 +182,14 @@ mod tests {
     }
 
     #[test]
-    fn request_times_out_without_reply() {
+    fn query_times_out_without_reply() {
         let (rx, tx) = make_pipe();
         let mut source = EventSource::new(rx).unwrap();
         write_bytes(&tx, b"a");
         let mut out: Vec<u8> = Vec::new();
-        let got: Option<()> = request(
-            &mut out,
-            &mut source,
-            b"REQ",
-            |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('z')).then_some(()),
-            Duration::from_millis(30),
-        )
-        .unwrap();
+        let got = source
+            .query(&mut out, &KEY_B, Duration::from_millis(30))
+            .unwrap();
         assert!(got.is_none());
         // The user input is untouched by the failed query.
         let ev = source.read().unwrap();
