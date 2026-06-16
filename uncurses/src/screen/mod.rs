@@ -5,8 +5,8 @@
 
 use std::io::{self, Write};
 
-use crate::ansi::mode::{self, Mode};
-use crate::ansi::{background, ctrl, graphics, kitty, termcap, winop, xterm};
+use crate::ansi::mode;
+use crate::ansi::{background, kitty};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::color::Profile;
@@ -169,92 +169,6 @@ impl<W: Write> Screen<W> {
     /// The active [`Profile`] used when emitting cell styles.
     pub fn color_profile(&self) -> Profile {
         self.renderer.color_profile()
-    }
-
-    // --- Terminal requests ----------------------------------------------
-    //
-    // Each `request_*` method stages a single ANSI/OSC sequence that asks
-    // the terminal for a piece of information. Bytes hit the wire on the
-    // next [`io::Write::flush`]. Replies arrive as [`crate::event::Event`]
-    // values from the input pipeline; the screen itself does not cache
-    // them — the caller decides what (if anything) to remember.
-
-    /// Request primary device attributes (`CSI c`). Reply:
-    /// [`crate::event::Event::PrimaryDeviceAttributes`].
-    pub fn request_primary_da(&mut self) -> io::Result<()> {
-        self.buf.write_all(ctrl::REQUEST_PRIMARY_DA)
-    }
-
-    /// Request secondary device attributes (`CSI > c`). Reply:
-    /// [`crate::event::Event::SecondaryDeviceAttributes`].
-    pub fn request_secondary_da(&mut self) -> io::Result<()> {
-        self.buf.write_all(ctrl::REQUEST_SECONDARY_DA)
-    }
-
-    /// Request tertiary device attributes (`CSI = c`). Reply:
-    /// [`crate::event::Event::TertiaryDeviceAttributes`].
-    pub fn request_tertiary_da(&mut self) -> io::Result<()> {
-        self.buf.write_all(ctrl::REQUEST_TERTIARY_DA)
-    }
-
-    /// Request the terminal name and version (XTVERSION, `CSI > q`).
-    pub fn request_name_version(&mut self) -> io::Result<()> {
-        self.buf.write_all(ctrl::REQUEST_XTVERSION)
-    }
-
-    /// Request the current setting of a terminal mode (DECRQM).
-    /// Handles both ANSI modes and DEC private modes — the request
-    /// uses `CSI mode $p` for ANSI variants and `CSI ? mode $p` for
-    /// DEC variants.
-    pub fn request_mode(&mut self, m: Mode) -> io::Result<()> {
-        mode::write_request_mode(&mut self.buf, m)
-    }
-
-    /// Request the active kitty keyboard protocol flags (`CSI ? u`).
-    pub fn request_kitty_keyboard_flags(&mut self) -> io::Result<()> {
-        self.buf.write_all(kitty::REQUEST_KITTY_KEYBOARD)
-    }
-
-    /// Probe for kitty graphics support by sending a 1×1 in-memory
-    /// image query. Terminals that don't speak the protocol stay
-    /// silent.
-    pub fn request_kitty_graphics(&mut self) -> io::Result<()> {
-        graphics::write_kitty_graphics(&mut self.buf, &["a=q", "t=d", "i=1", "s=1", "v=1"], &[])
-    }
-
-    /// Request the current `modifyOtherKeys` mode (`CSI ? 4 m`).
-    pub fn request_modify_other_keys(&mut self) -> io::Result<()> {
-        self.buf.write_all(xterm::QUERY_MODIFY_OTHER_KEYS)
-    }
-
-    /// Request the default foreground color (`OSC 10 ; ?`).
-    pub fn request_foreground_color(&mut self) -> io::Result<()> {
-        self.buf.write_all(background::REQUEST_FOREGROUND_COLOR)
-    }
-
-    /// Request the default background color (`OSC 11 ; ?`).
-    pub fn request_background_color(&mut self) -> io::Result<()> {
-        self.buf.write_all(background::REQUEST_BACKGROUND_COLOR)
-    }
-
-    /// Request the cursor color (`OSC 12 ; ?`).
-    pub fn request_cursor_color(&mut self) -> io::Result<()> {
-        self.buf.write_all(background::REQUEST_CURSOR_COLOR)
-    }
-
-    /// Request the character cell pixel size (`CSI 16 t`).
-    pub fn request_cell_pixel_size(&mut self) -> io::Result<()> {
-        winop::write_window_op(&mut self.buf, winop::op::REQUEST_CELL_SIZE, &[])
-    }
-
-    /// Request the window pixel size (`CSI 14 t`).
-    pub fn request_window_pixel_size(&mut self) -> io::Result<()> {
-        winop::write_window_op(&mut self.buf, winop::op::REQUEST_WINDOW_SIZE, &[])
-    }
-
-    /// Request termcap entries by short name (`DCS + q ... ST`).
-    pub fn request_termcap(&mut self, names: &[&str]) -> io::Result<()> {
-        termcap::write_xtgettcap(&mut self.buf, names)
     }
 
     // --- Color overrides ------------------------------------------------

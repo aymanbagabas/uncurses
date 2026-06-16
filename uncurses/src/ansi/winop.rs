@@ -17,6 +17,12 @@ pub mod op {
     pub const REQUEST_TEXT_AREA_SIZE: u16 = 18;
 }
 
+/// Request the window pixel size (`CSI 14 t`). Reply: `CSI 4;h;w t`.
+pub const REQUEST_WINDOW_PIXEL_SIZE: &[u8] = b"\x1b[14t";
+
+/// Request the character cell pixel size (`CSI 16 t`). Reply: `CSI 6;h;w t`.
+pub const REQUEST_CELL_PIXEL_SIZE: &[u8] = b"\x1b[16t";
+
 /// Encode an XTWINOPS sequence (`CSI p[;ps...] t`).
 ///
 /// Returns the empty result if `p == 0`.
