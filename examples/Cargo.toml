@@ -13,9 +13,11 @@ unicode-rs = ["uncurses/unicode-rs", "uncurses-ratatui/unicode-rs"]
 icu = ["uncurses/icu", "uncurses-ratatui/icu"]
 
 [dependencies]
-uncurses = { path = "../uncurses", default-features = false }
+uncurses = { path = "../uncurses", default-features = false, features = ["async"] }
 uncurses-ratatui = { path = "../uncurses-ratatui", default-features = false }
 ratatui = { version = "0.30", features = ["underline-color"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+tokio-stream = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
