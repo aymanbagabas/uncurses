@@ -175,6 +175,17 @@ where
         Ok(())
     }
 
+    /// Re-check readiness with a zero-timeout poll and ingest whatever is
+    /// ready, all under the caller's lock — the reader-thread path (see
+    /// the unix counterpart for the rationale). Deadline expiry is the
+    /// caller's responsibility (see [`EventSource::expire`]).
+    #[cfg(feature = "async")]
+    pub(super) fn drain_after_wait(&mut self) -> io::Result<()> {
+        let mut ready = [false; 2];
+        self.poller.poll(&mut ready, Some(Duration::ZERO))?;
+        self.ingest(ready, DeadlineKind::None)
+    }
+
     fn input_handle(&self) -> HANDLE {
         use std::os::windows::io::AsRawHandle;
         self.input.as_handle().as_raw_handle() as HANDLE
