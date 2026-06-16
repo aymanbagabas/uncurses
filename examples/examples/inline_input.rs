@@ -219,16 +219,15 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen, &self.buffer);
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.screen
             .resize(self.screen.width(), self.buffer.lines.len() as u16);
-        self.render();
-        self.screen.render()?;
-        self.screen.flush()?;
+        self.render()?;
 
         while let Ok(ev) = self.events.read() {
             match ev {
@@ -279,9 +278,7 @@ impl App {
 
             let w = self.screen.width();
             self.screen.resize(w, self.buffer.lines.len() as u16);
-            self.render();
-            self.screen.render()?;
-            self.screen.flush()?;
+            self.render()?;
         }
         Ok(())
     }

@@ -497,14 +497,13 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> io::Result<()> {
         draw(&self.state, &mut self.screen);
+        self.screen.present()
     }
 
     fn run(&mut self) -> io::Result<()> {
-        self.render();
-        self.screen.render()?;
-        self.screen.flush()?;
+        self.render()?;
 
         while let Ok(ev) = self.rx.as_ref().expect("receiver").recv() {
             let mut dirty = true;
@@ -576,9 +575,7 @@ impl App {
             }
 
             if dirty {
-                self.render();
-                self.screen.render()?;
-                self.screen.flush()?;
+                self.render()?;
             }
         }
 

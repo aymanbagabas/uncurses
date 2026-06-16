@@ -161,8 +161,9 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen, &self.last);
+        self.screen.present()
     }
 
     fn drain_log(&mut self) {
@@ -173,9 +174,7 @@ impl App {
     }
 
     fn run(&mut self) -> std::io::Result<()> {
-        self.render();
-        self.screen.render()?;
-        self.screen.flush()?;
+        self.render()?;
 
         while let Ok(ev) = self.events.read() {
             // Surface hook-side observations that happened during decode.
@@ -237,9 +236,7 @@ impl App {
 
             self.screen.insert_above(&last)?;
             self.last = last;
-            self.render();
-            self.screen.render()?;
-            self.screen.flush()?;
+            self.render()?;
         }
 
         self.drain_log();

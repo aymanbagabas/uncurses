@@ -74,17 +74,16 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> std::io::Result<()> {
         fit_and_redraw(&mut self.screen, &self.state, self.term_cols);
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         let mut next_tick = Instant::now() + TICK;
         let mut next_frame = Instant::now() + FRAME;
 
-        self.render();
-        self.screen.render()?;
-        self.screen.flush()?;
+        self.render()?;
 
         'running: loop {
             let now = Instant::now();
@@ -169,9 +168,7 @@ impl App {
             }
 
             if dirty {
-                self.render();
-                self.screen.render()?;
-                self.screen.flush()?;
+                self.render()?;
             }
         }
 

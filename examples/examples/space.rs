@@ -151,7 +151,7 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> std::io::Result<()> {
         draw(
             &mut self.screen,
             &mut self.field,
@@ -159,6 +159,7 @@ impl App {
             &self.fps,
             self.frame_count,
         );
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
@@ -205,9 +206,7 @@ impl App {
             }
 
             if needs_redraw && !quit {
-                self.render();
-                self.screen.render()?;
-                self.screen.flush()?;
+                self.render()?;
                 needs_redraw = false;
             }
 
