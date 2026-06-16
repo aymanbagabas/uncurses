@@ -10,12 +10,11 @@
 //! - handles keyboard navigation, mouse clicks, mouse-wheel scrolling,
 //!   and terminal resize events.
 //!
-//! Input is read on a dedicated background thread doing blocking
-//! [`EventSource::read`] calls; events are forwarded to the main thread
-//! through an [`mpsc::channel`]. On exit, the main thread fires the
-//! reader's paired [`Waker`](uncurses::event::Waker) so the blocking
-//! read returns [`io::ErrorKind::Interrupted`] and the thread shuts
-//! down cleanly.
+//! Input is read asynchronously: the blocking [`EventSource`] is turned
+//! into an [`EventStream`](uncurses::event::EventStream) with
+//! [`into_stream`](EventSource::into_stream) and driven with a small
+//! `tokio` current-thread runtime. The stream owns its reader thread and
+//! stops it on drop, so no manual channel or [`Waker`] plumbing is needed.
 //!
 //! Run with `cargo run --example file_explorer [directory]`. If no
 //! directory is given the current working directory is used.
@@ -33,13 +32,12 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::thread;
 
+use tokio_stream::StreamExt;
 use uncurses::SurfaceMut;
 use uncurses::Terminal;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, EventSource, Key, MouseButton, Waker};
+use uncurses::event::{Event, EventSource, EventStream, Key, MouseButton};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -405,9 +403,7 @@ fn unicode_char_width(ch: char) -> usize {
 struct App {
     term: Terminal<Stdin, Stdout>,
     screen: Screen<Stdout>,
-    rx: Option<mpsc::Receiver<Event>>,
-    waker: Waker,
-    reader_thread: Option<thread::JoinHandle<()>>,
+    events: EventStream,
     state: ExplorerState,
     quit_keys: [Key; 3],
     up_keys: [Key; 2],
@@ -447,15 +443,7 @@ impl App {
         )?;
         screen.flush()?;
 
-        let (tx, rx) = mpsc::channel::<Event>();
-        let (waker_tx, waker_rx) = mpsc::channel::<io::Result<Waker>>();
-        let input = term.input();
-        let reader_thread = thread::spawn(move || input_loop(input, tx, waker_tx));
-        let waker = match waker_rx.recv() {
-            Ok(Ok(waker)) => waker,
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, e)),
-        };
+        let events = EventSource::new(term.input())?.into_stream();
 
         // Parse key bindings once. `Key` implements `FromStr`, so
         // `"ctrl+c".parse::<Key>()` produces a canonical `Key` value, and
@@ -480,9 +468,7 @@ impl App {
         Ok(Self {
             term,
             screen,
-            rx: Some(rx),
-            waker,
-            reader_thread: Some(reader_thread),
+            events,
             state,
             quit_keys,
             up_keys,
@@ -502,10 +488,14 @@ impl App {
         self.screen.present()
     }
 
-    fn run(&mut self) -> io::Result<()> {
+    async fn run(&mut self) -> io::Result<()> {
         self.render()?;
 
-        while let Ok(ev) = self.rx.as_ref().expect("receiver").recv() {
+        while let Some(ev) = self.events.next().await {
+            let ev = match ev {
+                Ok(ev) => ev,
+                Err(_) => break,
+            };
             let mut dirty = true;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -583,53 +573,18 @@ impl App {
     }
 
     fn stop(&mut self) -> io::Result<()> {
-        // Wake the reader thread out of its blocking read, drop the
-        // receiver so the channel send fails if the wake races, and join.
-        self.waker.wake().ok();
-        drop(self.rx.take());
-        if let Some(reader_thread) = self.reader_thread.take() {
-            reader_thread.join().ok();
-        }
-
-        // Restore terminal.
+        // The event stream stops and joins its reader thread on drop, so
+        // teardown is just the terminal restore.
         self.screen.reset()?;
         self.screen.flush()?;
         self.term.restore()
     }
 }
 
-fn input_loop(input: Stdin, tx: mpsc::Sender<Event>, waker_tx: mpsc::Sender<io::Result<Waker>>) {
-    let mut events = match EventSource::new(input) {
-        Ok(events) => events,
-        Err(e) => {
-            let _ = waker_tx.send(Err(e));
-            return;
-        }
-    };
-    if waker_tx.send(Ok(events.waker())).is_err() {
-        return;
-    }
-
-    loop {
-        match events.read() {
-            Ok(ev) => {
-                if tx.send(ev).is_err() {
-                    // Main thread dropped the receiver.
-                    break;
-                }
-            }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {
-                // Woken by the main thread for shutdown.
-                break;
-            }
-            Err(_) => break,
-        }
-    }
-}
-
-fn main() -> io::Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> io::Result<()> {
     let mut app = App::start()?;
-    let result = app.run();
+    let result = app.run().await;
     app.stop()?;
     result
 }
