@@ -33,9 +33,9 @@ impl App {
         let mut term = Terminal::stdio();
         term.make_raw()?;
         let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
-        screen.set_alt_screen(true)?;
-        screen.set_cursor_visible(false)?;
-        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr)?;
+        screen.set_alt_screen(true);
+        screen.set_cursor_visible(false);
+        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr);
         let events = EventSource::new(term.input())?;
 
         // Parse key bindings once. `Key: FromStr`, and `==` compares on

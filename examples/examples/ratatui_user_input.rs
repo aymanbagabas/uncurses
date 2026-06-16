@@ -97,8 +97,8 @@ fn run() -> io::Result<()> {
     let stdout = stdout();
     let size = get_window_size(stdout).unwrap_or_default();
     let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
+    screen.set_alt_screen(true);
+    screen.set_cursor_visible(false);
 
     let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
     let mut events = EventSource::new(stdin)?;

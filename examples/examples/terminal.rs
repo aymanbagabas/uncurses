@@ -26,8 +26,8 @@ fn main() -> io::Result<()> {
     let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
     let mut source = EventSource::new(term.input())?;
 
-    screen.set_alt_screen(true)?;
-    screen.set_cursor_visible(false)?;
+    screen.set_alt_screen(true);
+    screen.set_cursor_visible(false);
 
     // One-shot capability query at startup (100ms budget): the request is
     // written through the screen's output and the reply is plucked off

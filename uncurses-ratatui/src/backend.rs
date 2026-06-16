@@ -77,12 +77,12 @@ impl<W: Write> Backend for UncursesBackend<W> {
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        self.screen.set_cursor_visible(false)?;
+        self.screen.set_cursor_visible(false);
         Write::flush(&mut self.screen)
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
-        self.screen.set_cursor_visible(true)?;
+        self.screen.set_cursor_visible(true);
         Write::flush(&mut self.screen)
     }
 
@@ -103,7 +103,7 @@ impl<W: Write> Backend for UncursesBackend<W> {
 
     fn set_cursor_position<P: Into<RtPosition>>(&mut self, position: P) -> io::Result<()> {
         let p = position.into();
-        self.screen.set_cursor_position(p.x, p.y)?;
+        self.screen.set_cursor_position(p.x, p.y);
         Write::flush(&mut self.screen)
     }
 
@@ -158,7 +158,7 @@ impl<W: Write> Backend for UncursesBackend<W> {
         }
         // Restore the cursor to where it was before the blank: ratatui's
         // Backend contract guarantees clear preserves the cursor position.
-        self.screen.set_cursor_position(cursor.x, cursor.y)?;
+        self.screen.set_cursor_position(cursor.x, cursor.y);
         // Push the staged blanks to the wire so the clear takes effect
         // before this call returns, matching the immediate-clear contract.
         self.screen.render()?;

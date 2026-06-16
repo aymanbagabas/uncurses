@@ -32,7 +32,7 @@ impl App {
             term.output(),
             (term.window_size().unwrap_or_default().col, VIEW_H),
         );
-        screen.set_cursor_visible(false)?;
+        screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
 
         Ok(Self {

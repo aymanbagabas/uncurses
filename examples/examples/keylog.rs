@@ -129,11 +129,11 @@ impl App {
         // into the scrollback above it.
         let cols = term.window_size().unwrap_or_default().col;
         let mut screen = Screen::new(term.output(), (cols, 2));
-        screen.set_cursor_visible(false)?;
-        screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr)?;
-        screen.set_focus_events(true)?;
-        screen.set_bracketed_paste(true)?;
-        screen.set_title("📺 keylog — events 🎹🖱️")?;
+        screen.set_cursor_visible(false);
+        screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr);
+        screen.set_focus_events(true);
+        screen.set_bracketed_paste(true);
+        screen.set_title("📺 keylog — events 🎹🖱️");
         let events = EventSource::new(term.input())?;
         Ok(Self {
             term,

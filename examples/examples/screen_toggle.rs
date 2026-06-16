@@ -31,7 +31,7 @@ impl App {
         let size = term.window_size().unwrap_or_default();
         // Inline mode: 4 rows is enough for the message + help.
         let mut screen = Screen::new(term.output(), (size.col, 4));
-        screen.set_cursor_visible(false)?;
+        screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
 
         Ok(Self {
@@ -82,9 +82,9 @@ impl App {
                     self.alt = !self.alt;
                     if self.alt {
                         self.screen.resize(self.size_col, self.size_row.max(4));
-                        self.screen.set_alt_screen(true)?;
+                        self.screen.set_alt_screen(true);
                     } else {
-                        self.screen.set_alt_screen(false)?;
+                        self.screen.set_alt_screen(false);
                         self.screen.resize(self.size_col, 4);
                     }
                     self.render()?;

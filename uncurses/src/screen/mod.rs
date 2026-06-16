@@ -266,7 +266,7 @@ impl<W: Write> Screen<W> {
     /// default (`OSC 110`). The choice is recorded in the screen's
     /// state so [`Screen::reset`] can return the terminal to its
     /// built-in defaults and [`Screen::restore`] can re-apply it.
-    pub fn set_foreground_color(&mut self, color: Option<crate::color::Color>) -> io::Result<()> {
+    pub fn set_foreground_color(&mut self, color: Option<crate::color::Color>) {
         if self.state.foreground_color != color {
             match color {
                 Some(c) => {
@@ -274,19 +274,22 @@ impl<W: Write> Screen<W> {
                     background::write_set_foreground_color(
                         &mut self.buf,
                         &background::xparse_rgb(r, g, b),
-                    )?;
+                    )
+                    .unwrap();
                 }
-                None => self.buf.write_all(background::RESET_FOREGROUND_COLOR)?,
+                None => self
+                    .buf
+                    .write_all(background::RESET_FOREGROUND_COLOR)
+                    .unwrap(),
             }
             self.state.foreground_color = color;
         }
-        Ok(())
     }
 
     /// Set the default background color (`OSC 11`), or restore the
     /// terminal default (`OSC 111`) when `color` is `None`. See
     /// [`Screen::set_foreground_color`] for state-tracking semantics.
-    pub fn set_background_color(&mut self, color: Option<crate::color::Color>) -> io::Result<()> {
+    pub fn set_background_color(&mut self, color: Option<crate::color::Color>) {
         if self.state.background_color != color {
             match color {
                 Some(c) => {
@@ -294,19 +297,22 @@ impl<W: Write> Screen<W> {
                     background::write_set_background_color(
                         &mut self.buf,
                         &background::xparse_rgb(r, g, b),
-                    )?;
+                    )
+                    .unwrap();
                 }
-                None => self.buf.write_all(background::RESET_BACKGROUND_COLOR)?,
+                None => self
+                    .buf
+                    .write_all(background::RESET_BACKGROUND_COLOR)
+                    .unwrap(),
             }
             self.state.background_color = color;
         }
-        Ok(())
     }
 
     /// Set the cursor color (`OSC 12`), or restore the terminal
     /// default (`OSC 112`) when `color` is `None`. See
     /// [`Screen::set_foreground_color`] for state-tracking semantics.
-    pub fn set_cursor_color(&mut self, color: Option<crate::color::Color>) -> io::Result<()> {
+    pub fn set_cursor_color(&mut self, color: Option<crate::color::Color>) {
         if self.state.cursor_color != color {
             match color {
                 Some(c) => {
@@ -314,13 +320,13 @@ impl<W: Write> Screen<W> {
                     background::write_set_cursor_color(
                         &mut self.buf,
                         &background::xparse_rgb(r, g, b),
-                    )?;
+                    )
+                    .unwrap();
                 }
-                None => self.buf.write_all(background::RESET_CURSOR_COLOR)?,
+                None => self.buf.write_all(background::RESET_CURSOR_COLOR).unwrap(),
             }
             self.state.cursor_color = color;
         }
-        Ok(())
     }
 
     // --- Kitty keyboard --------------------------------------------------
@@ -337,19 +343,16 @@ impl<W: Write> Screen<W> {
     /// every alt-screen toggle, on [`Screen::restore`], and clears it
     /// on [`Screen::reset`]. Pass [`crate::ansi::KittyKeyboardFlags::NONE`]
     /// (the empty set) to clear every enhancement.
-    pub fn set_kitty_keyboard_flags(
-        &mut self,
-        flags: crate::ansi::KittyKeyboardFlags,
-    ) -> io::Result<()> {
+    pub fn set_kitty_keyboard_flags(&mut self, flags: crate::ansi::KittyKeyboardFlags) {
         if self.state.kitty_keyboard != flags {
             kitty::write_set_kitty_keyboard(
                 &mut self.buf,
                 flags,
                 crate::ansi::KittyKeyboardMode::Set,
-            )?;
+            )
+            .unwrap();
             self.state.kitty_keyboard = flags;
         }
-        Ok(())
     }
 
     pub fn width(&self) -> u16 {
@@ -409,13 +412,14 @@ impl<W: Write> Screen<W> {
     /// **and** that tracked position is known to match the terminal
     /// on both axes. After [`Self::invalidate_cursor`] the next call
     /// always emits a move so the terminal cursor is reasserted.
-    pub fn set_cursor_position(&mut self, x: u16, y: u16) -> io::Result<()> {
+    pub fn set_cursor_position(&mut self, x: u16, y: u16) {
         let target = crate::Position::new(x, y);
         if self.renderer.cursor_known() && self.renderer.cursor_position() == target {
-            return Ok(());
+            return;
         }
         self.renderer
             .move_to(&mut self.buf, &self.front_buf, target.y, target.x)
+            .unwrap();
     }
 
     /// The renderer's last tracked cursor position as a [`crate::Position`].

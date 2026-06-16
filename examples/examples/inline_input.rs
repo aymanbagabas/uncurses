@@ -203,8 +203,8 @@ impl App {
             (term.window_size().unwrap_or_default().col, 1),
         );
 
-        screen.set_cursor_visible(false)?;
-        screen.set_bracketed_paste(true)?;
+        screen.set_cursor_visible(false);
+        screen.set_bracketed_paste(true);
 
         let events = EventSource::new(term.input())?;
         let buffer = Buffer::new();

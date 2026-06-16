@@ -131,8 +131,8 @@ impl App {
         term.make_raw()?;
         let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
 
-        screen.set_alt_screen(true)?;
-        screen.set_cursor_visible(false)?;
+        screen.set_alt_screen(true);
+        screen.set_cursor_visible(false);
         screen.flush()?;
 
         let events = EventSource::new(term.input())?;
