@@ -12,7 +12,7 @@
 //! input fd on Darwin should use [`super::Select`] instead.
 
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use super::{PollFd, Poller, check_ready_len, remaining, reset, validate};
