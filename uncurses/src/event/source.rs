@@ -62,8 +62,9 @@ pub trait Input: Read + AsHandle + Send {}
 #[cfg(windows)]
 impl<T: Read + AsHandle + Send> Input for T {}
 
-/// Default read buffer capacity used by event sources.
-pub const DEFAULT_BUFFER_CAPACITY: usize = 4096;
+/// Default read buffer capacity. This is the hard cap on any single
+/// sequence; the backing buffer is allocated once at construction.
+pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 4096;
 
 /// Default escape-sequence timeout.
 ///
@@ -81,40 +82,6 @@ pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 /// and clears the decoder's paste state. Guards against terminators
 /// that never arrive (truncated stream, malformed input).
 pub const DEFAULT_PASTE_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Construction-time options for an [`EventSource`].
-///
-/// All fields are optional knobs with documented defaults.
-#[derive(Debug, Clone)]
-pub struct Options {
-    /// Escape-sequence timeout — how long to wait for a continuation
-    /// byte before treating a buffered partial sequence as a bare
-    /// `Esc` keypress. Defaults to 50 ms.
-    pub esc_timeout: Duration,
-    /// Idle timeout for a bracketed paste with no closing terminator.
-    /// `None` disables; the source will then wait indefinitely for a
-    /// real `PasteEnd`. Defaults to `Some(2 s)`.
-    pub paste_idle_timeout: Option<Duration>,
-    /// Read buffer capacity in bytes. Sequences exceeding this size
-    /// are dropped silently. Defaults to 4 KiB.
-    pub buffer_capacity: usize,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            esc_timeout: DEFAULT_ESC_TIMEOUT,
-            paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
-            buffer_capacity: DEFAULT_BUFFER_CAPACITY,
-        }
-    }
-}
-
-impl Options {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
 
 /// Cloneable handle that interrupts an in-progress [`EventSource::try_read`].
 ///
@@ -281,10 +248,24 @@ where
         self.esc_timeout
     }
 
-    /// Replace the escape-sequence timeout. Takes effect on the next
-    /// armed deadline; an already-armed deadline is left as is.
-    pub fn set_esc_timeout(&mut self, timeout: Duration) {
+    /// Set the escape-sequence timeout — how long to wait for a
+    /// continuation byte before treating a buffered partial sequence as
+    /// a bare `Esc` keypress. Defaults to [`DEFAULT_ESC_TIMEOUT`].
+    ///
+    /// Consuming builder; chain after [`EventSource::new`].
+    pub fn with_esc_timeout(mut self, timeout: Duration) -> Self {
         self.esc_timeout = timeout;
+        self
+    }
+
+    /// Set the idle timeout for a bracketed paste with no closing
+    /// terminator. `None` disables it, so the source waits indefinitely
+    /// for a real `PasteEnd`. Defaults to `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
+    ///
+    /// Consuming builder; chain after [`EventSource::new`].
+    pub fn with_paste_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.paste_idle_timeout = timeout;
+        self
     }
 
     /// Cloneable [`Waker`] bound to this source.
@@ -538,17 +519,15 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Build a new event source for `input` with default [`Options`].
-    /// See [`EventSource::with_options`] for the knob-configurable variant.
-    pub fn new(input: I) -> io::Result<Self> {
-        Self::with_options(input, Options::default())
-    }
-
     /// Build a new event source for `input`. The handle is also used as
     /// the `TIOCGWINSZ` target whenever SIGWINCH fires, so it must refer
     /// to the terminal whose size the caller cares about (typically the
     /// controlling tty — any fd that names it works).
-    pub fn with_options(input: I, opts: Options) -> io::Result<Self> {
+    ///
+    /// Timeouts start at their documented defaults; override them with
+    /// [`EventSource::with_esc_timeout`] and
+    /// [`EventSource::with_paste_idle_timeout`].
+    pub fn new(input: I) -> io::Result<Self> {
         let (pipe_rx, pipe_tx) = make_self_pipe()?;
         let (winch_rx, winch_tx) = make_self_pipe()?;
         let winch_sub = winch::subscribe(winch_tx.as_raw_fd())?;
@@ -556,15 +535,13 @@ where
 
         let poller = Poller::new()?;
 
-        let capacity = opts.buffer_capacity.max(64);
-
         Ok(Self {
             input,
             parser: Decoder::new(DecoderFlags::empty()),
-            pending: Pending::with_capacity(capacity),
-            esc_timeout: opts.esc_timeout,
+            pending: Pending::with_capacity(DEFAULT_BUFFER_CAPACITY),
+            esc_timeout: DEFAULT_ESC_TIMEOUT,
             esc_deadline: None,
-            paste_idle_timeout: opts.paste_idle_timeout,
+            paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
             queue: VecDeque::with_capacity(16),
             waker,
@@ -738,15 +715,9 @@ mod tests {
     }
 
     fn new_reader(input: File) -> EventSource<File> {
-        EventSource::with_options(
-            input,
-            Options {
-                buffer_capacity: 1024,
-                esc_timeout: Duration::from_millis(50),
-                ..Options::default()
-            },
-        )
-        .unwrap()
+        EventSource::new(input)
+            .unwrap()
+            .with_esc_timeout(Duration::from_millis(50))
     }
 
     #[test]
@@ -845,15 +816,9 @@ mod tests {
     #[test]
     fn paste_idle_timeout_synthesizes_paste_end() {
         let (rx, tx) = make_pipe();
-        let mut src = EventSource::with_options(
-            rx,
-            Options {
-                buffer_capacity: 1024,
-                paste_idle_timeout: Some(Duration::from_millis(40)),
-                ..Options::default()
-            },
-        )
-        .unwrap();
+        let mut src = EventSource::new(rx)
+            .unwrap()
+            .with_paste_idle_timeout(Some(Duration::from_millis(40)));
         write_bytes(&tx, b"\x1b[200~hello");
         // Drain PasteStart + initial chunk.
         let mut got_start = false;
@@ -894,15 +859,9 @@ mod tests {
     #[test]
     fn paste_completes_when_terminator_arrives_within_idle_window() {
         let (rx, tx) = make_pipe();
-        let mut src = EventSource::with_options(
-            rx,
-            Options {
-                buffer_capacity: 1024,
-                paste_idle_timeout: Some(Duration::from_millis(500)),
-                ..Options::default()
-            },
-        )
-        .unwrap();
+        let mut src = EventSource::new(rx)
+            .unwrap()
+            .with_paste_idle_timeout(Some(Duration::from_millis(500)));
         write_bytes(&tx, b"\x1b[200~hi");
         let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
         while src.try_read().is_some() {}
@@ -931,15 +890,7 @@ mod tests {
     #[test]
     fn explicit_end_paste_recovers_stream() {
         let (rx, tx) = make_pipe();
-        let mut src = EventSource::with_options(
-            rx,
-            Options {
-                buffer_capacity: 1024,
-                paste_idle_timeout: None,
-                ..Options::default()
-            },
-        )
-        .unwrap();
+        let mut src = EventSource::new(rx).unwrap().with_paste_idle_timeout(None);
         write_bytes(&tx, b"\x1b[200~stuck");
         let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
         while src.try_read().is_some() {}
@@ -962,15 +913,7 @@ mod tests {
     #[test]
     fn paste_idle_timeout_disabled_blocks_indefinitely() {
         let (rx, tx) = make_pipe();
-        let mut src = EventSource::with_options(
-            rx,
-            Options {
-                buffer_capacity: 1024,
-                paste_idle_timeout: None,
-                ..Options::default()
-            },
-        )
-        .unwrap();
+        let mut src = EventSource::new(rx).unwrap().with_paste_idle_timeout(None);
         write_bytes(&tx, b"\x1b[200~partial");
         let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
         while src.try_read().is_some() {}
@@ -987,15 +930,10 @@ mod tests {
         // Pre-fix latent bug: while in paste, a partial ESC at the
         // head of the pending buffer must not synthesise Key(Esc).
         let (rx, tx) = make_pipe();
-        let mut src = EventSource::with_options(
-            rx,
-            Options {
-                buffer_capacity: 1024,
-                esc_timeout: Duration::from_millis(20),
-                paste_idle_timeout: Some(Duration::from_secs(5)),
-            },
-        )
-        .unwrap();
+        let mut src = EventSource::new(rx)
+            .unwrap()
+            .with_esc_timeout(Duration::from_millis(20))
+            .with_paste_idle_timeout(Some(Duration::from_secs(5)));
         write_bytes(&tx, b"\x1b[200~body");
         let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
         while src.try_read().is_some() {}
@@ -1028,15 +966,9 @@ mod tests {
     #[test]
     fn esc_deadline_tightens_long_caller_timeout() {
         let (rx, tx) = make_pipe();
-        let mut src = EventSource::with_options(
-            rx,
-            Options {
-                buffer_capacity: 1024,
-                esc_timeout: Duration::from_millis(20),
-                ..Options::default()
-            },
-        )
-        .unwrap();
+        let mut src = EventSource::new(rx)
+            .unwrap()
+            .with_esc_timeout(Duration::from_millis(20));
         write_byte(&tx, 0x1b);
         let _ = src.poll(Some(Duration::from_secs(60))).unwrap();
         let start = Instant::now();
