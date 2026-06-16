@@ -76,7 +76,7 @@ fn main() -> io::Result<()> {
         Ok(())
     })();
 
-    screen.reset()?;
+    screen.reset();
     screen.flush()?;
     term.restore()?;
     result

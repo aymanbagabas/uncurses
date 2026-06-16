@@ -73,7 +73,7 @@ impl App {
 
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen)?;
-        self.screen.render()?;
+        self.screen.render();
         self.screen.set_cursor_position(self.cx, self.cy);
         self.screen.flush()
     }
@@ -164,7 +164,7 @@ impl App {
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }

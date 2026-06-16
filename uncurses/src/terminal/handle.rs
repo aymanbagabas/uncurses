@@ -27,7 +27,7 @@
 //! let mut screen = Screen::new(term.output(), term.window_size()?);
 //! let mut source = EventSource::new(term.input())?;
 //! // ... draw to `screen`, read from `source` ...
-//! screen.reset()?;
+//! screen.reset();
 //! screen.flush()?;
 //! term.restore()?; // revert to the cached state
 //! # Ok(())

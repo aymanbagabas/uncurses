@@ -73,7 +73,8 @@ impl<W: Write> Backend for UncursesBackend<W> {
             let cell = cell_from_ratatui(rc);
             self.screen.set_cell((x, y), &cell);
         }
-        self.screen.render()
+        self.screen.render();
+        Ok(())
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
@@ -161,7 +162,7 @@ impl<W: Write> Backend for UncursesBackend<W> {
         self.screen.set_cursor_position(cursor.x, cursor.y);
         // Push the staged blanks to the wire so the clear takes effect
         // before this call returns, matching the immediate-clear contract.
-        self.screen.render()?;
+        self.screen.render();
         Write::flush(&mut self.screen)
     }
 
@@ -200,7 +201,7 @@ impl<W: Write> Backend for UncursesBackend<W> {
         // `insert_above` splits its argument on `\n`, so `m` newlines
         // produce `m + 1` lines. We want `n` blank lines.
         let content = "\n".repeat(n.saturating_sub(1) as usize);
-        self.screen.insert_above(&content)?;
+        self.screen.insert_above(&content);
         Write::flush(&mut self.screen)
     }
 
@@ -214,7 +215,7 @@ impl<W: Write> Backend for UncursesBackend<W> {
         if region.start == 0 && amount > 0 && region.end > 0 {
             let n = amount.min(region.end);
             let content = self.snapshot_rows_text(0..n);
-            self.screen.insert_above(&content)?;
+            self.screen.insert_above(&content);
             Write::flush(&mut self.screen)?;
         }
         // The shift itself only mutates the staged buffer; the SU/DL bytes

@@ -182,7 +182,7 @@ impl App {
             }
 
             let line = format_event(&ev);
-            self.screen.insert_above(&line)?;
+            self.screen.insert_above(&line);
             self.last = line;
             self.render()?;
         }
@@ -194,7 +194,7 @@ impl App {
     /// process until a `SIGCONT` (e.g. `fg`) returns control here.
     #[cfg(unix)]
     fn suspend(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()?;
         // SAFETY: raise is async-signal-safe.
@@ -211,13 +211,13 @@ impl App {
         if let Ok(size) = self.term.window_size() {
             self.screen.resize(size.col, 2);
         }
-        self.screen.restore()?;
+        self.screen.restore();
         self.screen.invalidate();
         Ok(())
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }

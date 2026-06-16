@@ -575,7 +575,7 @@ impl App {
     fn stop(&mut self) -> io::Result<()> {
         // The event stream stops and joins its reader thread on drop, so
         // teardown is just the terminal restore.
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }

@@ -177,13 +177,13 @@ impl App {
         self.screen.resize(self.term_cols, 3);
         self.screen.clear();
         self.screen.set_str((2, 1), "Bye!", WrapMode::Truncate);
-        self.screen.render()?;
+        self.screen.render();
 
         Ok(())
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }

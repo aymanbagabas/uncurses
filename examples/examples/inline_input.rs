@@ -240,7 +240,7 @@ impl App {
                         if modifiers.contains(KeyModifiers::CTRL) && !self.buffer.is_blank() =>
                     {
                         let text = self.buffer.as_text();
-                        self.screen.insert_above(&text)?;
+                        self.screen.insert_above(&text);
                         self.buffer.clear();
                     }
                     KeyCode::Enter => self.buffer.insert_newline(),
@@ -284,7 +284,7 @@ impl App {
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }

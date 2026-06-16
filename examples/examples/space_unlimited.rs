@@ -202,7 +202,7 @@ impl App {
             self.frame_count,
         );
         let t1 = Instant::now();
-        self.screen.render()?;
+        self.screen.render();
         let t2 = Instant::now();
         self.screen.flush()?;
         let t3 = Instant::now();
@@ -229,7 +229,7 @@ impl App {
     }
 
     fn stop(&mut self) -> io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         // The input thread exits on its next read once stdin returns EOF
         // or the user releases the next key; we do not wait for it.

@@ -52,7 +52,7 @@ fn run() -> io::Result<()> {
     }
 
     let screen = terminal.backend_mut().screen_mut();
-    screen.reset()?;
+    screen.reset();
     screen.flush()?;
     Ok(())
 }

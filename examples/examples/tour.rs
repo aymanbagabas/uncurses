@@ -131,7 +131,7 @@ fn run_scene<W: Write>(
     let end = dur.map(|d| start + d);
     let mut next_frame = start + FRAME;
     tick(screen, Duration::ZERO)?;
-    screen.render()?;
+    screen.render();
     screen.flush()?;
 
     loop {
@@ -174,7 +174,7 @@ fn run_scene<W: Write>(
                 next_frame = now + FRAME;
             }
             tick(screen, now - start)?;
-            screen.render()?;
+            screen.render();
             screen.flush()?;
         }
     }
@@ -765,7 +765,7 @@ impl App {
     }
 
     fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset()?;
+        self.screen.reset();
         self.screen.flush()?;
         self.term.restore()
     }
