@@ -1,7 +1,8 @@
 //! Inline / alt-screen toggle demo.
 //!
 //! Press `space` to switch between inline mode and the alternate
-//! screen. `q`, `Esc` or `Ctrl-C` exits.
+//! screen. `q`, `Esc` or `Ctrl-C` exits. On Unix, `Ctrl-Z` suspends the
+//! process and it resumes cleanly with `fg`.
 
 use std::io::Write;
 
@@ -43,14 +44,13 @@ impl App {
         })
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen, self.alt);
+        self.screen.present()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
-        self.render();
-        self.screen.render()?;
-        self.screen.flush()?;
+        self.render()?;
 
         loop {
             let ev = self.events.read()?;
@@ -65,6 +65,16 @@ impl App {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => break,
+                #[cfg(unix)]
+                Event::KeyPress(Key {
+                    code: KeyCode::Char('z'),
+                    modifiers,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CTRL) => {
+                    self.suspend()?;
+                    self.resume()?;
+                    self.render()?;
+                }
                 Event::KeyPress(Key {
                     code: KeyCode::Space,
                     ..
@@ -77,9 +87,7 @@ impl App {
                         self.screen.set_alt_screen(false)?;
                         self.screen.resize(self.size_col, 4);
                     }
-                    self.render();
-                    self.screen.render()?;
-                    self.screen.flush()?;
+                    self.render()?;
                 }
                 Event::Resize(ws) => {
                     if self.alt {
@@ -87,13 +95,45 @@ impl App {
                     } else {
                         self.screen.resize(ws.col, 4);
                     }
-                    self.render();
-                    self.screen.render()?;
-                    self.screen.flush()?;
+                    self.render()?;
                 }
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    /// Suspend to job control (Unix-only): tear down the screen, drop
+    /// raw mode, then send `SIGTSTP` to ourselves. The kernel pauses the
+    /// process until a `SIGCONT` (e.g. `fg`) returns control here.
+    #[cfg(unix)]
+    fn suspend(&mut self) -> std::io::Result<()> {
+        self.screen.reset()?;
+        self.screen.flush()?;
+        self.term.restore()?;
+        // SAFETY: raise is async-signal-safe.
+        unsafe { libc::raise(libc::SIGTSTP) };
+        Ok(())
+    }
+
+    /// Resume after [`suspend`](Self::suspend): re-acquire raw mode,
+    /// refit to the current window size, and reinstate the screen modes
+    /// (the alternate screen is re-entered if it was active), then force
+    /// a full repaint.
+    #[cfg(unix)]
+    fn resume(&mut self) -> std::io::Result<()> {
+        self.term.make_raw()?;
+        if let Ok(size) = self.term.window_size() {
+            self.size_col = size.col;
+            self.size_row = size.row;
+            if self.alt {
+                self.screen.resize(size.col, size.row.max(4));
+            } else {
+                self.screen.resize(size.col, 4);
+            }
+        }
+        self.screen.restore()?;
+        self.screen.invalidate();
         Ok(())
     }
 
