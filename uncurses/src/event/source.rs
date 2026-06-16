@@ -159,6 +159,13 @@ where
     pub(super) paste_deadline: Option<Instant>,
     pub(super) queue: VecDeque<Event>,
     pub(super) waker: Waker,
+    /// Whether the source delivers [`Event::Resize`] from the
+    /// out-of-band kernel resize notification (`SIGWINCH` on Unix).
+    /// Defaults to `true`. Set to `false` when in-band resize reports
+    /// (DEC mode 2048) are enabled so resizes arrive solely through the
+    /// decoder and are not duplicated. No effect on Windows, where resize
+    /// is always delivered in-band through the decoder.
+    pub(super) handle_resize: bool,
 
     // --- Unix-only state ---
     /// Shared readiness poller watching `[input, pipe_rx, winch_rx]` (in
@@ -258,6 +265,31 @@ where
     /// Cloneable [`Waker`] bound to this source.
     pub fn waker(&self) -> Waker {
         self.waker.clone()
+    }
+
+    /// Whether the source delivers [`Event::Resize`] from the kernel's
+    /// out-of-band window-resize notification (`SIGWINCH` on Unix).
+    pub fn handle_resize(&self) -> bool {
+        self.handle_resize
+    }
+
+    /// Control whether the source delivers [`Event::Resize`] from the
+    /// kernel's out-of-band window-resize notification (`SIGWINCH` on
+    /// Unix). Defaults to `true`.
+    ///
+    /// Set this to `false` after enabling in-band resize reports (DEC
+    /// mode 2048, e.g. via [`Screen::set_in_band_resize`]): the terminal
+    /// then reports size changes in-band as `CSI 48 t`, which the decoder
+    /// surfaces as [`Event::Resize`], so leaving the `SIGWINCH` path on
+    /// would deliver each resize twice. Restore it to `true` when in-band
+    /// reporting is disabled again.
+    ///
+    /// No effect on Windows, where resize is always delivered in-band
+    /// through the decoder.
+    ///
+    /// [`Screen::set_in_band_resize`]: crate::screen::Screen::set_in_band_resize
+    pub fn set_handle_resize(&mut self, enable: bool) {
+        self.handle_resize = enable;
     }
 
     /// Block up to `timeout` for at least one event to become available.

@@ -127,6 +127,7 @@ where
             paste_deadline: None,
             queue: VecDeque::with_capacity(16),
             waker,
+            handle_resize: true,
             poller,
             wake_event,
             vt_input,
