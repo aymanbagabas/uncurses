@@ -25,10 +25,13 @@
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut term = Terminal::open()?;
-//! let _prev = term.make_raw()?;
+//! term.make_raw()?;
 //! let mut out = term.output();
 //! let mut source = EventSource::new(term.input())?;
+//!
 //! let bg = source.query(&mut out, &query::BACKGROUND_COLOR, Duration::from_millis(100))?;
+//!
+//! term.restore()?; // leave raw mode before returning
 //! println!("background: {bg:?}");
 //! # Ok(())
 //! # }
@@ -195,6 +198,17 @@ pub const COLOR_SCHEME: Query<ColorScheme> =
         _ => None,
     });
 
+/// Whether in-band resize notifications (DEC 2048) are enabled (DECRQM,
+/// `CSI ? 2048 $p`). The reply is the reported [`ModeSetting`] for mode
+/// 2048; a [`ModeSetting::Set`] terminal emits [`Event::Resize`] in-band
+/// on every surface size change.
+///
+/// [`Event::Resize`]: crate::event::Event::Resize
+pub const IN_BAND_RESIZE: Query<ModeSetting> = Query::new(b"\x1b[?2048$p", |ev| match ev {
+    Event::ModeReport { mode, setting } if *mode == Mode::IN_BAND_RESIZE => Some(*setting),
+    _ => None,
+});
+
 /// Query the current setting of a terminal mode (DECRQM). Handles both
 /// ANSI modes (`CSI mode $p`) and DEC private modes (`CSI ? mode $p`).
 ///
@@ -358,6 +372,23 @@ mod tests {
         // The user input is untouched by the failed query.
         let ev = source.read().unwrap();
         assert!(matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+    }
+
+    #[test]
+    fn in_band_resize_query_matches_mode_2048_report() {
+        // The request is the DECRQM probe for DEC private mode 2048.
+        assert_eq!(IN_BAND_RESIZE.request(), b"\x1b[?2048$p");
+        // It resolves on a ModeReport for mode 2048, ignoring others.
+        let ev = Event::ModeReport {
+            mode: Mode::IN_BAND_RESIZE,
+            setting: ModeSetting::Set,
+        };
+        assert_eq!(IN_BAND_RESIZE.matches(&ev), Some(ModeSetting::Set));
+        let other = Event::ModeReport {
+            mode: Mode::Dec(2031),
+            setting: ModeSetting::Set,
+        };
+        assert_eq!(IN_BAND_RESIZE.matches(&other), None);
     }
 
     #[test]

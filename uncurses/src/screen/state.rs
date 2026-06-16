@@ -32,6 +32,12 @@ pub(super) struct State {
     /// terminal sends unsolicited reports as the user/OS toggles the
     /// dark/light theme.
     pub color_scheme_updates: bool,
+    /// In-band resize notifications (DEC 2048). When `true`, the
+    /// terminal sends a `CSI 48 ; … t` report whenever the surface
+    /// changes size, surfaced as [`Event::Resize`].
+    ///
+    /// [`Event::Resize`]: crate::event::Event::Resize
+    pub in_band_resize: bool,
     /// Title (window title set via OSC 0/2). `None` when no title
     /// override has been set.
     pub title: Option<String>,
@@ -63,6 +69,7 @@ impl Default for State {
             sync_updates: false,
             grapheme_clusters: false,
             color_scheme_updates: false,
+            in_band_resize: false,
             title: None,
             foreground_color: None,
             background_color: None,
