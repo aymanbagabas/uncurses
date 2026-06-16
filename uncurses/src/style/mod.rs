@@ -212,42 +212,6 @@ impl Style {
         }
         self
     }
-
-    pub fn is_bold(&self) -> bool {
-        self.attrs.contains(AttrFlags::BOLD)
-    }
-
-    pub fn is_faint(&self) -> bool {
-        self.attrs.contains(AttrFlags::FAINT)
-    }
-
-    pub fn is_italic(&self) -> bool {
-        self.attrs.contains(AttrFlags::ITALIC)
-    }
-
-    pub fn is_underlined(&self) -> bool {
-        self.underline != UnderlineStyle::None
-    }
-
-    pub fn is_strikethrough(&self) -> bool {
-        self.attrs.contains(AttrFlags::STRIKETHROUGH)
-    }
-
-    pub fn is_blinking(&self) -> bool {
-        self.attrs.contains(AttrFlags::SLOW_BLINK)
-    }
-
-    pub fn is_rapid_blinking(&self) -> bool {
-        self.attrs.contains(AttrFlags::RAPID_BLINK)
-    }
-
-    pub fn is_reversed(&self) -> bool {
-        self.attrs.contains(AttrFlags::REVERSE)
-    }
-
-    pub fn is_concealed(&self) -> bool {
-        self.attrs.contains(AttrFlags::CONCEAL)
-    }
 }
 
 #[cfg(test)]
