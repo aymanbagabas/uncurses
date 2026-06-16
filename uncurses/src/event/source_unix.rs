@@ -90,6 +90,7 @@ where
             paste_deadline: None,
             queue: VecDeque::with_capacity(16),
             waker,
+            handle_resize: true,
             poller,
             pipe_rx,
             winch_rx,
@@ -178,6 +179,12 @@ where
 
     fn handle_winch(&mut self) {
         drain_pipe(self.winch_rx.as_raw_fd());
+        // When in-band resize reporting is enabled the host disables
+        // this path; the terminal delivers resizes through the decoder
+        // instead, so emitting here too would duplicate every event.
+        if !self.handle_resize {
+            return;
+        }
         let new_size = match get_window_size(self.input.as_fd()) {
             Ok(sz) => sz,
             Err(_) => return,
@@ -546,6 +553,31 @@ mod tests {
         assert!(matches!(src.read().unwrap(), Event::PasteStart));
         assert!(matches!(src.read().unwrap(), Event::PasteChunk(ref b) if b == b"hello"));
         assert!(matches!(src.read().unwrap(), Event::PasteEnd));
+    }
+
+    #[test]
+    fn handle_resize_false_suppresses_sigwinch_resize_event() {
+        // With resize handling disabled (the host has enabled in-band
+        // reports), a SIGWINCH must drain its wake pipe but surface no
+        // Event::Resize — the decoder delivers resizes in-band instead.
+        let stderr_fd = 2;
+        let ws: libc::winsize = unsafe { std::mem::zeroed() };
+        let probe = unsafe { libc::ioctl(stderr_fd, libc::TIOCGWINSZ, &ws as *const _) };
+        if probe < 0 {
+            return;
+        }
+        let stderr_dup = unsafe { libc::dup(stderr_fd) };
+        assert!(stderr_dup >= 0);
+        let stderr_file = unsafe { File::from_raw_fd(stderr_dup) };
+        let mut src = new_reader(stderr_file);
+        assert!(src.handle_resize());
+        src.set_handle_resize(false);
+        assert!(!src.handle_resize());
+        src.last_size = None;
+        unsafe { libc::raise(libc::SIGWINCH) };
+        // No event is produced; the poll runs to its (short) timeout.
+        assert!(!src.poll(Some(Duration::from_millis(50))).unwrap());
+        assert!(src.try_read().is_none());
     }
 
     #[test]
