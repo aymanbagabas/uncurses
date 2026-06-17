@@ -1,58 +1,259 @@
 use std::io::{self, Write};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
+use ratatui::Viewport;
 use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::Cell as RtCell;
 use ratatui::layout::{Position as RtPosition, Size as RtSize};
-use uncurses::buffer::{Bounded, Surface, SurfaceMut};
+use uncurses::Terminal;
+use uncurses::buffer::SurfaceMut;
 use uncurses::cell::Cell as CzCell;
+use uncurses::event::{Event, EventSource, Input, query};
 use uncurses::screen::Screen;
-use uncurses::terminal::{size as size_mod, tty};
+use uncurses::terminal::{State, Stdin, Stdout, TtyInput, TtyOutput};
 
 use crate::convert::cell_from_ratatui;
 
-/// A `ratatui` [`Backend`](ratatui::backend::Backend) that renders through a
-/// [`uncurses::screen::Screen`].
+/// Platform bound for an output half usable as a real terminal: writable,
+/// `Copy` (so the `Terminal` can hand copies to the screen while keeping
+/// its own), and exposing the OS handle the raw-mode and window-size
+/// syscalls need. `Stdout`/`TtyOutput` satisfy it.
+#[cfg(unix)]
+pub trait OutputHandle: Write + Copy + std::os::fd::AsFd {}
+#[cfg(unix)]
+impl<T: Write + Copy + std::os::fd::AsFd> OutputHandle for T {}
+#[cfg(windows)]
+pub trait OutputHandle: Write + Copy + std::os::windows::io::AsHandle {}
+#[cfg(windows)]
+impl<T: Write + Copy + std::os::windows::io::AsHandle> OutputHandle for T {}
+
+/// Default geometry when the terminal size cannot be read at construction.
+const DEFAULT_SIZE: (u16, u16) = (80, 24);
+/// How long [`Backend::get_cursor_position`] blocks waiting for the CPR
+/// reply, matching the de-facto 2s budget other backends use.
+const CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(2000);
+
+/// A `ratatui` [`Backend`](ratatui::backend::Backend) that owns the whole
+/// terminal stack: the [`Terminal`] handle (raw-mode lifecycle, window
+/// size), the [`Screen`] it renders through, and a shared [`EventSource`]
+/// for input.
 ///
-/// Mirrors the conventions of other ratatui backends: side-effecting methods
-/// (`hide_cursor`, `show_cursor`, `set_cursor_position`, `clear`,
-/// `clear_region`) flush immediately, while `draw` only updates the back
-/// buffer and defers I/O to the next `flush`.
+/// Side-effecting methods (`hide_cursor`, `show_cursor`,
+/// `set_cursor_position`, `clear`, `clear_region`) flush immediately,
+/// while `draw` only updates the back buffer and defers I/O to the next
+/// `flush`.
 ///
-/// # Supported viewports
+/// # Events
 ///
-/// Only [`ratatui::Viewport::Fullscreen`] and [`ratatui::Viewport::Fixed`]
-/// are supported. [`ratatui::Viewport::Inline`] requires the backend to
-/// report the real cursor position from the controlling terminal so
-/// ratatui can anchor the inline area; that is not implemented here, and
-/// constructing a `Terminal` with an inline viewport will fail with
-/// [`io::ErrorKind::Unsupported`] from [`Backend::get_cursor_position`].
-pub struct UncursesBackend<W: Write> {
-    screen: Screen<W>,
+/// The source is shared behind `Arc<Mutex<_>>`. Read synchronously by
+/// locking [`events`](Self::events), or take an asynchronous
+/// [`EventStream`](uncurses::event::EventStream) with
+/// [`event_stream`](Self::event_stream) (the `async` feature) — the stream
+/// shares the *same* source, so [`Backend::get_cursor_position`] keeps
+/// working (and with it the inline viewport) while the stream is live.
+///
+/// # Setup
+///
+/// Construction is explicit: it does not enter raw mode or the alternate
+/// screen. Call [`make_raw`](Self::make_raw) and the relevant
+/// [`Screen`](Self::screen_mut) mode setters yourself, and
+/// [`restore`](Self::restore) on exit.
+pub struct UncursesBackend<I: Input, O: Write> {
+    terminal: Terminal<I, O>,
+    screen: Screen<O>,
+    events: Arc<Mutex<EventSource<I>>>,
+    /// The ratatui viewport, set via [`set_viewport`](Self::set_viewport)
+    /// (by `init_with_options`). Determines the screen buffer height
+    /// (inline height vs full terminal height) and whether `draw` /
+    /// `set_cursor_position` translate absolute rows into the inline
+    /// region.
+    viewport: Viewport,
+    /// Top row of an inline viewport. Seeded at initial setup from
+    /// [`get_cursor_position`](Backend::get_cursor_position), then kept
+    /// exact across resizes by [`clear_region`](Backend::clear_region),
+    /// which observes the cursor ratatui parks at the recomputed viewport
+    /// top before clearing. Absolute rows are translated down by this when
+    /// rendering an inline viewport.
+    inline_origin: u16,
+    /// Last full terminal size observed by [`size`](Backend::size) /
+    /// [`window_size`](Backend::window_size). When it changes the screen
+    /// is marked stale (`size_dirty`) so the next [`draw`](Backend::draw)
+    /// repaints in full. Tracked behind `Cell` because `size` takes
+    /// `&self`.
+    last_size: std::cell::Cell<(u16, u16)>,
+    /// Set when `last_size` changes; consumed by `draw` to invalidate the
+    /// screen.
+    size_dirty: std::cell::Cell<bool>,
+    /// Absolute row last requested by
+    /// [`set_cursor_position`](Backend::set_cursor_position). When ratatui
+    /// recomputes an inline viewport (initial setup and every resize) it
+    /// positions the cursor at the viewport's top row before clearing it,
+    /// so [`clear_region`](Backend::clear_region) reads this back as the
+    /// fresh `inline_origin` — the only place the *true* viewport top is
+    /// observable (the cursor reported by `get_cursor_position` sits at the
+    /// app's cursor, which need not be the viewport top).
+    last_cursor_row: u16,
 }
 
-impl<W: Write> UncursesBackend<W> {
-    /// Wrap a `Screen` for use as a ratatui backend.
-    pub fn new(screen: Screen<W>) -> Self {
-        Self { screen }
+impl UncursesBackend<Stdin, Stdout> {
+    /// Build a backend over the process stdio (`stdin` + `stdout`).
+    pub fn stdio() -> io::Result<Self> {
+        Self::from_terminal(Terminal::stdio())
+    }
+}
+
+impl UncursesBackend<TtyInput, TtyOutput> {
+    /// Build a backend over the controlling terminal (`/dev/tty`, or
+    /// `CONIN$`/`CONOUT$` on Windows), bypassing redirected stdio.
+    pub fn open() -> io::Result<Self> {
+        Self::from_terminal(Terminal::open()?)
+    }
+}
+
+impl<I, O> UncursesBackend<I, O>
+where
+    I: Input + Copy,
+    O: OutputHandle,
+{
+    /// Assemble a backend from a `Terminal`, building the source and
+    /// screen from its `Copy` halves. The screen is sized from the
+    /// terminal's current window size, falling back to 80x24.
+    fn from_terminal(terminal: Terminal<I, O>) -> io::Result<Self> {
+        let size = terminal
+            .window_size()
+            .map(|w| (w.col, w.row))
+            .ok()
+            .filter(|&(c, r)| c != 0 && r != 0)
+            .unwrap_or(DEFAULT_SIZE);
+        let screen = Screen::new(terminal.output(), size);
+        let events = EventSource::new(terminal.input())?;
+        Ok(Self::new(terminal, events, screen))
+    }
+}
+
+impl<I, O> UncursesBackend<I, O>
+where
+    I: Input,
+    O: Write,
+{
+    /// Build a backend from pre-constructed parts, so a caller can reuse
+    /// an existing terminal, source, and screen. The source is wrapped in
+    /// `Arc<Mutex<_>>` for sharing with an async stream.
+    pub fn new(terminal: Terminal<I, O>, events: EventSource<I>, screen: Screen<O>) -> Self {
+        Self {
+            terminal,
+            screen,
+            events: Arc::new(Mutex::new(events)),
+            viewport: Viewport::Fullscreen,
+            inline_origin: 0,
+            last_size: std::cell::Cell::new((0, 0)),
+            size_dirty: std::cell::Cell::new(false),
+            last_cursor_row: 0,
+        }
     }
 
-    /// Borrow the underlying screen.
-    pub fn screen(&self) -> &Screen<W> {
+    /// Record an observed full terminal size; if it differs from the last,
+    /// flag the screen stale so the next [`draw`](Backend::draw) repaints
+    /// in full. Takes `&self` so `size`/`window_size` can call it.
+    fn note_size(&self, size: (u16, u16)) {
+        if self.last_size.get() != size {
+            self.last_size.set(size);
+            self.size_dirty.set(true);
+        }
+    }
+
+    /// Set the ratatui viewport. Called by
+    /// [`init_with_options`](crate::init_with_options) so the backend can
+    /// size its screen buffer (inline height vs full terminal height) and
+    /// translate coordinates for an inline viewport. The default is
+    /// [`Viewport::Fullscreen`].
+    ///
+    /// For an inline viewport the screen buffer is resized to the inline
+    /// height immediately (clamped to the current terminal height), so the
+    /// first render is already the right size rather than starting at full
+    /// height and shrinking on the first draw.
+    pub fn set_viewport(&mut self, viewport: Viewport) {
+        if let Viewport::Inline(height) = viewport {
+            let h = height.min(self.screen.height());
+            self.screen.resize(self.screen.width(), h);
+        }
+        self.viewport = viewport;
+    }
+
+    /// Borrow the terminal handle.
+    pub fn terminal(&self) -> &Terminal<I, O> {
+        &self.terminal
+    }
+
+    /// Mutably borrow the terminal handle (raw-mode lifecycle, etc.).
+    pub fn terminal_mut(&mut self) -> &mut Terminal<I, O> {
+        &mut self.terminal
+    }
+
+    /// Borrow the screen.
+    pub fn screen(&self) -> &Screen<O> {
         &self.screen
     }
 
-    /// Borrow the underlying screen mutably.
-    pub fn screen_mut(&mut self) -> &mut Screen<W> {
+    /// Mutably borrow the screen (mode setters, manual rendering).
+    pub fn screen_mut(&mut self) -> &mut Screen<O> {
         &mut self.screen
     }
 
-    /// Consume the backend and return the wrapped screen.
-    pub fn into_inner(self) -> Screen<W> {
-        self.screen
+    /// Lock the shared event source for synchronous reading.
+    pub fn events(&self) -> MutexGuard<'_, EventSource<I>> {
+        self.events.lock().unwrap()
+    }
+
+    /// The shared event source, for callers that need their own handle
+    /// (e.g. to build an [`EventStream`](uncurses::event::EventStream)).
+    pub fn shared_events(&self) -> Arc<Mutex<EventSource<I>>> {
+        Arc::clone(&self.events)
     }
 }
 
-impl<W: Write> Write for UncursesBackend<W> {
+impl<I, O> UncursesBackend<I, O>
+where
+    I: Input,
+    O: OutputHandle,
+{
+    /// Enter raw mode, returning the prior state (also cached for
+    /// [`restore`](Self::restore)). Call once before driving the UI.
+    pub fn init(&mut self) -> io::Result<State> {
+        self.terminal.make_raw()
+    }
+
+    /// Restore the terminal: reset the screen (alt-screen, cursor, modes),
+    /// flush, then revert raw mode. The single teardown entry point.
+    pub fn restore(&mut self) -> io::Result<()> {
+        self.screen.reset();
+        Write::flush(&mut self.screen)?;
+        self.terminal.restore()
+    }
+}
+
+#[cfg(feature = "async")]
+impl<I, O> UncursesBackend<I, O>
+where
+    I: Input + 'static,
+    O: Write,
+{
+    /// Take an asynchronous [`EventStream`](uncurses::event::EventStream)
+    /// over the shared source. The backend keeps its handle, so
+    /// synchronous reads via [`events`](Self::events) and
+    /// [`get_cursor_position`](Backend::get_cursor_position) keep working
+    /// alongside the stream.
+    pub fn event_stream(&self) -> uncurses::event::EventStream<I> {
+        uncurses::event::EventStream::from_shared(self.shared_events())
+    }
+}
+
+impl<I, O> Write for UncursesBackend<I, O>
+where
+    I: Input,
+    O: Write,
+{
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.screen.write(buf)
     }
@@ -62,16 +263,50 @@ impl<W: Write> Write for UncursesBackend<W> {
     }
 }
 
-impl<W: Write> Backend for UncursesBackend<W> {
+impl<I, O> Backend for UncursesBackend<I, O>
+where
+    I: Input,
+    O: OutputHandle,
+{
     type Error = io::Error;
 
-    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    fn draw<'a, J>(&mut self, content: J) -> io::Result<()>
     where
-        I: Iterator<Item = (u16, u16, &'a RtCell)>,
+        J: Iterator<Item = (u16, u16, &'a RtCell)>,
     {
+        // Keep the screen buffer in step with what ratatui draws into.
+        // For an inline viewport the buffer is only the inline height and
+        // ratatui's absolute rows are translated down by the viewport top;
+        // otherwise it tracks the full terminal size.
+        let (full_w, full_h) = self
+            .terminal
+            .window_size()
+            .ok()
+            .map(|s| (s.col, s.row))
+            .filter(|&(c, r)| c != 0 && r != 0)
+            .unwrap_or((self.screen.width(), self.screen.height()));
+        let (w, h, top) = match self.viewport {
+            Viewport::Inline(height) => {
+                let h = height.min(full_h);
+                let top = self.inline_origin.min(full_h.saturating_sub(h));
+                (full_w, h, top)
+            }
+            _ => (full_w, full_h, 0),
+        };
+        // Repaint in full if the terminal size changed since the last
+        // observation (covers cases where the buffer dimensions stay the
+        // same, e.g. an inline viewport on a vertical-only resize).
+        self.note_size((full_w, full_h));
+        if self.size_dirty.take() {
+            self.screen.invalidate();
+        }
+        if (w, h) != (self.screen.width(), self.screen.height()) {
+            self.screen.invalidate();
+            self.screen.resize(w, h);
+        }
         for (x, y, rc) in content {
             let cell = cell_from_ratatui(rc);
-            self.screen.set_cell((x, y), &cell);
+            self.screen.set_cell((x, y.saturating_sub(top)), &cell);
         }
         self.screen.render();
         Ok(())
@@ -88,23 +323,55 @@ impl<W: Write> Backend for UncursesBackend<W> {
     }
 
     fn get_cursor_position(&mut self) -> io::Result<RtPosition> {
-        // Reporting the real cursor position requires a DSR/CPR round-trip
-        // through the controlling terminal. That path is not implemented,
-        // and returning the locally-cached position would silently break
-        // any caller that depends on a true reading (e.g. ratatui's
-        // inline viewport anchor). Surface the limitation as Unsupported
-        // so Terminal::with_options(Viewport::Inline(_)) fails cleanly at
-        // construction time.
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "get_cursor_position is not supported by UncursesBackend; \
-             only fullscreen and fixed viewports are supported",
-        ))
+        // Write ESC[6n to the terminal and block for the CPR reply,
+        // mirroring other backends. Works whether or not an async stream
+        // is active, because the stream shares this same source: the lock
+        // serializes the read, and the reader thread's lock-free poll does
+        // not hold it. Drain any stale CPR first so we match a fresh one.
+        let mut out = self.terminal.output();
+        let mut src = self.events.lock().unwrap();
+        while src
+            .try_read_matching(|e| matches!(e, Event::CursorPosition(_)))
+            .is_some()
+        {}
+        match src.query(&mut out, &query::CURSOR_POSITION, CURSOR_QUERY_TIMEOUT)? {
+            Some(p) => {
+                // ratatui calls this during inline setup to anchor the
+                // viewport at the cursor row; remember it so `draw` /
+                // `set_cursor_position` can translate absolute rows into
+                // the inline buffer.
+                self.inline_origin = p.y;
+                Ok(RtPosition { x: p.x, y: p.y })
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "cursor position report (CPR) not received in time",
+            )),
+        }
     }
 
     fn set_cursor_position<P: Into<RtPosition>>(&mut self, position: P) -> io::Result<()> {
         let p = position.into();
-        self.screen.set_cursor_position(p.x, p.y);
+        // Remember the requested row: when ratatui clears an inline
+        // viewport it places the cursor at the viewport top first, letting
+        // `clear_region` recover the (possibly shifted) origin on resize.
+        self.last_cursor_row = p.y;
+        // Emit an absolute CUP directly rather than going through the
+        // renderer's cost-optimized (possibly relative) move: ratatui calls
+        // this to place its own cursor, so the move must be unconditional
+        // and absolute.
+        uncurses::ansi::cursor::write_cup(&mut self.screen, p.y, p.x)?;
+        // Keep the renderer's cursor bookkeeping in step with the move we
+        // just made, translated into the (inline) buffer. In relative-cursor
+        // mode merely invalidating would lose the absolute row — the next
+        // frame's vertical moves would drift the viewport — so assert the
+        // exact buffer-relative position instead. For a non-inline viewport
+        // `inline_origin` is 0, so this is the absolute position unchanged.
+        let top = match self.viewport {
+            Viewport::Inline(_) => self.inline_origin,
+            _ => 0,
+        };
+        self.screen.assume_cursor_at(p.x, p.y.saturating_sub(top));
         Write::flush(&mut self.screen)
     }
 
@@ -125,6 +392,21 @@ impl<W: Write> Backend for UncursesBackend<W> {
         }
         let region = match clear_type {
             ClearType::All => Some(uncurses::layout::Rect::new(0, 0, w, h)),
+            ClearType::AfterCursor if matches!(self.viewport, Viewport::Inline(_)) => {
+                // Inline-viewport resize/clear path. ratatui homes the
+                // cursor to the viewport's (recomputed) top row, then erases
+                // to the end of the screen — for our inline buffer that is
+                // the whole thing. Adopt the fresh origin (the app cursor
+                // reported by `get_cursor_position` may sit anywhere in the
+                // viewport, so this is the authoritative top), and blank the
+                // entire staging buffer so the upcoming full repaint starts
+                // clean: the staging buffer preserves overlapping cells
+                // across a grow, which a diff-style painter never overwrites,
+                // and would otherwise duplicate the previous frame's right
+                // edge.
+                self.inline_origin = self.last_cursor_row;
+                Some(uncurses::layout::Rect::new(0, 0, w, h))
+            }
             ClearType::AfterCursor => {
                 if cursor.y < h {
                     let tail_x = cursor.x.min(w);
@@ -157,9 +439,7 @@ impl<W: Write> Backend for UncursesBackend<W> {
         if let Some(region) = region {
             self.screen.fill_rect(region, &CzCell::BLANK);
         }
-        // Restore the cursor to where it was before the blank: ratatui's
-        // Backend contract guarantees clear preserves the cursor position.
-        self.screen.set_cursor_position(cursor.x, cursor.y);
+        self.screen.invalidate_cursor();
         // Push the staged blanks to the wire so the clear takes effect
         // before this call returns, matching the immediate-clear contract.
         self.screen.render();
@@ -167,25 +447,35 @@ impl<W: Write> Backend for UncursesBackend<W> {
     }
 
     fn size(&self) -> io::Result<RtSize> {
-        let b = self.screen.bounds();
-        Ok(RtSize {
-            width: b.width(),
-            height: b.height(),
-        })
+        // The full terminal size: ratatui needs it to anchor inline
+        // viewports and to detect resizes. Fall back to the screen's
+        // buffer size if the query fails (e.g. output is not a tty).
+        let (width, height) = self
+            .terminal
+            .window_size()
+            .ok()
+            .map(|s| (s.col, s.row))
+            .filter(|&(c, r)| c != 0 && r != 0)
+            .unwrap_or((self.screen.width(), self.screen.height()));
+        self.note_size((width, height));
+        Ok(RtSize { width, height })
     }
 
     fn window_size(&mut self) -> io::Result<WindowSize> {
-        let b = self.screen.bounds();
-        let (_, out) = tty::open_tty()?;
-        let w = size_mod::get_window_size(out).ok();
+        // One query reports both cell and pixel dimensions; fall back to
+        // the screen's buffer size for cells if it fails.
+        let ws = self.terminal.window_size().ok();
+        let (width, height) = ws
+            .as_ref()
+            .map(|w| (w.col, w.row))
+            .filter(|&(c, r)| c != 0 && r != 0)
+            .unwrap_or_else(|| (self.screen.width(), self.screen.height()));
+        self.note_size((width, height));
         Ok(WindowSize {
-            columns_rows: RtSize {
-                width: b.width(),
-                height: b.height(),
-            },
+            columns_rows: RtSize { width, height },
             pixels: RtSize {
-                width: w.as_ref().map(|w| w.xpixel).unwrap_or(0),
-                height: w.as_ref().map(|w| w.ypixel).unwrap_or(0),
+                width: ws.as_ref().map(|w| w.xpixel).unwrap_or(0),
+                height: ws.as_ref().map(|w| w.ypixel).unwrap_or(0),
             },
         })
     }
@@ -195,68 +485,21 @@ impl<W: Write> Backend for UncursesBackend<W> {
     }
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
-        if n == 0 {
-            return Ok(());
+        for _ in 0..n {
+            let _ = writeln!(self.screen);
         }
-        // `insert_above` splits its argument on `\n`, so `m` newlines
-        // produce `m + 1` lines. We want `n` blank lines.
-        let content = "\n".repeat(n.saturating_sub(1) as usize);
-        self.screen.insert_above(&content);
         Write::flush(&mut self.screen)
     }
 
-    fn scroll_region_up(&mut self, region: std::ops::Range<u16>, amount: u16) -> io::Result<()> {
-        // When the region includes row 0, the rows scrolled off the top must
-        // be preserved in the terminal's scrollback (per the backend contract:
-        // see `ratatui_core::backend::Backend::scroll_region_up`). Route those
-        // rows through `Screen::insert_above` so the host terminal commits
-        // them to its scrollback buffer, and flush so they reach the wire
-        // before subsequent draws move the cursor.
-        if region.start == 0 && amount > 0 && region.end > 0 {
-            let n = amount.min(region.end);
-            let content = self.snapshot_rows_text(0..n);
-            self.screen.insert_above(&content);
-            Write::flush(&mut self.screen)?;
-        }
-        // The shift itself only mutates the staged buffer; the SU/DL bytes
-        // are emitted later by the renderer when the next `draw` flushes.
-        self.screen
-            .delete_lines(region.start, amount, region.end, &CzCell::BLANK);
+    fn scroll_region_up(&mut self, _region: std::ops::Range<u16>, _amount: u16) -> io::Result<()> {
         Ok(())
     }
 
-    fn scroll_region_down(&mut self, region: std::ops::Range<u16>, amount: u16) -> io::Result<()> {
-        // Mutates the staged buffer only; the SD/IL bytes are emitted later
-        // by the renderer when the next `draw` flushes.
-        self.screen
-            .insert_lines(region.start, amount, region.end, &CzCell::BLANK);
+    fn scroll_region_down(
+        &mut self,
+        _region: std::ops::Range<u16>,
+        _amount: u16,
+    ) -> io::Result<()> {
         Ok(())
-    }
-}
-
-impl<W: Write> UncursesBackend<W> {
-    /// Read rows `[rows.start, rows.end)` from the screen's staged buffer and
-    /// join them with `\n`, trimming trailing blanks per line. Continuation
-    /// cells of wide characters are skipped to avoid duplicating glyphs.
-    fn snapshot_rows_text(&self, rows: std::ops::Range<u16>) -> String {
-        let b = self.screen.bounds();
-        let width = b.width();
-        let mut out = String::new();
-        for (i, y) in rows.clone().enumerate() {
-            if i > 0 {
-                out.push('\n');
-            }
-            let mut line = String::new();
-            for x in 0..width {
-                if let Some(cell) = self.screen.cell((x, y).into())
-                    && !cell.is_continuation()
-                {
-                    line.push_str(cell.content());
-                }
-            }
-            let trimmed = line.trim_end();
-            out.push_str(trimmed);
-        }
-        out
     }
 }

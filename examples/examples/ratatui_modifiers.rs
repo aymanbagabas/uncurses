@@ -4,42 +4,27 @@
 //! foreground/background combinations with every text modifier applied
 //! to demonstrate which modifiers the host terminal supports.
 
-use std::io::{self, Write};
+use std::io;
 use std::iter::once;
 
 use ratatui::Frame;
-use ratatui::Terminal;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
-use uncurses::event::{Event, EventSource};
-use uncurses::screen::Screen;
-use uncurses::terminal::{get_window_size, make_raw_mode, set_state, stdin, stdout};
-use uncurses_ratatui::UncursesBackend;
+use uncurses::event::Event;
 
 fn main() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let raw_state = make_raw_mode(stdin, stdout)?;
-    let result = run();
-    set_state(stdin, stdout, &raw_state)?;
+    let mut terminal = uncurses_ratatui::try_init()?;
+    let result = run(&mut terminal);
+    uncurses_ratatui::restore(&mut terminal);
     result
 }
 
-fn run() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true);
-    screen.set_cursor_visible(false);
-
-    let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
-    let mut events = EventSource::new(stdin)?;
-
+fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
     loop {
         terminal.draw(render)?;
+        let mut events = terminal.backend().events();
         if events.poll(None)?
             && let Some(Event::KeyPress(_)) = events.try_read()
         {
@@ -47,9 +32,6 @@ fn run() -> io::Result<()> {
         }
     }
 
-    let screen = terminal.backend_mut().screen_mut();
-    screen.reset();
-    screen.flush()?;
     Ok(())
 }
 

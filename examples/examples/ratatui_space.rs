@@ -8,18 +8,14 @@
 //! Run with `cargo run --release --example ratatui_space`. Press `q` or
 //! `Ctrl-C` to quit.
 
-use std::io::{self, Write};
+use std::io;
 use std::time::{Duration, Instant};
 
-use ratatui::Terminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Stylize};
 use ratatui::widgets::{Paragraph, Widget};
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
-use uncurses::terminal::{get_window_size, make_raw_mode, set_state, stdin, stdout};
-use uncurses_ratatui::UncursesBackend;
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 
 const FRAME: Duration = Duration::from_micros(16_667); // ~60 FPS
 
@@ -156,25 +152,13 @@ impl Widget for FpsWidget<'_> {
 }
 
 fn main() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let raw_state = make_raw_mode(stdin, stdout)?;
-    let result = run();
-    set_state(stdin, stdout, &raw_state)?;
+    let mut terminal = uncurses_ratatui::try_init()?;
+    let result = run(&mut terminal);
+    uncurses_ratatui::restore(&mut terminal);
     result
 }
 
-fn run() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true);
-    screen.set_cursor_visible(false);
-
-    let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
-    let mut events = EventSource::new(stdin)?;
-
+fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
     let mut rng = Rng::new(seed_from_clock());
     let mut field = Field::new();
     let mut fps = Fps::new();
@@ -186,21 +170,24 @@ fn run() -> io::Result<()> {
         let now = Instant::now();
         let remaining = next_frame.saturating_duration_since(now);
 
-        if !remaining.is_zero() && events.poll(Some(remaining))? {
-            while let Some(ev) = events.try_read() {
-                match ev {
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('q'),
-                        modifiers,
-                        ..
-                    }) if modifiers.is_empty() => quit = true,
-                    Event::KeyPress(Key {
-                        code: KeyCode::Char('c'),
-                        modifiers,
-                        ..
-                    }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-                    Event::Resize(_) => field = Field::new(),
-                    _ => {}
+        if !remaining.is_zero() {
+            let mut events = terminal.backend().events();
+            if events.poll(Some(remaining))? {
+                while let Some(ev) = events.try_read() {
+                    match ev {
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('q'),
+                            modifiers,
+                            ..
+                        }) if modifiers.is_empty() => quit = true,
+                        Event::KeyPress(Key {
+                            code: KeyCode::Char('c'),
+                            modifiers,
+                            ..
+                        }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
+                        Event::Resize(_) => field = Field::new(),
+                        _ => {}
+                    }
                 }
             }
         }
@@ -241,9 +228,6 @@ fn run() -> io::Result<()> {
         }
     }
 
-    let screen = terminal.backend_mut().screen_mut();
-    screen.reset();
-    screen.flush()?;
     Ok(())
 }
 

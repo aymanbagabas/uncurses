@@ -10,6 +10,8 @@ repository.workspace = true
 default = ["unicode-rs"]
 unicode-rs = ["uncurses/unicode-rs"]
 icu = ["uncurses/icu"]
+# Asynchronous event streaming. Enables `UncursesBackend::event_stream`.
+async = ["uncurses/async"]
 
 [dependencies]
 uncurses = { path = "../uncurses", default-features = false }

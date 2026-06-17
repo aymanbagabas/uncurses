@@ -4,18 +4,14 @@
 //! editing, `Esc` to stop, `Enter` to commit a message into the history,
 //! and `q` to quit (from normal mode).
 
-use std::io::{self, Write};
+use std::io;
 
 use ratatui::Frame;
-use ratatui::Terminal;
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListItem, Paragraph};
-use uncurses::event::{Event, EventSource, KeyCode};
-use uncurses::screen::Screen;
-use uncurses::terminal::{get_window_size, make_raw_mode, set_state, stdin, stdout};
-use uncurses_ratatui::UncursesBackend;
+use uncurses::event::{Event, KeyCode};
 
 enum InputMode {
     Normal,
@@ -84,34 +80,25 @@ impl App {
 }
 
 fn main() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let raw_state = make_raw_mode(stdin, stdout)?;
-    let result = run();
-    set_state(stdin, stdout, &raw_state)?;
+    let mut terminal = uncurses_ratatui::try_init()?;
+    let result = run(&mut terminal);
+    uncurses_ratatui::restore(&mut terminal);
     result
 }
 
-fn run() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true);
-    screen.set_cursor_visible(false);
-
-    let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
-    let mut events = EventSource::new(stdin)?;
+fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
     let mut app = App::new();
 
     'outer: loop {
         terminal.draw(|frame| render(frame, &app))?;
+        let mut events = terminal.backend().events();
         if !events.poll(None)? {
             continue;
         }
         let Some(Event::KeyPress(key)) = events.try_read() else {
             continue;
         };
+        drop(events);
         match app.input_mode {
             InputMode::Normal => match key.code {
                 KeyCode::Char('e') => app.input_mode = InputMode::Editing,
@@ -130,9 +117,6 @@ fn run() -> io::Result<()> {
         }
     }
 
-    let screen = terminal.backend_mut().screen_mut();
-    screen.reset();
-    screen.flush()?;
     Ok(())
 }
 
