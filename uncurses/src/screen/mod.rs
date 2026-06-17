@@ -341,6 +341,30 @@ impl<W: Write> Screen<W> {
         self.renderer.cursor_position()
     }
 
+    /// Mark the tracked cursor position unknown, so the next
+    /// [`Self::set_cursor_position`] always emits a move rather than
+    /// short-circuiting on a matching tracked position. Use when the
+    /// terminal cursor has been moved by a means the renderer cannot see
+    /// (e.g. a raw escape written directly to the screen buffer).
+    pub fn invalidate_cursor(&mut self) {
+        self.renderer.invalidate_cursor();
+    }
+
+    /// Tell the renderer the terminal cursor is now at buffer-relative
+    /// `(x, y)`, with both axes known, *without* emitting any move. The
+    /// caller must have already placed the terminal cursor there (e.g. via
+    /// a raw escape the renderer can't see).
+    ///
+    /// Prefer this over [`Self::invalidate_cursor`] when the new position
+    /// is known: in relative-cursor mode an invalidated cursor can only
+    /// re-home its column (`\r`), so the next frame's vertical moves would
+    /// be computed from a stale row. Asserting the exact position keeps
+    /// those relative moves correct.
+    pub fn assume_cursor_at(&mut self, x: u16, y: u16) {
+        self.renderer
+            .set_cursor_position(crate::Position::new(x, y));
+    }
+
     /// Write the cell-diff sequences (wrapped in cursor-hide and, when
     /// enabled, synchronized-output) for any touched cells directly into
     /// `w`.
