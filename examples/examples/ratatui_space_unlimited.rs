@@ -9,20 +9,18 @@
 //! Run with `cargo run --release --example ratatui_space_unlimited`.
 //! Press `q` or `Ctrl-C` to quit.
 
-use std::io::{self, Write};
+use std::io;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ratatui::Terminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Stylize};
 use ratatui::widgets::{Paragraph, Widget};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
-use uncurses::terminal::{get_window_size, make_raw_mode, set_state, stdin, stdout};
-use uncurses_ratatui::UncursesBackend;
+use uncurses::terminal::Stdin;
 
 struct Fps {
     frames: u32,
@@ -178,27 +176,21 @@ enum InputMsg {
 }
 
 fn main() -> io::Result<()> {
-    let stdin = stdin();
-    let stdout = stdout();
-    let raw_state = make_raw_mode(stdin, stdout)?;
-    let result = run();
-    set_state(stdin, stdout, &raw_state)?;
+    let mut terminal = uncurses_ratatui::try_init()?;
+    let shared = terminal.backend().shared_events();
+    let result = run(&mut terminal, shared);
+    uncurses_ratatui::restore(&mut terminal);
     result
 }
 
-fn run() -> io::Result<()> {
-    let stdout = stdout();
-    let size = get_window_size(stdout).unwrap_or_default();
-    let mut screen = Screen::new(stdout, (size.col, size.row));
-    screen.set_alt_screen(true);
-    screen.set_cursor_visible(false);
-
-    let mut terminal = Terminal::new(UncursesBackend::new(screen))?;
-
+fn run(
+    terminal: &mut uncurses_ratatui::DefaultTerminal,
+    events: Arc<Mutex<EventSource<Stdin>>>,
+) -> io::Result<()> {
     let (tx, rx) = mpsc::channel::<InputMsg>();
     let input_handle = thread::Builder::new()
         .name("input".into())
-        .spawn(move || input_loop(tx))
+        .spawn(move || input_loop(events, tx))
         .expect("spawn input thread");
 
     let mut rng = Rng::new(seed_from_clock());
@@ -258,21 +250,14 @@ fn run() -> io::Result<()> {
         fps.record(t1 - t0);
     }
 
-    let screen = terminal.backend_mut().screen_mut();
-    screen.reset();
-    screen.flush()?;
     drop(input_handle);
     Ok(())
 }
 
-fn input_loop(tx: mpsc::Sender<InputMsg>) {
-    let stdin = stdin();
-    let mut events = match EventSource::new(stdin) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
+fn input_loop(events: Arc<Mutex<EventSource<Stdin>>>, tx: mpsc::Sender<InputMsg>) {
     loop {
-        match events.read() {
+        let ev = events.lock().unwrap().read();
+        match ev {
             Ok(ev) => match ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q'),

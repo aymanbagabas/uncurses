@@ -403,7 +403,7 @@ fn unicode_char_width(ch: char) -> usize {
 struct App {
     term: Terminal<Stdin, Stdout>,
     screen: Screen<Stdout>,
-    events: EventStream,
+    events: EventStream<Stdin>,
     state: ExplorerState,
     quit_keys: [Key; 3],
     up_keys: [Key; 2],
