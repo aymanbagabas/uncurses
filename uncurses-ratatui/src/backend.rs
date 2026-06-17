@@ -6,11 +6,11 @@ use ratatui::Viewport;
 use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::Cell as RtCell;
 use ratatui::layout::{Position as RtPosition, Size as RtSize};
-use uncurses::Terminal;
 use uncurses::buffer::SurfaceMut;
 use uncurses::cell::Cell as CzCell;
 use uncurses::event::{Event, EventSource, Input, query};
 use uncurses::screen::Screen;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{State, Stdin, Stdout, TtyInput, TtyOutput};
 
 use crate::convert::cell_from_ratatui;

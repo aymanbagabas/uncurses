@@ -8,9 +8,9 @@
 
 use std::io::{self, Write};
 
-use crate::Position;
 use crate::ansi::{cost, cursor};
 use crate::cell::Cell;
+use crate::layout::Position;
 use crate::renderer::Renderer;
 use crate::renderer::caps::Optimizations;
 

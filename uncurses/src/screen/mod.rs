@@ -297,7 +297,7 @@ impl<W: Write> Screen<W> {
     }
 
     /// Set a cell directly.
-    pub fn set_cell(&mut self, pos: impl Into<crate::Position>, cell: &Cell) {
+    pub fn set_cell(&mut self, pos: impl Into<crate::layout::Position>, cell: &Cell) {
         let pos = pos.into();
         self.front_buf.set_cell(pos, cell);
     }
@@ -314,7 +314,7 @@ impl<W: Write> Screen<W> {
     /// Callers must not change [`Cell::width`] through this handle —
     /// width changes require continuation-column accounting that only
     /// [`Self::set_cell`] performs.
-    pub fn cell_mut(&mut self, pos: impl Into<crate::Position>) -> Option<&mut Cell> {
+    pub fn cell_mut(&mut self, pos: impl Into<crate::layout::Position>) -> Option<&mut Cell> {
         self.front_buf.cell_mut(pos)
     }
 
@@ -327,7 +327,7 @@ impl<W: Write> Screen<W> {
     /// on both axes. After [`Self::invalidate_cursor`] the next call
     /// always emits a move so the terminal cursor is reasserted.
     pub fn set_cursor_position(&mut self, x: u16, y: u16) {
-        let target = crate::Position::new(x, y);
+        let target = crate::layout::Position::new(x, y);
         if self.renderer.cursor_known() && self.renderer.cursor_position() == target {
             return;
         }
@@ -336,8 +336,8 @@ impl<W: Write> Screen<W> {
             .unwrap();
     }
 
-    /// The renderer's last tracked cursor position as a [`crate::Position`].
-    pub fn cursor_position(&self) -> crate::Position {
+    /// The renderer's last tracked cursor position as a [`crate::layout::Position`].
+    pub fn cursor_position(&self) -> crate::layout::Position {
         self.renderer.cursor_position()
     }
 
@@ -362,7 +362,7 @@ impl<W: Write> Screen<W> {
     /// those relative moves correct.
     pub fn assume_cursor_at(&mut self, x: u16, y: u16) {
         self.renderer
-            .set_cursor_position(crate::Position::new(x, y));
+            .set_cursor_position(crate::layout::Position::new(x, y));
     }
 
     /// Write the cell-diff sequences (wrapped in cursor-hide and, when
@@ -440,23 +440,23 @@ impl<W: Write> Screen<W> {
 }
 
 impl<W: Write> Bounded for Screen<W> {
-    fn bounds(&self) -> crate::Rect {
+    fn bounds(&self) -> crate::layout::Rect {
         self.front_buf.bounds()
     }
 }
 
 impl<W: Write> Surface for Screen<W> {
-    fn cell(&self, pos: crate::Position) -> Option<&Cell> {
+    fn cell(&self, pos: crate::layout::Position) -> Option<&Cell> {
         self.front_buf.cell(pos)
     }
 }
 
 impl<W: Write> SurfaceMut for Screen<W> {
-    fn set_cell(&mut self, pos: crate::Position, cell: &Cell) {
+    fn set_cell(&mut self, pos: crate::layout::Position, cell: &Cell) {
         self.front_buf.set_cell(pos, cell);
     }
 
-    fn cell_mut(&mut self, pos: crate::Position) -> Option<&mut Cell> {
+    fn cell_mut(&mut self, pos: crate::layout::Position) -> Option<&mut Cell> {
         self.front_buf.cell_mut(pos)
     }
 
@@ -468,11 +468,23 @@ impl<W: Write> SurfaceMut for Screen<W> {
         self.front_buf.delete_lines(y, n, bounds_bottom, fill);
     }
 
-    fn insert_cells(&mut self, pos: crate::Position, n: u16, bounds_right: u16, fill: &Cell) {
+    fn insert_cells(
+        &mut self,
+        pos: crate::layout::Position,
+        n: u16,
+        bounds_right: u16,
+        fill: &Cell,
+    ) {
         self.front_buf.insert_cells(pos, n, bounds_right, fill);
     }
 
-    fn delete_cells(&mut self, pos: crate::Position, n: u16, bounds_right: u16, fill: &Cell) {
+    fn delete_cells(
+        &mut self,
+        pos: crate::layout::Position,
+        n: u16,
+        bounds_right: u16,
+        fill: &Cell,
+    ) {
         self.front_buf.delete_cells(pos, n, bounds_right, fill);
     }
 }

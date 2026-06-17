@@ -9,8 +9,8 @@
 
 use std::io;
 
-use crate::Position;
 use crate::cell::Cell;
+use crate::layout::Position;
 use crate::renderer::Renderer;
 
 impl Renderer {

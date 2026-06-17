@@ -4,10 +4,10 @@
 use std::io;
 
 use super::predicates::{can_clear_with, cells_equal_blank};
-use crate::Position;
 use crate::ansi::{self, cursor as ansi_cursor};
 use crate::buffer::{SurfaceMut, fill_line_into};
 use crate::cell::Cell;
+use crate::layout::Position;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 

@@ -14,11 +14,11 @@
 
 use std::io::Write;
 
-use uncurses::Terminal;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, MouseButton};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 

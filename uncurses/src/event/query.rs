@@ -13,14 +13,14 @@
 //! ([`mode`], [`termcap`]) are constructor functions. Build a custom
 //! query with [`Query::new`].
 //!
-//! The writer is any [`Write`]: a [`Terminal`](crate::Terminal) handle, a
+//! The writer is any [`Write`]: a [`Terminal`](crate::terminal::Terminal) handle, a
 //! [`Screen`](crate::screen::Screen) (writes are staged and flushed), or
 //! a bare stdout. Pair it with the [`EventSource`] reading the same
 //! terminal.
 //!
 //! ```no_run
 //! use std::time::Duration;
-//! use uncurses::Terminal;
+//! use uncurses::terminal::Terminal;
 //! use uncurses::event::{EventSource, query};
 //!
 //! # fn main() -> std::io::Result<()> {
@@ -42,12 +42,12 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use super::{Event, EventSource, Input};
-use crate::Position;
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::ansi::{
     KittyKeyboardFlags, background, ctrl, graphics, kitty, mode, status, termcap, winop, xterm,
 };
 use crate::color::Color;
+use crate::layout::Position;
 
 use super::{ColorScheme, ModifyOtherKeysMode};
 

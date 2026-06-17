@@ -6,8 +6,8 @@
 
 use std::io;
 
-use crate::Position;
 use crate::ansi;
+use crate::layout::Position;
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
 

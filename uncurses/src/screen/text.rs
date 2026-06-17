@@ -20,10 +20,10 @@ impl<W: Write> Screen<W> {
     /// ```
     pub fn set_str(
         &mut self,
-        pos: impl Into<crate::Position>,
+        pos: impl Into<crate::layout::Position>,
         s: &str,
         wrap: WrapMode,
-    ) -> crate::Position {
+    ) -> crate::layout::Position {
         self.painter().set_str(pos, s, wrap)
     }
 
@@ -32,11 +32,11 @@ impl<W: Write> Screen<W> {
     /// mutate the painter's state as they're encountered.
     pub fn set_str_with(
         &mut self,
-        pos: impl Into<crate::Position>,
+        pos: impl Into<crate::layout::Position>,
         s: &str,
         wrap: WrapMode,
         style: Style,
-    ) -> crate::Position {
+    ) -> crate::layout::Position {
         self.painter().set_str_with(pos, s, wrap, style)
     }
 
@@ -48,7 +48,7 @@ impl<W: Write> Screen<W> {
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
-    ) -> crate::Position {
+    ) -> crate::layout::Position {
         self.painter().set_str_rect(rect, s, wrap)
     }
 
@@ -60,7 +60,7 @@ impl<W: Write> Screen<W> {
         s: &str,
         wrap: WrapMode,
         style: Style,
-    ) -> crate::Position {
+    ) -> crate::layout::Position {
         self.painter().set_str_rect_with(rect, s, wrap, style)
     }
 

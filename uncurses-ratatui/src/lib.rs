@@ -2,7 +2,7 @@
 //! [`uncurses::screen::Screen`].
 //!
 //! [`UncursesBackend`] owns the whole terminal stack — the
-//! [`Terminal`](uncurses::Terminal) handle, the [`Screen`](uncurses::screen::Screen),
+//! [`Terminal`](uncurses::terminal::Terminal) handle, the [`Screen`](uncurses::screen::Screen),
 //! and a shared [`EventSource`](uncurses::event::EventSource) — so a
 //! single value drives rendering, input, and the raw-mode lifecycle.
 

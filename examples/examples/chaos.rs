@@ -5,12 +5,12 @@
 use std::io::Write;
 use std::time::Instant;
 
-use uncurses::Terminal;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 
 const NUM_PATTERNS: usize = 100;

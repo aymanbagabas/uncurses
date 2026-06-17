@@ -128,7 +128,7 @@ pub enum Event {
     // -- Position / device attrs --------------------------------------------
     /// Cursor position report (CPR). Coordinates are zero-based (the
     /// 1-based wire form is normalized when parsed).
-    CursorPosition(crate::Position),
+    CursorPosition(crate::layout::Position),
     /// Primary device attributes (DA1) — list of decoded numeric attributes.
     PrimaryDeviceAttributes(Vec<Option<u32>>),
     /// Secondary device attributes (DA2).

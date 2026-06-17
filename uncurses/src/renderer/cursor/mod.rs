@@ -11,7 +11,7 @@ pub(super) mod overwrite;
 pub(super) mod planner;
 pub(super) mod relative;
 
-use crate::Position;
+use crate::layout::Position;
 
 /// Threshold (in cells) past which a move is considered "non-local"
 /// and a single absolute jump (CUP) is preferred over any
@@ -36,7 +36,7 @@ mod tests {
     use super::super::Renderer;
     use super::super::caps::Optimizations;
     use super::super::tabstops::TabStops;
-    use crate::Position;
+    use crate::layout::Position;
 
     fn renderer() -> Renderer {
         let mut r = Renderer::new();

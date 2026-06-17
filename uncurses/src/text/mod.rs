@@ -1,6 +1,6 @@
 //! Text shaping: width measurement, segmentation, wrapping policy,
 //! and the [`Painter`] for writing strings into any
-//! [`crate::SurfaceMut`].
+//! [`crate::buffer::SurfaceMut`].
 //!
 //! ## Width measurement
 //!
@@ -26,7 +26,7 @@
 //!
 //! ## Painter
 //!
-//! [`Painter`] binds a target [`crate::SurfaceMut`] together with a
+//! [`Painter`] binds a target [`crate::buffer::SurfaceMut`] together with a
 //! [`WidthMode`] and an `eaw_wide` policy, then paints styled strings —
 //! optionally interpreting inline SGR (`CSI … m`) and OSC 8 hyperlinks
 //! in the input.

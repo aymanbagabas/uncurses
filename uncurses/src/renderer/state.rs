@@ -2,9 +2,9 @@
 //! and the constructor / [`Default`] impl. Behavior methods live in the
 //! sibling submodules.
 
-use crate::Position;
 use crate::cell::Cell;
 use crate::color::{Color, Profile};
+use crate::layout::Position;
 use crate::renderer::buffer::RenderBuffer;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::color_cache::ColorCache;

@@ -10,7 +10,7 @@
 //! `impl Into<Rect>`, so plain tuples work as ergonomic shorthand:
 //!
 //! ```
-//! use uncurses::{Position, Rect};
+//! use uncurses::layout::{Position, Rect};
 //!
 //! let p: Position = (3, 5).into();
 //! assert_eq!(p, Position::new(3, 5));

@@ -1,8 +1,8 @@
 //! Behavioural tests for [`Renderer::render`] and the cursor /
 //! glyph emission helpers in the frame submodule.
 
-use crate::Position;
 use crate::cell::Cell;
+use crate::layout::Position;
 use crate::renderer::RenderBuffer;
 use crate::renderer::Renderer;
 

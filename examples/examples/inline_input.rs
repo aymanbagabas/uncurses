@@ -18,11 +18,11 @@
 
 use std::io::Write;
 
-use uncurses::SurfaceMut;
-use uncurses::Terminal;
+use uncurses::buffer::SurfaceMut;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, PasteBuffer};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::{WrapMode, char_width};
 

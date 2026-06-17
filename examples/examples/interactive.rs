@@ -11,10 +11,10 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use uncurses::SurfaceMut;
-use uncurses::Terminal;
+use uncurses::buffer::SurfaceMut;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 

@@ -1,7 +1,7 @@
 use super::tabstops::TabStops;
 use super::*;
-use crate::Position;
 use crate::cell::Cell;
+use crate::layout::Position;
 use crate::style::Style;
 
 fn movement_opts() -> Optimizations {
