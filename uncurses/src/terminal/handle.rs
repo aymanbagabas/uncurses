@@ -17,7 +17,7 @@
 //!
 //! ```no_run
 //! use std::io::Write;
-//! use uncurses::Terminal;
+//! use uncurses::terminal::Terminal;
 //! use uncurses::screen::Screen;
 //! use uncurses::event::EventSource;
 //!

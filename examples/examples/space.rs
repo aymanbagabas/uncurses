@@ -11,13 +11,13 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use uncurses::SurfaceMut;
-use uncurses::Terminal;
+use uncurses::buffer::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
@@ -265,7 +265,7 @@ fn draw<W: Write>(
         }
     }
 
-    screen.clear_rect(uncurses::Rect::new(0, 0, width, 1));
+    screen.clear_rect(uncurses::layout::Rect::new(0, 0, width, 1));
     let header = "space — press q to quit";
     screen.set_str((0, 0), &truncate(header, width), WrapMode::Truncate);
 

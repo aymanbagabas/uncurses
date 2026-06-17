@@ -108,7 +108,7 @@ fn write_string_widths_follow_current_mode() {
     assert_eq!(
         screen
             .front_buf
-            .cell(crate::Position::new(0, 0))
+            .cell(crate::layout::Position::new(0, 0))
             .unwrap()
             .content(),
         "e\u{0301}"
@@ -116,7 +116,7 @@ fn write_string_widths_follow_current_mode() {
     assert!(
         screen
             .front_buf
-            .cell(crate::Position::new(1, 0))
+            .cell(crate::layout::Position::new(1, 0))
             .unwrap()
             .is_blank()
     );
@@ -130,7 +130,7 @@ fn write_string_widths_follow_current_mode() {
     assert_eq!(
         screen
             .front_buf
-            .cell(crate::Position::new(0, 0))
+            .cell(crate::layout::Position::new(0, 0))
             .unwrap()
             .content(),
         "e\u{0301}"

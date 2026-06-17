@@ -196,7 +196,10 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
     if final_byte == b'R' && no_private && no_intermediate && params.len() == 2 {
         let row = params.get_or(0, 1).max(1);
         let col = params.get_or(1, 1).max(1);
-        let cpr = Event::CursorPosition(crate::Position::new((col - 1) as u16, (row - 1) as u16));
+        let cpr = Event::CursorPosition(crate::layout::Position::new(
+            (col - 1) as u16,
+            (row - 1) as u16,
+        ));
         if row == 1 && col >= 1 && col - 1 <= 15 {
             let mods = xterm_modifiers(col as u16);
             let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods).normalized());

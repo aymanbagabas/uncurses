@@ -14,9 +14,9 @@ use std::io;
 use std::io::Write;
 use std::time::Duration;
 
-use uncurses::Terminal;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, query};
 use uncurses::screen::Screen;
+use uncurses::terminal::Terminal;
 use uncurses::text::WrapMode;
 
 fn main() -> io::Result<()> {

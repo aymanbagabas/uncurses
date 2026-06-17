@@ -115,7 +115,7 @@ mod tests {
     use super::super::plan::scrolln;
     use super::super::verify::{shift_old_hashes_down, shift_old_hashes_up};
     use super::*;
-    use crate::Position;
+    use crate::layout::Position;
     use crate::renderer::Optimizations;
     use crate::renderer::frame::prepare::hash_line;
 

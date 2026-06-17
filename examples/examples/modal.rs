@@ -7,14 +7,14 @@
 
 use std::io::Write;
 
-use uncurses::SurfaceMut;
-use uncurses::Terminal;
+use uncurses::buffer::SurfaceMut;
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 

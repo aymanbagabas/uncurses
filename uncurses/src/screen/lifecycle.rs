@@ -252,7 +252,7 @@ impl<W: Write> Screen<W> {
         }
 
         self.renderer
-            .set_cursor_position(crate::Position { y: 0, x: 0 });
+            .set_cursor_position(crate::layout::Position { y: 0, x: 0 });
         self.renderer.request_clear();
     }
 }

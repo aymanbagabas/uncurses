@@ -34,12 +34,12 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use tokio_stream::StreamExt;
-use uncurses::SurfaceMut;
-use uncurses::Terminal;
+use uncurses::buffer::SurfaceMut;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, EventStream, Key, MouseButton};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
+use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
 
