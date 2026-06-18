@@ -127,8 +127,8 @@ pub trait Query: Sized + private::Sealed {
 /// recognise the terminal's reply.
 ///
 /// Bundling the request bytes with their reply matcher keeps the two in
-/// sync. The matcher is a plain `fn` pointer, so a `Single` is `Copy`,
-/// `Send`, and `'static`, and the predefined queries are `const`.
+/// sync. The matcher is a plain `fn` pointer, so a `Single` is `Send` and
+/// `'static`, and the predefined queries are `const`.
 pub struct Single<T> {
     /// Request sequence written to the terminal. Borrowed for the
     /// predefined constants, owned for the parameterised constructors.
