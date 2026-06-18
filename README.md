@@ -61,6 +61,42 @@ and a teardown that always cleans up after itself? The
 in a few minutes. New to terminals in general? [How terminals actually
 work](docs/terminals.md) is the five-minute mental model behind all of it.
 
+## Terminal features
+
+uncurses runs on all the major platforms: Linux, macOS, Windows, and the
+BSDs. It does not use terminfo. If you want to know what a terminal can do
+before leaning on it, ask the terminal yourself with a
+[query](uncurses/README.md#queries).
+
+- 24-bit RGB color, with automatic downsampling to 256, 16, or no color
+- [Hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) (OSC 8)
+- [Fancy underlines](https://sw.kovidgoyal.net/kitty/underlines/): curly, double, dotted, dashed, plus underline color
+- Bracketed paste
+- [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/), all five enhancement flags
+- modifyOtherKeys
+- Mouse: X10, SGR (1006), SGR-pixel (1016), URxvt (1015), and UTF-8 (1005), with press, release, drag, and wheel
+- Focus events (Mode 1004)
+- Synchronized output (Mode 2026)
+- [Unicode core](https://github.com/contour-terminal/terminal-unicode-core) (Mode 2027)
+- Color scheme updates (Mode 2031)
+- [In-band resize reports](https://gist.github.com/rockorager/e695fb2924d36b2bcf1fff4a3704bd83) (Mode 2048)
+- System clipboard (OSC 52)
+- System notifications (OSC 9, Kitty OSC 99, URxvt OSC 777)
+- Cursor shapes and visibility, window title (OSC 2)
+- Wide characters and grapheme clusters
+- Alt screen and inline rendering, both diffed cell by cell
+- 7-bit and 8-bit (C1) control sequences
+- Typed terminal queries: background color, device attributes, cell and pixel size, cursor position, and more
+- Optional async input over a `futures_core::Stream`
+
+Planned: real image rendering, currently only low-level encoders exist.
+The goal is to place images like text across Unicode blocks (half blocks
+and quadrants), Sixel, iTerm2, and the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
+(classic, Unicode placeholder, and
+[text-sized](https://github.com/kovidgoyal/kitty/blob/master/docs/text-sizing-protocol.rst)
+placements).
+
 ## Crates
 
 | Crate | What it is |
