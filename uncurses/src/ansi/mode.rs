@@ -148,6 +148,19 @@ impl ModeSetting {
     }
 }
 
+impl std::fmt::Display for ModeSetting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            ModeSetting::NotRecognized => "not recognized",
+            ModeSetting::Set => "set",
+            ModeSetting::Reset => "reset",
+            ModeSetting::PermanentlySet => "permanently set",
+            ModeSetting::PermanentlyReset => "permanently reset",
+        };
+        f.write_str(label)
+    }
+}
+
 /// Set (enable) one or more modes.
 pub fn write_set_mode<W: Write>(w: &mut W, modes: &[Mode]) -> io::Result<()> {
     write_mode_seq(w, modes, b'h')
@@ -352,6 +365,18 @@ mod tests {
         assert!(!ModeSetting::Reset.is_set());
         assert!(ModeSetting::Reset.is_reset());
         assert!(ModeSetting::PermanentlyReset.is_reset());
+    }
+
+    #[test]
+    fn test_mode_setting_display() {
+        assert_eq!(ModeSetting::NotRecognized.to_string(), "not recognized");
+        assert_eq!(ModeSetting::Set.to_string(), "set");
+        assert_eq!(ModeSetting::Reset.to_string(), "reset");
+        assert_eq!(ModeSetting::PermanentlySet.to_string(), "permanently set");
+        assert_eq!(
+            ModeSetting::PermanentlyReset.to_string(),
+            "permanently reset"
+        );
     }
 
     #[test]
