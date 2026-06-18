@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  # Tier-1 platforms with native runners: build and test across the width
+  # backends. `default` exercises the pure-Rust backend; `all-features`
+  # exercises the ICU backend plus async.
+  test:
+    name: test ${{ matrix.os }} (${{ matrix.features.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        features:
+          - { name: default, flags: "" }
+          - { name: all-features, flags: "--all-features" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --locked ${{ matrix.features.flags }}
+      - run: cargo test --workspace --locked ${{ matrix.features.flags }}
+
+  # musl libc on Linux. The crate is pure Rust, so a static musl binary
+  # links without a C toolchain and runs on the glibc host.
+  musl:
+    name: test x86_64-unknown-linux-musl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --locked --all-features --target x86_64-unknown-linux-musl
+      - run: cargo test --workspace --locked --all-features --target x86_64-unknown-linux-musl
+
+  # The BSDs run inside QEMU VMs since GitHub does not host BSD runners.
+  # They cover the platform-specific terminal backends (termios, the
+  # select poller, signal handling, the async reader thread); the heavy
+  # `examples` crate is skipped to keep the VMs lean.
+  freebsd:
+    name: test freebsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y rust
+          run: |
+            cargo build --workspace --exclude examples --features async --locked
+            cargo test --workspace --exclude examples --features async --locked
+
+  openbsd:
+    name: test openbsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/openbsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg_add -I rust
+          run: |
+            cargo build --workspace --exclude examples --features async --locked
+            cargo test --workspace --exclude examples --features async --locked
+
+  netbsd:
+    name: test netbsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/netbsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            /usr/sbin/pkg_add rust
+          run: |
+            export PATH="$PATH:/usr/pkg/bin"
+            cargo build --workspace --exclude examples --features async --locked
+            cargo test --workspace --exclude examples --features async --locked
+
+  dragonfly:
+    name: test dragonflybsd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/dragonflybsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install -y rust
+          run: |
+            cargo build --workspace --exclude examples --features async --locked
+            cargo test --workspace --exclude examples --features async --locked
