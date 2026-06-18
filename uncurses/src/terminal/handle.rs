@@ -217,9 +217,13 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
         )
     }
 
-    /// Query the current window size (`TIOCGWINSZ` on the output).
+    /// Query the current window size (`TIOCGWINSZ`).
+    ///
+    /// Tries the output half first, then falls back to the input half if
+    /// the output query fails (for example when stdout is redirected to a
+    /// pipe while stdin is still attached to the terminal).
     pub fn window_size(&self) -> io::Result<Winsize> {
-        get_window_size(&self.output)
+        get_window_size(&self.output).or_else(|_| get_window_size(&self.input))
     }
 }
 
