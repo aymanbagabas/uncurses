@@ -75,8 +75,8 @@ jobs:
   # They cover the platform-specific terminal backends (termios, the
   # pollers, signal handling, the async reader thread). The heavy
   # `examples` and `uncurses-ratatui` crates are skipped to keep the VMs
-  # lean and off the ratatui dependency tree, whose MSRV outruns the Rust
-  # some images package (e.g. DragonFly).
+  # lean and off the ratatui dependency tree. (DragonFly is omitted: its
+  # packaged Rust trails the crate's MSRV and it has no rustup channel.)
   freebsd:
     name: test freebsd
     runs-on: ubuntu-latest
@@ -120,20 +120,6 @@ jobs:
             cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
             cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
 
-  dragonfly:
-    name: test dragonflybsd
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: vmactions/dragonflybsd-vm@v1
-        with:
-          usesh: true
-          prepare: |
-            pkg install -y rust
-          run: |
-            cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
-            cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
-
   # illumos and Solaris have neither epoll nor kqueue, so they fall back
   # to the select poller. select(2) is required here rather than poll(2):
   # on these platforms poll(2) does not report readiness for tty
@@ -165,6 +151,7 @@ jobs:
         with:
           usesh: true
           prepare: |
+            pkg install gcc
             source <(curl -s https://raw.githubusercontent.com/psumbera/solaris-rust/refs/heads/main/sh.rust-web-install)
           run: |
             export PATH=$HOME/.rust_solaris/bin:$PATH
