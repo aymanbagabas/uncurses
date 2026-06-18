@@ -73,8 +73,10 @@ jobs:
 
   # The BSDs run inside QEMU VMs since GitHub does not host BSD runners.
   # They cover the platform-specific terminal backends (termios, the
-  # select poller, signal handling, the async reader thread); the heavy
-  # `examples` crate is skipped to keep the VMs lean.
+  # pollers, signal handling, the async reader thread). The heavy
+  # `examples` and `uncurses-ratatui` crates are skipped to keep the VMs
+  # lean and off the ratatui dependency tree, whose MSRV outruns the Rust
+  # some images package (e.g. DragonFly).
   freebsd:
     name: test freebsd
     runs-on: ubuntu-latest
@@ -86,8 +88,8 @@ jobs:
           prepare: |
             pkg install -y rust
           run: |
-            cargo build --workspace --exclude examples --features async --locked
-            cargo test --workspace --exclude examples --features async --locked
+            cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
+            cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
 
   openbsd:
     name: test openbsd
@@ -100,8 +102,8 @@ jobs:
           prepare: |
             pkg_add -I rust
           run: |
-            cargo build --workspace --exclude examples --features async --locked
-            cargo test --workspace --exclude examples --features async --locked
+            cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
+            cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
 
   netbsd:
     name: test netbsd
@@ -115,8 +117,8 @@ jobs:
             /usr/sbin/pkg_add rust
           run: |
             export PATH="$PATH:/usr/pkg/bin"
-            cargo build --workspace --exclude examples --features async --locked
-            cargo test --workspace --exclude examples --features async --locked
+            cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
+            cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
 
   dragonfly:
     name: test dragonflybsd
@@ -129,8 +131,8 @@ jobs:
           prepare: |
             pkg install -y rust
           run: |
-            cargo build --workspace --exclude examples --features async --locked
-            cargo test --workspace --exclude examples --features async --locked
+            cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
+            cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
 
   # illumos and Solaris have neither epoll nor kqueue, so they fall back
   # to the select poller. select(2) is required here rather than poll(2):
@@ -151,8 +153,8 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
           run: |
             . "$HOME/.cargo/env"
-            cargo build --workspace --exclude examples --features async --locked
-            cargo test --workspace --exclude examples --features async --locked
+            cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
+            cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
 
   solaris:
     name: test solaris
@@ -166,5 +168,5 @@ jobs:
             source <(curl -s https://raw.githubusercontent.com/psumbera/solaris-rust/refs/heads/main/sh.rust-web-install)
           run: |
             export PATH=$HOME/.rust_solaris/bin:$PATH
-            cargo build --workspace --exclude examples --features async --locked
-            cargo test --workspace --exclude examples --features async --locked
+            cargo build --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
+            cargo test --workspace --exclude examples --exclude uncurses-ratatui --features async --locked
