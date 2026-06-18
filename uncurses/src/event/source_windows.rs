@@ -225,6 +225,8 @@ where
     }
 
     fn feed_bytes(&mut self, bytes: &[u8]) {
+        #[cfg(debug_assertions)]
+        crate::trace::tee_input(bytes);
         let cap = self.pending.capacity();
         if self.pending.len().saturating_add(bytes.len()) > cap {
             self.pending.clear();
