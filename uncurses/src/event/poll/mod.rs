@@ -150,9 +150,6 @@ pub(crate) mod epoll;
 pub(crate) mod kqueue;
 
 #[cfg(unix)]
-#[allow(clippy::module_inception)]
-pub(crate) mod poll;
-#[cfg(unix)]
 pub(crate) mod select;
 #[cfg(windows)]
 pub(crate) mod windows;
@@ -168,8 +165,6 @@ pub(crate) use epoll::Epoll;
 ))]
 pub(crate) use kqueue::Kqueue;
 #[cfg(unix)]
-pub(crate) use poll::Poll;
-#[cfg(unix)]
 pub(crate) use select::Select;
 #[cfg(windows)]
 pub(crate) use windows::Windows;
@@ -179,6 +174,11 @@ pub(crate) use windows::Windows;
 /// spins on tty character devices: a tty input fd selects [`Select`],
 /// otherwise [`Kqueue`]. The choice is made once here, at construction,
 /// so the returned poller's `poll` stays stateless and `&self`.
+///
+/// Unix targets without a native readiness backend fall back to
+/// [`Select`] rather than `poll(2)`: on some platforms (notably
+/// illumos/Solaris) `poll(2)` does not report readiness for tty
+/// character devices, whereas `select(2)` does.
 #[allow(unused_variables)]
 pub(crate) fn new_poller(
     fds: &[PollFd],
@@ -219,7 +219,7 @@ pub(crate) fn new_poller(
         windows,
     )))]
     {
-        Ok(std::sync::Arc::new(Poll::new(fds)?))
+        Ok(std::sync::Arc::new(Select::new(fds)?))
     }
 }
 
@@ -233,8 +233,6 @@ fn _assert_obj(_: &dyn Poller) {}
 fn _assert() {
     #[cfg(unix)]
     _assert_poller::<Select>();
-    #[cfg(unix)]
-    _assert_poller::<Poll>();
     #[cfg(windows)]
     _assert_poller::<Windows>();
     #[cfg(target_os = "linux")]
