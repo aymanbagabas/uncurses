@@ -131,3 +131,40 @@ jobs:
           run: |
             cargo build --workspace --exclude examples --features async --locked
             cargo test --workspace --exclude examples --features async --locked
+
+  # illumos and Solaris have neither epoll nor kqueue, so they fall back
+  # to the select poller. select(2) is required here rather than poll(2):
+  # on these platforms poll(2) does not report readiness for tty
+  # character devices, whereas select(2) does. Rust is installed via
+  # rustup (illumos) and a community build script (Solaris) since the VMs
+  # ship no Rust toolchain.
+  illumos:
+    name: test illumos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/omnios-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg install gcc14 curl
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          run: |
+            . "$HOME/.cargo/env"
+            cargo build --workspace --exclude examples --features async --locked
+            cargo test --workspace --exclude examples --features async --locked
+
+  solaris:
+    name: test solaris
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vmactions/solaris-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            source <(curl -s https://raw.githubusercontent.com/psumbera/solaris-rust/refs/heads/main/sh.rust-web-install)
+          run: |
+            export PATH=$HOME/.rust_solaris/bin:$PATH
+            cargo build --workspace --exclude examples --features async --locked
+            cargo test --workspace --exclude examples --features async --locked
