@@ -12,6 +12,7 @@
 //!   recognized by name.
 //! * `WT_SESSION` — Windows Terminal advertises itself this way → TrueColor.
 //! * `GOOGLE_CLOUD_SHELL` → TrueColor.
+//! * `CI` — CI runners render ANSI color in logs → TrueColor.
 
 use super::Color;
 use crate::terminal::Env;
@@ -145,6 +146,12 @@ fn env_color_profile(env: &Env, term: &str) -> Profile {
     }
 
     if env.bool("GOOGLE_CLOUD_SHELL") {
+        return Profile::TrueColor;
+    }
+
+    // CI runners advertise themselves with CI=true and render ANSI
+    // color in their logs even though TERM is usually unset or `dumb`.
+    if env.bool("CI") {
         return Profile::TrueColor;
     }
 
@@ -357,6 +364,12 @@ mod tests {
     #[test]
     fn google_cloud_shell_implies_truecolor() {
         let e = env(&[("GOOGLE_CLOUD_SHELL", "true"), ("TERM", "xterm")]);
+        assert_eq!(Profile::detect_from(&e, true), Profile::TrueColor);
+    }
+
+    #[test]
+    fn ci_implies_truecolor() {
+        let e = env(&[("CI", "true"), ("TERM", "dumb")]);
         assert_eq!(Profile::detect_from(&e, true), Profile::TrueColor);
     }
 
