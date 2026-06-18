@@ -478,12 +478,19 @@ mod tests {
     fn blocking_query_resolves_reply_keeping_input_visible() {
         let (rx, tx) = make_pipe();
         let stream = EventSource::new(rx).unwrap().into_stream();
-        // A user keypress 'a' arrives before the awaited reply 'b'.
-        write_bytes(&tx, b"ab");
+        // A user keypress 'a' and the awaited reply 'b' arrive *after* the
+        // query is issued, as a real terminal reply would. Writing before
+        // issuing would race the reader thread, which only matches replies
+        // against events decoded once the query is registered.
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            write_bytes(&tx, b"ab");
+        });
         let mut out: Vec<u8> = Vec::new();
         let got = stream
             .query_blocking(&mut out, KEY_B, Duration::from_secs(1))
             .unwrap();
+        writer.join().unwrap();
         assert_eq!(got, Some('b'));
         assert_eq!(out, b"REQ");
         // Both 'a' and the reply 'b' are still delivered, in order.
@@ -538,11 +545,17 @@ mod tests {
     fn batched_blocking_query() {
         let (rx, tx) = make_pipe();
         let stream = EventSource::new(rx).unwrap().into_stream();
+        // Replies arrive *after* the batch is issued (see the note on
+        // blocking_query_resolves_reply_keeping_input_visible).
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            write_bytes(&tx, b"cb");
+        });
         let mut out: Vec<u8> = Vec::new();
-        write_bytes(&tx, b"cb");
         let (b, c) = stream
             .query_blocking(&mut out, (KEY_B, KEY_C), Duration::from_secs(1))
             .unwrap();
+        writer.join().unwrap();
         assert_eq!(out, b"REQREQ2");
         assert_eq!(b, Some('b'));
         assert_eq!(c, Some('c'));
