@@ -41,15 +41,13 @@ impl Poller for Kqueue {
         }
         for (i, &fd) in fds.iter().enumerate() {
             // Carry the registration index in `udata` so `poll` maps a
-            // ready event straight to `ready[i]`.
-            let ev = libc::kevent {
-                ident: fd as usize,
-                filter: libc::EVFILT_READ,
-                flags: libc::EV_ADD,
-                fflags: 0,
-                data: 0,
-                udata: index_to_udata(i),
-            };
+            // ready event straight to `ready[i]`. Build from a zeroed
+            // value so platform-specific trailing fields stay default.
+            let mut ev: libc::kevent = unsafe { std::mem::zeroed() };
+            ev.ident = fd as _;
+            ev.filter = libc::EVFILT_READ;
+            ev.flags = libc::EV_ADD;
+            ev.udata = index_to_udata(i);
             let rc = unsafe {
                 libc::kevent(
                     kq.as_raw_fd(),
