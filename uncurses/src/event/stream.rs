@@ -1,65 +1,53 @@
-//! Asynchronous event streaming (`async` feature).
+//! Thread-backed event reader and concurrent query engine.
 //!
-//! [`EventStream`] turns a blocking [`EventSource`] into a
-//! [`futures_core::Stream`] of decoded events. There is no reactor to
-//! register the terminal handle with, so a dedicated reader thread does
-//! the blocking readiness waits; decoded events flow through the source's
-//! own queue and the consumer is woken through a single stored task
-//! waker (a hand-rolled bridge — no executor or channel crate, only
-//! `futures-core` for the [`Stream`] trait).
+//! [`EventStream`] turns a blocking [`EventSource`] into a shared,
+//! thread-backed reader: a single dedicated thread does the blocking
+//! readiness waits and decode, then dispatches each decoded event to
+//! whoever is waiting for it. Consumers are passive — they register a
+//! query observer (in the source's registry) or a waker (for the next
+//! event) and park — so the input fd has exactly one owner and there is
+//! never a contest over who reads it.
 //!
-//! The source is **shared**, not moved: the stream holds
-//! `Arc<Mutex<EventSource>>` and the reader thread holds a clone, so a
-//! synchronous caller (e.g. a `ratatui` backend's cursor-position probe)
-//! can still lock the same source and run a [`query`](EventSource::query)
-//! while the stream is live. The reader waits for readiness lock-free
-//! (through a cloned [`Poller`], which polls by shared reference) and only
-//! takes the source lock to drain what is ready — re-checking readiness
-//! under the lock so a blocking input fd never stalls the lock even if a
-//! concurrent query consumed the bytes first.
+//! This is what makes concurrent queries safe: any number of queries may
+//! be in flight at once, from one thread or many. Each registers its
+//! reply matcher; the reader fills each query's slot out of the event
+//! flow as events decode, in whatever order the terminal sends them, and
+//! leaves every event queued, in order, for [`read`](EventStream::read) —
+//! a query never hides input. The same engine backs the asynchronous
+//! [`Stream`] face under the `async` feature: a query slot stores a
+//! [`std::task::Waker`], so a synchronous caller parks its OS thread
+//! through a thread-unpark waker while an async task uses its own task
+//! waker, with no separate code path.
+//!
+//! The source is shared (`Arc<Mutex<EventSource>>`); the reader waits for
+//! readiness lock-free through a cloned [`Poller`] and only takes the
+//! source lock to drain what is ready, re-checking readiness under the
+//! lock so a blocking input fd never stalls the lock.
 
-use std::future::Future;
 use std::io::{self, Write};
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker as TaskWaker};
+use std::task::{Poll, Wake, Waker as TaskWaker};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use futures_core::Stream;
-
 use super::Event;
 use super::poll::Poller;
-use super::query::Query;
-use super::source::{EventSource, Input, Waker};
+use super::query::{Query, Registrar};
+use super::source::{DeadlineKind, EventSource, Input, Waker};
 
-/// Type-erased reply matcher dispatched to the reader thread.
-type Predicate = Box<dyn Fn(&Event) -> bool + Send>;
-
-/// A query handed from the async side to the reader thread.
-struct QueryRequest {
-    predicate: Predicate,
-    timeout: Duration,
-}
-
-/// Coordination state between the reader thread and the consumer.
+/// Coordination state between the reader thread and the consumers.
 ///
-/// Decoded events live in the source's own queue, not here; this only
-/// carries the consumer waker, the terminal error/closed signal, and the
-/// query hand-off. `query` and `next` are never awaited concurrently
-/// (both take `&mut self`), so a single `task` slot serves both.
+/// Decoded events live in the source's queue and query replies in the
+/// source's observer registry; this carries only the next-event consumer
+/// waker and the terminal error/closed signal.
 #[derive(Default)]
 struct Inner {
-    /// Consumer task waker, stored while the consumer is parked.
+    /// Next-event consumer waker, stored while that consumer is parked.
     task: Option<TaskWaker>,
     /// A fatal reader error, surfaced once to the consumer.
     error: Option<io::Error>,
-    /// Set once the source is closed (EOF/error) or the stream is dropped.
+    /// Set once the source is closed (EOF/error) or the reader is dropped.
     closed: bool,
-    /// Pending query for the reader thread to run.
-    query: Option<QueryRequest>,
-    /// Result of the most recent query, for the awaiting consumer.
-    query_result: Option<io::Result<Option<Event>>>,
 }
 
 struct Shared {
@@ -72,19 +60,24 @@ fn wake_task(inner: &mut Inner) {
     }
 }
 
-/// A [`Stream`] of decoded terminal events, backed by a reader thread
-/// over a shared [`EventSource`].
+/// A thread-backed reader over a shared [`EventSource`], and the engine
+/// behind concurrent terminal queries.
 ///
 /// Build one with [`EventSource::into_stream`] (standalone) or
-/// [`EventStream::from_shared`] (sharing a source kept elsewhere, e.g. by
-/// a backend that also needs synchronous queries). Dropping the stream
-/// stops and joins the reader thread; the source itself lives as long as
-/// any `Arc` to it remains.
+/// [`EventStream::from_shared`] (sharing a source kept elsewhere).
+/// Dropping it stops and joins the reader thread; the source itself lives
+/// as long as any `Arc` to it remains.
+///
+/// `EventStream` is `Send + Sync` and its methods take `&self`, so it can
+/// be shared across threads (e.g. `Arc<EventStream>`): each thread may
+/// run [`read`](Self::read) or [`query`](Self::query) and the single
+/// reader thread serves them all. Under the `async` feature it also
+/// implements [`futures_core::Stream`], yielding `io::Result<Event>`.
 pub struct EventStream<I: Input> {
     source: Arc<Mutex<EventSource<I>>>,
     shared: Arc<Shared>,
     /// Wakes the reader thread out of its lock-free readiness wait (for a
-    /// pending query or for shutdown).
+    /// newly submitted query or for shutdown).
     waker: Waker,
     handle: Option<JoinHandle<()>>,
 }
@@ -93,12 +86,11 @@ impl<I> EventSource<I>
 where
     I: Input + 'static,
 {
-    /// Convert this source into an asynchronous [`EventStream`].
+    /// Convert this source into a thread-backed [`EventStream`].
     ///
     /// The source is wrapped in `Arc<Mutex<_>>` and shared with a reader
-    /// thread; the returned stream yields `io::Result<Event>`. To keep a
-    /// handle to the source for synchronous queries, build the
-    /// `Arc<Mutex<_>>` yourself and use [`EventStream::from_shared`].
+    /// thread. To keep a handle to the source, build the `Arc<Mutex<_>>`
+    /// yourself and use [`EventStream::from_shared`].
     pub fn into_stream(self) -> EventStream<I> {
         EventStream::from_shared(Arc::new(Mutex::new(self)))
     }
@@ -134,47 +126,99 @@ where
             handle: Some(handle),
         }
     }
+}
 
-    /// Run `query`: write its request to `out`, then await the reply, up
-    /// to `timeout`.
+impl<I: Input> EventStream<I> {
+    /// Take the next decoded event without blocking, or `None` if none is
+    /// queued yet.
+    pub fn try_read(&self) -> Option<Event> {
+        self.source.lock().unwrap().try_read()
+    }
+
+    /// Block until the next decoded event is available.
     ///
-    /// Events that are not the reply stay queued, in order, for a later
-    /// poll of the stream. Returns `Ok(None)` if the terminal does not
-    /// reply within `timeout`.
-    pub async fn query<W, T>(
-        &mut self,
-        out: &mut W,
-        query: &Query<T>,
-        timeout: Duration,
-    ) -> io::Result<Option<T>>
+    /// Returns `Err` once the source is closed (EOF) or a fatal read
+    /// error occurred.
+    pub fn read(&self) -> io::Result<Event> {
+        block_on_parking(|task| self.poll_event(task)).unwrap_or_else(|| Err(closed_err()))
+    }
+
+    /// Issue `query` (a single query, or a tuple/array batch): write its
+    /// request(s) to `out`, flush once, and return the in-flight reply
+    /// handle(s) without blocking.
+    ///
+    /// The request is written synchronously, so `out` is only borrowed for
+    /// the duration of this call; the returned handles borrow nothing.
+    /// This lets several queries run concurrently — submit each, then
+    /// collect them in any order. Replies may arrive in any order;
+    /// non-reply events stay queued for [`read`](Self::read), and each
+    /// reply event is also delivered through a later read. Dropping a
+    /// reply handle before it resolves cancels that query.
+    ///
+    /// Collect with [`QueryReply::try_take`](super::query::QueryReply::try_take),
+    /// the blocking [`query_blocking`](Self::query_blocking), or — under
+    /// the `async` feature — by `.await`ing the handle.
+    pub fn query<Q, W>(&self, out: &mut W, query: Q, timeout: Duration) -> io::Result<Q::Replies>
     where
+        Q: Query,
         W: Write,
-        T: 'static,
     {
-        out.write_all(query.request())?;
+        let deadline = Instant::now() + timeout;
+        let replies = {
+            let mut src = self.source.lock().unwrap();
+            let writer: &mut dyn Write = &mut *out;
+            let mut reg = Registrar::new(writer, src.observers_mut(), deadline);
+            query.issue(&mut reg)?
+        };
         out.flush()?;
-
-        // Capture the matcher as a plain `fn` pointer so the predicate
-        // closure is `Send + 'static` without borrowing `query`.
-        let reply = query.reply_fn();
-        let predicate: Predicate = Box::new(move |ev| reply(ev).is_some());
-
-        {
-            let mut inner = self.shared.inner.lock().unwrap();
-            if inner.closed {
-                return Err(closed_err());
-            }
-            inner.query = Some(QueryRequest { predicate, timeout });
-        }
-        // Interrupt the reader thread's readiness wait so it picks up the
-        // pending query.
+        // Interrupt the reader thread's readiness wait so it recomputes
+        // its timeout to honour the new query's deadline.
         let _ = self.waker.wake();
+        Ok(replies)
+    }
 
-        let ev = QueryReply {
-            shared: &self.shared,
+    /// Issue `query` and block up to `timeout`, parking until every reply
+    /// has arrived (or its deadline elapsed), then return the collected
+    /// value(s).
+    ///
+    /// Convenience for [`query`](Self::query) followed by collecting each
+    /// reply. A single query yields `Option<T>` (`None` on timeout); a
+    /// batch yields a tuple/array of each member's own. Several threads
+    /// sharing one stream may call this concurrently.
+    pub fn query_blocking<Q, W>(
+        &self,
+        out: &mut W,
+        query: Q,
+        timeout: Duration,
+    ) -> io::Result<Q::Resolved>
+    where
+        Q: Query,
+        W: Write,
+    {
+        let replies = self.query(out, query, timeout)?;
+        let waker = TaskWaker::from(Arc::new(ThreadWaker(std::thread::current())));
+        loop {
+            if Q::ready(&replies) {
+                break;
+            }
+            Q::arm(&replies, &waker);
+            // Re-check after arming: the reader thread may have resolved a
+            // slot in between, and its wake would otherwise be lost.
+            if Q::ready(&replies) {
+                break;
+            }
+            match Q::deadline(&replies) {
+                Some(d) => {
+                    let now = Instant::now();
+                    if now >= d {
+                        break;
+                    }
+                    std::thread::park_timeout(d - now);
+                }
+                None => break,
+            }
         }
-        .await?;
-        Ok(ev.and_then(|e| reply(&e)))
+        Ok(Q::resolve(replies))
     }
 
     /// Whether the backing source delivers [`Event::Resize`] from the
@@ -184,21 +228,23 @@ where
         self.source.lock().unwrap().handle_resize()
     }
 
-    /// Control whether the backing source delivers [`Event::Resize`]
-    /// from the kernel's out-of-band window-resize notification
-    /// (`SIGWINCH` on Unix). Set to `false` after enabling in-band
-    /// resize reports (DEC mode 2048) to avoid duplicate resize events.
-    /// See [`EventSource::set_handle_resize`].
+    /// Control whether the backing source delivers [`Event::Resize`] from
+    /// the kernel's out-of-band window-resize notification (`SIGWINCH` on
+    /// Unix). See [`EventSource::set_handle_resize`].
     pub fn set_handle_resize(&self, enable: bool) {
         self.source.lock().unwrap().set_handle_resize(enable);
     }
-}
 
-impl<I: Input> Stream for EventStream<I> {
-    type Item = io::Result<Event>;
+    /// The shared source, for callers that built the stream with
+    /// [`from_shared`](Self::from_shared) and kept their own clone.
+    pub fn shared_source(&self) -> Arc<Mutex<EventSource<I>>> {
+        Arc::clone(&self.source)
+    }
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Events live in the shared source's queue.
+    /// Poll for the next event, arming `task` to be woken when one
+    /// arrives. Drives both the blocking [`read`](Self::read) and the
+    /// asynchronous [`Stream`] face.
+    pub(super) fn poll_event(&self, task: &TaskWaker) -> Poll<Option<io::Result<Event>>> {
         if let Some(ev) = self.source.lock().unwrap().try_read() {
             return Poll::Ready(Some(Ok(ev)));
         }
@@ -213,7 +259,7 @@ impl<I: Input> Stream for EventStream<I> {
             if inner.closed {
                 return Poll::Ready(None);
             }
-            inner.task = Some(cx.waker().clone());
+            inner.task = Some(task.clone());
         }
         if let Some(ev) = self.source.lock().unwrap().try_read() {
             return Poll::Ready(Some(Ok(ev)));
@@ -236,29 +282,46 @@ impl<I: Input> Drop for EventStream<I> {
     }
 }
 
-/// Future that resolves when the reader thread posts a query result.
-struct QueryReply<'a> {
-    shared: &'a Shared,
+#[cfg(feature = "async")]
+impl<I: Input> futures_core::Stream for EventStream<I> {
+    type Item = io::Result<Event>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.poll_event(cx.waker())
+    }
 }
 
-impl Future for QueryReply<'_> {
-    type Output = io::Result<Option<Event>>;
+/// Wakes a parked thread by unparking it; the synchronous counterpart to
+/// an async task waker.
+struct ThreadWaker(std::thread::Thread);
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut inner = self.shared.inner.lock().unwrap();
-        if let Some(result) = inner.query_result.take() {
-            return Poll::Ready(result);
+impl Wake for ThreadWaker {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+/// Drive `poll` to completion on the current thread, parking between
+/// wakes. The waker handed to `poll` unparks this thread, so the reader
+/// thread resolving a slot wakes the parked caller.
+fn block_on_parking<T>(mut poll: impl FnMut(&TaskWaker) -> Poll<T>) -> T {
+    let waker = TaskWaker::from(Arc::new(ThreadWaker(std::thread::current())));
+    loop {
+        match poll(&waker) {
+            Poll::Ready(v) => return v,
+            Poll::Pending => std::thread::park(),
         }
-        if inner.closed {
-            return Poll::Ready(Err(closed_err()));
-        }
-        inner.task = Some(cx.waker().clone());
-        Poll::Pending
     }
 }
 
 fn closed_err() -> io::Error {
-    io::Error::new(io::ErrorKind::BrokenPipe, "event stream closed")
+    io::Error::new(io::ErrorKind::BrokenPipe, "event reader closed")
 }
 
 fn fail(shared: &Shared, e: io::Error) {
@@ -276,30 +339,24 @@ fn reader_loop<I: Input>(
 ) {
     let mut scratch = vec![false; slots];
     loop {
-        // 1. Shutdown or a pending query takes priority.
-        let job = {
-            let mut inner = shared.inner.lock().unwrap();
-            if inner.closed {
-                return;
-            }
-            inner.query.take()
-        };
-        if let Some(job) = job {
-            let result = run_query(&source, &job, &shared);
-            let mut inner = shared.inner.lock().unwrap();
-            inner.query_result = Some(result);
-            wake_task(&mut inner);
-            continue;
+        // 1. Shutdown takes priority.
+        if shared.inner.lock().unwrap().closed {
+            return;
         }
 
-        // 2. Decide how long to wait (reads the source's decode deadlines).
-        let (timeout, kind) = {
+        // 2. Wait the shorter of the source's decode deadlines and the
+        //    nearest query deadline, routing a timeout to the right
+        //    expiry. A query deadline must not expire the source's
+        //    partial-sequence state, so it carries `DeadlineKind::None`.
+        let (src_timeout, src_kind, query_deadline) = {
             let s = source.lock().unwrap();
-            s.next_timeout()
+            let (t, k) = s.next_timeout();
+            (t, k, s.observers_nearest_deadline())
         };
+        let (timeout, kind) = combine_timeout(src_timeout, src_kind, query_deadline);
 
         // 3. Block for readiness without holding the source lock, so a
-        //    synchronous query can take the lock meanwhile.
+        //    consumer can take the lock meanwhile.
         let n = match poller.poll(&mut scratch, timeout) {
             Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -310,46 +367,47 @@ fn reader_loop<I: Input>(
         };
 
         // 4. Take the lock and drain (re-checking readiness) or expire.
-        let has_events = {
-            let mut s = source.lock().unwrap();
-            if n == 0 {
-                s.expire(kind);
-            } else if let Err(e) = s.drain_after_wait()
-                && e.kind() != io::ErrorKind::Interrupted
-            {
-                drop(s);
-                fail(&shared, e);
-                return;
-            }
-            s.has_events()
-        };
-        if has_events {
-            let mut inner = shared.inner.lock().unwrap();
+        //    Decoded events offer themselves to the query observers as
+        //    they are produced (see `EventSource::emit`), so query slots
+        //    fill here; resolve any whose deadline has now passed.
+        let mut s = source.lock().unwrap();
+        if n == 0 {
+            s.expire(kind);
+        } else if let Err(e) = s.drain_after_wait()
+            && e.kind() != io::ErrorKind::Interrupted
+        {
+            drop(s);
+            fail(&shared, e);
+            return;
+        }
+        s.expire_observers(Instant::now());
+        let mut inner = shared.inner.lock().unwrap();
+        if s.has_events() {
             wake_task(&mut inner);
         }
     }
 }
 
-fn run_query<I: Input>(
-    source: &Arc<Mutex<EventSource<I>>>,
-    job: &QueryRequest,
-    shared: &Shared,
-) -> io::Result<Option<Event>> {
-    let deadline = Instant::now() + job.timeout;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let matched = {
-            let mut s = source.lock().unwrap();
-            s.read_matching(|ev| (job.predicate)(ev), Some(remaining))?
-        };
-        if let Some(ev) = matched {
-            return Ok(Some(ev));
-        }
-        // `read_matching` returns `None` on a real timeout or a spurious
-        // wake (the query-submission wake, or shutdown). Retry until the
-        // deadline; non-matching events stay queued in the source.
-        if shared.inner.lock().unwrap().closed || Instant::now() >= deadline {
-            return Ok(None);
+/// Pick the sooner of the source's decode deadline and the nearest query
+/// deadline. The returned [`DeadlineKind`] is the source's only when the
+/// source deadline governs, so a query-driven wakeup never expires the
+/// source's buffered partial sequence early.
+fn combine_timeout(
+    src_timeout: Option<Duration>,
+    src_kind: DeadlineKind,
+    query_deadline: Option<Instant>,
+) -> (Option<Duration>, DeadlineKind) {
+    let query_remaining = query_deadline.map(|d| d.saturating_duration_since(Instant::now()));
+    match (src_timeout, query_remaining) {
+        (None, None) => (None, DeadlineKind::None),
+        (Some(s), None) => (Some(s), src_kind),
+        (None, Some(q)) => (Some(q), DeadlineKind::None),
+        (Some(s), Some(q)) => {
+            if s <= q {
+                (Some(s), src_kind)
+            } else {
+                (Some(q), DeadlineKind::None)
+            }
         }
     }
 }
@@ -357,13 +415,12 @@ fn run_query<I: Input>(
 #[cfg(all(test, unix))]
 mod tests {
     use std::fs::File;
-    use std::future::poll_fn;
     use std::os::fd::FromRawFd;
     use std::os::unix::io::AsRawFd;
     use std::sync::Arc;
-    use std::task::Wake;
 
     use super::*;
+    use crate::event::query::Single;
     use crate::event::{Key, KeyCode};
 
     fn make_pipe() -> (File, File) {
@@ -381,113 +438,144 @@ mod tests {
         assert_eq!(n, bytes.len() as isize);
     }
 
-    /// Minimal executor: poll the future, parking the thread between
-    /// wakes. Keeps the async tests free of any runtime dependency.
-    struct ThreadWaker(std::thread::Thread);
-    impl Wake for ThreadWaker {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-        fn wake_by_ref(self: &Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    fn block_on<F: Future>(mut fut: F) -> F::Output {
-        let waker = TaskWaker::from(Arc::new(ThreadWaker(std::thread::current())));
-        let mut cx = Context::from_waker(&waker);
-        // SAFETY: `fut` lives on this stack frame and is never moved after
-        // being pinned here.
-        let mut fut = unsafe { Pin::new_unchecked(&mut fut) };
-        loop {
-            match fut.as_mut().poll(&mut cx) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => std::thread::park(),
-            }
-        }
-    }
-
-    async fn next<I: Input>(stream: &mut EventStream<I>) -> Option<io::Result<Event>> {
-        poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
-    }
-
-    /// Query that resolves on `KeyPress('b')`, for pipe-driven tests
-    /// without a real terminal reply.
-    const KEY_B: Query<()> = Query::new(b"REQ", reply_key_b);
-    fn reply_key_b(ev: &Event) -> Option<()> {
-        matches!(
-            ev,
+    /// Query resolving on `KeyPress('b')`, for pipe-driven tests without a
+    /// real terminal reply.
+    const KEY_B: Single<char> = Single::new(b"REQ", reply_key_b);
+    fn reply_key_b(ev: &Event) -> Option<char> {
+        match ev {
             Event::KeyPress(Key {
                 code: KeyCode::Char('b'),
                 ..
-            })
-        )
-        .then_some(())
+            }) => Some('b'),
+            _ => None,
+        }
+    }
+
+    /// Companion query resolving on `KeyPress('c')`.
+    const KEY_C: Single<char> = Single::new(b"REQ2", reply_key_c);
+    fn reply_key_c(ev: &Event) -> Option<char> {
+        match ev {
+            Event::KeyPress(Key {
+                code: KeyCode::Char('c'),
+                ..
+            }) => Some('c'),
+            _ => None,
+        }
     }
 
     #[test]
-    fn stream_yields_events_in_order() {
+    fn reads_events_in_order() {
         let (rx, tx) = make_pipe();
-        let mut stream = EventSource::new(rx).unwrap().into_stream();
+        let stream = EventSource::new(rx).unwrap().into_stream();
         write_bytes(&tx, b"ab");
-        let a = block_on(next(&mut stream)).unwrap().unwrap();
-        let b = block_on(next(&mut stream)).unwrap().unwrap();
+        let a = stream.read().unwrap();
+        let b = stream.read().unwrap();
         assert!(matches!(a, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
         assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
     }
 
     #[test]
-    fn stream_query_plucks_reply_leaving_others() {
+    fn blocking_query_resolves_reply_keeping_input_visible() {
         let (rx, tx) = make_pipe();
-        let mut stream = EventSource::new(rx).unwrap().into_stream();
+        let stream = EventSource::new(rx).unwrap().into_stream();
         // A user keypress 'a' arrives before the awaited reply 'b'.
         write_bytes(&tx, b"ab");
         let mut out: Vec<u8> = Vec::new();
-        let got = block_on(stream.query(&mut out, &KEY_B, Duration::from_secs(1))).unwrap();
-        assert!(got.is_some(), "reply should be found");
+        let got = stream
+            .query_blocking(&mut out, KEY_B, Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(got, Some('b'));
         assert_eq!(out, b"REQ");
-        // The non-matching 'a' is still delivered, in order, by the stream.
-        let ev = block_on(next(&mut stream)).unwrap().unwrap();
-        assert!(matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+        // Both 'a' and the reply 'b' are still delivered, in order.
+        let a = stream.read().unwrap();
+        assert!(matches!(a, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+        let b = stream.read().unwrap();
+        assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
     }
 
     #[test]
-    fn stream_query_times_out_without_reply() {
+    fn blocking_query_times_out_without_reply() {
         let (rx, tx) = make_pipe();
-        let mut stream = EventSource::new(rx).unwrap().into_stream();
+        let stream = EventSource::new(rx).unwrap().into_stream();
         write_bytes(&tx, b"a");
         let mut out: Vec<u8> = Vec::new();
-        let got = block_on(stream.query(&mut out, &KEY_B, Duration::from_millis(30))).unwrap();
-        assert!(got.is_none());
-        // The user input survives the failed query.
-        let ev = block_on(next(&mut stream)).unwrap().unwrap();
+        let got = stream
+            .query_blocking(&mut out, KEY_B, Duration::from_millis(30))
+            .unwrap();
+        assert_eq!(got, None);
+        let ev = stream.read().unwrap();
         assert!(matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
     }
 
-    // Path A: a synchronous query on the shared source runs while the
-    // stream's reader thread is live (the get_cursor_position scenario).
-    // The query locks the same source the reader uses; whichever side
-    // reads the reply byte first, read_matching finds it (queue or fd),
-    // and unrelated input is still delivered by the stream afterward.
+    // Submit several queries up front, then collect them: each fills its
+    // own slot regardless of arrival order — the sync "fire several,
+    // collect later" pattern, no async feature required.
     #[test]
-    fn shared_source_sync_query_while_streaming() {
+    fn submit_many_collect_later() {
         let (rx, tx) = make_pipe();
-        let source = Arc::new(Mutex::new(EventSource::new(rx).unwrap()));
-        let mut stream = EventStream::from_shared(Arc::clone(&source));
-
-        // The awaited reply 'b' arrives on the shared input.
-        write_bytes(&tx, b"b");
+        let stream = EventSource::new(rx).unwrap().into_stream();
         let mut out: Vec<u8> = Vec::new();
-        let got = {
-            let mut s = source.lock().unwrap();
-            s.query(&mut out, &KEY_B, Duration::from_secs(1)).unwrap()
-        };
-        assert!(got.is_some(), "sync query should find the reply");
-        assert_eq!(out, b"REQ");
+        let mut qb = stream
+            .query(&mut out, KEY_B, Duration::from_secs(1))
+            .unwrap();
+        let mut qc = stream
+            .query(&mut out, KEY_C, Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(out, b"REQREQ2");
+        // Replies arrive out of submission order, interleaved with input.
+        write_bytes(&tx, b"cab");
+        // Drain events so the reader thread fills the slots.
+        let _ = stream.read().unwrap();
+        let _ = stream.read().unwrap();
+        let _ = stream.read().unwrap();
+        assert_eq!(qb.try_take(), Some('b'));
+        assert_eq!(qc.try_take(), Some('c'));
+    }
 
-        // A later user event still flows through the stream.
-        write_bytes(&tx, b"a");
-        let ev = block_on(next(&mut stream)).unwrap().unwrap();
-        assert!(matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+    // One batched blocking call writes both requests in a single flush and
+    // collects both replies independently.
+    #[test]
+    fn batched_blocking_query() {
+        let (rx, tx) = make_pipe();
+        let stream = EventSource::new(rx).unwrap().into_stream();
+        let mut out: Vec<u8> = Vec::new();
+        write_bytes(&tx, b"cb");
+        let (b, c) = stream
+            .query_blocking(&mut out, (KEY_B, KEY_C), Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(out, b"REQREQ2");
+        assert_eq!(b, Some('b'));
+        assert_eq!(c, Some('c'));
+    }
+
+    // Multiple OS threads share one stream (`&EventStream` is `Send +
+    // Sync`) and each blocks on its own query concurrently. Both are
+    // served by the single reader thread — no async runtime, no feature.
+    #[test]
+    fn concurrent_queries_across_threads() {
+        let (rx, tx) = make_pipe();
+        let stream = Arc::new(EventSource::new(rx).unwrap().into_stream());
+        let r_b = Arc::clone(&stream);
+        let tb = std::thread::spawn(move || {
+            let mut out: Vec<u8> = Vec::new();
+            r_b.query_blocking(&mut out, KEY_B, Duration::from_secs(2))
+                .unwrap()
+        });
+        let r_c = Arc::clone(&stream);
+        let tc = std::thread::spawn(move || {
+            let mut out: Vec<u8> = Vec::new();
+            r_c.query_blocking(&mut out, KEY_C, Duration::from_secs(2))
+                .unwrap()
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        write_bytes(&tx, b"cb");
+        assert_eq!(tb.join().unwrap(), Some('b'));
+        assert_eq!(tc.join().unwrap(), Some('c'));
+    }
+
+    fn _assert_send_sync<T: Send + Sync>() {}
+    #[test]
+    fn stream_is_send_sync() {
+        _assert_send_sync::<EventStream<File>>();
     }
 }
