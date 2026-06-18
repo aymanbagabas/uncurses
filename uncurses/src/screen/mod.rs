@@ -11,7 +11,7 @@ use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::color::Profile;
 use crate::renderer::{RenderBuffer, Renderer};
-use crate::terminal::Env;
+use crate::terminal::{Env, Terminal};
 
 use self::state::State;
 
@@ -478,6 +478,90 @@ impl<W: Write> Screen<W> {
     /// Force a full redraw on next render.
     pub fn invalidate(&mut self) {
         self.renderer.request_clear();
+    }
+}
+
+#[cfg(unix)]
+impl<O: Write + Copy + std::os::fd::AsFd> Screen<O> {
+    /// Build a screen over `terminal`'s output half, sized to the
+    /// terminal's current window size and configured from the terminal's
+    /// captured [`Env`].
+    ///
+    /// The terminal is borrowed, not consumed, so it stays available for
+    /// the raw-mode lifecycle (`make_raw` / `restore`). The screen drives
+    /// the `Copy` output half, leaving the input half free for an
+    /// [`EventSource`](crate::event::EventSource). Equivalent to
+    /// `Screen::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
+    ///
+    /// Fails only if the window size query fails.
+    ///
+    /// ```no_run
+    /// use std::io::Write;
+    /// use uncurses::terminal::Terminal;
+    /// use uncurses::screen::Screen;
+    /// use uncurses::event::EventSource;
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// let mut term = Terminal::open()?;
+    /// let _prev = term.make_raw()?;
+    /// let mut screen = Screen::from_terminal(&term)?;
+    /// let mut source = EventSource::new(term.input())?;
+    /// // ... draw to `screen`, read from `source` ...
+    /// screen.reset();
+    /// screen.flush()?;
+    /// term.restore()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_terminal<I: std::os::fd::AsFd>(terminal: &Terminal<I, O>) -> io::Result<Self> {
+        Ok(Self::from_env(
+            terminal.output(),
+            terminal.window_size()?,
+            terminal.env(),
+        ))
+    }
+}
+
+#[cfg(windows)]
+impl<O: Write + Copy + std::os::windows::io::AsHandle> Screen<O> {
+    /// Build a screen over `terminal`'s output half, sized to the
+    /// terminal's current window size and configured from the terminal's
+    /// captured [`Env`].
+    ///
+    /// The terminal is borrowed, not consumed, so it stays available for
+    /// the raw-mode lifecycle (`make_raw` / `restore`). The screen drives
+    /// the `Copy` output half, leaving the input half free for an
+    /// [`EventSource`](crate::event::EventSource). Equivalent to
+    /// `Screen::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
+    ///
+    /// Fails only if the window size query fails.
+    ///
+    /// ```no_run
+    /// use std::io::Write;
+    /// use uncurses::terminal::Terminal;
+    /// use uncurses::screen::Screen;
+    /// use uncurses::event::EventSource;
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// let mut term = Terminal::open()?;
+    /// let _prev = term.make_raw()?;
+    /// let mut screen = Screen::from_terminal(&term)?;
+    /// let mut source = EventSource::new(term.input())?;
+    /// // ... draw to `screen`, read from `source` ...
+    /// screen.reset();
+    /// screen.flush()?;
+    /// term.restore()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_terminal<I: std::os::windows::io::AsHandle>(
+        terminal: &Terminal<I, O>,
+    ) -> io::Result<Self> {
+        Ok(Self::from_env(
+            terminal.output(),
+            terminal.window_size()?,
+            terminal.env(),
+        ))
     }
 }
 
