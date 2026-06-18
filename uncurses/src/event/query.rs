@@ -59,12 +59,13 @@ use super::source::{Observers, Slot};
 use super::{Event, EventSource, Input};
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::ansi::{
-    KittyKeyboardFlags, background, ctrl, graphics, kitty, mode, status, termcap, winop, xterm,
+    KittyKeyboardFlags, background, clipboard, ctrl, graphics, kitty, mode, status, termcap, winop,
+    xterm,
 };
 use crate::color::Color;
 use crate::layout::Position;
 
-use super::{ColorScheme, ModifyOtherKeysMode};
+use super::{ClipboardSelection, ColorScheme, ModifyOtherKeysMode};
 
 mod private {
     /// Sealed: the [`Query`](super::Query) trait is implemented only by
@@ -693,6 +694,45 @@ pub fn kitty_graphics(options: &[&str]) -> Single<KittyGraphicsReply> {
     })
 }
 
+/// Read a clipboard selection (`OSC 52 ; Pc ; ?`). The reply is the
+/// decoded clipboard text. Most terminals disable clipboard reads by
+/// default (a privacy measure) and stay silent, so pair this with the
+/// [`PRIMARY_DEVICE_ATTRIBUTES`] sentinel to tell "denied" from "slow".
+///
+/// The reply matcher only accepts a report for the *same* selection, so
+/// concurrent reads of different selections never cross-match.
+pub fn read_clipboard(selection: ClipboardSelection) -> Single<String> {
+    let pc = match selection {
+        ClipboardSelection::System => clipboard::SYSTEM_CLIPBOARD,
+        ClipboardSelection::Primary => clipboard::PRIMARY_CLIPBOARD,
+        ClipboardSelection::Other(c) => c as u8,
+    };
+    // Pick a non-capturing matcher per selection so it stays a `fn`
+    // pointer. `Other` matches any non-standard selection char.
+    let reply: fn(&Event) -> Option<String> = match selection {
+        ClipboardSelection::System => |ev| clipboard_reply(ev, ClipboardSelection::System),
+        ClipboardSelection::Primary => |ev| clipboard_reply(ev, ClipboardSelection::Primary),
+        ClipboardSelection::Other(_) => |ev| match ev {
+            Event::Clipboard {
+                selection: ClipboardSelection::Other(_),
+                content,
+            } => Some(content.clone()),
+            _ => None,
+        },
+    };
+    let mut request = Vec::new();
+    clipboard::write_request_clipboard(&mut request, pc)
+        .expect("encoding a clipboard request cannot fail");
+    Single::owned(request, reply)
+}
+
+fn clipboard_reply(ev: &Event, want: ClipboardSelection) -> Option<String> {
+    match ev {
+        Event::Clipboard { selection, content } if *selection == want => Some(content.clone()),
+        _ => None,
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::fs::File;
@@ -862,5 +902,29 @@ mod tests {
         // Already `a=q`: left as a single `a=q`.
         let q = kitty_graphics(&["a=q", "i=1"]);
         assert_eq!(q.request(), b"\x1b_Ga=q,i=1\x1b\\");
+    }
+
+    #[test]
+    fn read_clipboard_matches_only_its_selection() {
+        let system = Event::Clipboard {
+            selection: ClipboardSelection::System,
+            content: "sys".to_string(),
+        };
+        let primary = Event::Clipboard {
+            selection: ClipboardSelection::Primary,
+            content: "pri".to_string(),
+        };
+
+        let q = read_clipboard(ClipboardSelection::System);
+        assert_eq!(q.request(), b"\x1b]52;c;?\x07");
+        // Matches its own selection, ignores another selection's reply so
+        // concurrent reads never cross-match.
+        assert_eq!(q.matches(&system), Some("sys".to_string()));
+        assert_eq!(q.matches(&primary), None);
+
+        let q = read_clipboard(ClipboardSelection::Primary);
+        assert_eq!(q.request(), b"\x1b]52;p;?\x07");
+        assert_eq!(q.matches(&primary), Some("pri".to_string()));
+        assert_eq!(q.matches(&system), None);
     }
 }
