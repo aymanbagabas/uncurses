@@ -112,6 +112,67 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
+### Querying by hand
+
+The helpers are not magic, and you do not have to use them. A `Query`
+exposes the two pieces it is built from: `request()` gives you the bytes to
+send, and `matches(&event)` tests whether some event is the reply (and
+decodes it). So you can skip the registry entirely, write the request
+yourself, and let one arm of your normal event loop catch the reply:
+
+```rust,no_run
+use std::io::Write;
+use uncurses::terminal::Terminal;
+use uncurses::event::{Event, EventSource, query};
+
+fn main() -> std::io::Result<()> {
+    let mut term = Terminal::open()?;
+    term.make_raw()?;
+    let mut out = term.output();
+    let mut source = EventSource::new(term.input())?;
+
+    out.write_all(query::BACKGROUND_COLOR.request())?; // fire the request
+    out.flush()?;
+
+    loop {
+        let ev = source.read()?;
+        // The reply rides in as an ordinary event; the query's own matcher
+        // recognises and decodes it. Everything else is normal input.
+        if let Some(color) = query::BACKGROUND_COLOR.matches(&ev) {
+            println!("background: {color:?}");
+        }
+        if let Event::KeyPress(_) = ev {
+            break; // any key quits, for the sake of the example
+        }
+    }
+
+    term.restore()?;
+    Ok(())
+}
+```
+
+The reply rides in as just another event, so keystrokes and resizes keep
+flowing while you wait, same as with the helpers, and catching it is one
+extra branch in a loop you already run. A blocking `read` waits forever, so
+the loop above never gives up on a silent terminal. If you want a deadline,
+you can add one by hand: swap `read` for `poll(Some(remaining))` against a
+deadline you track yourself, and break when the budget runs out. That is
+real bookkeeping though, recomputed every iteration as input trickles in,
+and it is per query, so a shared budget across a batch becomes a small
+state machine you maintain.
+
+This inline match works the same whether you hold an `EventSource` or an
+`EventStream`. The stream's reader thread blocks on the terminal and fills
+a shared queue; its `read` and `try_read` just pop from that queue, so the
+match arm is identical. What the helpers add is that bookkeeping done for
+you: a deadline, a typed result, and a whole batch resolved on one
+round-trip. Under async they pull the most weight, because
+`EventStream::query` hands back a `Future` that resolves on its own through
+the observer registry. You can `.await` it, or race it against a timeout,
+without weaving reply detection into your `Stream` loop or parking an
+executor thread on a blocking `read`. The `query_inline` and
+`capabilities` examples show both sides.
+
 ## Async input
 
 Flip on the `async` feature and an `EventSource` becomes an `EventStream`,
