@@ -229,6 +229,57 @@ impl Style {
         w.write_all(text.as_bytes())?;
         w.write_all(sgr::RESET)
     }
+
+    /// Wrap `text` in this style for `Display`. The returned adapter
+    /// renders the style's SGR sequence, the text, then an SGR reset,
+    /// so it composes directly with `format!`/`write!` without a
+    /// throwaway buffer. The `Display`-friendly companion to
+    /// [`Style::write_styled`].
+    pub fn styled<'a>(&self, text: &'a str) -> StyledText<'a> {
+        StyledText {
+            style: self.clone(),
+            text,
+        }
+    }
+}
+
+/// Renders this style's SGR sequence (`CSI ... m`) — the opener only,
+/// with no trailing reset, so it can be used as a standalone token. An
+/// empty style renders the reset sequence (`CSI m`). For a wrapped span
+/// (opener, text, reset) use [`Style::styled`].
+impl std::fmt::Display for Style {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // SGR sequences are pure ASCII, so the bytes are valid UTF-8.
+        let mut buf = Vec::new();
+        self.write(&mut buf).map_err(|_| std::fmt::Error)?;
+        let s = std::str::from_utf8(&buf).map_err(|_| std::fmt::Error)?;
+        f.write_str(s)
+    }
+}
+
+/// A piece of text bound to a [`Style`], renderable via [`Display`].
+///
+/// Created by [`Style::styled`]. Emitting it writes the style's SGR
+/// sequence, the text, then an SGR reset.
+///
+/// [`Display`]: std::fmt::Display
+#[derive(Debug, Clone)]
+pub struct StyledText<'a> {
+    style: Style,
+    text: &'a str,
+}
+
+impl std::fmt::Display for StyledText<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // SGR sequences are ASCII and `text` is UTF-8, so the rendered
+        // bytes are always valid UTF-8.
+        let mut buf = Vec::new();
+        self.style
+            .write_styled(&mut buf, self.text)
+            .map_err(|_| std::fmt::Error)?;
+        let s = std::str::from_utf8(&buf).map_err(|_| std::fmt::Error)?;
+        f.write_str(s)
+    }
 }
 
 #[cfg(test)]
@@ -292,5 +343,18 @@ mod tests {
         let mut buf = Vec::new();
         Style::EMPTY.bold().write_styled(&mut buf, "hi").unwrap();
         assert_eq!(buf, b"\x1b[1mhi\x1b[m");
+    }
+
+    #[test]
+    fn styled_display_matches_write_styled() {
+        let style = Style::EMPTY.bold();
+        assert_eq!(format!("{}", style.styled("hi")), "\x1b[1mhi\x1b[m");
+    }
+
+    #[test]
+    fn display_is_the_opener_only() {
+        assert_eq!(Style::EMPTY.bold().to_string(), "\x1b[1m");
+        // An empty style yields the reset sequence.
+        assert_eq!(Style::EMPTY.to_string(), "\x1b[m");
     }
 }
