@@ -43,6 +43,48 @@ pub use crate::renderer::Optimizations;
 /// The screen itself implements [`io::Write`] as a passthrough to the
 /// owned writer — handy for emitting arbitrary escape sequences around
 /// a frame, or flushing pending bytes via [`io::Write::flush`].
+///
+/// # Managed area
+///
+/// A `Screen` manages a rectangular slice of the terminal window and
+/// works in two layouts. Either way the screen owns and diffs only the
+/// `#` region below; everything else belongs to the terminal.
+///
+/// **Fullscreen** ([alt screen](Screen::set_alt_screen) on): the managed
+/// area is the *entire* terminal viewport, addressed with absolute cursor
+/// moves. Nothing outside it survives.
+///
+/// ```text
+///       +---------------------+  --.
+///       |#####################|    |
+///       |####             ####|    |
+///       |#### managed     ####|    | terminal
+///       |#### screen      ####|    | height
+///       |#### (= viewport)####|    |
+///       |#####################|    |
+///       +---------------------+  --'
+///       |<---- term width --->|
+/// ```
+///
+/// **Inline** (default, alt screen off): the managed area is the full
+/// terminal *width* but only as tall as the application, anchored in the
+/// normal buffer with relative cursor moves. Scrollback above and the
+/// returning shell prompt below stay in the live terminal, untouched.
+///
+/// ```text
+///       | $ ./app             |  earlier output, left
+///       | ...prior output...  |  untouched in scrollback
+///       +=====================+  --.
+///       |#### managed     ####|    | application
+///       |#### screen      ####|    | height
+///       +=====================+  --'
+///       | $ _                 |  shell prompt returns below
+///       |<---- term width --->|
+/// ```
+///
+/// [`resize`](Screen::resize) sets this area's size: in fullscreen pass
+/// the terminal's `(width, height)`; inline, pass the terminal width and
+/// the height your application draws.
 pub struct Screen<W: Write> {
     /// The underlying byte sink.
     writer: W,
