@@ -19,7 +19,7 @@ use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DeadlineKind,
-    EventSource, Input, Waker,
+    EventSource, Input, Observers, Waker,
 };
 use crate::event::Event;
 use crate::terminal::size::get_window_size;
@@ -91,6 +91,7 @@ where
             queue: VecDeque::with_capacity(16),
             waker,
             handle_resize: true,
+            observers: Observers::default(),
             poller,
             pipe_rx,
             winch_rx,
@@ -152,7 +153,6 @@ where
     /// present, so a blocking input fd never stalls the lock — even if a
     /// concurrent query drained the bytes in between. Deadline expiry is
     /// the caller's responsibility (see [`EventSource::expire`]).
-    #[cfg(feature = "async")]
     pub(super) fn drain_after_wait(&mut self) -> io::Result<()> {
         let mut ready = [false; 3];
         self.poller.poll(&mut ready, Some(Duration::ZERO))?;
@@ -208,7 +208,7 @@ where
             return;
         }
         self.last_size = Some(new_size);
-        self.queue.push_back(Event::Resize(new_size));
+        self.emit(Event::Resize(new_size));
     }
 }
 

@@ -328,14 +328,22 @@ where
         // is active, because the stream shares this same source: the lock
         // serializes the read, and the reader thread's lock-free poll does
         // not hold it. Drain any stale CPR first so we match a fresh one.
+        // Use the low-level destructive `read_matching` rather than the
+        // visible-reply query API: the CPR reply is internal backend
+        // plumbing and must not surface in the application's event loop.
         let mut out = self.terminal.output();
         let mut src = self.events.lock().unwrap();
         while src
             .try_read_matching(|e| matches!(e, Event::CursorPosition(_)))
             .is_some()
         {}
-        match src.query(&mut out, &query::CURSOR_POSITION, CURSOR_QUERY_TIMEOUT)? {
-            Some(p) => {
+        out.write_all(query::CURSOR_POSITION.request())?;
+        out.flush()?;
+        match src.read_matching(
+            |e| matches!(e, Event::CursorPosition(_)),
+            Some(CURSOR_QUERY_TIMEOUT),
+        )? {
+            Some(Event::CursorPosition(p)) => {
                 // ratatui calls this during inline setup to anchor the
                 // viewport at the cursor row; remember it so `draw` /
                 // `set_cursor_position` can translate absolute rows into
@@ -343,7 +351,7 @@ where
                 self.inline_origin = p.y;
                 Ok(RtPosition { x: p.x, y: p.y })
             }
-            None => Err(io::Error::new(
+            _ => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "cursor position report (CPR) not received in time",
             )),

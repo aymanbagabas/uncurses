@@ -39,7 +39,7 @@ use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DeadlineKind,
-    EventSource, Input, Waker,
+    EventSource, Input, Observers, Waker,
 };
 
 const READ_BATCH: usize = 64;
@@ -128,6 +128,7 @@ where
             queue: VecDeque::with_capacity(16),
             waker,
             handle_resize: true,
+            observers: Observers::default(),
             poller,
             wake_event,
             vt_input,
@@ -179,7 +180,6 @@ where
     /// ready, all under the caller's lock — the reader-thread path (see
     /// the unix counterpart for the rationale). Deadline expiry is the
     /// caller's responsibility (see [`EventSource::expire`]).
-    #[cfg(feature = "async")]
     pub(super) fn drain_after_wait(&mut self) -> io::Result<()> {
         let mut ready = [false; 2];
         self.poller.poll(&mut ready, Some(Duration::ZERO))?;
