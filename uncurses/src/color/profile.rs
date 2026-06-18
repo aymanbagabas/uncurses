@@ -110,7 +110,10 @@ const DUMB_TERM: &str = "dumb";
 
 /// Environment-driven profile inference. Knows nothing about TTY-ness.
 fn env_color_profile(env: &Env, term: &str) -> Profile {
-    let mut p = if term.is_empty() || term == DUMB_TERM {
+    let mut p = if term == DUMB_TERM {
+        // An explicit `dumb` terminal opts out of styling everywhere.
+        Profile::Disabled
+    } else if term.is_empty() {
         // On Windows, the lack of TERM is normal — Windows Terminal and
         // cmd.exe don't set it. Defer to a Windows-specific fallback when
         // we know we're on Windows; otherwise treat as Disabled.
