@@ -64,7 +64,8 @@ work](docs/terminals.md) is the five-minute mental model behind all of it.
 ## Terminal features
 
 uncurses runs on all the major platforms: Linux, macOS, Windows, and the
-BSDs. It does not use terminfo. If you want to know what a terminal can do
+BSDs, along with other Unix-like systems. It does not use terminfo. If you
+want to know what a terminal can do
 before leaning on it, ask the terminal yourself with a
 [query](uncurses/README.md#queries).
 
