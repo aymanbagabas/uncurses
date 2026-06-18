@@ -73,6 +73,15 @@ pub enum ColorScheme {
     Light,
 }
 
+impl std::fmt::Display for ColorScheme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ColorScheme::Dark => "dark",
+            ColorScheme::Light => "light",
+        })
+    }
+}
+
 /// A terminal event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -311,6 +320,12 @@ mod tests {
         assert_eq!(b.len(), 11);
         assert_eq!(b.as_bytes(), b"hello world");
         assert_eq!(b.into_string().unwrap(), "hello world");
+    }
+
+    #[test]
+    fn color_scheme_display() {
+        assert_eq!(ColorScheme::Dark.to_string(), "dark");
+        assert_eq!(ColorScheme::Light.to_string(), "light");
     }
 
     #[test]
