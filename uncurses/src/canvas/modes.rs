@@ -1,6 +1,6 @@
-//! Terminal-mode toggles for [`Canvas`] — alt screen, cursor, mouse,
-//! bracketed paste, focus reporting, synchronized output, grapheme
-//! clusters (DEC 2027), and window title.
+//! Render-coupled mode toggles for [`Canvas`] — alt screen, cursor
+//! visibility/style, synchronized output, and grapheme clusters
+//! (DEC 2027).
 //!
 //! These setters only stage escape bytes into the screen's in-memory
 //! buffer, so they are infallible and return `()`. The bytes reach the
@@ -9,7 +9,7 @@
 
 use std::io::Write;
 
-use crate::ansi::{self, cursor, kitty, mode};
+use crate::ansi::{cursor, kitty, mode};
 
 use super::Canvas;
 
@@ -72,49 +72,6 @@ impl<W: Write> Canvas<W> {
         }
     }
 
-    /// Enable/disable bracketed paste mode.
-    pub fn set_bracketed_paste(&mut self, enable: bool) {
-        if self.state.bracketed_paste != enable {
-            if enable {
-                mode::Mode::BRACKETED_PASTE.set(&mut self.buf).unwrap();
-            } else {
-                mode::Mode::BRACKETED_PASTE.reset(&mut self.buf).unwrap();
-            }
-            self.state.bracketed_paste = enable;
-        }
-    }
-
-    /// Enable/disable focus in/out reporting.
-    pub fn set_focus_events(&mut self, enable: bool) {
-        if self.state.focus_events != enable {
-            if enable {
-                mode::Mode::FOCUS.set(&mut self.buf).unwrap();
-            } else {
-                mode::Mode::FOCUS.reset(&mut self.buf).unwrap();
-            }
-            self.state.focus_events = enable;
-        }
-    }
-
-    /// Set mouse tracking mode.
-    pub fn set_mouse_mode(&mut self, mouse_mode: mode::MouseMode, encoding: mode::MouseEncoding) {
-        // Disable old mode
-        if self.state.mouse_mode != mode::MouseMode::None {
-            mode::write_disable_mouse(
-                &mut self.buf,
-                self.state.mouse_mode,
-                self.state.mouse_encoding,
-            )
-            .unwrap();
-        }
-        // Enable new mode
-        if mouse_mode != mode::MouseMode::None {
-            mode::write_enable_mouse(&mut self.buf, mouse_mode, encoding).unwrap();
-        }
-        self.state.mouse_mode = mouse_mode;
-        self.state.mouse_encoding = encoding;
-    }
-
     /// Set synchronized updates.
     pub fn set_sync_updates(&mut self, enable: bool) {
         self.state.sync_updates = enable;
@@ -134,58 +91,5 @@ impl<W: Write> Canvas<W> {
             }
             self.state.grapheme_clusters = enable;
         }
-    }
-
-    /// Enable or disable color scheme update notifications
-    /// (DEC private mode 2031). When enabled, the terminal sends a
-    /// `CSI ? 997 ; {1|2} n` report whenever the user or operating
-    /// system switches between dark and light themes; these surface as
-    /// [`Event::DarkColorScheme`] / [`Event::LightColorScheme`].
-    ///
-    /// [`Event::DarkColorScheme`]: crate::event::Event::DarkColorScheme
-    /// [`Event::LightColorScheme`]: crate::event::Event::LightColorScheme
-    pub fn set_color_scheme_updates(&mut self, enable: bool) {
-        if self.state.color_scheme_updates != enable {
-            if enable {
-                mode::Mode::LIGHT_DARK.set(&mut self.buf).unwrap();
-            } else {
-                mode::Mode::LIGHT_DARK.reset(&mut self.buf).unwrap();
-            }
-            self.state.color_scheme_updates = enable;
-        }
-    }
-
-    /// Whether color scheme update notifications (DEC 2031) are enabled.
-    pub fn color_scheme_updates(&self) -> bool {
-        self.state.color_scheme_updates
-    }
-
-    /// Enable or disable in-band resize notifications (DEC private mode
-    /// 2048). When enabled, the terminal reports every surface size
-    /// change in-band as a `CSI 48 ; height ; width ; ypixel ; xpixel t`
-    /// sequence, which the decoder surfaces as [`Event::Resize`] — no
-    /// `SIGWINCH` handler required.
-    ///
-    /// [`Event::Resize`]: crate::event::Event::Resize
-    pub fn set_in_band_resize(&mut self, enable: bool) {
-        if self.state.in_band_resize != enable {
-            if enable {
-                mode::Mode::IN_BAND_RESIZE.set(&mut self.buf).unwrap();
-            } else {
-                mode::Mode::IN_BAND_RESIZE.reset(&mut self.buf).unwrap();
-            }
-            self.state.in_band_resize = enable;
-        }
-    }
-
-    /// Whether in-band resize notifications (DEC 2048) are enabled.
-    pub fn in_band_resize(&self) -> bool {
-        self.state.in_band_resize
-    }
-
-    /// Set window title.
-    pub fn set_title(&mut self, title: &str) {
-        ansi::write_window_title(&mut self.buf, title).unwrap();
-        self.state.title = Some(title.to_string());
     }
 }

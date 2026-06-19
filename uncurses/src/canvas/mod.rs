@@ -5,8 +5,8 @@
 
 use std::io::{self, Write};
 
+use crate::ansi::kitty;
 use crate::ansi::mode;
-use crate::ansi::{background, kitty};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::color::Profile;
@@ -211,78 +211,6 @@ impl<W: Write> Canvas<W> {
     /// The active [`Profile`] used when emitting cell styles.
     pub fn color_profile(&self) -> Profile {
         self.renderer.color_profile()
-    }
-
-    // --- Color overrides ------------------------------------------------
-
-    /// Set the default foreground color (`OSC 10`). Pass `Some(color)`
-    /// to assign a value (converted to 24-bit RGB via
-    /// [`crate::color::Color::to_rgb`] and emitted as
-    /// `rgb:RRRR/GGGG/BBBB`); pass `None` to restore the terminal
-    /// default (`OSC 110`). The choice is recorded in the screen's
-    /// state so [`Canvas::reset`] can return the terminal to its
-    /// built-in defaults and [`Canvas::restore`] can re-apply it.
-    pub fn set_foreground_color(&mut self, color: Option<crate::color::Color>) {
-        if self.state.foreground_color != color {
-            match color {
-                Some(c) => {
-                    let (r, g, b) = c.to_rgb();
-                    background::write_set_foreground_color(
-                        &mut self.buf,
-                        &background::xparse_rgb(r, g, b),
-                    )
-                    .unwrap();
-                }
-                None => self
-                    .buf
-                    .write_all(background::RESET_FOREGROUND_COLOR)
-                    .unwrap(),
-            }
-            self.state.foreground_color = color;
-        }
-    }
-
-    /// Set the default background color (`OSC 11`), or restore the
-    /// terminal default (`OSC 111`) when `color` is `None`. See
-    /// [`Canvas::set_foreground_color`] for state-tracking semantics.
-    pub fn set_background_color(&mut self, color: Option<crate::color::Color>) {
-        if self.state.background_color != color {
-            match color {
-                Some(c) => {
-                    let (r, g, b) = c.to_rgb();
-                    background::write_set_background_color(
-                        &mut self.buf,
-                        &background::xparse_rgb(r, g, b),
-                    )
-                    .unwrap();
-                }
-                None => self
-                    .buf
-                    .write_all(background::RESET_BACKGROUND_COLOR)
-                    .unwrap(),
-            }
-            self.state.background_color = color;
-        }
-    }
-
-    /// Set the cursor color (`OSC 12`), or restore the terminal
-    /// default (`OSC 112`) when `color` is `None`. See
-    /// [`Canvas::set_foreground_color`] for state-tracking semantics.
-    pub fn set_cursor_color(&mut self, color: Option<crate::color::Color>) {
-        if self.state.cursor_color != color {
-            match color {
-                Some(c) => {
-                    let (r, g, b) = c.to_rgb();
-                    background::write_set_cursor_color(
-                        &mut self.buf,
-                        &background::xparse_rgb(r, g, b),
-                    )
-                    .unwrap();
-                }
-                None => self.buf.write_all(background::RESET_CURSOR_COLOR).unwrap(),
-            }
-            self.state.cursor_color = color;
-        }
     }
 
     // --- Kitty keyboard --------------------------------------------------

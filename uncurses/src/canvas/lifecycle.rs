@@ -4,7 +4,7 @@
 
 use std::io::Write;
 
-use crate::ansi::{self, background, cursor, kitty, mode};
+use crate::ansi::{self, cursor, kitty, mode};
 
 use super::Canvas;
 
@@ -44,20 +44,6 @@ impl<W: Write> Canvas<W> {
         if self.state.cursor_style != cursor::CursorStyle::Default {
             cursor::write_cursor_style(&mut self.buf, cursor::CursorStyle::Default).unwrap();
         }
-        if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.reset(&mut self.buf).unwrap();
-        }
-        if self.state.focus_events {
-            mode::Mode::FOCUS.reset(&mut self.buf).unwrap();
-        }
-        if self.state.mouse_mode != mode::MouseMode::None {
-            mode::write_disable_mouse(
-                &mut self.buf,
-                self.state.mouse_mode,
-                self.state.mouse_encoding,
-            )
-            .unwrap();
-        }
         // Clear the alt screen's kitty keyboard frame *before* leaving
         // the alt screen — the stack is per-screen-buffer, so the
         // clear must be issued while alt is still active.
@@ -86,28 +72,6 @@ impl<W: Write> Canvas<W> {
         }
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.reset(&mut self.buf).unwrap();
-        }
-        if self.state.color_scheme_updates {
-            mode::Mode::LIGHT_DARK.reset(&mut self.buf).unwrap();
-        }
-        if self.state.in_band_resize {
-            mode::Mode::IN_BAND_RESIZE.reset(&mut self.buf).unwrap();
-        }
-        if self.state.foreground_color.is_some() {
-            self.buf
-                .write_all(background::RESET_FOREGROUND_COLOR)
-                .unwrap();
-        }
-        if self.state.background_color.is_some() {
-            self.buf
-                .write_all(background::RESET_BACKGROUND_COLOR)
-                .unwrap();
-        }
-        if self.state.cursor_color.is_some() {
-            self.buf.write_all(background::RESET_CURSOR_COLOR).unwrap();
-        }
-        if self.state.title.is_some() {
-            ansi::write_window_title(&mut self.buf, "").unwrap();
         }
     }
 
@@ -151,49 +115,11 @@ impl<W: Write> Canvas<W> {
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.set(&mut self.buf).unwrap();
         }
-        if self.state.color_scheme_updates {
-            mode::Mode::LIGHT_DARK.set(&mut self.buf).unwrap();
-        }
-        if self.state.in_band_resize {
-            mode::Mode::IN_BAND_RESIZE.set(&mut self.buf).unwrap();
-        }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
         }
         if self.state.cursor_style != cursor::CursorStyle::Default {
             cursor::write_cursor_style(&mut self.buf, self.state.cursor_style).unwrap();
-        }
-        if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.set(&mut self.buf).unwrap();
-        }
-        if self.state.focus_events {
-            mode::Mode::FOCUS.set(&mut self.buf).unwrap();
-        }
-        if self.state.mouse_mode != mode::MouseMode::None {
-            mode::write_enable_mouse(
-                &mut self.buf,
-                self.state.mouse_mode,
-                self.state.mouse_encoding,
-            )
-            .unwrap();
-        }
-        if let Some(c) = self.state.foreground_color {
-            let (r, g, b) = c.to_rgb();
-            background::write_set_foreground_color(&mut self.buf, &background::xparse_rgb(r, g, b))
-                .unwrap();
-        }
-        if let Some(c) = self.state.background_color {
-            let (r, g, b) = c.to_rgb();
-            background::write_set_background_color(&mut self.buf, &background::xparse_rgb(r, g, b))
-                .unwrap();
-        }
-        if let Some(c) = self.state.cursor_color {
-            let (r, g, b) = c.to_rgb();
-            background::write_set_cursor_color(&mut self.buf, &background::xparse_rgb(r, g, b))
-                .unwrap();
-        }
-        if let Some(ref title) = self.state.title {
-            ansi::write_window_title(&mut self.buf, title).unwrap();
         }
     }
 

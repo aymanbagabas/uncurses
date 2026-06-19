@@ -441,16 +441,13 @@ where
     /// Unix). Defaults to `true`.
     ///
     /// Set this to `false` after enabling in-band resize reports (DEC
-    /// mode 2048, e.g. via [`Canvas::set_in_band_resize`]): the terminal
-    /// then reports size changes in-band as `CSI 48 t`, which the decoder
-    /// surfaces as [`Event::Resize`], so leaving the `SIGWINCH` path on
-    /// would deliver each resize twice. Restore it to `true` when in-band
-    /// reporting is disabled again.
+    /// mode 2048): the terminal then reports size changes in-band as
+    /// `CSI 48 t`, which the decoder surfaces as [`Event::Resize`], so
+    /// leaving the `SIGWINCH` path on would deliver each resize twice.
+    /// Restore it to `true` when in-band reporting is disabled again.
     ///
     /// No effect on Windows, where resize is always delivered in-band
     /// through the decoder.
-    ///
-    /// [`Canvas::set_in_band_resize`]: crate::canvas::Canvas::set_in_band_resize
     pub fn set_handle_resize(&mut self, enable: bool) {
         self.handle_resize = enable;
     }
