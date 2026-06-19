@@ -19,8 +19,8 @@
 use std::io::Write;
 
 use uncurses::buffer::SurfaceMut;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, PasteBuffer};
 use uncurses::canvas::Canvas;
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, PasteBuffer};
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{TtyInput, TtyOutput};
@@ -204,7 +204,6 @@ impl App {
         );
 
         screen.set_cursor_visible(false);
-        screen.set_bracketed_paste(true);
 
         let events = EventSource::new(term.input())?;
         let buffer = Buffer::new();

@@ -5,11 +5,10 @@
 
 use std::io::Write;
 
-use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, MouseButton};
-use uncurses::canvas::Canvas;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -35,7 +34,6 @@ impl App {
         let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
-        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr);
         let events = EventSource::new(term.input())?;
 
         // Parse key bindings once. `Key: FromStr`, and `==` compares on

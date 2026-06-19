@@ -14,9 +14,8 @@
 
 use std::io::Write;
 
-use uncurses::ansi::mode::{MouseEncoding, MouseMode};
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, MouseButton};
 use uncurses::canvas::Canvas;
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, MouseButton};
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -58,7 +57,6 @@ impl App {
 
         screen.set_alt_screen(true);
         screen.set_cursor_visible(true);
-        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr);
 
         let events = EventSource::new(term.input())?;
 

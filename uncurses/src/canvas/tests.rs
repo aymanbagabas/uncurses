@@ -86,26 +86,6 @@ fn grapheme_width_and_cells_use_screen_policy() {
 }
 
 #[test]
-fn set_color_scheme_updates_emits_decset_2031_and_tracks_state() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Canvas::new(&mut buf, (20, 1));
-        assert!(!screen.color_scheme_updates());
-        screen.set_color_scheme_updates(true);
-        assert!(screen.color_scheme_updates());
-        // Idempotent: second enable doesn't write again.
-        screen.set_color_scheme_updates(true);
-        screen.set_color_scheme_updates(false);
-        assert!(!screen.color_scheme_updates());
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b[?2031h"));
-    assert!(out.contains("\x1b[?2031l"));
-    assert_eq!(out.matches("\x1b[?2031h").count(), 1);
-}
-
-#[test]
 fn set_grapheme_clusters_toggles_width_mode_and_emits_decset() {
     let mut buf: Vec<u8> = Vec::new();
     {
@@ -187,48 +167,6 @@ fn reset_and_restore_round_trip_grapheme_clusters() {
     // Enable SM, reset emits RM, restore emits SM again.
     assert!(out.matches("\x1b[?2027h").count() >= 2);
     assert!(out.contains("\x1b[?2027l"));
-}
-
-#[test]
-fn set_in_band_resize_emits_decset_2048_and_tracks_state() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Canvas::new(&mut buf, (20, 1));
-        assert!(!screen.in_band_resize());
-        screen.set_in_band_resize(true);
-        assert!(screen.in_band_resize());
-        // Idempotent: second enable doesn't write again.
-        screen.set_in_band_resize(true);
-        screen.set_in_band_resize(false);
-        assert!(!screen.in_band_resize());
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b[?2048h"));
-    assert!(out.contains("\x1b[?2048l"));
-    assert_eq!(out.matches("\x1b[?2048h").count(), 1);
-}
-
-#[test]
-fn reset_and_restore_round_trip_in_band_resize() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Canvas::new(&mut buf, (20, 1));
-        screen.set_in_band_resize(true);
-        assert!(screen.in_band_resize());
-
-        // reset: state preserved, teardown writes RM
-        screen.reset();
-        assert!(screen.in_band_resize());
-
-        // restore: re-emits SM
-        screen.restore();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    // Enable SM, reset emits RM, restore emits SM again.
-    assert!(out.matches("\x1b[?2048h").count() >= 2);
-    assert!(out.contains("\x1b[?2048l"));
 }
 
 #[test]
@@ -1489,79 +1427,6 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
         !head.contains("\x1b[50;1H") && !head.contains("\x1b[50H"),
         "reset targeted live height instead of front-buf height: head={head:?}"
     );
-}
-
-// --- foreground/background/cursor color setters ---
-
-#[test]
-fn set_foreground_color_emits_osc_10_and_is_idempotent() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Canvas::new(&mut buf, (20, 1));
-        screen.set_foreground_color(Some(crate::color::Color::Rgb(255, 128, 0)));
-        // Idempotent: same color does not re-emit.
-        screen.set_foreground_color(Some(crate::color::Color::Rgb(255, 128, 0)));
-        screen.set_foreground_color(None);
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert_eq!(out.matches("\x1b]10;").count(), 1);
-    assert!(out.contains("\x1b]110\x07"));
-}
-
-#[test]
-fn set_background_color_emits_osc_11_and_reset() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Canvas::new(&mut buf, (20, 1));
-        screen.set_background_color(Some(crate::color::Color::Rgb(0, 0, 255)));
-        screen.set_background_color(None);
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b]11;"));
-    assert!(out.contains("\x1b]111\x07"));
-}
-
-#[test]
-fn set_cursor_color_emits_osc_12_and_reset() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Canvas::new(&mut buf, (20, 1));
-        screen.set_cursor_color(Some(crate::color::Color::Rgb(0, 255, 0)));
-        screen.set_cursor_color(None);
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b]12;"));
-    assert!(out.contains("\x1b]112\x07"));
-}
-
-#[test]
-fn reset_clears_color_state_and_restore_reapplies() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Canvas::new(&mut buf, (20, 1));
-        screen.set_foreground_color(Some(crate::color::Color::Rgb(10, 20, 30)));
-        screen.set_background_color(Some(crate::color::Color::Rgb(40, 50, 60)));
-        screen.set_cursor_color(Some(crate::color::Color::Rgb(70, 80, 90)));
-        screen.reset();
-        // State preserved across reset.
-        assert!(screen.state.foreground_color.is_some());
-        assert!(screen.state.background_color.is_some());
-        assert!(screen.state.cursor_color.is_some());
-        screen.restore();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    // Reset emits the three OSC reset sequences.
-    assert!(out.contains("\x1b]110\x07"));
-    assert!(out.contains("\x1b]111\x07"));
-    assert!(out.contains("\x1b]112\x07"));
-    // Restore re-emits each set sequence (so the count is 2: initial + restore).
-    assert_eq!(out.matches("\x1b]10;").count(), 2);
-    assert_eq!(out.matches("\x1b]11;").count(), 2);
-    assert_eq!(out.matches("\x1b]12;").count(), 2);
 }
 
 // --- kitty keyboard setter ---

@@ -35,9 +35,9 @@ use std::path::PathBuf;
 
 use tokio_stream::StreamExt;
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, EventStream, Key, MouseButton};
-use uncurses::canvas::Canvas;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -437,10 +437,6 @@ impl App {
         // sync with the actual terminal mode flags.
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
-        screen.set_mouse_mode(
-            uncurses::ansi::mode::MouseMode::Normal,
-            uncurses::ansi::mode::MouseEncoding::Sgr,
-        );
         screen.flush()?;
 
         let events = EventSource::new(term.input())?.into_stream();

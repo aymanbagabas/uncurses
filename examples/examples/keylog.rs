@@ -15,10 +15,9 @@
 
 use std::io::Write;
 
-use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::buffer::SurfaceMut;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::canvas::Canvas;
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::WrapMode;
@@ -130,10 +129,6 @@ impl App {
         let cols = term.window_size().unwrap_or_default().col;
         let mut screen = Canvas::new(term.output(), (cols, 2));
         screen.set_cursor_visible(false);
-        screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr);
-        screen.set_focus_events(true);
-        screen.set_bracketed_paste(true);
-        screen.set_title("📺 keylog — events 🎹🖱️");
         let events = EventSource::new(term.input())?;
         Ok(Self {
             term,
