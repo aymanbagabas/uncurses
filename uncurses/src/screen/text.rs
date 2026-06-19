@@ -96,4 +96,41 @@ impl<W: Write> Screen<W> {
     pub fn grapheme_clusters(&self) -> bool {
         self.state.grapheme_clusters
     }
+
+    /// Display width, in columns, of `s` under the screen's current
+    /// [width mode](Self::width_mode) and
+    /// [East-Asian Ambiguous policy](Self::eaw_wide).
+    ///
+    /// Inline ANSI escapes (SGR `CSI … m`, OSC 8 hyperlinks) contribute
+    /// no width, matching how [`Self::set_str`] paints. The result
+    /// saturates at `u16::MAX`.
+    pub fn str_width(&self, s: &str) -> u16 {
+        crate::ansi::string_width(s.as_bytes(), self.width_mode(), self.eaw_wide)
+            .min(u16::MAX as usize) as u16
+    }
+
+    /// Display width, in columns, of one extended grapheme cluster `g`
+    /// under the screen's current [width mode](Self::width_mode) and
+    /// [East-Asian Ambiguous policy](Self::eaw_wide).
+    ///
+    /// In [`WidthMode::Wc`](crate::text::WidthMode::Wc) this is the width
+    /// of `g`'s first code point; in
+    /// [`WidthMode::Grapheme`](crate::text::WidthMode::Grapheme) it is the
+    /// full cluster width. See [`crate::text::grapheme_width`].
+    pub fn grapheme_width(&self, g: &str) -> u8 {
+        self.width_mode().grapheme_width(g, self.eaw_wide)
+    }
+
+    /// Iterate `s` as `(cluster, width)` pairs under the screen's current
+    /// [width mode](Self::width_mode) and
+    /// [East-Asian Ambiguous policy](Self::eaw_wide).
+    ///
+    /// Always segments by extended grapheme cluster; only the per-cluster
+    /// width follows the mode. See [`crate::text::grapheme_cells`].
+    pub fn grapheme_cells<'a>(
+        &self,
+        s: &'a str,
+    ) -> impl Iterator<Item = (&'a str, u8)> + use<'a, W> {
+        crate::text::grapheme_cells(s, self.width_mode(), self.eaw_wide)
+    }
 }
