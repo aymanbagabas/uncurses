@@ -56,6 +56,36 @@ fn with_eaw_wide_sets_eaw_wide() {
 }
 
 #[test]
+fn str_width_follows_mode_and_eaw_and_ignores_escapes() {
+    let mut screen = Screen::new(Vec::new(), (20, 1));
+    // Plain CJK: two columns regardless of mode.
+    assert_eq!(screen.str_width("中"), 2);
+    // Inline SGR contributes no width.
+    assert_eq!(screen.str_width("\x1b[31mhi\x1b[0m"), 2);
+    // Ambiguous code point flips with eaw_wide.
+    assert_eq!(screen.str_width("…"), 1);
+    let wide = Screen::new(Vec::new(), (20, 1)).with_eaw_wide(true);
+    assert_eq!(wide.str_width("…"), 2);
+    // VS16 only matters once grapheme-cluster mode is on.
+    assert_eq!(screen.str_width("\u{270b}\u{fe0e}"), 2);
+    screen.set_grapheme_clusters(true);
+    assert_eq!(screen.str_width("\u{270b}\u{fe0e}"), 1);
+}
+
+#[test]
+fn grapheme_width_and_cells_use_screen_policy() {
+    let mut screen = Screen::new(Vec::new(), (20, 1));
+    // Wc mode is cluster-blind: the VS15 tail is ignored, base '✋' is 2.
+    assert_eq!(screen.grapheme_width("\u{270b}\u{fe0e}"), 2);
+    screen.set_grapheme_clusters(true);
+    // Grapheme mode honours VS15 → text presentation, one column.
+    assert_eq!(screen.grapheme_width("\u{270b}\u{fe0e}"), 1);
+
+    let cells: Vec<_> = screen.grapheme_cells("Ae\u{0301}中").collect();
+    assert_eq!(cells, vec![("A", 1), ("e\u{0301}", 1), ("中", 2)]);
+}
+
+#[test]
 fn set_color_scheme_updates_emits_decset_2031_and_tracks_state() {
     let mut buf: Vec<u8> = Vec::new();
     {
