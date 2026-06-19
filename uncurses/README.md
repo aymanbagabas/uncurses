@@ -227,6 +227,96 @@ it with `Arc<Mutex<EventSource>>` and `EventStream::from_shared(...)`.
 
 ## Unicode features
 
+### Character widths
+
+Every cell on the grid is one or two columns wide. uncurses decides how
+many columns a character or cluster occupies with two functions in the
+`text` module:
+
+- `char_width(c, eaw_wide)` measures a single code point, wcwidth-style.
+  Controls, combining marks, format characters, and default-ignorable
+  code points are 0; code points whose East-Asian-Width property is
+  `Wide` or `Fullwidth` (most CJK) are 2; everything else is 1.
+- `grapheme_width(g, eaw_wide)` measures one extended grapheme cluster as
+  a whole. It honours variation selectors (VS15 text, VS16 emoji),
+  Regional Indicator pairs (flag emoji), ZWJ sequences, and
+  `Extended_Pictographic` default presentation per UTS #51. Combining
+  marks and joiners in the tail of a cluster add no columns.
+
+### East-Asian Ambiguous policy (`eaw_wide`)
+
+A block of code points carry East-Asian-Width `Ambiguous`: characters
+that existed in both legacy CJK encodings (drawn double-width) and
+Western text (drawn single-width), so their column count genuinely
+depends on context. Examples are box-drawing glyphs, the horizontal
+ellipsis, and many Greek and Cyrillic letters. The `eaw_wide` flag picks
+the policy:
+
+- `false` (default): Ambiguous code points are 1 column.
+- `true`: Ambiguous code points are 2 columns.
+
+Terminals configured for CJK locales usually render these double-wide
+and want `true`; most others want `false`. The policy is orthogonal to
+clustering and applies in both width modes.
+
+There is no universally correct choice. The only hard rule is that your
+measurement and the terminal's must use the same policy: if the library
+counts an Ambiguous character as 1 column while the terminal draws it as
+2 (or the reverse), every following cell on the line is misaligned, which
+shows up as overlapping glyphs, gaps, or garbled tables. The terminal's
+policy is usually tied to its locale or a config setting, and the font in
+use can pull the glyph's visual width the other way again. uncurses does
+not probe any of this; you set the policy to match your target with
+`Screen::with_eaw_wide`, and it then flows into `str_width`,
+`grapheme_width`, `set_str`, and the rest.
+
+### Grapheme-cluster mode (Unicode core, DEC 2027)
+
+How a string is split into cells is a separate choice from `eaw_wide`,
+captured by `WidthMode`:
+
+- `Wc` (default): each cluster's width is the width of its first code
+  point alone. Cluster-blind, so VS16, ZWJ joins, and emoji-presentation
+  overrides do not change the result.
+- `Grapheme`: the full cluster is measured via `grapheme_width`, so a
+  `✋` + VS16 sequence is 2 columns and a `✋` + VS15 sequence is 1.
+
+This mirrors the terminal's Unicode core mode (DEC private mode 2027).
+When the terminal advertises that it measures whole clusters, enabling
+the mode keeps the library's accounting in step with what the terminal
+actually draws; otherwise the wcwidth-style `Wc` mode matches the more
+common per-code-point behaviour.
+
+### How `Screen` measures strings
+
+A `Screen` combines both choices when it paints. `set_str`,
+`set_str_rect`, and `insert_above` all measure through the screen's
+current `width_mode()` and `eaw_wide()`:
+
+- `width_mode()` is derived from grapheme-cluster mode: `Grapheme` once
+  `set_grapheme_clusters(true)` has emitted DEC 2027, `Wc` otherwise.
+- `eaw_wide()` is fixed at construction with `Screen::with_eaw_wide(true)`
+  and defaults to `false`.
+
+```rust,ignore
+let mut screen = Screen::new(out, (80, 24)).with_eaw_wide(true);
+screen.set_grapheme_clusters(true); // measure whole clusters
+
+// Advances the cursor by the measured column count, here 2.
+let end = screen.set_str((0, 0), "中", WrapMode::Truncate);
+```
+
+To measure without painting, the screen exposes helpers that already
+carry its current mode and policy: `screen.str_width(s)` for a whole
+string's column count (inline SGR and OSC 8 are ignored, as in
+`set_str`), `screen.grapheme_width(g)` for one cluster, and
+`screen.grapheme_cells(s)` to iterate `(cluster, width)` pairs. The
+underlying `text::char_width`, `text::grapheme_width`, and
+`text::grapheme_cells` functions are also available if you want to pass a
+mode and policy explicitly.
+
+### Backends
+
 Width and grapheme segmentation come from one of two backends:
 
 - `unicode-rs` (default): pure-Rust tables, small and fast.
