@@ -1,7 +1,6 @@
 //! Terminal state management — cursor, modes, etc.
 
 use crate::ansi::KittyKeyboardFlags;
-use crate::ansi::cursor::CursorStyle;
 
 /// Tracked render-coupled terminal state for save/restore.
 #[derive(Debug, Clone)]
@@ -10,8 +9,6 @@ pub(super) struct State {
     pub alt_screen: bool,
     /// Cursor visibility.
     pub cursor_visible: bool,
-    /// Cursor style.
-    pub cursor_style: CursorStyle,
     /// Synchronized updates.
     pub sync_updates: bool,
     /// Unicode core / grapheme cluster mode (DEC 2027). When `true`,
@@ -29,7 +26,6 @@ impl Default for State {
         Self {
             alt_screen: false,
             cursor_visible: true,
-            cursor_style: CursorStyle::Default,
             sync_updates: false,
             grapheme_clusters: false,
             kitty_keyboard: KittyKeyboardFlags::NONE,
