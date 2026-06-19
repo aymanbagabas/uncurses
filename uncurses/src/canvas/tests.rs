@@ -18,7 +18,7 @@ fn test_write_and_render() {
     {
         let mut screen = Canvas::new(&mut buf, (20, 5));
         {
-            screen.set_str((0, 0), "Hello", WrapMode::Truncate);
+            screen.set_str((0, 0), "Hello", crate::style::Style::default());
         };
         screen.render();
         screen.flush().unwrap();
@@ -113,7 +113,7 @@ fn write_string_widths_follow_current_mode() {
     // the composed string; only the cursor advance differs.
     let mut screen = Canvas::new(Vec::new(), (10, 1));
     {
-        screen.set_str((0, 0), "e\u{0301}", WrapMode::Truncate);
+        screen.set_str((0, 0), "e\u{0301}", crate::style::Style::default());
     };
     assert_eq!(
         screen
@@ -134,7 +134,7 @@ fn write_string_widths_follow_current_mode() {
     screen.set_grapheme_clusters(true);
     screen.clear();
     {
-        screen.set_str((0, 0), "e\u{0301}", WrapMode::Truncate);
+        screen.set_str((0, 0), "e\u{0301}", crate::style::Style::default());
     };
     // Grapheme mode: combined into one cell.
     assert_eq!(
@@ -192,7 +192,7 @@ fn test_screen_clears_stale_chars_after_navigating() {
             screen.set_str(
                 (0, 2),
                 "icu_segmenter = \"compiled_data\"",
-                WrapMode::Truncate,
+                crate::style::Style::default(),
             );
         };
         screen.render();
@@ -247,7 +247,7 @@ fn test_screen_clears_stale_chars_after_navigating() {
 //   `fullscreen_diagonal_emits_exact_byte_stream`.
 //
 // Output-frame cases drive the same source text through Canvas
-// (with `set_str(..., WrapMode::Wrap)`), render both frames in a
+// (with `set_str_wrap(..., WrapMode::Wrap)`), render both frames in a
 // single Canvas lifetime, and assert that the relevant content and
 // clearing sequences appear in the cumulative byte stream.
 
@@ -265,7 +265,12 @@ fn fill(screen: &mut Canvas<&mut Vec<u8>>, x: u16, y: u16, content: &str) {
 
 fn draw_wrapped(screen: &mut Canvas<&mut Vec<u8>>, src: &str) {
     let bounds = screen.bounds();
-    screen.set_str((bounds.x, bounds.y), src, WrapMode::Wrap);
+    screen.set_str_wrap(
+        (bounds.x, bounds.y),
+        src,
+        WrapMode::Wrap,
+        crate::style::Style::default(),
+    );
 }
 
 fn blank_screen(screen: &mut Canvas<&mut Vec<u8>>) {
@@ -303,7 +308,11 @@ fn inline_hello_world_emits_exact_byte_stream() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Canvas::new(&mut buf, (80, 24));
-        screen.set_str((0u16, 0u16), "Hello, World!", WrapMode::Truncate);
+        screen.set_str(
+            (0u16, 0u16),
+            "Hello, World!",
+            crate::style::Style::default(),
+        );
         screen.render();
         screen.flush().unwrap();
     }
@@ -1203,11 +1212,11 @@ fn scroll_to_bottom_in_inline_mode_renders_both_frames() {
     {
         let mut screen = Canvas::new(&mut buf, (10, 5));
 
-        screen.set_str((0u16, 0u16), "ABC", WrapMode::Truncate);
+        screen.set_str((0u16, 0u16), "ABC", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
 
-        screen.set_str((0u16, 0u16), "XXX", WrapMode::Truncate);
+        screen.set_str((0u16, 0u16), "XXX", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
     }
@@ -1294,7 +1303,7 @@ fn inline_erase_until_end_of_line_clears_trailing_cells() {
     {
         let mut screen = Canvas::new(&mut buf, (10, 5));
 
-        screen.set_str((0u16, 1u16), "ABCEFGHIJK", WrapMode::Truncate);
+        screen.set_str((0u16, 1u16), "ABCEFGHIJK", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
 
@@ -1329,18 +1338,18 @@ fn redraw_identical_frame_after_clear_emits_zero_bytes() {
     let bytes_after_frame_one;
     {
         let mut screen = Canvas::new(&mut buf, (20, 4));
-        screen.set_str((0, 0), "Hello", WrapMode::Truncate);
-        screen.set_str((0, 1), "World", WrapMode::Truncate);
-        screen.set_str((0, 2), "!!!!", WrapMode::Truncate);
+        screen.set_str((0, 0), "Hello", crate::style::Style::default());
+        screen.set_str((0, 1), "World", crate::style::Style::default());
+        screen.set_str((0, 2), "!!!!", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
         bytes_after_frame_one = screen.writer.len();
 
         // Frame 2: clear + identical redraw. Must produce no bytes.
         screen.clear();
-        screen.set_str((0, 0), "Hello", WrapMode::Truncate);
-        screen.set_str((0, 1), "World", WrapMode::Truncate);
-        screen.set_str((0, 2), "!!!!", WrapMode::Truncate);
+        screen.set_str((0, 0), "Hello", crate::style::Style::default());
+        screen.set_str((0, 1), "World", crate::style::Style::default());
+        screen.set_str((0, 2), "!!!!", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
 
@@ -1360,7 +1369,7 @@ fn reset_moves_cursor_to_last_row_inline() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Canvas::new(&mut buf, (20, 5));
-        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
         screen.render();
         screen.reset();
         screen.flush().unwrap();
@@ -1381,7 +1390,7 @@ fn reset_moves_cursor_to_last_row_alt_screen() {
     {
         let mut screen = Canvas::new(&mut buf, (20, 5));
         screen.set_alt_screen(true);
-        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
         screen.render();
         screen.reset();
         screen.flush().unwrap();
@@ -1412,7 +1421,7 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
     {
         let mut screen = Canvas::new(&mut buf, (20, 5));
         screen.set_alt_screen(true);
-        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
         screen.render();
         // Grow the screen. front_buf still reflects the 5-row render.
         screen.resize(20, 50);

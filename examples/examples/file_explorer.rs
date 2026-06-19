@@ -41,7 +41,6 @@ use uncurses::event::{Event, EventSource, EventStream, Key, MouseButton};
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 const PREVIEW_LIMIT: usize = 64 * 1024;
 
@@ -259,7 +258,11 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Canvas<W>) {
     if w < 20 || h < 5 {
         screen.clear();
         {
-            screen.set_str((0, 0), "terminal too small", WrapMode::Truncate);
+            screen.set_str(
+                (0, 0),
+                "terminal too small",
+                uncurses::style::Style::default(),
+            );
         };
         return;
     }
@@ -294,7 +297,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Canvas<W>) {
         );
         let pad = clip_to(&pad, w);
         {
-            screen.set_str_with((0, 0), &pad, WrapMode::Truncate, header.clone());
+            screen.set_str((0, 0), &pad, header.clone());
         };
     }
 
@@ -324,7 +327,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Canvas<W>) {
                 (false, false) => normal.clone(),
             };
             {
-                screen.set_str_with((0, y), &padded, WrapMode::Truncate, style.clone());
+                screen.set_str((0, y), &padded, style.clone());
             };
         }
     }
@@ -332,7 +335,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Canvas<W>) {
     // Vertical divider.
     for row in 0..body_h {
         {
-            screen.set_str_with((list_w, row + 1), "│", WrapMode::Truncate, dim.clone());
+            screen.set_str((list_w, row + 1), "│", dim.clone());
         };
     }
 
@@ -343,12 +346,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Canvas<W>) {
         if let Some(line) = app.preview_lines.get(idx) {
             let s = clip_to(line, preview_w);
             {
-                screen.set_str_with(
-                    (preview_x, row as u16 + 1),
-                    &s,
-                    WrapMode::Truncate,
-                    normal.clone(),
-                );
+                screen.set_str((preview_x, row as u16 + 1), &s, normal.clone());
             };
         }
     }
@@ -358,10 +356,9 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Canvas<W>) {
     let help = "↑↓:move  ⏎:open  ⌫:up  PgUp/PgDn:scroll  r:refresh  q:quit";
     let status_line = format!(" {}  ·  {}", app.status, help);
     let status_line = pad_to(&clip_to(&status_line, w), w);
-    screen.set_str_with(
+    screen.set_str(
         (0, status_y),
         &status_line,
-        WrapMode::Truncate,
         Style::default()
             .bg(Color::Basic(BasicColor::BrightBlack))
             .fg(Color::Basic(BasicColor::White)),

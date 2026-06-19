@@ -19,7 +19,6 @@ use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, MouseButto
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 const HEADER: &str = "cursor_pad — arrows/mouse to move, type to write, Ctrl-C to quit";
 const HEADER_ROWS: u16 = 1;
@@ -31,7 +30,7 @@ fn redraw<W: Write>(screen: &mut Canvas<W>) -> std::io::Result<()> {
     } else {
         HEADER.chars().take(w as usize).collect()
     };
-    screen.set_str_with((0, 0), &header, WrapMode::Truncate, Style::default());
+    screen.set_str((0, 0), &header, Style::default());
     Ok(())
 }
 
@@ -119,23 +118,16 @@ impl App {
                     }
                     KeyCode::Backspace if self.cx > 0 => {
                         self.cx -= 1;
-                        self.screen.set_str_with(
-                            (self.cx, self.cy),
-                            " ",
-                            WrapMode::Truncate,
-                            Style::default(),
-                        );
+                        self.screen
+                            .set_str((self.cx, self.cy), " ", Style::default());
                     }
                     _ => {
                         if let Some(text) = key.text.as_deref()
                             && !text.is_empty()
                         {
-                            let end = self.screen.set_str_with(
-                                (self.cx, self.cy),
-                                text,
-                                WrapMode::Truncate,
-                                Style::default(),
-                            );
+                            let end =
+                                self.screen
+                                    .set_str((self.cx, self.cy), text, Style::default());
                             let (nx, ny) = clamp_to_screen(&self.screen, end.x, end.y);
                             self.cx = nx;
                             self.cy = ny;

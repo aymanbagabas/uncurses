@@ -21,7 +21,6 @@ use uncurses::layout::Position;
 use uncurses::style::{Style, UnderlineStyle};
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 const BOX_W: u16 = 56;
 const BOX_H: u16 = 16;
@@ -83,11 +82,11 @@ fn draw_box<W: Write>(screen: &mut Canvas<W>, a: Anchor, style: &Style) {
     }
     bot.push('┘');
 
-    screen.set_str_with((x0, y0), &top, WrapMode::Truncate, style.clone());
-    screen.set_str_with((x0, y1), &bot, WrapMode::Truncate, style.clone());
+    screen.set_str((x0, y0), &top, style.clone());
+    screen.set_str((x0, y1), &bot, style.clone());
     for y in y0 + 1..y1 {
-        screen.set_str_with((x0, y), "│", WrapMode::Truncate, style.clone());
-        screen.set_str_with((x1, y), "│", WrapMode::Truncate, style.clone());
+        screen.set_str((x0, y), "│", style.clone());
+        screen.set_str((x1, y), "│", style.clone());
     }
 }
 
@@ -101,11 +100,11 @@ fn fill_inside<W: Write>(screen: &mut Canvas<W>, a: Anchor, style: &Style) {
 }
 
 fn write<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, s: &str, style: &Style) {
-    screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone());
+    screen.set_str((x, y), s, style.clone());
 }
 
 fn write_link<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
-    screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone().link(url, ""));
+    screen.set_str((x, y), s, style.clone().link(url, ""));
 }
 
 fn footer<W: Write>(screen: &mut Canvas<W>, a: Anchor, hint: &str) {

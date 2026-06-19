@@ -135,27 +135,16 @@ fn paint_content<W: Write>(screen: &mut Canvas<W>) {
     let plain = Style::default();
     let bullet_color = Style::default().fg(BasicColor::Yellow.into());
 
-    screen.set_str_with(
-        (0, 1),
-        "Press m to toggle the modal.",
-        WrapMode::Truncate,
-        cyan,
-    );
-    screen.set_str_with(
+    screen.set_str((0, 1), "Press m to toggle the modal.", cyan);
+    screen.set_str(
         (0, 2),
         "Behind the modal there's regular flow content:",
-        WrapMode::Truncate,
         plain,
     );
     for (i, label) in ["item 1", "item 2", "item 3", "item 4"].iter().enumerate() {
         let y = 3 + i as u16;
-        screen.set_str_with(
-            (0, y),
-            "•",
-            WrapMode::Truncate,
-            Style::default().fg(BasicColor::Yellow.into()),
-        );
-        screen.set_str_with((2, y), label, WrapMode::Truncate, bullet_color.clone());
+        screen.set_str((0, y), "•", Style::default().fg(BasicColor::Yellow.into()));
+        screen.set_str((2, y), label, bullet_color.clone());
     }
 }
 
@@ -196,18 +185,18 @@ fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;
     for x in (rect.x + 1)..right {
-        screen.set_str_with((x, rect.y), "─", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((x, bottom), "─", WrapMode::Truncate, frame.clone());
+        screen.set_str((x, rect.y), "─", frame.clone());
+        screen.set_str((x, bottom), "─", frame.clone());
     }
     for y in (rect.y + 1)..bottom {
-        screen.set_str_with((rect.x, y), "│", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((right, y), "│", WrapMode::Truncate, frame.clone());
+        screen.set_str((rect.x, y), "│", frame.clone());
+        screen.set_str((right, y), "│", frame.clone());
     }
     // Rounded corners.
-    screen.set_str_with((rect.x, rect.y), "╭", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, rect.y), "╮", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((rect.x, bottom), "╰", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, bottom), "╯", WrapMode::Truncate, frame.clone());
+    screen.set_str((rect.x, rect.y), "╭", frame.clone());
+    screen.set_str((right, rect.y), "╮", frame.clone());
+    screen.set_str((rect.x, bottom), "╰", frame.clone());
+    screen.set_str((right, bottom), "╯", frame.clone());
 
     let inner = Rect::new(
         rect.x + 2,
@@ -219,14 +208,13 @@ fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())
         .bold();
-    screen.set_str_rect_with(
+    screen.set_str_rect(
         Rect::new(inner.x, inner.y, inner.width, 1),
         "Modal Dialog",
-        WrapMode::Truncate,
         title,
     );
     let copy = "I sit on top thanks to z-index: 20.";
-    screen.set_str_rect_with(
+    screen.set_str_rect_wrap(
         Rect::new(
             inner.x,
             inner.y + 1,
@@ -237,10 +225,9 @@ fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
         WrapMode::Wrap,
         body,
     );
-    screen.set_str_rect_with(
+    screen.set_str_rect(
         Rect::new(inner.x, bottom - 1, inner.width, 1),
         "Press m or Esc to dismiss.",
-        WrapMode::Truncate,
         hint,
     );
 }

@@ -13,7 +13,6 @@ use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 struct App {
     term: Terminal<Stdin, Stdout>,
@@ -164,12 +163,7 @@ fn redraw<W: Write>(screen: &mut Canvas<W>, alt: bool) {
         .bold();
     let help = Style::default().fg(BasicColor::BrightBlack.into());
 
-    screen.set_str((2, 1), "You're in", WrapMode::Truncate);
-    screen.set_str_with((12, 1), mode, WrapMode::Truncate, keyword);
-    screen.set_str_with(
-        (2, 3),
-        "space: switch modes • q: quit",
-        WrapMode::Truncate,
-        help,
-    );
+    screen.set_str((2, 1), "You're in", uncurses::style::Style::default());
+    screen.set_str((12, 1), mode, keyword);
+    screen.set_str((2, 3), "space: switch modes • q: quit", help);
 }

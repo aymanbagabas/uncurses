@@ -16,7 +16,6 @@ use uncurses::canvas::Canvas;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 const TICK: Duration = Duration::from_millis(500);
 
@@ -139,7 +138,11 @@ fn redraw<W: std::io::Write>(
         uptime.subsec_millis() / 100,
     );
     {
-        screen.set_str((0, 0), &truncate(&header, w), WrapMode::Truncate);
+        screen.set_str(
+            (0, 0),
+            &truncate(&header, w),
+            uncurses::style::Style::default(),
+        );
     };
     let body_top = 2;
     let body_height = screen.height().saturating_sub(body_top);
@@ -147,7 +150,11 @@ fn redraw<W: std::io::Write>(
     for (i, line) in log.iter().skip(start).enumerate() {
         let row = body_top + i as u16;
         {
-            screen.set_str((0, row), &truncate(line, w), WrapMode::Truncate);
+            screen.set_str(
+                (0, row),
+                &truncate(line, w),
+                uncurses::style::Style::default(),
+            );
         };
     }
     Ok(())

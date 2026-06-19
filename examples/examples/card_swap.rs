@@ -10,7 +10,6 @@ use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 const CARD_W: u16 = 20;
 const CARD_H: u16 = 10;
@@ -104,12 +103,7 @@ fn redraw<W: Write>(screen: &mut Canvas<W>, flip: bool) {
     let footer = Style::default().fg(BasicColor::BrightBlack.into());
     let footer_text = "Press any key to swap the cards, or q to quit.";
     if h >= 2 {
-        screen.set_str_with(
-            (2, h.saturating_sub(2)),
-            footer_text,
-            WrapMode::Truncate,
-            footer,
-        );
+        screen.set_str((2, h.saturating_sub(2)), footer_text, footer);
     }
 
     if w < CARD_W + 14 || h < CARD_H + 4 {
@@ -141,7 +135,7 @@ fn draw_card<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, label: &str, bord
     let blank = " ".repeat(w as usize - 2);
     // Erase interior with default bg so the lower card doesn't bleed through.
     for row in 1..h - 1 {
-        screen.set_str((x + 1, y + row), &blank, WrapMode::Truncate);
+        screen.set_str((x + 1, y + row), &blank, uncurses::style::Style::default());
     }
 
     // Rounded corners + horizontals + verticals.
@@ -153,21 +147,16 @@ fn draw_card<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, label: &str, bord
         .chain(std::iter::repeat_n('─', w as usize - 2))
         .chain(std::iter::once('╯'))
         .collect();
-    screen.set_str_with((x, y), &top, WrapMode::Truncate, border.clone());
-    screen.set_str_with((x, y + h - 1), &bot, WrapMode::Truncate, border.clone());
+    screen.set_str((x, y), &top, border.clone());
+    screen.set_str((x, y + h - 1), &bot, border.clone());
     for row in 1..h - 1 {
-        screen.set_str_with((x, y + row), "│", WrapMode::Truncate, border.clone());
-        screen.set_str_with(
-            (x + w - 1, y + row),
-            "│",
-            WrapMode::Truncate,
-            border.clone(),
-        );
+        screen.set_str((x, y + row), "│", border.clone());
+        screen.set_str((x + w - 1, y + row), "│", border.clone());
     }
 
     // Centered label.
     let lw = label.chars().count() as u16;
     let lx = x + (w.saturating_sub(lw)) / 2;
     let ly = y + h / 2;
-    screen.set_str((lx, ly), label, WrapMode::Truncate);
+    screen.set_str((lx, ly), label, uncurses::style::Style::default());
 }

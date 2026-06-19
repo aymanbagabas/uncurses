@@ -19,14 +19,13 @@
 //! use uncurses::canvas::Canvas;
 //! use uncurses::style::Style;
 //! use uncurses::color::{Color, BasicColor};
-//! use uncurses::text::WrapMode;
 //! use uncurses::terminal::stdout;
 //!
 //! let mut screen = Canvas::new(stdout(), (80, 24));
 //! let style = Style::default()
 //!     .bold()
 //!     .fg(Color::Basic(BasicColor::Green));
-//! screen.set_str_with((0, 0), "Hello, terminal!", WrapMode::Truncate, style);
+//! screen.set_str((0, 0), "Hello, terminal!", style);
 //!
 //! screen.render();
 //! screen.flush().unwrap();

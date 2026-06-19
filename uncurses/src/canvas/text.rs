@@ -9,59 +9,60 @@ use crate::text::{Painter, WidthMode, WrapMode};
 use super::Canvas;
 
 impl<W: Write> Canvas<W> {
-    /// Paint `s` into this screen starting at `pos`. See
-    /// [`Painter::set_str`] for full semantics — inline SGR (`CSI … m`)
-    /// updates style mid-stream and inline OSC 8 sequences attach a
-    /// hyperlink to subsequent cells. Returns the position immediately
-    /// after the last painted cell.
+    /// Paint `s` into this screen at `pos` with `style` as the starting
+    /// style, truncating at the right edge. See [`Painter::set_str`]
+    /// for full semantics — inline SGR (`CSI … m`) updates the style
+    /// mid-stream and inline OSC 8 sequences attach a hyperlink to
+    /// subsequent cells. Returns the position immediately after the last
+    /// painted cell. Use [`Self::set_str_wrap`] to control wrapping.
     ///
     /// ```ignore
-    /// screen.set_str((0, 0), "hi", WrapMode::Truncate);
+    /// screen.set_str((0, 0), "hi", Style::default());
     /// ```
     pub fn set_str(
         &mut self,
         pos: impl Into<crate::layout::Position>,
         s: &str,
-        wrap: WrapMode,
+        style: Style,
     ) -> crate::layout::Position {
-        self.painter().set_str(pos, s, wrap)
+        self.painter().set_str(pos, s, style)
     }
 
-    /// Like [`Self::set_str`] but starts with the given `style` instead
-    /// of [`Style::default()`]. Inline SGR/OSC 8 sequences in `s` still
-    /// mutate the painter's state as they're encountered.
-    pub fn set_str_with(
+    /// Like [`Self::set_str`] but with an explicit [`WrapMode`].
+    pub fn set_str_wrap(
         &mut self,
         pos: impl Into<crate::layout::Position>,
         s: &str,
         wrap: WrapMode,
         style: Style,
     ) -> crate::layout::Position {
-        self.painter().set_str_with(pos, s, wrap, style)
+        self.painter().set_str_wrap(pos, s, wrap, style)
     }
 
     /// Paint `s` clipped to `rect` (in the screen's own coordinate
-    /// space). Painting starts at `rect`'s top-left corner; `\n` resets
-    /// `x` to `rect.left()` and advances `y`. See [`Painter::set_str_rect`].
+    /// space) with `style` as the starting style, truncating at `rect`'s
+    /// right edge. Painting starts at `rect`'s top-left corner; `\n`
+    /// resets `x` to `rect.left()` and advances `y`. Use
+    /// [`Self::set_str_rect_wrap`] to control wrapping. See
+    /// [`Painter::set_str_rect`].
     pub fn set_str_rect(
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
-        wrap: WrapMode,
+        style: Style,
     ) -> crate::layout::Position {
-        self.painter().set_str_rect(rect, s, wrap)
+        self.painter().set_str_rect(rect, s, style)
     }
 
-    /// Like [`Self::set_str_rect`] but starts with the given `style`
-    /// instead of [`Style::default()`].
-    pub fn set_str_rect_with(
+    /// Like [`Self::set_str_rect`] but with an explicit [`WrapMode`].
+    pub fn set_str_rect_wrap(
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
         style: Style,
     ) -> crate::layout::Position {
-        self.painter().set_str_rect_with(rect, s, wrap, style)
+        self.painter().set_str_rect_wrap(rect, s, wrap, style)
     }
 
     /// Construct a [`Painter`] that writes into this screen, wired up
