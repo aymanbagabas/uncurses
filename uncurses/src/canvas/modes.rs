@@ -1,5 +1,5 @@
 //! Render-coupled mode toggles for [`Canvas`] — alt screen, cursor
-//! visibility/style, synchronized output, and grapheme clusters
+//! visibility, synchronized output, and grapheme clusters
 //! (DEC 2027).
 //!
 //! These setters only stage escape bytes into the screen's in-memory
@@ -9,7 +9,7 @@
 
 use std::io::Write;
 
-use crate::ansi::{cursor, kitty, mode};
+use crate::ansi::{kitty, mode};
 
 use super::Canvas;
 
@@ -61,14 +61,6 @@ impl<W: Write> Canvas<W> {
                 mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
             }
             self.state.cursor_visible = visible;
-        }
-    }
-
-    /// Set cursor style.
-    pub fn set_cursor_style(&mut self, style: cursor::CursorStyle) {
-        if self.state.cursor_style != style {
-            cursor::write_cursor_style(&mut self.buf, style).unwrap();
-            self.state.cursor_style = style;
         }
     }
 

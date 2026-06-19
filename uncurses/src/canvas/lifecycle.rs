@@ -41,9 +41,6 @@ impl<W: Write> Canvas<W> {
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.set(&mut self.buf).unwrap();
         }
-        if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.buf, cursor::CursorStyle::Default).unwrap();
-        }
         // Clear the alt screen's kitty keyboard frame *before* leaving
         // the alt screen — the stack is per-screen-buffer, so the
         // clear must be issued while alt is still active.
@@ -117,9 +114,6 @@ impl<W: Write> Canvas<W> {
         }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
-        }
-        if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.buf, self.state.cursor_style).unwrap();
         }
     }
 

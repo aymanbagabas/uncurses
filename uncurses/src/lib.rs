@@ -65,6 +65,7 @@ pub mod layout;
 pub mod renderer;
 #[cfg(not(feature = "bench"))]
 pub(crate) mod renderer;
+pub mod screen;
 pub mod style;
 pub mod terminal;
 pub mod text;
