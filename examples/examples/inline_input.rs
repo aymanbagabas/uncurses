@@ -4,7 +4,7 @@
 //! the prompt grows vertically as you type, editing in place at the
 //! bottom of the screen. `Enter` inserts a newline at the cursor.
 //! `Ctrl-D` commits the whole multiline block above the screen via
-//! [`Screen::insert_above`] (it scrolls into the scrollback) and
+//! [`Canvas::insert_above`] (it scrolls into the scrollback) and
 //! clears the buffer for the next entry.
 //!
 //! Navigation: arrow keys move within the buffer. `Backspace` deletes
@@ -20,7 +20,7 @@ use std::io::Write;
 
 use uncurses::buffer::SurfaceMut;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, PasteBuffer};
-use uncurses::screen::Screen;
+use uncurses::canvas::Canvas;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{TtyInput, TtyOutput};
@@ -153,7 +153,7 @@ fn char_index_to_byte(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
-fn redraw<W: std::io::Write>(screen: &mut Screen<W>, buf: &Buffer) {
+fn redraw<W: std::io::Write>(screen: &mut Canvas<W>, buf: &Buffer) {
     screen.clear();
     for (row, line) in buf.lines.iter().enumerate() {
         let prefix = if row == 0 { "> " } else { ". " };
@@ -188,7 +188,7 @@ fn redraw<W: std::io::Write>(screen: &mut Screen<W>, buf: &Buffer) {
 
 struct App {
     term: Terminal<TtyInput, TtyOutput>,
-    screen: Screen<TtyOutput>,
+    screen: Canvas<TtyOutput>,
     events: EventSource<TtyInput>,
     buffer: Buffer,
     paste: Option<PasteBuffer>,
@@ -198,7 +198,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::open()?;
         term.make_raw()?;
-        let mut screen = Screen::new(
+        let mut screen = Canvas::new(
             term.output(),
             (term.window_size().unwrap_or_default().col, 1),
         );

@@ -7,9 +7,9 @@ use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::Cell as RtCell;
 use ratatui::layout::{Position as RtPosition, Size as RtSize};
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::cell::Cell as CzCell;
 use uncurses::event::{Event, EventSource, Input, query};
-use uncurses::screen::Screen;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{State, Stdin, Stdout, TtyInput, TtyOutput};
 
@@ -36,7 +36,7 @@ const CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// A `ratatui` [`Backend`](ratatui::backend::Backend) that owns the whole
 /// terminal stack: the [`Terminal`] handle (raw-mode lifecycle, window
-/// size), the [`Screen`] it renders through, and a shared [`EventSource`]
+/// size), the [`Canvas`] it renders through, and a shared [`EventSource`]
 /// for input.
 ///
 /// Side-effecting methods (`hide_cursor`, `show_cursor`,
@@ -57,11 +57,11 @@ const CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(2000);
 ///
 /// Construction is explicit: it does not enter raw mode or the alternate
 /// screen. Call [`make_raw`](Self::make_raw) and the relevant
-/// [`Screen`](Self::screen_mut) mode setters yourself, and
+/// [`Canvas`](Self::screen_mut) mode setters yourself, and
 /// [`restore`](Self::restore) on exit.
 pub struct UncursesBackend<I: Input, O: Write> {
     terminal: Terminal<I, O>,
-    screen: Screen<O>,
+    screen: Canvas<O>,
     events: Arc<Mutex<EventSource<I>>>,
     /// The ratatui viewport, set via [`set_viewport`](Self::set_viewport)
     /// (by `init_with_options`). Determines the screen buffer height
@@ -126,7 +126,7 @@ where
             .ok()
             .filter(|&(c, r)| c != 0 && r != 0)
             .unwrap_or(DEFAULT_SIZE);
-        let screen = Screen::new(terminal.output(), size);
+        let screen = Canvas::new(terminal.output(), size);
         let events = EventSource::new(terminal.input())?;
         Ok(Self::new(terminal, events, screen))
     }
@@ -140,7 +140,7 @@ where
     /// Build a backend from pre-constructed parts, so a caller can reuse
     /// an existing terminal, source, and screen. The source is wrapped in
     /// `Arc<Mutex<_>>` for sharing with an async stream.
-    pub fn new(terminal: Terminal<I, O>, events: EventSource<I>, screen: Screen<O>) -> Self {
+    pub fn new(terminal: Terminal<I, O>, events: EventSource<I>, screen: Canvas<O>) -> Self {
         Self {
             terminal,
             screen,
@@ -192,12 +192,12 @@ where
     }
 
     /// Borrow the screen.
-    pub fn screen(&self) -> &Screen<O> {
+    pub fn screen(&self) -> &Canvas<O> {
         &self.screen
     }
 
     /// Mutably borrow the screen (mode setters, manual rendering).
-    pub fn screen_mut(&mut self) -> &mut Screen<O> {
+    pub fn screen_mut(&mut self) -> &mut Canvas<O> {
         &mut self.screen
     }
 

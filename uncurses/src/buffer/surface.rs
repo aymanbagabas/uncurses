@@ -3,7 +3,7 @@
 //! The buffer-like types ([`Buffer`](super::Buffer),
 //! [`RenderBuffer`](crate::renderer::RenderBuffer),
 //! [`Window`](super::Window), [`View`](super::View),
-//! [`Screen`](crate::screen::Screen)) all share the same shape: a
+//! [`Canvas`](crate::canvas::Canvas)) all share the same shape: a
 //! rectangular region of [`Cell`]s with read and/or write access. This
 //! module defines the three small traits that capture that shape.
 //!

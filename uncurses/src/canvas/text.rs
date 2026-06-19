@@ -1,4 +1,4 @@
-//! String painting and width-mode accessors for [`Screen`].
+//! String painting and width-mode accessors for [`Canvas`].
 
 use std::io::Write;
 
@@ -6,9 +6,9 @@ use crate::layout::Rect;
 use crate::style::Style;
 use crate::text::{Painter, WidthMode, WrapMode};
 
-use super::Screen;
+use super::Canvas;
 
-impl<W: Write> Screen<W> {
+impl<W: Write> Canvas<W> {
     /// Paint `s` into this screen starting at `pos`. See
     /// [`Painter::set_str`] for full semantics — inline SGR (`CSI … m`)
     /// updates style mid-stream and inline OSC 8 sequences attach a
@@ -87,7 +87,7 @@ impl<W: Write> Screen<W> {
     /// East-Asian-Width property is `Ambiguous` are measured as 2
     /// cells instead of 1. Terminals configured for CJK locales
     /// typically want `true`. See [`crate::text::char_width`]. Set at
-    /// construction with [`Screen::with_eaw_wide`].
+    /// construction with [`Canvas::with_eaw_wide`].
     pub fn eaw_wide(&self) -> bool {
         self.eaw_wide
     }

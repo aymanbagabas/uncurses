@@ -4,7 +4,7 @@
 //!
 //! - reads directory entries from the filesystem (`std::fs`),
 //! - lazily loads a preview of the highlighted file (capped at 64 KiB),
-//! - draws a two-pane TUI through the cell-based `Screen` so the
+//! - draws a two-pane TUI through the cell-based `Canvas` so the
 //!   renderer can diff between frames and only emit the cells that
 //!   actually changed,
 //! - handles keyboard navigation, mouse clicks, mouse-wheel scrolling,
@@ -37,7 +37,7 @@ use tokio_stream::StreamExt;
 use uncurses::buffer::SurfaceMut;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, EventStream, Key, MouseButton};
-use uncurses::screen::Screen;
+use uncurses::canvas::Canvas;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -253,7 +253,7 @@ fn hex_dump(bytes: &[u8]) -> String {
 
 // -- Rendering ---------------------------------------------------------------
 
-fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
+fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Canvas<W>) {
     let w = screen.width();
     let h = screen.height();
     if w < 20 || h < 5 {
@@ -402,7 +402,7 @@ fn unicode_char_width(ch: char) -> usize {
 
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventStream<Stdin>,
     state: ExplorerState,
     quit_keys: [Key; 3],
@@ -430,7 +430,7 @@ impl App {
         let mut term = Terminal::stdio();
         term.make_raw()?;
 
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
 
         // Enter the alt screen, hide the cursor, and enable SGR-encoded
         // mouse tracking via the screen API so internal state stays in

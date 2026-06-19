@@ -1,4 +1,4 @@
-//! Compositional `uncurses` demo: a `Terminal` handle feeding a `Screen`
+//! Compositional `uncurses` demo: a `Terminal` handle feeding a `Canvas`
 //! and a `EventSource`, with a startup `query`.
 //!
 //! Run with `cargo run --example terminal`. Opens the controlling
@@ -7,15 +7,15 @@
 //! you press `q` or Ctrl-C.
 //!
 //! Nothing is hidden behind a facade: the `Terminal` owns the device and
-//! its raw-mode lifecycle, while its `Copy` halves drive `Screen`
+//! its raw-mode lifecycle, while its `Copy` halves drive `Canvas`
 //! (output) and `EventSource` (input). You own the loop.
 
 use std::io;
 use std::io::Write;
 use std::time::Duration;
 
+use uncurses::canvas::Canvas;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, query};
-use uncurses::screen::Screen;
 use uncurses::terminal::Terminal;
 use uncurses::text::WrapMode;
 
@@ -23,7 +23,7 @@ fn main() -> io::Result<()> {
     let mut term = Terminal::open()?;
     term.make_raw()?;
 
-    let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+    let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
     let mut source = EventSource::new(term.input())?;
 
     screen.set_alt_screen(true);

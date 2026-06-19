@@ -12,8 +12,8 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::WrapMode;
@@ -25,7 +25,7 @@ const TICK: Duration = Duration::from_millis(500);
 /// `stop` restores the terminal.
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     started: Instant,
     log: VecDeque<String>,
@@ -35,7 +35,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
@@ -127,7 +127,7 @@ fn push(log: &mut VecDeque<String>, line: String, height: u16) {
 }
 
 fn redraw<W: std::io::Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     log: &VecDeque<String>,
     uptime: Duration,
 ) -> std::io::Result<()> {

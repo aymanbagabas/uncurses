@@ -16,7 +16,7 @@ use std::io::Write;
 
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, MouseButton};
-use uncurses::screen::Screen;
+use uncurses::canvas::Canvas;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -25,7 +25,7 @@ use uncurses::text::WrapMode;
 const HEADER: &str = "cursor_pad — arrows/mouse to move, type to write, Ctrl-C to quit";
 const HEADER_ROWS: u16 = 1;
 
-fn redraw<W: Write>(screen: &mut Screen<W>) -> std::io::Result<()> {
+fn redraw<W: Write>(screen: &mut Canvas<W>) -> std::io::Result<()> {
     let w = screen.width();
     let header = if (HEADER.len() as u16) <= w {
         HEADER.to_string()
@@ -36,7 +36,7 @@ fn redraw<W: Write>(screen: &mut Screen<W>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn clamp_to_screen<W: Write>(screen: &Screen<W>, x: u16, y: u16) -> (u16, u16) {
+fn clamp_to_screen<W: Write>(screen: &Canvas<W>, x: u16, y: u16) -> (u16, u16) {
     let w = screen.width().saturating_sub(1);
     let h = screen.height().saturating_sub(1);
     (x.min(w), y.min(h))
@@ -44,7 +44,7 @@ fn clamp_to_screen<W: Write>(screen: &Screen<W>, x: u16, y: u16) -> (u16, u16) {
 
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     cx: u16,
     cy: u16,
@@ -54,7 +54,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
 
         screen.set_alt_screen(true);
         screen.set_cursor_visible(true);

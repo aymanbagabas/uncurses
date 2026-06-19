@@ -7,9 +7,9 @@
 use std::io::Write;
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -17,7 +17,7 @@ use uncurses::text::WrapMode;
 
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     alt: bool,
     size_col: u16,
@@ -30,7 +30,7 @@ impl App {
         term.make_raw()?;
         let size = term.window_size().unwrap_or_default();
         // Inline mode: 4 rows is enough for the message + help.
-        let mut screen = Screen::new(term.output(), (size.col, 4));
+        let mut screen = Canvas::new(term.output(), (size.col, 4));
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
 
@@ -151,7 +151,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, alt: bool) {
+fn redraw<W: Write>(screen: &mut Canvas<W>, alt: bool) {
     screen.clear();
     let mode = if alt {
         " alt-screen mode "

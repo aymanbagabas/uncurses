@@ -49,7 +49,7 @@ impl Renderer {
 
     /// Render the renderer-owned `back_buf` (populated by
     /// [`Renderer::sync_front`]) and reset its touched flags. The
-    /// `Screen` flow uses this after `sync_front` to keep `back_buf`
+    /// `Canvas` flow uses this after `sync_front` to keep `back_buf`
     /// internal to the renderer.
     pub(crate) fn render_back(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
         // Swap back_buf out so the existing pipeline can borrow it as

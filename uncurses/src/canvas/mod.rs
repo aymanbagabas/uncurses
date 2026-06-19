@@ -1,4 +1,4 @@
-//! Screen — the orchestrator for rendering + terminal state management.
+//! Canvas — the orchestrator for rendering + terminal state management.
 //!
 //! Owns the RenderBuffer (touch-tracked cell grid), the Renderer (output
 //! diffing), and the underlying writer.
@@ -46,11 +46,11 @@ pub use crate::renderer::Optimizations;
 ///
 /// # Managed area
 ///
-/// A `Screen` manages a rectangular slice of the terminal window and
+/// A `Canvas` manages a rectangular slice of the terminal window and
 /// works in two layouts. Either way the screen owns and diffs only the
 /// `#` region below; everything else belongs to the terminal.
 ///
-/// **Fullscreen** ([alt screen](Screen::set_alt_screen) on): the managed
+/// **Fullscreen** ([alt screen](Canvas::set_alt_screen) on): the managed
 /// area is the *entire* terminal viewport, addressed with absolute cursor
 /// moves. Nothing outside it survives.
 ///
@@ -82,10 +82,10 @@ pub use crate::renderer::Optimizations;
 ///       |<---- term width --->|
 /// ```
 ///
-/// [`resize`](Screen::resize) sets this area's size: in fullscreen pass
+/// [`resize`](Canvas::resize) sets this area's size: in fullscreen pass
 /// the terminal's `(width, height)`; inline, pass the terminal width and
 /// the height your application draws.
-pub struct Screen<W: Write> {
+pub struct Canvas<W: Write> {
     /// The underlying byte sink.
     writer: W,
     /// Touch-tracked cell grid. Holds both the intended frame state and
@@ -93,14 +93,14 @@ pub struct Screen<W: Write> {
     front_buf: RenderBuffer,
     /// The diff renderer.
     renderer: Renderer,
-    /// Scratch byte buffer that every Screen method (mode changes,
+    /// Scratch byte buffer that every Canvas method (mode changes,
     /// cursor moves, frame diffs, raw [`io::Write`] passthrough)
     /// stages bytes into before [`io::Write::flush`] drains them to
     /// the owned writer.
     buf: Vec<u8>,
     /// Terminal state.
     state: State,
-    /// Screen dimensions.
+    /// Canvas dimensions.
     width: u16,
     height: u16,
     /// East-Asian Ambiguous policy used when measuring strings: when
@@ -111,7 +111,7 @@ pub struct Screen<W: Write> {
     eaw_wide: bool,
 }
 
-impl<W: Write> Screen<W> {
+impl<W: Write> Canvas<W> {
     /// Create a new terminal screen with the given writer and initial
     /// `(width, height)` in cells, using a color profile and
     /// optimization set auto-detected from the process environment.
@@ -120,11 +120,11 @@ impl<W: Write> Screen<W> {
     /// `(width, height)` pair, or a [`Winsize`](crate::terminal::Winsize)
     /// straight from [`get_window_size`](crate::terminal::get_window_size).
     ///
-    /// Use [`Screen::from_env`] to detect from a specific environment,
+    /// Use [`Canvas::from_env`] to detect from a specific environment,
     /// and the consuming builders
-    /// [`with_color_profile`](Screen::with_color_profile),
-    /// [`with_optimizations`](Screen::with_optimizations), and
-    /// [`with_eaw_wide`](Screen::with_eaw_wide) to override the
+    /// [`with_color_profile`](Canvas::with_color_profile),
+    /// [`with_optimizations`](Canvas::with_optimizations), and
+    /// [`with_eaw_wide`](Canvas::with_eaw_wide) to override the
     /// detected defaults.
     pub fn new(writer: W, size: impl Into<(u16, u16)>) -> Self {
         Self::from_env(writer, size, &Env::from_process())
@@ -170,7 +170,7 @@ impl<W: Write> Screen<W> {
     }
 
     /// Build with the East-Asian Ambiguous width policy set (see
-    /// [`Screen::eaw_wide`]). Consuming builder for use right after
+    /// [`Canvas::eaw_wide`]). Consuming builder for use right after
     /// construction.
     pub fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
         self.eaw_wide = eaw_wide;
@@ -179,7 +179,7 @@ impl<W: Write> Screen<W> {
 
     /// Build with an explicit color [`Profile`], overriding the
     /// auto-detected one. Consuming builder; see
-    /// [`Screen::use_color_profile`] to change it at runtime.
+    /// [`Canvas::use_color_profile`] to change it at runtime.
     pub fn with_color_profile(mut self, profile: Profile) -> Self {
         self.use_color_profile(profile);
         self
@@ -187,7 +187,7 @@ impl<W: Write> Screen<W> {
 
     /// Build with an explicit [`Optimizations`] set, overriding the
     /// auto-detected one. Consuming builder; see
-    /// [`Screen::use_optimizations`] to change it at runtime.
+    /// [`Canvas::use_optimizations`] to change it at runtime.
     pub fn with_optimizations(mut self, optimizations: Optimizations) -> Self {
         self.use_optimizations(optimizations);
         self
@@ -195,7 +195,7 @@ impl<W: Write> Screen<W> {
 
     /// Switch to a different color [`Profile`] at runtime — for example
     /// to upgrade the profile after confirming richer terminal support.
-    /// Affects subsequent frames; call [`Screen::invalidate`] to
+    /// Affects subsequent frames; call [`Canvas::invalidate`] to
     /// repaint already-rendered content with the new profile.
     pub fn use_color_profile(&mut self, profile: Profile) {
         self.renderer.set_color_profile(profile);
@@ -220,8 +220,8 @@ impl<W: Write> Screen<W> {
     /// [`crate::color::Color::to_rgb`] and emitted as
     /// `rgb:RRRR/GGGG/BBBB`); pass `None` to restore the terminal
     /// default (`OSC 110`). The choice is recorded in the screen's
-    /// state so [`Screen::reset`] can return the terminal to its
-    /// built-in defaults and [`Screen::restore`] can re-apply it.
+    /// state so [`Canvas::reset`] can return the terminal to its
+    /// built-in defaults and [`Canvas::restore`] can re-apply it.
     pub fn set_foreground_color(&mut self, color: Option<crate::color::Color>) {
         if self.state.foreground_color != color {
             match color {
@@ -244,7 +244,7 @@ impl<W: Write> Screen<W> {
 
     /// Set the default background color (`OSC 11`), or restore the
     /// terminal default (`OSC 111`) when `color` is `None`. See
-    /// [`Screen::set_foreground_color`] for state-tracking semantics.
+    /// [`Canvas::set_foreground_color`] for state-tracking semantics.
     pub fn set_background_color(&mut self, color: Option<crate::color::Color>) {
         if self.state.background_color != color {
             match color {
@@ -267,7 +267,7 @@ impl<W: Write> Screen<W> {
 
     /// Set the cursor color (`OSC 12`), or restore the terminal
     /// default (`OSC 112`) when `color` is `None`. See
-    /// [`Screen::set_foreground_color`] for state-tracking semantics.
+    /// [`Canvas::set_foreground_color`] for state-tracking semantics.
     pub fn set_cursor_color(&mut self, color: Option<crate::color::Color>) {
         if self.state.cursor_color != color {
             match color {
@@ -296,8 +296,8 @@ impl<W: Write> Screen<W> {
     /// The kitty keyboard stack is per-screen-buffer in the terminal.
     /// Rather than expose that detail, the screen treats its tracked
     /// flag set as the single source of truth and re-applies it on
-    /// every alt-screen toggle, on [`Screen::restore`], and clears it
-    /// on [`Screen::reset`]. Pass [`crate::ansi::KittyKeyboardFlags::NONE`]
+    /// every alt-screen toggle, on [`Canvas::restore`], and clears it
+    /// on [`Canvas::reset`]. Pass [`crate::ansi::KittyKeyboardFlags::NONE`]
     /// (the empty set) to clear every enhancement.
     pub fn set_kitty_keyboard_flags(&mut self, flags: crate::ansi::KittyKeyboardFlags) {
         if self.state.kitty_keyboard != flags {
@@ -361,7 +361,7 @@ impl<W: Write> Screen<W> {
     }
 
     /// Queue a cursor move to `(x, y)` (buffer-relative, origin at
-    /// top-left). The move bytes are appended to [`Screen::buf`] and
+    /// top-left). The move bytes are appended to [`Canvas::buf`] and
     /// reach the terminal on the next [`io::Write::flush`].
     ///
     /// No-op when the renderer already reports the cursor at `(x, y)`
@@ -425,16 +425,16 @@ impl<W: Write> Screen<W> {
 
     /// Render the next frame and flush it to the writer in one call.
     ///
-    /// Convenience for [`Screen::render`] followed by
+    /// Convenience for [`Canvas::render`] followed by
     /// [`std::io::Write::flush`]: composes the pending frame's diff and
-    /// commits it to the terminal. Like [`Screen::render`], a no-op
+    /// commits it to the terminal. Like [`Canvas::render`], a no-op
     /// frame emits zero bytes.
     pub fn present(&mut self) -> io::Result<()> {
         self.render();
         self.flush()
     }
 
-    /// Stage a single rendered frame into [`Screen::buf`]:
+    /// Stage a single rendered frame into [`Canvas::buf`]:
     /// synchronized-output begin, cursor hide (so the cursor doesn't
     /// dance across cells during the diff), the renderer's cell diff,
     /// cursor show, synchronized-output end. Assumes
@@ -443,10 +443,10 @@ impl<W: Write> Screen<W> {
     /// The cursor hide/show wrap is emitted inside the sync-output wrap
     /// so terminals that support DECSET 2026 treat the whole frame as
     /// atomic. The wrap is skipped entirely when the caller has already
-    /// hidden the cursor via [`Screen::set_cursor_visible`].
+    /// hidden the cursor via [`Canvas::set_cursor_visible`].
     ///
     /// Only stages into the buffer, so it is infallible; the bytes reach
-    /// the terminal on the next [`Screen::flush`].
+    /// the terminal on the next [`Canvas::flush`].
     fn write_frame(&mut self) {
         if self.state.sync_updates {
             mode::Mode::SYNCHRONIZED_OUTPUT.set(&mut self.buf).unwrap();
@@ -482,7 +482,7 @@ impl<W: Write> Screen<W> {
 }
 
 #[cfg(unix)]
-impl<O: Write + Copy + std::os::fd::AsFd> Screen<O> {
+impl<O: Write + Copy + std::os::fd::AsFd> Canvas<O> {
     /// Build a screen over `terminal`'s output half, sized to the
     /// terminal's current window size and configured from the terminal's
     /// captured [`Env`].
@@ -491,20 +491,20 @@ impl<O: Write + Copy + std::os::fd::AsFd> Screen<O> {
     /// the raw-mode lifecycle (`make_raw` / `restore`). The screen drives
     /// the `Copy` output half, leaving the input half free for an
     /// [`EventSource`](crate::event::EventSource). Equivalent to
-    /// `Screen::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
+    /// `Canvas::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
     ///
     /// Fails only if the window size query fails.
     ///
     /// ```no_run
     /// use std::io::Write;
     /// use uncurses::terminal::Terminal;
-    /// use uncurses::screen::Screen;
+    /// use uncurses::canvas::Canvas;
     /// use uncurses::event::EventSource;
     ///
     /// # fn main() -> std::io::Result<()> {
     /// let mut term = Terminal::open()?;
     /// let _prev = term.make_raw()?;
-    /// let mut screen = Screen::from_terminal(&term)?;
+    /// let mut screen = Canvas::from_terminal(&term)?;
     /// let mut source = EventSource::new(term.input())?;
     /// // ... draw to `screen`, read from `source` ...
     /// screen.reset();
@@ -523,7 +523,7 @@ impl<O: Write + Copy + std::os::fd::AsFd> Screen<O> {
 }
 
 #[cfg(windows)]
-impl<O: Write + Copy + std::os::windows::io::AsHandle> Screen<O> {
+impl<O: Write + Copy + std::os::windows::io::AsHandle> Canvas<O> {
     /// Build a screen over `terminal`'s output half, sized to the
     /// terminal's current window size and configured from the terminal's
     /// captured [`Env`].
@@ -532,20 +532,20 @@ impl<O: Write + Copy + std::os::windows::io::AsHandle> Screen<O> {
     /// the raw-mode lifecycle (`make_raw` / `restore`). The screen drives
     /// the `Copy` output half, leaving the input half free for an
     /// [`EventSource`](crate::event::EventSource). Equivalent to
-    /// `Screen::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
+    /// `Canvas::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
     ///
     /// Fails only if the window size query fails.
     ///
     /// ```no_run
     /// use std::io::Write;
     /// use uncurses::terminal::Terminal;
-    /// use uncurses::screen::Screen;
+    /// use uncurses::canvas::Canvas;
     /// use uncurses::event::EventSource;
     ///
     /// # fn main() -> std::io::Result<()> {
     /// let mut term = Terminal::open()?;
     /// let _prev = term.make_raw()?;
-    /// let mut screen = Screen::from_terminal(&term)?;
+    /// let mut screen = Canvas::from_terminal(&term)?;
     /// let mut source = EventSource::new(term.input())?;
     /// // ... draw to `screen`, read from `source` ...
     /// screen.reset();
@@ -565,19 +565,19 @@ impl<O: Write + Copy + std::os::windows::io::AsHandle> Screen<O> {
     }
 }
 
-impl<W: Write> Bounded for Screen<W> {
+impl<W: Write> Bounded for Canvas<W> {
     fn bounds(&self) -> crate::layout::Rect {
         self.front_buf.bounds()
     }
 }
 
-impl<W: Write> Surface for Screen<W> {
+impl<W: Write> Surface for Canvas<W> {
     fn cell(&self, pos: crate::layout::Position) -> Option<&Cell> {
         self.front_buf.cell(pos)
     }
 }
 
-impl<W: Write> SurfaceMut for Screen<W> {
+impl<W: Write> SurfaceMut for Canvas<W> {
     fn set_cell(&mut self, pos: crate::layout::Position, cell: &Cell) {
         self.front_buf.set_cell(pos, cell);
     }
@@ -615,15 +615,15 @@ impl<W: Write> SurfaceMut for Screen<W> {
     }
 }
 
-impl<W: Write> Write for Screen<W> {
-    /// Append raw bytes into [`Screen::buf`]. The bytes do not reach
+impl<W: Write> Write for Canvas<W> {
+    /// Append raw bytes into [`Canvas::buf`]. The bytes do not reach
     /// the underlying writer until [`Write::flush`] is called.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.buf.extend_from_slice(buf);
         Ok(buf.len())
     }
 
-    /// Drain [`Screen::buf`] into the owned writer and flush it.
+    /// Drain [`Canvas::buf`] into the owned writer and flush it.
     fn flush(&mut self) -> io::Result<()> {
         if !self.buf.is_empty() {
             #[cfg(debug_assertions)]

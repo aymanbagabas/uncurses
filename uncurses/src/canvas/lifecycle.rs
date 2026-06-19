@@ -1,4 +1,4 @@
-//! Terminal-lifecycle operations for [`Screen`] — `reset` / `restore`
+//! Terminal-lifecycle operations for [`Canvas`] — `reset` / `restore`
 //! tear down and re-apply held modes around a shell handoff, and
 //! `insert_above` injects content into the scrollback above the screen.
 
@@ -6,18 +6,18 @@ use std::io::Write;
 
 use crate::ansi::{self, background, cursor, kitty, mode};
 
-use super::Screen;
+use super::Canvas;
 
-impl<W: Write> Screen<W> {
+impl<W: Write> Canvas<W> {
     /// Disable every non-default terminal state currently held in
     /// `self.state` so the terminal is returned to a clean baseline,
     /// suitable for handing control back to the shell (e.g. before
     /// suspending the process or exec-ing a child). Pure write — does
-    /// not mutate `self.state`, so a subsequent [`Screen::restore`]
+    /// not mutate `self.state`, so a subsequent [`Canvas::restore`]
     /// can re-apply the same modes verbatim.
     ///
     /// Only stages into the buffer, so it is infallible; the bytes reach
-    /// the terminal on the next [`Screen::flush`].
+    /// the terminal on the next [`Canvas::flush`].
     pub fn reset(&mut self) {
         // Walk to the bottom of the *last rendered* surface before any
         // mode teardown. Use the renderer's last-render height rather
@@ -112,13 +112,13 @@ impl<W: Write> Screen<W> {
     }
 
     /// Re-emit every non-default mode held in `self.state` to `w`.
-    /// Pairs with [`Screen::reset`] for any scenario where the
+    /// Pairs with [`Canvas::reset`] for any scenario where the
     /// terminal was temporarily handed back to the shell. Pure write —
-    /// does not mutate `self.state`. Call [`Screen::invalidate`]
+    /// does not mutate `self.state`. Call [`Canvas::invalidate`]
     /// afterwards if the screen contents also need to be repainted.
     ///
     /// Only stages into the buffer, so it is infallible; the bytes reach
-    /// the terminal on the next [`Screen::flush`].
+    /// the terminal on the next [`Canvas::flush`].
     pub fn restore(&mut self) {
         // Re-apply the desired kitty keyboard flags on the main
         // screen *before* entering the alt screen — the stack is
@@ -207,10 +207,10 @@ impl<W: Write> Screen<W> {
     /// but will also not corrupt the rendered frame.
     ///
     /// Only writes — does not flush. Forces a full redraw on the next
-    /// [`Screen::render`].
+    /// [`Canvas::render`].
     ///
     /// Only stages into the buffer, so it is infallible; the bytes reach
-    /// the terminal on the next [`Screen::flush`].
+    /// the terminal on the next [`Canvas::flush`].
     pub fn insert_above(&mut self, content: &str) {
         if content.is_empty() {
             return;
