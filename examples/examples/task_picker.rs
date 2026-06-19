@@ -19,7 +19,6 @@ use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::style::{Style, write_style};
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 const CHOICES: &[&str] = &[
     "Plant carrots",
@@ -176,7 +175,8 @@ impl App {
         // returns on its own line below the message.
         self.screen.resize(self.term_cols, 3);
         self.screen.clear();
-        self.screen.set_str((2, 1), "Bye!", WrapMode::Truncate);
+        self.screen
+            .set_str((2, 1), "Bye!", uncurses::style::Style::default());
         self.screen.render();
 
         Ok(())
@@ -237,7 +237,11 @@ fn draw_choices<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
 
     let mut last = 0u16;
     let mut y = 1u16;
-    screen.set_str((2, y), "What to do today?", WrapMode::Truncate);
+    screen.set_str(
+        (2, y),
+        "What to do today?",
+        uncurses::style::Style::default(),
+    );
     last = last.max(y);
     y += 2;
 
@@ -248,18 +252,18 @@ fn draw_choices<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
         } else {
             format!("{subtle}[ ] {choice}{RESET}")
         };
-        screen.set_str((2, row), &line, WrapMode::Truncate);
+        screen.set_str((2, row), &line, uncurses::style::Style::default());
         last = last.max(row);
     }
 
     y += CHOICES.len() as u16 + 1;
     let line = format!("Program quits in {ticks_st}{RESET} seconds");
-    screen.set_str((2, y), &line, WrapMode::Truncate);
+    screen.set_str((2, y), &line, uncurses::style::Style::default());
     last = last.max(y);
 
     y += 2;
     let line = format!("{subtle}j/k or up/down: select  •  enter: choose  •  q: quit{RESET}");
-    screen.set_str((2, y), &line, WrapMode::Truncate);
+    screen.set_str((2, y), &line, uncurses::style::Style::default());
     last = last.max(y);
 
     last + 1
@@ -283,7 +287,7 @@ fn draw_chosen<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
 
     let mut last = 0u16;
     let mut y = 1u16;
-    screen.set_str((2, y), head, WrapMode::Truncate);
+    screen.set_str((2, y), head, uncurses::style::Style::default());
     last = last.max(y);
     y += 2;
 
@@ -291,12 +295,12 @@ fn draw_chosen<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
         "Need {keyword}{}{RESET} and {keyword}{}{RESET}...",
         deps[0], deps[1]
     );
-    screen.set_str((2, y), &line, WrapMode::Truncate);
+    screen.set_str((2, y), &line, uncurses::style::Style::default());
     last = last.max(y);
     y += 2;
 
     let label = if s.loaded { "Done." } else { "Downloading..." };
-    screen.set_str((2, y), label, WrapMode::Truncate);
+    screen.set_str((2, y), label, uncurses::style::Style::default());
     last = last.max(y);
     y += 1;
 
@@ -305,13 +309,13 @@ fn draw_chosen<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
     let empty_str = "░".repeat((BAR_WIDTH - filled) as usize);
     let pct = format!(" {:>3.0}%", s.progress * 100.0);
     let bar = format!("{bar_st}{filled_str}{empty_st}{empty_str}{RESET}{pct}");
-    screen.set_str((2, y), &bar, WrapMode::Truncate);
+    screen.set_str((2, y), &bar, uncurses::style::Style::default());
     last = last.max(y);
 
     if s.loaded {
         y += 2;
         let line = format!("Exiting in {ticks_st}{}{RESET} seconds", s.ticks);
-        screen.set_str((2, y), &line, WrapMode::Truncate);
+        screen.set_str((2, y), &line, uncurses::style::Style::default());
         last = last.max(y);
     }
 

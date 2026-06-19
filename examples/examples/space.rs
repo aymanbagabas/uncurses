@@ -19,7 +19,6 @@ use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 const FRAME: Duration = Duration::from_micros(16_667); // ~60 FPS
 const GLYPH: &str = "\u{2580}";
@@ -267,13 +266,21 @@ fn draw<W: Write>(
 
     screen.clear_rect(uncurses::layout::Rect::new(0, 0, width, 1));
     let header = "space — press q to quit";
-    screen.set_str((0, 0), &truncate(header, width), WrapMode::Truncate);
+    screen.set_str(
+        (0, 0),
+        &truncate(header, width),
+        uncurses::style::Style::default(),
+    );
 
     if let Some(value) = fps.value {
         let label = format!("{value:.1} fps");
         let label_w = label.chars().count() as u16;
         if label_w < width {
-            screen.set_str((width - label_w, 0), &label, WrapMode::Truncate);
+            screen.set_str(
+                (width - label_w, 0),
+                &label,
+                uncurses::style::Style::default(),
+            );
         }
     }
 }

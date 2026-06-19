@@ -136,7 +136,7 @@ fn paint_background<W: Write>(screen: &mut Canvas<W>) {
     let body_rows = h.saturating_sub(1);
     for y in 0..body_rows {
         let line = BACKGROUND[(y as usize) % BACKGROUND.len()];
-        screen.set_str_with((0, y), line, WrapMode::Truncate, body.clone());
+        screen.set_str((0, y), line, body.clone());
     }
 }
 
@@ -158,7 +158,7 @@ fn paint_status<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
     } else {
         " modal: closed  space/m: toggle    q: quit "
     };
-    screen.set_str_with((0, y), label, WrapMode::Truncate, status);
+    screen.set_str((0, y), label, status);
 }
 
 fn modal_rect<W: Write>(screen: &Canvas<W>) -> Option<Rect> {
@@ -192,22 +192,22 @@ fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
     let bottom = rect.y + rect.height - 1;
     // Borders.
     for x in (rect.x + 1)..right {
-        screen.set_str_with((x, rect.y), "─", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((x, bottom), "─", WrapMode::Truncate, frame.clone());
+        screen.set_str((x, rect.y), "─", frame.clone());
+        screen.set_str((x, bottom), "─", frame.clone());
     }
     for y in (rect.y + 1)..bottom {
-        screen.set_str_with((rect.x, y), "│", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((right, y), "│", WrapMode::Truncate, frame.clone());
+        screen.set_str((rect.x, y), "│", frame.clone());
+        screen.set_str((right, y), "│", frame.clone());
     }
-    screen.set_str_with((rect.x, rect.y), "┌", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, rect.y), "┐", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((rect.x, bottom), "└", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, bottom), "┘", WrapMode::Truncate, frame.clone());
+    screen.set_str((rect.x, rect.y), "┌", frame.clone());
+    screen.set_str((right, rect.y), "┐", frame.clone());
+    screen.set_str((rect.x, bottom), "└", frame.clone());
+    screen.set_str((right, bottom), "┘", frame.clone());
 
     // Title bar.
     let title = " Modal ";
     let title_x = rect.x + (rect.width - title.chars().count() as u16) / 2;
-    screen.set_str_with((title_x, rect.y), title, WrapMode::Truncate, frame.clone());
+    screen.set_str((title_x, rect.y), title, frame.clone());
 
     // Body wraps inside the modal's inner area.
     let inner = Rect::new(
@@ -219,10 +219,10 @@ fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
     let body_text = "This panel covers a fixed slice of the screen. \
                      The paragraph text behind it is hidden until the \
                      modal is dismissed.";
-    screen.set_str_rect_with(inner, body_text, WrapMode::Wrap, body.clone());
+    screen.set_str_rect_wrap(inner, body_text, WrapMode::Wrap, body.clone());
 
     // Footer hint inside the modal.
     let footer = "press space / m to close";
     let fx = rect.x + (rect.width - footer.chars().count() as u16) / 2;
-    screen.set_str_with((fx, bottom - 1), footer, WrapMode::Truncate, hint);
+    screen.set_str((fx, bottom - 1), footer, hint);
 }

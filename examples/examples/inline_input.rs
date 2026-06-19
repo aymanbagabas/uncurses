@@ -24,7 +24,7 @@ use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, PasteBuffe
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{TtyInput, TtyOutput};
-use uncurses::text::{WrapMode, char_width};
+use uncurses::text::char_width;
 
 /// Editable multiline buffer with a single cursor.
 struct Buffer {
@@ -159,7 +159,11 @@ fn redraw<W: std::io::Write>(screen: &mut Canvas<W>, buf: &Buffer) {
         let prefix = if row == 0 { "> " } else { ". " };
         let rendered = format!("{}{}", prefix, line);
         {
-            screen.set_str((0, row as u16), &rendered, WrapMode::Truncate);
+            screen.set_str(
+                (0, row as u16),
+                &rendered,
+                uncurses::style::Style::default(),
+            );
         };
     }
 
@@ -178,10 +182,9 @@ fn redraw<W: std::io::Write>(screen: &mut Canvas<W>, buf: &Buffer) {
         .sum();
     let cursor_x = prefix_w + before_width;
     let cursor_ch = line_chars.get(buf.col).copied().unwrap_or(' ');
-    screen.set_str_with(
+    screen.set_str(
         (cursor_x, buf.row as u16),
         &cursor_ch.to_string(),
-        WrapMode::Truncate,
         Style::default().reverse(),
     );
 }

@@ -17,7 +17,6 @@ use std::time::Duration;
 use uncurses::canvas::Canvas;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, query};
 use uncurses::terminal::Terminal;
-use uncurses::text::WrapMode;
 
 fn main() -> io::Result<()> {
     let mut term = Terminal::open()?;
@@ -46,12 +45,12 @@ fn main() -> io::Result<()> {
             screen.set_str(
                 (0, 0),
                 "uncurses compositional demo — press q or Ctrl-C to quit",
-                WrapMode::Truncate,
+                uncurses::style::Style::default(),
             );
             screen.set_str(
                 (0, 1),
                 &format!("size: {w}x{h}   background: {bg:?}   events: {events}      "),
-                WrapMode::Truncate,
+                uncurses::style::Style::default(),
             );
             screen.present()?;
 

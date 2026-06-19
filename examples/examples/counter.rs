@@ -12,7 +12,6 @@ use uncurses::event::{Event, EventSource, Key, MouseButton};
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
 
 /// Click-counter app: owns the terminal, screen, and event source, plus
 /// its own UI state. `start` enters raw mode and configures the screen,
@@ -147,11 +146,11 @@ fn redraw<W: Write>(screen: &mut Canvas<W>, count: u32) {
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())
         .bold();
-    screen.set_str_with((x, y), &inner, WrapMode::Truncate, button);
+    screen.set_str((x, y), &inner, button);
 
     let help = Style::default().fg(BasicColor::BrightBlack.into());
     let hint = "click / enter / space: increment • q: quit";
     let hint_w = hint.chars().count() as u16;
     let hx = w.saturating_sub(hint_w) / 2;
-    screen.set_str_with((hx, h.saturating_sub(2)), hint, WrapMode::Truncate, help);
+    screen.set_str((hx, h.saturating_sub(2)), hint, help);
 }

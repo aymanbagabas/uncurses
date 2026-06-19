@@ -20,7 +20,6 @@ use uncurses::canvas::Canvas;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{TtyInput, TtyOutput};
-use uncurses::text::WrapMode;
 
 fn format_modifiers(m: KeyModifiers) -> String {
     let mut parts = Vec::new();
@@ -91,11 +90,19 @@ fn redraw<W: std::io::Write>(screen: &mut Canvas<W>, last: &str) -> std::io::Res
     let w = screen.width();
     let header = "keylog — press q or Ctrl-C to quit. Type, click, drag, paste, resize.";
     {
-        screen.set_str((0, 0), &truncate(header, w), WrapMode::Truncate);
+        screen.set_str(
+            (0, 0),
+            &truncate(header, w),
+            uncurses::style::Style::default(),
+        );
     };
     let line = format!("last: {}", last);
     {
-        screen.set_str((0, 1), &truncate(&line, w), WrapMode::Truncate);
+        screen.set_str(
+            (0, 1),
+            &truncate(&line, w),
+            uncurses::style::Style::default(),
+        );
     };
     Ok(())
 }
