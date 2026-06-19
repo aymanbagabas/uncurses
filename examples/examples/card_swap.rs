@@ -4,9 +4,9 @@
 use std::io::Write;
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -19,7 +19,7 @@ const VIEW_H: u16 = 15;
 
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     flip: bool,
 }
@@ -28,7 +28,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Screen::new(
+        let mut screen = Canvas::new(
             term.output(),
             (term.window_size().unwrap_or_default().col, VIEW_H),
         );
@@ -96,7 +96,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
+fn redraw<W: Write>(screen: &mut Canvas<W>, flip: bool) {
     screen.clear();
     let w = screen.width();
     let h = screen.height();
@@ -134,7 +134,7 @@ fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
     }
 }
 
-fn draw_card<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, label: &str, border: Style) {
+fn draw_card<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, label: &str, border: Style) {
     let w = CARD_W;
     let h = CARD_H;
 

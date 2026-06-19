@@ -282,7 +282,7 @@ impl Renderer {
 
     /// Surface dimensions captured at the most recent render. Returns
     /// `(0, 0)` before the first render. Differs from the
-    /// [`Screen`](crate::Screen)'s live size when the terminal has
+    /// [`Canvas`](crate::canvas::Canvas)'s live size when the terminal has
     /// resized but no frame has been rendered yet — useful when
     /// teardown needs to address the *rendered* surface rather than
     /// rows that were never drawn.

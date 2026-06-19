@@ -44,7 +44,7 @@
 //!
 //! The writer is any [`Write`], paired with the source reading the same
 //! terminal. If you are already rendering with a
-//! [`Screen`](crate::screen::Screen), write the request through it (the
+//! [`Canvas`](crate::canvas::Canvas), write the request through it (the
 //! bytes are staged and sent on flush in order with any already-staged
 //! output); otherwise write straight to a
 //! [`Terminal`](crate::terminal::Terminal) handle or stdout.

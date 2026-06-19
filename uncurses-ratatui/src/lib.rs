@@ -1,8 +1,8 @@
 //! Integration adapter that lets a `ratatui::Terminal` render through a
-//! [`uncurses::screen::Screen`].
+//! [`uncurses::canvas::Canvas`].
 //!
 //! [`UncursesBackend`] owns the whole terminal stack — the
-//! [`Terminal`](uncurses::terminal::Terminal) handle, the [`Screen`](uncurses::screen::Screen),
+//! [`Terminal`](uncurses::terminal::Terminal) handle, the [`Canvas`](uncurses::canvas::Canvas),
 //! and a shared [`EventSource`](uncurses::event::EventSource) — so a
 //! single value drives rendering, input, and the raw-mode lifecycle.
 

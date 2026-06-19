@@ -5,7 +5,7 @@
 //! builds). Each tee is activated by setting the corresponding
 //! environment variable to a file path:
 //!
-//! - `UNCURSES_OUTPUT_TRACE` — receives one entry per `Screen::flush`
+//! - `UNCURSES_OUTPUT_TRACE` — receives one entry per `Canvas::flush`
 //!   with the full staged buffer (text frames + control sequences +
 //!   any raw `Write` payloads such as raster image OSCs), in flush
 //!   order.

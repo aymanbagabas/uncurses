@@ -3,7 +3,7 @@
 //! Run with `cargo run --example keylog`. Runs in *inline* mode (no alt
 //! screen): a one-line status bar at the bottom of the screen tracks the
 //! latest event, and every event is inserted above the screen via
-//! [`Screen::insert_above`], so the full event history scrolls naturally
+//! [`Canvas::insert_above`], so the full event history scrolls naturally
 //! into the terminal's scrollback.
 //!
 //! Demonstrates the full breadth of events the source can produce: keys
@@ -18,7 +18,7 @@ use std::io::Write;
 use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::buffer::SurfaceMut;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
+use uncurses::canvas::Canvas;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::WrapMode;
@@ -87,7 +87,7 @@ fn format_event(ev: &Event) -> String {
     }
 }
 
-fn redraw<W: std::io::Write>(screen: &mut Screen<W>, last: &str) -> std::io::Result<()> {
+fn redraw<W: std::io::Write>(screen: &mut Canvas<W>, last: &str) -> std::io::Result<()> {
     screen.clear();
     let w = screen.width();
     let header = "keylog — press q or Ctrl-C to quit. Type, click, drag, paste, resize.";
@@ -116,7 +116,7 @@ fn truncate(s: &str, width: u16) -> String {
 /// terminal. On Unix, Ctrl-Z suspends and resumes cleanly.
 struct App {
     term: Terminal<TtyInput, TtyOutput>,
-    screen: Screen<TtyOutput>,
+    screen: Canvas<TtyOutput>,
     events: EventSource<TtyInput>,
     last: String,
 }
@@ -128,7 +128,7 @@ impl App {
         // Inline status area is two rows tall; insert_above scrolls events
         // into the scrollback above it.
         let cols = term.window_size().unwrap_or_default().col;
-        let mut screen = Screen::new(term.output(), (cols, 2));
+        let mut screen = Canvas::new(term.output(), (cols, 2));
         screen.set_cursor_visible(false);
         screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr);
         screen.set_focus_events(true);

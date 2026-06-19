@@ -9,7 +9,7 @@ use uncurses::ansi::mode::{MouseEncoding, MouseMode};
 use uncurses::buffer::SurfaceMut;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key, MouseButton};
-use uncurses::screen::Screen;
+use uncurses::canvas::Canvas;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -20,7 +20,7 @@ use uncurses::text::WrapMode;
 /// `run` drives the event loop, and `stop` restores the terminal.
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     count: u32,
     button_rect: Option<(u16, u16, u16)>,
@@ -32,7 +32,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
         screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr);
@@ -112,7 +112,7 @@ fn button_label(count: u32) -> String {
     format!("[ {label} ]")
 }
 
-fn button_bounds<W: Write>(screen: &Screen<W>, count: u32) -> Option<(u16, u16, u16)> {
+fn button_bounds<W: Write>(screen: &Canvas<W>, count: u32) -> Option<(u16, u16, u16)> {
     let w = screen.width();
     let h = screen.height();
     if w < 20 || h < 5 {
@@ -132,7 +132,7 @@ fn hit(rect: Option<(u16, u16, u16)>, mx: u16, my: u16) -> bool {
     my == y && mx >= x && mx < x + w
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, count: u32) {
+fn redraw<W: Write>(screen: &mut Canvas<W>, count: u32) {
     screen.clear();
     let w = screen.width();
     let h = screen.height();

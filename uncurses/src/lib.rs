@@ -8,7 +8,7 @@
 //! # Architecture
 //!
 //! ```text
-//! Terminal → Screen → Buffer/Window (cell model)
+//! Terminal → Canvas → Buffer/Window (cell model)
 //!                              + internal cell-diff to ANSI
 //! ```
 //!
@@ -16,13 +16,13 @@
 //!
 //! ```rust
 //! use std::io::Write;
-//! use uncurses::screen::Screen;
+//! use uncurses::canvas::Canvas;
 //! use uncurses::style::Style;
 //! use uncurses::color::{Color, BasicColor};
 //! use uncurses::text::WrapMode;
 //! use uncurses::terminal::stdout;
 //!
-//! let mut screen = Screen::new(stdout(), (80, 24));
+//! let mut screen = Canvas::new(stdout(), (80, 24));
 //! let style = Style::default()
 //!     .bold()
 //!     .fg(Color::Basic(BasicColor::Green));
@@ -34,7 +34,7 @@
 
 //! # Output buffering and flushing
 //!
-//! [`screen::Screen`] owns the writer and stages every byte it emits
+//! [`canvas::Canvas`] owns the writer and stages every byte it emits
 //! into an internal buffer. Nothing reaches the underlying writer until
 //! [`std::io::Write::flush`] is called on the screen, which gives
 //! callers control over exactly when a frame plus its mode changes hit
@@ -44,7 +44,7 @@
 //! use std::io::Write;
 //! use uncurses::terminal::stdout;
 //!
-//! let mut screen = uncurses::screen::Screen::new(stdout(), (80, 24));
+//! let mut screen = uncurses::canvas::Canvas::new(stdout(), (80, 24));
 //! // … screen.render(); screen.set_alt_screen(true); …
 //! screen.flush()?; // explicit: nothing reaches the terminal until here
 //! # Ok::<_, std::io::Error>(())
@@ -57,6 +57,7 @@ compile_error!(
 
 pub mod ansi;
 pub mod buffer;
+pub mod canvas;
 pub mod cell;
 pub mod color;
 pub mod event;
@@ -65,7 +66,6 @@ pub mod layout;
 pub mod renderer;
 #[cfg(not(feature = "bench"))]
 pub(crate) mod renderer;
-pub mod screen;
 pub mod style;
 pub mod terminal;
 pub mod text;

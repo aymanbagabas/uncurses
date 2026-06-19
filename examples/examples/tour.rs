@@ -13,11 +13,11 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Position;
-use uncurses::screen::Screen;
 use uncurses::style::{Style, UnderlineStyle};
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -53,7 +53,7 @@ struct Anchor {
     y: u16,
 }
 
-fn anchor<W: Write>(screen: &Screen<W>) -> Anchor {
+fn anchor<W: Write>(screen: &Canvas<W>) -> Anchor {
     let w = screen.width();
     let h = screen.height();
     Anchor {
@@ -62,11 +62,11 @@ fn anchor<W: Write>(screen: &Screen<W>) -> Anchor {
     }
 }
 
-fn paint_blank<W: Write>(screen: &mut Screen<W>) {
+fn paint_blank<W: Write>(screen: &mut Canvas<W>) {
     screen.clear();
 }
 
-fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
+fn draw_box<W: Write>(screen: &mut Canvas<W>, a: Anchor, style: &Style) {
     let (x0, y0) = (a.x, a.y);
     let (x1, y1) = (a.x + BOX_W - 1, a.y + BOX_H - 1);
 
@@ -91,7 +91,7 @@ fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
     }
 }
 
-fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
+fn fill_inside<W: Write>(screen: &mut Canvas<W>, a: Anchor, style: &Style) {
     let cell = Cell::narrow(" ").style(style.clone());
     for y in a.y + 1..a.y + BOX_H - 1 {
         for x in a.x + 1..a.x + BOX_W - 1 {
@@ -100,15 +100,15 @@ fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
     }
 }
 
-fn write<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Style) {
+fn write<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, s: &str, style: &Style) {
     screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone());
 }
 
-fn write_link<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
+fn write_link<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
     screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone().link(url, ""));
 }
 
-fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
+fn footer<W: Write>(screen: &mut Canvas<W>, a: Anchor, hint: &str) {
     let dim = Style::default().fg(BasicColor::BrightBlack.into());
     let label_w = hint.chars().count() as i32;
     let center = a.x as i32 + BOX_W as i32 / 2;
@@ -121,10 +121,10 @@ fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
 /// Returns `Ok(true)` to keep going, `Ok(false)` when the user asked
 /// to quit. Any non-quit key advances early.
 fn run_scene<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     events: &mut EventSource<Stdin>,
     dur: Option<Duration>,
-    mut tick: impl FnMut(&mut Screen<W>, Duration) -> std::io::Result<()>,
+    mut tick: impl FnMut(&mut Canvas<W>, Duration) -> std::io::Result<()>,
 ) -> std::io::Result<bool> {
     while events.try_read().is_some() {}
     let start = Instant::now();
@@ -181,7 +181,7 @@ fn run_scene<W: Write>(
 }
 
 fn scene_sprinkles<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut rng = Rng::new(0x9E37_79B9_7F4A_7C15);
@@ -226,7 +226,7 @@ fn scene_sprinkles<W: Write>(
 }
 
 fn scene_panels<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut rng = Rng::new(0x243F_6A88_85A3_08D3);
@@ -341,7 +341,7 @@ const ART: &[&str] = &[
 ];
 
 fn scene_art<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let draw_ms: u64 = 2200;
@@ -399,7 +399,7 @@ fn scene_art<W: Write>(
 }
 
 fn scene_banner<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut drawn = false;
@@ -538,7 +538,7 @@ const MARQUEE: &[(&str, UnderlineStyle, BasicColor)] = &[
 ];
 
 fn scene_marquee<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut drawn_box = false;
@@ -629,7 +629,7 @@ struct Ball {
 }
 
 fn scene_balls<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     events: &mut EventSource<Stdin>,
 ) -> std::io::Result<bool> {
     let mut balls = vec![
@@ -724,7 +724,7 @@ fn scene_balls<W: Write>(
 /// `stop` restores the terminal. Each scene owns its own rendering.
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
 }
 
@@ -732,7 +732,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
@@ -744,7 +744,7 @@ impl App {
     }
 
     fn run(&mut self) -> std::io::Result<()> {
-        type Scene = fn(&mut Screen<Stdout>, &mut EventSource<Stdin>) -> std::io::Result<bool>;
+        type Scene = fn(&mut Canvas<Stdout>, &mut EventSource<Stdin>) -> std::io::Result<bool>;
         let scenes: [Scene; 6] = [
             scene_sprinkles,
             scene_panels,

@@ -9,11 +9,11 @@
 use std::io::Write;
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Rect;
-use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -26,7 +26,7 @@ const MODAL_H: u16 = 7;
 
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     modal_open: bool,
 }
@@ -38,7 +38,7 @@ impl App {
         let size = term.window_size().unwrap_or_default();
         let w = SURFACE_W.min(size.col.max(1));
         let h = SURFACE_H.min(size.row.max(1));
-        let mut screen = Screen::new(term.output(), (w, h));
+        let mut screen = Canvas::new(term.output(), (w, h));
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
 
@@ -119,7 +119,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
+fn redraw<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
     screen.clear();
     paint_content(screen);
     if modal_open {
@@ -130,7 +130,7 @@ fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
     }
 }
 
-fn paint_content<W: Write>(screen: &mut Screen<W>) {
+fn paint_content<W: Write>(screen: &mut Canvas<W>) {
     let cyan = Style::default().fg(BasicColor::BrightCyan.into());
     let plain = Style::default();
     let bullet_color = Style::default().fg(BasicColor::Yellow.into());
@@ -159,7 +159,7 @@ fn paint_content<W: Write>(screen: &mut Screen<W>) {
     }
 }
 
-fn paint_scrim<W: Write>(screen: &mut Screen<W>) {
+fn paint_scrim<W: Write>(screen: &mut Canvas<W>) {
     // Dim the surface with a uniform gray fill so the modal stands
     // out. The cells behind keep their content but the scrim's bg
     // wins because we overwrite each cell.
@@ -168,7 +168,7 @@ fn paint_scrim<W: Write>(screen: &mut Screen<W>) {
     screen.fill_rect(bounds, &Cell::narrow(" ").style(scrim));
 }
 
-fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
+fn modal_rect<W: Write>(screen: &Canvas<W>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W || h < MODAL_H {
@@ -179,7 +179,7 @@ fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
+fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
     let frame = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())

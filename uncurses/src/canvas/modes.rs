@@ -1,19 +1,19 @@
-//! Terminal-mode toggles for [`Screen`] — alt screen, cursor, mouse,
+//! Terminal-mode toggles for [`Canvas`] — alt screen, cursor, mouse,
 //! bracketed paste, focus reporting, synchronized output, grapheme
 //! clusters (DEC 2027), and window title.
 //!
 //! These setters only stage escape bytes into the screen's in-memory
 //! buffer, so they are infallible and return `()`. The bytes reach the
-//! terminal when the caller invokes [`Screen::flush`] (or
-//! [`Screen::present`]), which is the sole fallible I/O boundary.
+//! terminal when the caller invokes [`Canvas::flush`] (or
+//! [`Canvas::present`]), which is the sole fallible I/O boundary.
 
 use std::io::Write;
 
 use crate::ansi::{self, cursor, kitty, mode};
 
-use super::Screen;
+use super::Canvas;
 
-impl<W: Write> Screen<W> {
+impl<W: Write> Canvas<W> {
     /// Toggle alternate screen mode. Entering saves the cursor and
     /// switches to the alternate buffer; exiting restores both. No-op
     /// when already in the requested state.
@@ -121,8 +121,8 @@ impl<W: Write> Screen<W> {
     }
 
     /// Enable or disable Unicode core / grapheme-cluster mode
-    /// (DEC private mode 2027). When enabled, [`Screen::set_str`]
-    /// and [`Screen::insert_above`] calculate cell widths per grapheme
+    /// (DEC private mode 2027). When enabled, [`Canvas::set_str`]
+    /// and [`Canvas::insert_above`] calculate cell widths per grapheme
     /// cluster (UTS-29 + emoji presentation rules). When disabled,
     /// widths fall back to per-codepoint wcwidth-style.
     pub fn set_grapheme_clusters(&mut self, enable: bool) {

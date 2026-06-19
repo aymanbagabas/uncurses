@@ -8,11 +8,11 @@
 use std::io::Write;
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, EventSource, Key};
 use uncurses::layout::Rect;
-use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout, Terminal};
 use uncurses::text::WrapMode;
@@ -43,7 +43,7 @@ const BACKGROUND: &[&str] = &[
 /// `run` drives the event loop, and `stop` restores the terminal.
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     modal_open: bool,
     quit_keys: [Key; 3],
@@ -54,7 +54,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
@@ -116,7 +116,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
+fn redraw<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
     screen.clear();
     paint_background(screen);
     paint_status(screen, modal_open);
@@ -125,7 +125,7 @@ fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
     }
 }
 
-fn paint_background<W: Write>(screen: &mut Screen<W>) {
+fn paint_background<W: Write>(screen: &mut Canvas<W>) {
     let w = screen.width();
     let h = screen.height();
     if w == 0 || h == 0 {
@@ -140,7 +140,7 @@ fn paint_background<W: Write>(screen: &mut Screen<W>) {
     }
 }
 
-fn paint_status<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
+fn paint_status<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
     let h = screen.height();
     if h == 0 {
         return;
@@ -161,7 +161,7 @@ fn paint_status<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
     screen.set_str_with((0, y), label, WrapMode::Truncate, status);
 }
 
-fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
+fn modal_rect<W: Write>(screen: &Canvas<W>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W + 2 || h < MODAL_H + 2 {
@@ -172,7 +172,7 @@ fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
+fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
     let frame = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())

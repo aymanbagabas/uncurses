@@ -8,23 +8,23 @@
 //! It is **not** `Copy`: it caches the terminal state across
 //! [`make_raw`](Terminal::make_raw) so [`restore`](Terminal::restore)
 //! can revert it without a `State` argument — the same self-managed
-//! teardown pattern as [`Screen::reset`](crate::screen::Screen::reset).
+//! teardown pattern as [`Canvas::reset`](crate::canvas::Canvas::reset).
 //! There is no `Drop`; restore explicitly.
 //!
-//! Feed [`Screen`] and [`EventSource`] from the `Copy` halves with
+//! Feed [`Canvas`] and [`EventSource`] from the `Copy` halves with
 //! [`output`](Terminal::output) / [`input`](Terminal::input), and keep
 //! the `Terminal` for the raw-mode lifecycle:
 //!
 //! ```no_run
 //! use std::io::Write;
 //! use uncurses::terminal::Terminal;
-//! use uncurses::screen::Screen;
+//! use uncurses::canvas::Canvas;
 //! use uncurses::event::EventSource;
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut term = Terminal::open()?; // owns fds + env; not Copy
 //! let _prev = term.make_raw()?;     // caches the prior state
-//! let mut screen = Screen::new(term.output(), term.window_size()?);
+//! let mut screen = Canvas::new(term.output(), term.window_size()?);
 //! let mut source = EventSource::new(term.input())?;
 //! // ... draw to `screen`, read from `source` ...
 //! screen.reset();
@@ -34,7 +34,7 @@
 //! # }
 //! ```
 //!
-//! [`Screen`]: crate::screen::Screen
+//! [`Canvas`]: crate::canvas::Canvas
 //! [`EventSource`]: crate::event::EventSource
 
 use std::io::{self, Read, Write};
@@ -56,12 +56,12 @@ use super::tty::{TtyInput, TtyOutput, open_tty};
 ///
 /// `Terminal` implements [`Read`] (from the input) and [`Write`] (to the
 /// output). It is **not** `Copy` — it caches the pre-raw state so
-/// [`restore`](Self::restore) takes no argument. Build a [`Screen`] and a
+/// [`restore`](Self::restore) takes no argument. Build a [`Canvas`] and a
 /// [`EventSource`] from the `Copy` halves via [`output`](Self::output) /
 /// [`input`](Self::input), and keep the `Terminal` itself for the
 /// raw-mode lifecycle.
 ///
-/// [`Screen`]: crate::screen::Screen
+/// [`Canvas`]: crate::canvas::Canvas
 /// [`EventSource`]: crate::event::EventSource
 pub struct Terminal<I, O> {
     input: I,
@@ -118,7 +118,7 @@ impl<I, O> Terminal<I, O> {
     }
 
     /// Copy of the output half — pass to
-    /// [`Screen::new`](crate::screen::Screen::new).
+    /// [`Canvas::new`](crate::canvas::Canvas::new).
     pub fn output(&self) -> O
     where
         O: Copy,

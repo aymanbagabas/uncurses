@@ -12,10 +12,10 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
@@ -117,7 +117,7 @@ impl Field {
 
 struct App {
     term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
+    screen: Canvas<Stdout>,
     events: EventSource<Stdin>,
     rng: Rng,
     field: Field,
@@ -129,7 +129,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
 
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
@@ -232,7 +232,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn draw<W: Write>(
-    screen: &mut Screen<W>,
+    screen: &mut Canvas<W>,
     field: &mut Field,
     rng: &mut Rng,
     fps: &Fps,
