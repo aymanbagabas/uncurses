@@ -382,15 +382,19 @@ impl Renderer {
         let ts = &self.tabs;
         let mut count: u16 = 0;
         let mut col = fx;
+        // Tab while the true next tab stop still lands at or before the
+        // target. `next_stop` is unclamped (it reports the real stop a
+        // terminal's tab reaches, which may be past the canvas edge), so a
+        // tab is never counted unless it genuinely stays within `tx`. The
+        // residual forward leg covers the rest. Mirrors ncurses' NEXTTAB
+        // loop in `relative_move`.
         loop {
-            if ts.next(col) > tx {
+            let next = ts.next_stop(col);
+            if next > tx {
                 break;
             }
+            col = next;
             count += 1;
-            if col == ts.next(col) || col + 1 >= ts.width() {
-                break;
-            }
-            col = ts.next(col);
         }
         ForwardTabRun {
             count,
