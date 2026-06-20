@@ -45,10 +45,12 @@ impl Buffer {
         }
     }
 
+    /// Return the buffer width in cells.
     pub fn width(&self) -> u16 {
         self.width
     }
 
+    /// Return the buffer height in cells.
     pub fn height(&self) -> u16 {
         self.height
     }

@@ -24,6 +24,7 @@ use windows_sys::Win32::Foundation::HANDLE;
 #[derive(Clone)]
 pub struct State {
     #[cfg(unix)]
+    /// Saved terminal attributes.
     pub termios: libc::termios,
     #[cfg(windows)]
     pub input_mode: u32,

@@ -20,7 +20,12 @@ pub use crate::text::WidthMode;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token<'a> {
     /// A grapheme of visible text with its display width.
-    Text { text: &'a [u8], width: u16 },
+    Text {
+        /// Grapheme bytes.
+        text: &'a [u8],
+        /// Display width in terminal cells.
+        width: u16,
+    },
     /// An ANSI escape sequence (passed through verbatim, no width).
     Escape(&'a [u8]),
     /// A single control byte (C0, DEL, or a non-introducer C1) that isn't

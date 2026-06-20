@@ -20,6 +20,7 @@ pub enum Color {
 }
 
 impl Color {
+    /// Construct a 24-bit RGB color.
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self::Rgb(r, g, b)
     }
@@ -38,25 +39,42 @@ impl Color {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum BasicColor {
+    /// Black.
     Black = 0,
+    /// Red.
     Red = 1,
+    /// Green.
     Green = 2,
+    /// Yellow.
     Yellow = 3,
+    /// Blue.
     Blue = 4,
+    /// Magenta.
     Magenta = 5,
+    /// Cyan.
     Cyan = 6,
+    /// White.
     White = 7,
+    /// Bright black.
     BrightBlack = 8,
+    /// Bright red.
     BrightRed = 9,
+    /// Bright green.
     BrightGreen = 10,
+    /// Bright yellow.
     BrightYellow = 11,
+    /// Bright blue.
     BrightBlue = 12,
+    /// Bright magenta.
     BrightMagenta = 13,
+    /// Bright cyan.
     BrightCyan = 14,
+    /// Bright white.
     BrightWhite = 15,
 }
 
 impl BasicColor {
+    /// Return the 0..=15 palette index.
     pub const fn as_u8(self) -> u8 {
         self as u8
     }

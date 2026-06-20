@@ -19,14 +19,23 @@ bitflags! {
     ///   inspect lock state can mask `modifiers` with `LOCK_MASK`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct KeyModifiers: u16 {
+        /// Shift key modifier.
         const SHIFT       = 0b0000_0000_0000_0001;
+        /// Alt key modifier.
         const ALT         = 0b0000_0000_0000_0010;
+        /// Control key modifier.
         const CTRL        = 0b0000_0000_0000_0100;
+        /// Meta key modifier.
         const META        = 0b0000_0000_0000_1000;
+        /// Hyper key modifier.
         const HYPER       = 0b0000_0000_0001_0000;
+        /// Super key modifier.
         const SUPER       = 0b0000_0000_0010_0000;
+        /// Caps Lock state.
         const CAPS_LOCK   = 0b0000_0000_0100_0000;
+        /// Num Lock state.
         const NUM_LOCK    = 0b0000_0000_1000_0000;
+        /// Scroll Lock state.
         const SCROLL_LOCK = 0b0000_0001_0000_0000;
 
         /// Mask of lock-state bits (`CAPS_LOCK | NUM_LOCK | SCROLL_LOCK`).
@@ -325,86 +334,161 @@ pub enum KeyCode {
     /// decoder is configured with [`DecoderFlags::SELECT_KEY`](crate::event::decode::DecoderFlags::SELECT_KEY).
     Select,
     // Navigation
+    /// Up arrow key.
     Up,
+    /// Down arrow key.
     Down,
+    /// Left arrow key.
     Left,
+    /// Right arrow key.
     Right,
+    /// Home key.
     Home,
+    /// End key.
     End,
+    /// Page Up key.
     PageUp,
+    /// Page Down key.
     PageDown,
     // Editing
+    /// Backspace key.
     Backspace,
+    /// Delete key.
     Delete,
+    /// Insert key.
     Insert,
+    /// Tab key.
     Tab,
+    /// Enter key.
     Enter,
     // Whitespace
+    /// Space key.
     Space,
     // Special
+    /// Escape key.
     Escape,
+    /// Caps Lock key.
     CapsLock,
+    /// Scroll Lock key.
     ScrollLock,
+    /// Num Lock key.
     NumLock,
+    /// Print Screen key.
     PrintScreen,
+    /// Pause key.
     Pause,
+    /// Menu key.
     Menu,
     // Keypad
+    /// Keypad Enter key.
     KpEnter,
+    /// Keypad Add key.
     KpAdd,
+    /// Keypad Subtract key.
     KpSubtract,
+    /// Keypad Multiply key.
     KpMultiply,
+    /// Keypad Divide key.
     KpDivide,
+    /// Keypad Decimal key.
     KpDecimal,
+    /// Keypad Equal key.
     KpEqual,
+    /// Keypad Separator key.
     KpSeparator,
+    /// Keypad Left key.
     KpLeft,
+    /// Keypad Right key.
     KpRight,
+    /// Keypad Up key.
     KpUp,
+    /// Keypad Down key.
     KpDown,
+    /// Keypad Page Up key.
     KpPageUp,
+    /// Keypad Page Down key.
     KpPageDown,
+    /// Keypad Home key.
     KpHome,
+    /// Keypad End key.
     KpEnd,
+    /// Keypad Insert key.
     KpInsert,
+    /// Keypad Delete key.
     KpDelete,
+    /// Keypad Begin key.
     KpBegin,
+    /// Keypad 0 key.
     Kp0,
+    /// Keypad 1 key.
     Kp1,
+    /// Keypad 2 key.
     Kp2,
+    /// Keypad 3 key.
     Kp3,
+    /// Keypad 4 key.
     Kp4,
+    /// Keypad 5 key.
     Kp5,
+    /// Keypad 6 key.
     Kp6,
+    /// Keypad 7 key.
     Kp7,
+    /// Keypad 8 key.
     Kp8,
+    /// Keypad 9 key.
     Kp9,
     // Media
+    /// Media Play key.
     MediaPlay,
+    /// Media Pause key.
     MediaPause,
+    /// Media Play/Pause key.
     MediaPlayPause,
+    /// Media Reverse key.
     MediaReverse,
+    /// Media Stop key.
     MediaStop,
+    /// Media Rewind key.
     MediaRewind,
+    /// Media Fast Forward key.
     MediaFastForward,
+    /// Media Next key.
     MediaNext,
+    /// Media Previous key.
     MediaPrev,
+    /// Media Record key.
     MediaRecord,
+    /// Volume Up key.
     VolumeUp,
+    /// Volume Down key.
     VolumeDown,
+    /// Volume Mute key.
     VolumeMute,
     // Modifier keys (reported with Kitty protocol)
+    /// Left Shift key.
     LeftShift,
+    /// Right Shift key.
     RightShift,
+    /// Left Control key.
     LeftCtrl,
+    /// Right Control key.
     RightCtrl,
+    /// Left Alt key.
     LeftAlt,
+    /// Right Alt key.
     RightAlt,
+    /// Left Super key.
     LeftSuper,
+    /// Right Super key.
     RightSuper,
+    /// Left Hyper key.
     LeftHyper,
+    /// Right Hyper key.
     RightHyper,
+    /// Left Meta key.
     LeftMeta,
+    /// Right Meta key.
     RightMeta,
     /// ISO Level 3 Shift (typically AltGr).
     IsoLevel3Shift,

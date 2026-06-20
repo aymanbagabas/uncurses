@@ -206,6 +206,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Create a renderer with default state and no current buffer.
     pub fn new() -> Self {
         Self {
             cur_buf: None,

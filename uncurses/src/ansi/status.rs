@@ -16,14 +16,17 @@ pub const REQUEST_EXTENDED_CURSOR_POSITION: &[u8] = b"\x1b[?6n";
 /// (`CSI ? 996 n`).
 pub const REQUEST_LIGHT_DARK_REPORT: &[u8] = b"\x1b[?996n";
 
+/// Write the cursor position request (`CSI 6 n`).
 pub fn write_request_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_CURSOR_POSITION)
 }
 
+/// Write the extended cursor position request (`CSI ? 6 n`).
 pub fn write_request_extended_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_EXTENDED_CURSOR_POSITION)
 }
 
+/// Write the light or dark preference request (`CSI ? 996 n`).
 pub fn write_request_light_dark_report<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_LIGHT_DARK_REPORT)
 }

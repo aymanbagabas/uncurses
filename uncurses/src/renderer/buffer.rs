@@ -15,11 +15,13 @@ pub struct TouchedSpan {
 /// A buffer that tracks which lines/cells have been modified since last render.
 #[derive(Debug, Clone)]
 pub struct RenderBuffer {
+    /// Backing cell buffer.
     pub buffer: Buffer,
     touched: Vec<Option<TouchedSpan>>,
 }
 
 impl RenderBuffer {
+    /// Create a render buffer with all lines initially untouched.
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             buffer: Buffer::new(width, height),
@@ -27,10 +29,12 @@ impl RenderBuffer {
         }
     }
 
+    /// Return the buffer width in cells.
     pub fn width(&self) -> u16 {
         self.buffer.width()
     }
 
+    /// Return the buffer height in cells.
     pub fn height(&self) -> u16 {
         self.buffer.height()
     }

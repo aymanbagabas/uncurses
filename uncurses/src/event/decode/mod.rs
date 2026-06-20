@@ -55,6 +55,7 @@ impl Default for Decoder {
 }
 
 impl Decoder {
+    /// Construct a decoder with the given behavior flags.
     pub fn new(flags: DecoderFlags) -> Self {
         Self {
             buf: Vec::with_capacity(256),

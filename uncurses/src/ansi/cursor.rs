@@ -188,12 +188,19 @@ pub fn write_request_extended_cursor_position<W: Write>(w: &mut W) -> io::Result
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CursorStyle {
     #[default]
+    /// Terminal default cursor style.
     Default,
+    /// Blinking block cursor.
     BlinkingBlock,
+    /// Steady block cursor.
     SteadyBlock,
+    /// Blinking underline cursor.
     BlinkingUnderline,
+    /// Steady underline cursor.
     SteadyUnderline,
+    /// Blinking bar cursor.
     BlinkingBar,
+    /// Steady bar cursor.
     SteadyBar,
 }
 

@@ -7,21 +7,37 @@ use crate::ansi::params::Params;
 /// Mouse button identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
+    /// Left mouse button.
     Left,
+    /// Middle mouse button.
     Middle,
+    /// Right mouse button.
     Right,
+    /// Vertical wheel scrolled up.
     WheelUp,
+    /// Vertical wheel scrolled down.
     WheelDown,
+    /// Horizontal wheel scrolled left.
     WheelLeft,
+    /// Horizontal wheel scrolled right.
     WheelRight,
+    /// Additional mouse button 4.
     Button4,
+    /// Additional mouse button 5.
     Button5,
+    /// Additional mouse button 6.
     Button6,
+    /// Additional mouse button 7.
     Button7,
+    /// Additional mouse button 8.
     Button8,
+    /// Additional mouse button 9.
     Button9,
+    /// Additional mouse button 10.
     Button10,
+    /// Additional mouse button 11.
     Button11,
+    /// No button.
     None,
 }
 
@@ -34,9 +50,13 @@ pub enum MouseButton {
 /// coordinates when appropriate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Mouse {
+    /// Horizontal coordinate.
     pub x: u16,
+    /// Vertical coordinate.
     pub y: u16,
+    /// Mouse button involved in the event.
     pub button: MouseButton,
+    /// Active keyboard modifiers.
     pub modifiers: KeyModifiers,
 }
 
