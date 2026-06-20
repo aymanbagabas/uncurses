@@ -38,9 +38,9 @@ impl<W: Write> Canvas<W> {
     /// under the screen's current width mode and East-Asian Ambiguous
     /// policy.
     ///
-    /// In [`WidthMode::Wc`](crate::text::WidthMode::Wc) this is the width
+    /// In [`WidthMode::Wc`] this is the width
     /// of `g`'s first code point; in
-    /// [`WidthMode::Grapheme`](crate::text::WidthMode::Grapheme) it is the
+    /// [`WidthMode::Grapheme`] it is the
     /// full cluster width. See [`crate::text::grapheme_width`].
     pub fn grapheme_width(&self, g: &str) -> u8 {
         TextSurface::width_mode(self).grapheme_width(g, self.eaw_wide)

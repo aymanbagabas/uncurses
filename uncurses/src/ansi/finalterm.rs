@@ -1,6 +1,6 @@
 //! FinalTerm shell-integration marks (OSC 133).
 //!
-//! See: https://iterm2.com/documentation-shell-integration.html
+//! See: <https://iterm2.com/documentation-shell-integration.html>
 
 use std::io::{self, Write};
 

@@ -319,10 +319,10 @@ pub enum KeyCode {
     /// treat values outside the valid range as bugs.
     F(u8),
     /// Legacy VT220 Find key, distinct from Home. Only emitted when the
-    /// decoder is configured with [`DecoderFlags::FIND_KEY`].
+    /// decoder is configured with [`DecoderFlags::FIND_KEY`](crate::event::decode::DecoderFlags::FIND_KEY).
     Find,
     /// Legacy VT220 Select key, distinct from End. Only emitted when the
-    /// decoder is configured with [`DecoderFlags::SELECT_KEY`].
+    /// decoder is configured with [`DecoderFlags::SELECT_KEY`](crate::event::decode::DecoderFlags::SELECT_KEY).
     Select,
     // Navigation
     Up,

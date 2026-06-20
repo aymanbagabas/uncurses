@@ -156,7 +156,7 @@ impl RenderBuffer {
     ///
     /// Unlike [`Self::set_cell`], this does not compare against the
     /// existing cell — the touched span is extended unconditionally and
-    /// [`crate::renderer::Renderer::sync_front`] filters unchanged
+    /// `Renderer::sync_front` filters unchanged
     /// cells by reference equality. Callers must not change
     /// [`Cell::width`] through this handle; use [`Self::set_cell`] for
     /// wide-cell writes that need continuation-column accounting.

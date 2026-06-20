@@ -1,3 +1,8 @@
+//! Cell-grid storage and surface traits.
+//!
+//! This module provides [`Buffer`], row helpers, rectangular views, and owned [`Window`]s for working with terminal cells.
+//! Reach for it when you need an off-screen grid, a slice of a grid, or a common [`Surface`] / [`SurfaceMut`] API that drawing code can target.
+
 pub mod ops;
 pub mod surface;
 pub mod view;

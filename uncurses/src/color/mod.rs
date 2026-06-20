@@ -1,3 +1,8 @@
+//! Terminal color types and capability profiles.
+//!
+//! This module defines [`Color`], the standard [`BasicColor`] palette, and [`Profile`] for choosing how colors should be encoded.
+//! Reach for it when styling text, converting palette entries to RGB, or adapting output to a terminal's color support.
+
 mod convert;
 mod profile;
 

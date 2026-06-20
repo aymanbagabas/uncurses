@@ -1,7 +1,6 @@
 //! Cell-grid surface traits.
 //!
-//! The buffer-like types ([`Buffer`](super::Buffer),
-//! [`RenderBuffer`](crate::renderer::RenderBuffer),
+//! The buffer-like types ([`Buffer`](super::Buffer), `RenderBuffer`,
 //! [`Window`](super::Window), [`View`](super::View),
 //! [`Canvas`](crate::canvas::Canvas)) all share the same shape: a
 //! rectangular region of [`Cell`]s with read and/or write access. This
@@ -239,7 +238,7 @@ pub trait SurfaceMut: Surface {
     /// are filled with `fill`.
     ///
     /// The default implementation snapshots the row's primary cells in
-    /// the affected window through [`Self::cell`], blanks the window
+    /// the affected window through [`Surface::cell`], blanks the window
     /// via [`Self::set_cell`], then replays each surviving primary at
     /// its shifted position. Wide primaries whose new footprint would
     /// cross `bounds_right` are dropped. Implementations backed by a
@@ -275,7 +274,7 @@ pub trait SurfaceMut: Surface {
     /// slots `[bounds_right - n, bounds_right)` are filled with `fill`.
     ///
     /// The default implementation snapshots the row's primary cells in
-    /// the affected window through [`Self::cell`], blanks the window
+    /// the affected window through [`Surface::cell`], blanks the window
     /// via [`Self::set_cell`], then replays each surviving primary at
     /// its shifted position. Primaries whose source column falls inside
     /// `[pos.x, pos.x + n)` are dropped. Implementations backed by a

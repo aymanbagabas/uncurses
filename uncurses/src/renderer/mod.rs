@@ -1,3 +1,8 @@
+//! Cell-diff renderer internals.
+//!
+//! This module compares a front [`RenderBuffer`] with tracked terminal state and emits the minimal cell, style, cursor, and scroll changes it can.
+//! Most users reach for [`crate::canvas::Canvas`] instead, while this module is useful for lower-level rendering tests and integrations that need direct access to [`Renderer`] or [`Optimizations`].
+
 pub(crate) mod buffer;
 pub(crate) mod caps;
 pub(crate) mod color_cache;

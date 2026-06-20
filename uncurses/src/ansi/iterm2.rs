@@ -1,6 +1,6 @@
 //! iTerm2 proprietary protocol (OSC 1337).
 //!
-//! See: https://iterm2.com/documentation-escape-codes.html
+//! See: <https://iterm2.com/documentation-escape-codes.html>
 
 use std::io::{self, Write};
 

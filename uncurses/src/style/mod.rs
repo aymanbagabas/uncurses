@@ -1,3 +1,8 @@
+//! Text style representation and SGR helpers.
+//!
+//! This module defines [`Style`], attribute flags, underline variants, and optional hyperlink targets for cells.
+//! Reach for it when building styled text or when parsing, diffing, or emitting style changes.
+
 pub mod diff;
 pub mod parse;
 pub mod sgr;

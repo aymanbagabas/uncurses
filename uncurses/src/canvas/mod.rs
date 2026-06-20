@@ -170,7 +170,7 @@ impl<W: Write> Canvas<W> {
     }
 
     /// Build with the East-Asian Ambiguous width policy set (see
-    /// [`Canvas::eaw_wide`]). Consuming builder for use right after
+    /// [`TextSurface::eaw_wide`](crate::text::TextSurface::eaw_wide)). Consuming builder for use right after
     /// construction.
     pub fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
         self.eaw_wide = eaw_wide;
@@ -294,7 +294,7 @@ impl<W: Write> Canvas<W> {
     }
 
     /// Queue a cursor move to `(x, y)` (buffer-relative, origin at
-    /// top-left). The move bytes are appended to [`Canvas::buf`] and
+    /// top-left). The move bytes are appended to `buf` and
     /// reach the terminal on the next [`io::Write::flush`].
     ///
     /// No-op when the renderer already reports the cursor at `(x, y)`
@@ -549,14 +549,14 @@ impl<W: Write> SurfaceMut for Canvas<W> {
 }
 
 impl<W: Write> Write for Canvas<W> {
-    /// Append raw bytes into [`Canvas::buf`]. The bytes do not reach
+    /// Append raw bytes into `buf`. The bytes do not reach
     /// the underlying writer until [`Write::flush`] is called.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.buf.extend_from_slice(buf);
         Ok(buf.len())
     }
 
-    /// Drain [`Canvas::buf`] into the owned writer and flush it.
+    /// Drain `buf` into the owned writer and flush it.
     fn flush(&mut self) -> io::Result<()> {
         if !self.buf.is_empty() {
             #[cfg(debug_assertions)]

@@ -43,15 +43,15 @@ const DEFAULT_SIZE: (u16, u16) = (80, 24);
 /// # Events
 ///
 /// Read synchronously by locking [`events`](Self::events), or take an
-/// asynchronous [`EventStream`](uncurses::event::EventStream) with
-/// [`event_stream`](Self::event_stream) (the `async` feature) over the
+/// asynchronous `EventStream` with
+/// `event_stream` (the `async` feature) over the
 /// same shared source. Synchronous reads keep working alongside a live
 /// stream, subject to the stream's coexistence caveats.
 ///
 /// # Setup
 ///
 /// Construction is explicit: it does not enter raw mode or the alternate
-/// screen. Call [`make_raw`](Self::make_raw) and the relevant
+/// screen. Call [`init`](Self::init) and the relevant
 /// [`Canvas`](Self::screen_mut) mode setters yourself, and
 /// [`restore`](Self::restore) on exit.
 pub struct UncursesBackend<I: Input, O: Write> {
@@ -135,7 +135,7 @@ where
     /// Build a backend from pre-constructed parts, so a caller can reuse
     /// an existing terminal, source, and screen. The source is shared
     /// behind `Arc<Mutex<_>>` so it can be read synchronously and, under
-    /// the `async` feature, also back an [`EventStream`].
+    /// the `async` feature, also back an `EventStream`.
     pub fn new(terminal: Terminal<I, O>, events: EventSource<I>, screen: Canvas<O>) -> Self {
         Self {
             terminal,
@@ -206,7 +206,7 @@ where
 
     /// A clone of the shared event source handle, for callers that need
     /// their own (e.g. to read it on a dedicated thread or build an
-    /// [`EventStream`](uncurses::event::EventStream)).
+    /// `EventStream`).
     pub fn shared_events(&self) -> Arc<Mutex<EventSource<I>>> {
         Arc::clone(&self.events)
     }

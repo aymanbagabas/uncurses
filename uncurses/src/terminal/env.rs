@@ -4,7 +4,7 @@
 //! depends on the process environment can be exercised with deterministic
 //! inputs in tests, and so that callers can build synthetic environments
 //! (for example, from a configuration file) without mutating the
-//! process-global state managed by [`std::env`].
+//! process-global state managed by [`std::env`](mod@std::env).
 
 /// A snapshot of environment variables.
 ///

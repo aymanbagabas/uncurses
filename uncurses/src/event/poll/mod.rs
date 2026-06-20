@@ -1,7 +1,7 @@
 //! Platform-specific readiness wait.
 //!
 //! Wraps the native readiness primitive on each platform behind a small
-//! uniform interface so the event loop in [`super::reader`] does not
+//! uniform interface so the event loop in `reader` does not
 //! grow per-target branches. The caller owns a `&mut [PollFd]`:
 //! [`Poller::poll`] writes back the `ready` flag on each entry and
 //! returns the number of ready fds.
@@ -122,7 +122,7 @@ fn remaining(deadline: Option<Instant>) -> Option<Duration> {
 /// There is deliberately no platform-dispatch wrapper: the concrete
 /// implementations are exposed per target and the caller picks one. On
 /// Darwin, `kqueue` spins on tty character devices, so a caller watching
-/// a tty input fd selects [`Select`] over [`Kqueue`].
+/// a tty input fd selects `Select` over `Kqueue`.
 pub trait Poller: Send + Sync {
     /// Construct a poller watching exactly `fds`, registered once for
     /// the poller's lifetime.

@@ -1,6 +1,6 @@
 //! In-band terminal resize encoding (mode 2048).
 //!
-//! See: https://gist.github.com/rockorager/e695fb2924d36b2bcf1fff4a3704bd83
+//! See: <https://gist.github.com/rockorager/e695fb2924d36b2bcf1fff4a3704bd83>
 
 use std::io::{self, Write};
 
