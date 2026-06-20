@@ -532,9 +532,11 @@ where
 
         // Mouse tracking: enable with the requested motion/pixel preference,
         // letting the screen pick the best mode and encoding the terminal
-        // supports now that capabilities are known.
+        // supports now that capabilities are known. Pixel coordinates are
+        // requested only when SGR-pixel encoding is actually available, so the
+        // preference degrades to cell coordinates on terminals without it.
         if let Some(pref) = self.options.mouse {
-            self.enable_mouse(pref.motion, pref.pixels)?;
+            self.enable_mouse(pref.motion, pref.pixels && self.caps.mouse_sgr_pixel)?;
         }
         Ok(())
     }
