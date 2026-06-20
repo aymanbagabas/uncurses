@@ -3,15 +3,15 @@
 //! With bracketed paste on (a [`Screen`] default), the terminal wraps
 //! pasted text in [`Event::PasteStart`] / [`Event::PasteEnd`] and streams
 //! the body as [`Event::PasteChunk`] payloads. That lets you tell a paste
-//! apart from someone typing fast, and reassemble it with a
-//! [`PasteBuffer`]. This app shows the last thing you pasted.
+//! apart from someone typing fast, and reassemble it by accumulating the
+//! chunks into a `Vec<u8>`. This app shows the last thing you pasted.
 //!
 //! Run with `cargo run --example paste`. Paste some text (try a few
 //! lines); press `q` or `Ctrl-C` to quit.
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, Key, PasteBuffer};
+use uncurses::event::{Event, Key};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -31,22 +31,22 @@ fn main() -> std::io::Result<()> {
 fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
     let mut last: Option<String> = None;
-    // Holds chunks between PasteStart and PasteEnd.
-    let mut pending: Option<PasteBuffer> = None;
+    // Holds chunk bytes between PasteStart and PasteEnd.
+    let mut pending: Option<Vec<u8>> = None;
     render(screen, last.as_deref());
 
     loop {
         match screen.read_event()? {
             Event::KeyPress(ref k) if quit.contains(k) => break,
-            Event::PasteStart => pending = Some(PasteBuffer::new()),
+            Event::PasteStart => pending = Some(Vec::new()),
             Event::PasteChunk(bytes) => {
                 if let Some(buf) = pending.as_mut() {
-                    buf.push(&bytes);
+                    buf.extend_from_slice(&bytes);
                 }
             }
             Event::PasteEnd => {
                 if let Some(buf) = pending.take() {
-                    last = Some(buf.into_string_lossy());
+                    last = Some(String::from_utf8_lossy(&buf).into_owned());
                     render(screen, last.as_deref());
                 }
             }

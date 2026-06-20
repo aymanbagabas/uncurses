@@ -9,15 +9,14 @@
 //!
 //! Navigation: arrow keys move within the buffer. `Backspace` deletes
 //! the previous character (or joins lines at column 0). Pasted text
-//! is accumulated across `PasteChunk` events into a
-//! [`PasteBuffer`](uncurses::event::PasteBuffer), decoded as UTF-8
-//! on `PasteEnd`, and inserted at the cursor (embedded newlines
+//! is accumulated across `PasteChunk` events into a `Vec<u8>`, decoded
+//! as UTF-8 on `PasteEnd`, and inserted at the cursor (embedded newlines
 //! split lines).
 //!
 //! Press `Esc` or `Ctrl-C` to exit.
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::event::{Event, Key, KeyCode, KeyModifiers, PasteBuffer};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{TtyInput, TtyOutput};
@@ -185,7 +184,7 @@ fn redraw(screen: &mut Screen<TtyInput, TtyOutput>, buf: &Buffer) {
 struct App {
     screen: Screen<TtyInput, TtyOutput>,
     buffer: Buffer,
-    paste: Option<PasteBuffer>,
+    paste: Option<Vec<u8>>,
 }
 
 impl App {
@@ -252,16 +251,16 @@ impl App {
                     _ => {}
                 },
                 Event::PasteStart => {
-                    self.paste = Some(PasteBuffer::new());
+                    self.paste = Some(Vec::new());
                 }
                 Event::PasteChunk(bytes) => {
                     if let Some(p) = self.paste.as_mut() {
-                        p.push(&bytes);
+                        p.extend_from_slice(&bytes);
                     }
                 }
                 Event::PasteEnd => {
                     if let Some(p) = self.paste.take() {
-                        let text = p.into_string_lossy();
+                        let text = String::from_utf8_lossy(&p).into_owned();
                         self.buffer.insert_str(&text);
                     }
                 }
