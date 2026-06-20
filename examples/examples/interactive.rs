@@ -3,45 +3,37 @@
 //! Run with `cargo run --example interactive`. Press any key to see events;
 //! press `q` or Ctrl-C to exit. Resize the terminal to see Resize events.
 //!
-//! Demonstrates the non-blocking [`EventSource::poll`] / [`EventSource::try_read`]
+//! Demonstrates the non-blocking [`Screen::poll`] / [`Screen::try_read`]
 //! style: every 500 ms the main loop wakes up to advance a clock in the
 //! header, even when no input has arrived.
 
 use std::collections::VecDeque;
-use std::io::Write;
 use std::time::{Duration, Instant};
 
-use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::terminal::Terminal;
+use uncurses::buffer::{Bounded, SurfaceMut};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::screen::Screen;
 use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::TextSurface;
 
 const TICK: Duration = Duration::from_millis(500);
 
 /// Event-polling demo app. `start` enters raw mode + alternate screen,
-/// `run` polls on a 500 ms tick to advance the clock even when idle, and
-/// `stop` restores the terminal.
+/// `run` polls on a 500 ms tick to advance the clock even when idle.
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     started: Instant,
     log: VecDeque<String>,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
         Ok(Self {
-            term,
             screen,
-            events,
             started: Instant::now(),
             log: VecDeque::with_capacity(64),
         })
@@ -58,11 +50,11 @@ impl App {
         let mut next_tick = Instant::now() + TICK;
         loop {
             let remaining = next_tick.saturating_duration_since(Instant::now());
-            let got = self.events.poll(Some(remaining))?;
+            let got = self.screen.poll(Some(remaining))?;
             let mut dirty = false;
 
             if got {
-                while let Some(ev) = self.events.try_read() {
+                while let Some(ev) = self.screen.try_read() {
                     match &ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),
@@ -75,7 +67,7 @@ impl App {
                             ..
                         }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(()),
                         Event::Resize(ws) => {
-                            self.screen.resize(ws.col, ws.row);
+                            self.screen.resize((ws.col, ws.row));
                             let h = self.screen.height();
                             push(&mut self.log, format!("Resize {}x{}", ws.col, ws.row), h);
                         }
@@ -104,10 +96,8 @@ impl App {
         }
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -125,8 +115,8 @@ fn push(log: &mut VecDeque<String>, line: String, height: u16) {
     }
 }
 
-fn redraw<W: std::io::Write>(
-    screen: &mut Canvas<W>,
+fn redraw(
+    screen: &mut Screen<Stdin, Stdout>,
     log: &VecDeque<String>,
     uptime: Duration,
 ) -> std::io::Result<()> {

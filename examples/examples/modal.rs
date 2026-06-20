@@ -5,17 +5,15 @@
 //! When the modal is hidden, the text underneath becomes visible
 //! again. `q`, `Esc`, or `Ctrl-C` exits.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, EventSource, Key};
+use uncurses::event::{Event, Key};
 use uncurses::layout::Rect;
+use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{Stdin, Stdout, Terminal};
-use uncurses::text::WrapMode;
+use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::{TextSurface, WrapMode};
 
 const MODAL_W: u16 = 44;
 const MODAL_H: u16 = 9;
@@ -40,11 +38,9 @@ const BACKGROUND: &[&str] = &[
 ];
 
 /// Modal-toggle app. `start` enters raw mode and the alternate screen,
-/// `run` drives the event loop, and `stop` restores the terminal.
+/// and `run` drives the event loop.
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     modal_open: bool,
     quit_keys: [Key; 3],
     toggle_keys: [Key; 2],
@@ -52,20 +48,16 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
         // Parse key bindings once. `Key: FromStr`, and `==` compares on
         // the canonical chord identity — so plain equality is the right
         // operator for keyboard-shortcut matching.
         Ok(Self {
-            term,
             screen,
-            events,
             modal_open: true,
             quit_keys: ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap()),
             toggle_keys: ["space", "m"].map(|s| s.parse().unwrap()),
@@ -81,7 +73,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -90,7 +82,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, ws.row);
+                    self.screen.resize((ws.col, ws.row));
                     dirty = true;
                 }
                 _ => {}
@@ -102,10 +94,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -116,7 +106,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     screen.clear();
     paint_background(screen);
     paint_status(screen, modal_open);
@@ -125,7 +115,7 @@ fn redraw<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
     }
 }
 
-fn paint_background<W: Write>(screen: &mut Canvas<W>) {
+fn paint_background(screen: &mut Screen<Stdin, Stdout>) {
     let w = screen.width();
     let h = screen.height();
     if w == 0 || h == 0 {
@@ -140,7 +130,7 @@ fn paint_background<W: Write>(screen: &mut Canvas<W>) {
     }
 }
 
-fn paint_status<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
+fn paint_status(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     let h = screen.height();
     if h == 0 {
         return;
@@ -161,7 +151,7 @@ fn paint_status<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
     screen.set_str((0, y), label, status);
 }
 
-fn modal_rect<W: Write>(screen: &Canvas<W>) -> Option<Rect> {
+fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W + 2 || h < MODAL_H + 2 {
@@ -172,7 +162,7 @@ fn modal_rect<W: Write>(screen: &Canvas<W>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
+fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())

@@ -3,7 +3,7 @@
 //! glyphs, and `insert_above`.
 
 use super::*;
-use crate::text::{WidthMode, WrapMode};
+use crate::text::{TextSurface, WidthMode, WrapMode};
 
 #[test]
 fn test_new_screen() {

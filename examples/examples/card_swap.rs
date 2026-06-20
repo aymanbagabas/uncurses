@@ -1,15 +1,13 @@
 //! Two layered cards. Press any key to swap their stacking order;
 //! `q`, `Esc`, or `Ctrl-C` exits.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::TextSurface;
 
 const CARD_W: u16 = 20;
 const CARD_H: u16 = 10;
@@ -17,27 +15,22 @@ const CARD_H: u16 = 10;
 const VIEW_H: u16 = 15;
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     flip: bool,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Canvas::new(
-            term.output(),
-            (term.get_window_size().unwrap_or_default().col, VIEW_H),
-        );
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.hide_cursor()?;
+        // Inline view: keep the terminal width but only as tall as the
+        // two stacked cards plus the footer.
+        let w = screen.width();
+        screen.resize((w, VIEW_H));
 
         Ok(Self {
-            term,
             screen,
-            events,
             flip: false,
         })
     }
@@ -51,7 +44,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(Key {
@@ -69,7 +62,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, VIEW_H);
+                    self.screen.resize((ws.col, VIEW_H));
                     dirty = true;
                 }
                 _ => {}
@@ -81,10 +74,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -95,7 +86,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Canvas<W>, flip: bool) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, flip: bool) {
     screen.clear();
     let w = screen.width();
     let h = screen.height();
@@ -128,14 +119,14 @@ fn redraw<W: Write>(screen: &mut Canvas<W>, flip: bool) {
     }
 }
 
-fn draw_card<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, label: &str, border: Style) {
+fn draw_card(screen: &mut Screen<Stdin, Stdout>, x: u16, y: u16, label: &str, border: Style) {
     let w = CARD_W;
     let h = CARD_H;
 
     let blank = " ".repeat(w as usize - 2);
     // Erase interior with default bg so the lower card doesn't bleed through.
     for row in 1..h - 1 {
-        screen.set_str((x + 1, y + row), &blank, uncurses::style::Style::default());
+        screen.set_str((x + 1, y + row), &blank, Style::default());
     }
 
     // Rounded corners + horizontals + verticals.
@@ -158,5 +149,5 @@ fn draw_card<W: Write>(screen: &mut Canvas<W>, x: u16, y: u16, label: &str, bord
     let lw = label.chars().count() as u16;
     let lx = x + (w.saturating_sub(lw)) / 2;
     let ly = y + h / 2;
-    screen.set_str((lx, ly), label, uncurses::style::Style::default());
+    screen.set_str((lx, ly), label, Style::default());
 }

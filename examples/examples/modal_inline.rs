@@ -6,18 +6,15 @@
 //! surface with a scrim and sits on top. `q`, `Esc`, or `Ctrl-C`
 //! exits.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Rect;
+use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::{TextSurface, WrapMode};
 
 const SURFACE_W: u16 = 60;
 const SURFACE_H: u16 = 16;
@@ -25,27 +22,21 @@ const MODAL_W: u16 = 36;
 const MODAL_H: u16 = 7;
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     modal_open: bool,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let size = term.get_window_size().unwrap_or_default();
-        let w = SURFACE_W.min(size.col.max(1));
-        let h = SURFACE_H.min(size.row.max(1));
-        let mut screen = Canvas::new(term.output(), (w, h));
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        let w = SURFACE_W.min(screen.width().max(1));
+        let h = SURFACE_H.min(screen.height().max(1));
+        screen.resize((w, h));
+        screen.hide_cursor()?;
 
         Ok(Self {
-            term,
             screen,
-            events,
             modal_open: false,
         })
     }
@@ -59,7 +50,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(Key {
@@ -93,7 +84,7 @@ impl App {
                 Event::Resize(ws) => {
                     let nw = SURFACE_W.min(ws.col.max(1));
                     let nh = SURFACE_H.min(ws.row.max(1));
-                    self.screen.resize(nw, nh);
+                    self.screen.resize((nw, nh));
                     dirty = true;
                 }
                 _ => {}
@@ -105,10 +96,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -119,7 +108,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     screen.clear();
     paint_content(screen);
     if modal_open {
@@ -130,7 +119,7 @@ fn redraw<W: Write>(screen: &mut Canvas<W>, modal_open: bool) {
     }
 }
 
-fn paint_content<W: Write>(screen: &mut Canvas<W>) {
+fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
     let cyan = Style::default().fg(BasicColor::BrightCyan.into());
     let plain = Style::default();
     let bullet_color = Style::default().fg(BasicColor::Yellow.into());
@@ -148,7 +137,7 @@ fn paint_content<W: Write>(screen: &mut Canvas<W>) {
     }
 }
 
-fn paint_scrim<W: Write>(screen: &mut Canvas<W>) {
+fn paint_scrim(screen: &mut Screen<Stdin, Stdout>) {
     // Dim the surface with a uniform gray fill so the modal stands
     // out. The cells behind keep their content but the scrim's bg
     // wins because we overwrite each cell.
@@ -157,7 +146,7 @@ fn paint_scrim<W: Write>(screen: &mut Canvas<W>) {
     screen.fill_rect(bounds, &Cell::narrow(" ").style(scrim));
 }
 
-fn modal_rect<W: Write>(screen: &Canvas<W>) -> Option<Rect> {
+fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W || h < MODAL_H {
@@ -168,7 +157,7 @@ fn modal_rect<W: Write>(screen: &Canvas<W>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal<W: Write>(screen: &mut Canvas<W>, rect: Rect) {
+fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
         .fg(BasicColor::BrightWhite.into())
         .bg(BasicColor::Blue.into())
