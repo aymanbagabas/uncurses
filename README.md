@@ -34,9 +34,34 @@ fn main() -> io::Result<()> {
 }
 ```
 
-That is the styling layer on its own. When you want a full interactive
-app — an alternate screen, an event loop, mouse, and teardown that always
-cleans up — reach for `Screen`. The
+That is the styling layer on its own. When you want an interactive app — an
+event loop, mouse, and teardown that always cleans up — reach for `Screen`.
+A session is bracketed by `init()` and `finish()`, and in between it starts
+**inline** (drawing alongside your shell output, not taking over the window)
+with the **cursor visible**; the alternate screen and a hidden cursor are
+opt-in:
+
+```rust,no_run
+use uncurses::event::{Event, Key};
+use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
+
+fn main() -> std::io::Result<()> {
+    let mut screen = Screen::stdio()?;
+    screen.init()?; // raw mode + capability detection; starts inline, cursor visible
+
+    screen.set_str((0, 0), "Hello! Press q to quit.", Style::default());
+    screen.present()?;
+
+    let q: Key = "q".parse().unwrap();
+    while !matches!(screen.read_event()?, Event::KeyPress(k) if k == q) {}
+
+    screen.finish() // restore the terminal — always, one call
+}
+```
+
+For a full-screen app, add `screen.enter_alt_screen()?` after `init`. The
 [`uncurses` quick start](uncurses/README.md#screen-the-easy-button) builds
 one in a dozen lines, or run `cargo run --example counter`.
 

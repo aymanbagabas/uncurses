@@ -51,8 +51,8 @@ use uncurses::text::TextSurface;
 fn main() -> std::io::Result<()> {
     let mut screen = Screen::stdio()?;
     screen.init()?;             // raw mode + capability detection
-    screen.enter_alt_screen()?; // take over the whole window
-    screen.hide_cursor()?;
+    screen.enter_alt_screen()?; // optional: take over the window (default is inline)
+    screen.hide_cursor()?;      // optional: the cursor is visible by default
 
     let quit: [Key; 2] = ["q", "esc"].map(|s| s.parse().unwrap());
     loop {
@@ -72,7 +72,12 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-The lifecycle is explicit and there is no `Drop` magic:
+The lifecycle is explicit and there is no `Drop` magic. Every session is
+bracketed by exactly two calls — [`init`](Screen::init) at the start and
+[`finish`](Screen::finish) at the end — and in between the screen starts
+**inline** (drawing in the normal buffer, not taking over the window) with
+the **cursor visible**. The alternate screen and a hidden cursor are opt-in,
+so `enter_alt_screen` and `hide_cursor` above are choices, not requirements:
 
 - [`Screen::stdio`] / [`Screen::open`] build it; [`init`](Screen::init) (or
   [`init_with`](Screen::init_with) for [`ScreenOptions`]) begins the

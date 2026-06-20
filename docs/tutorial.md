@@ -57,10 +57,18 @@ impl App {
 ```
 
 `init` (and `init_with`) does the busywork: raw mode, a batch of capability
-queries, and the always-on defaults like bracketed paste. The mode setters
-(`enter_alt_screen`, `hide_cursor`, `enable_mouse`, and the rest) write
-their escape sequences immediately and flush, so each one returns an
-`io::Result`.
+queries, and the always-on defaults like bracketed paste. It does **not**
+take over the window or hide the cursor: a freshly `init`-ed screen starts
+**inline** (it draws in the normal buffer, alongside your shell output) with
+the **cursor visible**. The alternate screen and a hidden cursor are
+opt-in, which is why `start` calls `enter_alt_screen` and `hide_cursor`
+explicitly above. Those mode setters (`enter_alt_screen`, `hide_cursor`,
+`enable_mouse`, and the rest) write their escape sequences immediately and
+flush, so each one returns an `io::Result`.
+
+Every session is bracketed by exactly two calls: `init` (or `init_with`) at
+the start and `finish` at the end. `finish` restores everything the
+screen changed, so the terminal is left exactly as you found it.
 
 ## Drawing a frame
 
