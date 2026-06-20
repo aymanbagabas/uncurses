@@ -139,12 +139,12 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, count: u32) {
     let y = h / 2;
 
     let button = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue)
         .bold();
     screen.set_str((x, y), &inner, button);
 
-    let help = Style::default().fg(BasicColor::BrightBlack.into());
+    let help = Style::default().fg(BasicColor::BrightBlack);
     let hint = "click / enter / space: increment • q: quit";
     let hint_w = hint.chars().count() as u16;
     let hx = w.saturating_sub(hint_w) / 2;

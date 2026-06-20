@@ -69,14 +69,18 @@ fn play(term: &Terminal<Stdin, Stdout>, canvas: &mut Canvas<Stdout>) -> std::io:
             "draw-only demo (Canvas, no input) - exiting in {:.1}s",
             remaining_ms as f32 / 1000.0,
         );
-        let dim = Style::default().fg(BasicColor::BrightBlack.into());
+        let dim = Style::default().fg(BasicColor::BrightBlack);
         canvas.set_str((0, 0), &header, dim);
 
         if w >= label_w && h >= 3 {
             // Bounce the label left and right across the width.
             let travel = (w - label_w).max(1) as u32;
             let phase = frame % (2 * travel);
-            let x = if phase < travel { phase } else { 2 * travel - phase } as u16;
+            let x = if phase < travel {
+                phase
+            } else {
+                2 * travel - phase
+            } as u16;
 
             // Cycle the color so the marquee shimmers.
             let palette = [
@@ -88,7 +92,7 @@ fn play(term: &Terminal<Stdin, Stdout>, canvas: &mut Canvas<Stdout>) -> std::io:
                 BasicColor::BrightMagenta,
             ];
             let color = palette[(frame as usize / 4) % palette.len()];
-            canvas.set_str((x, h / 2), label, Style::default().bold().fg(color.into()));
+            canvas.set_str((x, h / 2), label, Style::default().bold().fg(color));
         }
 
         // `present` renders the diff and flushes it in one call.

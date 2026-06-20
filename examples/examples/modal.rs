@@ -121,7 +121,7 @@ fn paint_background(screen: &mut Screen<Stdin, Stdout>) {
     if w == 0 || h == 0 {
         return;
     }
-    let body = Style::default().fg(BasicColor::BrightBlack.into());
+    let body = Style::default().fg(BasicColor::BrightBlack);
     // Reserve the bottom row for the status line.
     let body_rows = h.saturating_sub(1);
     for y in 0..body_rows {
@@ -137,8 +137,8 @@ fn paint_status(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     }
     let y = h - 1;
     let status = Style::default()
-        .fg(BasicColor::Black.into())
-        .bg(BasicColor::BrightWhite.into());
+        .fg(BasicColor::Black)
+        .bg(BasicColor::BrightWhite);
     screen.fill_rect(
         Rect::new(0, y, screen.width(), 1),
         &Cell::narrow(" ").style(status.clone()),
@@ -164,15 +164,15 @@ fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
 
 fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue)
         .bold();
     let body = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into());
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue);
     let hint = Style::default()
-        .fg(BasicColor::BrightYellow.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightYellow)
+        .bg(BasicColor::Blue)
         .italic();
 
     // Solid fill so background text never bleeds through the modal.

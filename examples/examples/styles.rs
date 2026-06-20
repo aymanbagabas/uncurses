@@ -44,7 +44,7 @@ fn main() -> io::Result<()> {
         let style = Style::default()
             .underline()
             .underline_style(kind)
-            .underline_color(BasicColor::BrightRed.into());
+            .underline_color(BasicColor::BrightRed);
         writeln!(out, "  {}", style.styled(name))?;
     }
 
@@ -53,7 +53,7 @@ fn main() -> io::Result<()> {
         out,
         "  {}",
         Style::default()
-            .fg(BasicColor::Green.into())
+            .fg(BasicColor::Green)
             .styled("basic green (16-color)")
     )?;
     writeln!(
@@ -74,8 +74,8 @@ fn main() -> io::Result<()> {
         out,
         "  {}",
         Style::default()
-            .fg(BasicColor::White.into())
-            .bg(BasicColor::Blue.into())
+            .fg(BasicColor::White)
+            .bg(BasicColor::Blue)
             .bold()
             .styled(" foreground on background ")
     )?;
@@ -85,9 +85,7 @@ fn main() -> io::Result<()> {
     // Style carries a `link(...)`. Writing straight to stdout (no cells),
     // wrap the text in the hyperlink sequence by hand and style it with SGR.
     let url = "https://github.com/aymanbagabas/uncurses";
-    let style = Style::default()
-        .underline()
-        .fg(BasicColor::BrightBlue.into());
+    let style = Style::default().underline().fg(BasicColor::BrightBlue);
     write!(out, "  ")?;
     write_hyperlink_start(&mut out, url, "")?;
     write!(out, "{}", style.styled("uncurses on GitHub"))?;
@@ -98,6 +96,6 @@ fn main() -> io::Result<()> {
 }
 
 fn section(out: &mut impl Write, title: &str) -> io::Result<()> {
-    let heading = Style::default().bold().fg(BasicColor::BrightCyan.into());
+    let heading = Style::default().bold().fg(BasicColor::BrightCyan);
     writeln!(out, "\n{}", heading.styled(title))
 }

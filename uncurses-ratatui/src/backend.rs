@@ -372,7 +372,8 @@ where
             Viewport::Inline(_) => self.inline_origin,
             _ => 0,
         };
-        self.screen.assume_cursor_position((p.x, p.y.saturating_sub(top)));
+        self.screen
+            .assume_cursor_position((p.x, p.y.saturating_sub(top)));
         Write::flush(&mut self.screen)
     }
 

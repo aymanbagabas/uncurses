@@ -67,7 +67,7 @@ fn draw_card(canvas: &mut Canvas<Vec<u8>>) {
     let h = canvas.height();
 
     // Rounded border.
-    let border = Style::default().fg(BasicColor::BrightBlack.into());
+    let border = Style::default().fg(BasicColor::BrightBlack);
     let edge = |s: &str| Cell::narrow(s).style(border.clone());
     canvas.fill_rect(Rect::new(1, 0, w - 2, 1), &edge("─"));
     canvas.fill_rect(Rect::new(1, h - 1, w - 2, 1), &edge("─"));
@@ -81,51 +81,42 @@ fn draw_card(canvas: &mut Canvas<Vec<u8>>) {
     // A colored title chip on the top border.
     let title = Style::default()
         .bold()
-        .fg(BasicColor::Black.into())
-        .bg(BasicColor::BrightMagenta.into());
+        .fg(BasicColor::Black)
+        .bg(BasicColor::BrightMagenta);
     canvas.set_str((3, 0), " uncurses ", title);
 
     // Headline with a wide emoji to show off-screen wide-cell handling.
     canvas.set_str(
         (3, 2),
         "Rendered off-screen ✨",
-        Style::default().bold().fg(BasicColor::BrightWhite.into()),
+        Style::default().bold().fg(BasicColor::BrightWhite),
     );
     canvas.set_str(
         (3, 3),
         "cells in, escape bytes out",
-        Style::default().fg(BasicColor::BrightBlack.into()),
+        Style::default().fg(BasicColor::BrightBlack),
     );
 
-    // A true-color gradient bar, one background per column.
+    // A true-color gradient bar. Each cell is a left-half block `▌`: its
+    // foreground is the left sub-pixel and its background the right one, so the
+    // bar carries twice as many color steps as it has columns.
     let bar = Rect::new(3, 5, w.saturating_sub(6), 1);
+    let cols = u32::from(bar.width) * 2;
     for i in 0..bar.width {
-        let hue = f32::from(i) / f32::from(bar.width.max(1)) * 300.0;
-        let (r, g, b) = hsv_to_rgb(hue, 0.85, 1.0);
-        let cell = Cell::narrow(" ").style(Style::default().bg(Color::Rgb(r, g, b)));
+        let left = gradient_color(u32::from(i) * 2, cols);
+        let right = gradient_color(u32::from(i) * 2 + 1, cols);
+        let cell = Cell::narrow("▌").style(Style::default().fg(left).bg(right));
         canvas.set_cell((bar.x + i, bar.y), &cell);
     }
     canvas.set_str(
         (3, 6),
         "24-bit color, downsampled to fit",
-        Style::default().fg(BasicColor::BrightBlack.into()),
+        Style::default().fg(BasicColor::BrightBlack),
     );
 }
 
-/// Minimal HSV-to-RGB for `s`, `v` in `0.0..=1.0` and `h` in degrees.
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
-    let c = v * s;
-    let hp = (h / 60.0).rem_euclid(6.0);
-    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
-    let (r, g, b) = match hp as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = v - c;
-    let to = |f: f32| ((f + m) * 255.0).round() as u8;
-    (to(r), to(g), to(b))
+/// Color of one gradient sub-pixel at column `step` of `cols` total columns.
+fn gradient_color(step: u32, cols: u32) -> Color {
+    let hue = step as f32 / cols.max(1) as f32 * 300.0;
+    Color::hsl(hue, 0.85, 0.55)
 }

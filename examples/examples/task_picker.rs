@@ -222,9 +222,9 @@ fn sgr(style: &Style) -> String {
 const RESET: &str = "\x1b[m";
 
 fn draw_choices(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
-    let subtle = sgr(&Style::default().fg(BasicColor::BrightBlack.into()));
-    let checkbox = sgr(&Style::default().fg(BasicColor::Cyan.into()).bold());
-    let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
+    let subtle = sgr(&Style::default().fg(BasicColor::BrightBlack));
+    let checkbox = sgr(&Style::default().fg(BasicColor::Cyan).bold());
+    let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow).bold());
 
     let mut last = 0u16;
     let mut y = 1u16;
@@ -261,10 +261,10 @@ fn draw_choices(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
 }
 
 fn draw_chosen(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
-    let keyword = sgr(&Style::default().fg(BasicColor::BrightMagenta.into()).bold());
-    let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
-    let bar_st = sgr(&Style::default().fg(BasicColor::BrightGreen.into()));
-    let empty_st = sgr(&Style::default().fg(BasicColor::BrightBlack.into()));
+    let keyword = sgr(&Style::default().fg(BasicColor::BrightMagenta).bold());
+    let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow).bold());
+    let bar_st = sgr(&Style::default().fg(BasicColor::BrightGreen));
+    let empty_st = sgr(&Style::default().fg(BasicColor::BrightBlack));
 
     let (head, deps): (&str, [&str; 2]) = match s.choice {
         0 => ("Carrot planting?", ["libgarden", "vegeutils"]),

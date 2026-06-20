@@ -35,7 +35,10 @@ fn main() -> io::Result<()> {
     result
 }
 
-fn read_loop(events: &mut EventSource<impl uncurses::event::Input>, out: &mut impl Write) -> io::Result<()> {
+fn read_loop(
+    events: &mut EventSource<impl uncurses::event::Input>,
+    out: &mut impl Write,
+) -> io::Result<()> {
     loop {
         // `read` blocks until the next decoded event (or a partial escape
         // sequence resolves on its own short timeout).

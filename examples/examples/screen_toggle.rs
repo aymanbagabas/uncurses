@@ -113,10 +113,10 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, alt: bool) {
         " inline mode "
     };
     let keyword = Style::default()
-        .fg(BasicColor::BrightCyan.into())
-        .bg(BasicColor::Black.into())
+        .fg(BasicColor::BrightCyan)
+        .bg(BasicColor::Black)
         .bold();
-    let help = Style::default().fg(BasicColor::BrightBlack.into());
+    let help = Style::default().fg(BasicColor::BrightBlack);
 
     screen.set_str((2, 1), "You're in", uncurses::style::Style::default());
     screen.set_str((12, 1), mode, keyword);

@@ -77,7 +77,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
     let w = screen.width();
     let h = screen.height();
 
-    let dim = Style::default().fg(BasicColor::BrightBlack.into());
+    let dim = Style::default().fg(BasicColor::BrightBlack);
     screen.set_str((0, 0), "Move and click. q quits.", dim);
 
     let info = format!(
@@ -95,8 +95,8 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
     {
         let marker = Style::default()
             .bold()
-            .fg(BasicColor::Black.into())
-            .bg(BasicColor::BrightYellow.into());
+            .fg(BasicColor::Black)
+            .bg(BasicColor::BrightYellow);
         screen.set_str((x, y), "▢", marker);
     }
 

@@ -62,10 +62,10 @@ async fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 
 fn render(screen: &mut Screen<Stdin, Stdout>, typed: &str) {
     screen.clear();
-    let dim = Style::default().fg(BasicColor::BrightBlack.into());
+    let dim = Style::default().fg(BasicColor::BrightBlack);
     screen.set_str((0, 0), "Async echo. Type away; q quits.", dim);
 
-    let text = Style::default().fg(BasicColor::BrightGreen.into());
+    let text = Style::default().fg(BasicColor::BrightGreen);
     let h = screen.height();
     screen.set_str((0, h / 2), typed, text);
 
