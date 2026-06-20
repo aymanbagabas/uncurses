@@ -10,8 +10,7 @@
 //! Press `q` or `Ctrl-C` to quit.
 
 use std::io;
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -177,8 +176,8 @@ enum InputMsg {
 
 fn main() -> io::Result<()> {
     let mut terminal = uncurses_ratatui::try_init()?;
-    let shared = terminal.backend().shared_events();
-    let result = run(&mut terminal, shared);
+    let events = terminal.backend().shared_events();
+    let result = run(&mut terminal, events);
     uncurses_ratatui::restore(&mut terminal);
     result
 }

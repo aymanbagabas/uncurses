@@ -1,6 +1,5 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
 use ratatui::Viewport;
 use ratatui::backend::{Backend, ClearType, WindowSize};
@@ -9,7 +8,7 @@ use ratatui::layout::{Position as RtPosition, Size as RtSize};
 use uncurses::buffer::SurfaceMut;
 use uncurses::canvas::Canvas;
 use uncurses::cell::Cell as CzCell;
-use uncurses::event::{Event, EventSource, Input, query};
+use uncurses::event::{EventSource, Input};
 use uncurses::terminal::Terminal;
 use uncurses::terminal::{State, Stdin, Stdout, TtyInput, TtyOutput};
 
@@ -30,9 +29,6 @@ impl<T: Write + Copy + std::os::windows::io::AsHandle> OutputHandle for T {}
 
 /// Default geometry when the terminal size cannot be read at construction.
 const DEFAULT_SIZE: (u16, u16) = (80, 24);
-/// How long [`Backend::get_cursor_position`] blocks waiting for the CPR
-/// reply, matching the de-facto 2s budget other backends use.
-const CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// A `ratatui` [`Backend`](ratatui::backend::Backend) that owns the whole
 /// terminal stack: the [`Terminal`] handle (raw-mode lifecycle, window
@@ -46,12 +42,11 @@ const CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(2000);
 ///
 /// # Events
 ///
-/// The source is shared behind `Arc<Mutex<_>>`. Read synchronously by
-/// locking [`events`](Self::events), or take an asynchronous
-/// [`EventStream`](uncurses::event::EventStream) with
-/// [`event_stream`](Self::event_stream) (the `async` feature) — the stream
-/// shares the *same* source, so [`Backend::get_cursor_position`] keeps
-/// working (and with it the inline viewport) while the stream is live.
+/// Read synchronously by locking [`events`](Self::events), or take an
+/// asynchronous [`EventStream`](uncurses::event::EventStream) with
+/// [`event_stream`](Self::event_stream) (the `async` feature) over the
+/// same shared source. Synchronous reads keep working alongside a live
+/// stream, subject to the stream's coexistence caveats.
 ///
 /// # Setup
 ///
@@ -113,7 +108,7 @@ impl UncursesBackend<TtyInput, TtyOutput> {
 
 impl<I, O> UncursesBackend<I, O>
 where
-    I: Input + Copy,
+    I: Input + Copy + 'static,
     O: OutputHandle,
 {
     /// Assemble a backend from a `Terminal`, building the source and
@@ -138,8 +133,9 @@ where
     O: Write,
 {
     /// Build a backend from pre-constructed parts, so a caller can reuse
-    /// an existing terminal, source, and screen. The source is wrapped in
-    /// `Arc<Mutex<_>>` for sharing with an async stream.
+    /// an existing terminal, source, and screen. The source is shared
+    /// behind `Arc<Mutex<_>>` so it can be read synchronously and, under
+    /// the `async` feature, also back an [`EventStream`].
     pub fn new(terminal: Terminal<I, O>, events: EventSource<I>, screen: Canvas<O>) -> Self {
         Self {
             terminal,
@@ -201,13 +197,16 @@ where
         &mut self.screen
     }
 
-    /// Lock the shared event source for synchronous reading.
+    /// Lock the shared event source for synchronous reading. Returns a
+    /// guard that derefs to the [`EventSource`] (so `poll`, `try_read`,
+    /// `read` work directly).
     pub fn events(&self) -> MutexGuard<'_, EventSource<I>> {
         self.events.lock().unwrap()
     }
 
-    /// The shared event source, for callers that need their own handle
-    /// (e.g. to build an [`EventStream`](uncurses::event::EventStream)).
+    /// A clone of the shared event source handle, for callers that need
+    /// their own (e.g. to read it on a dedicated thread or build an
+    /// [`EventStream`](uncurses::event::EventStream)).
     pub fn shared_events(&self) -> Arc<Mutex<EventSource<I>>> {
         Arc::clone(&self.events)
     }
@@ -240,10 +239,9 @@ where
     O: Write,
 {
     /// Take an asynchronous [`EventStream`](uncurses::event::EventStream)
-    /// over the shared source. The backend keeps its handle, so
-    /// synchronous reads via [`events`](Self::events) and
-    /// [`get_cursor_position`](Backend::get_cursor_position) keep working
-    /// alongside the stream.
+    /// over the shared event source. The backend keeps its handle, so
+    /// synchronous reads via [`events`](Self::events) continue to work
+    /// alongside the stream (see the stream's coexistence caveats).
     pub fn event_stream(&self) -> uncurses::event::EventStream<I> {
         uncurses::event::EventStream::from_shared(self.shared_events())
     }
@@ -323,39 +321,11 @@ where
     }
 
     fn get_cursor_position(&mut self) -> io::Result<RtPosition> {
-        // Write ESC[6n to the terminal and block for the CPR reply,
-        // mirroring other backends. Works whether or not an async stream
-        // is active, because the stream shares this same source: the lock
-        // serializes the read, and the reader thread's lock-free poll does
-        // not hold it. Drain any stale CPR first so we match a fresh one.
-        // Use the low-level destructive `read_matching` rather than the
-        // visible-reply query API: the CPR reply is internal backend
-        // plumbing and must not surface in the application's event loop.
-        let mut out = self.terminal.output();
-        let mut src = self.events.lock().unwrap();
-        while src
-            .try_read_matching(|e| matches!(e, Event::CursorPosition(_)))
-            .is_some()
-        {}
-        out.write_all(query::CURSOR_POSITION.request())?;
-        out.flush()?;
-        match src.read_matching(
-            |e| matches!(e, Event::CursorPosition(_)),
-            Some(CURSOR_QUERY_TIMEOUT),
-        )? {
-            Some(Event::CursorPosition(p)) => {
-                // ratatui calls this during inline setup to anchor the
-                // viewport at the cursor row; remember it so `draw` /
-                // `set_cursor_position` can translate absolute rows into
-                // the inline buffer.
-                self.inline_origin = p.y;
-                Ok(RtPosition { x: p.x, y: p.y })
-            }
-            _ => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "cursor position report (CPR) not received in time",
-            )),
-        }
+        // Cursor-position querying (CPR) is not implemented under the
+        // single-owner event model: a synchronous request/reply cannot
+        // share the input with a reader thread. Report the origin for now;
+        // inline-viewport anchoring that relies on this will be revisited.
+        Ok(RtPosition { x: 0, y: 0 })
     }
 
     fn set_cursor_position<P: Into<RtPosition>>(&mut self, position: P) -> io::Result<()> {

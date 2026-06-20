@@ -26,8 +26,6 @@ use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::task::Waker as TaskWaker;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -70,6 +68,23 @@ impl<T: Read + AsHandle + Send> Input for T {}
 /// Default read buffer capacity. This is the hard cap on any single
 /// sequence; the backing buffer is allocated once at construction.
 pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 4096;
+
+/// Readiness slots the platform poller reports, in fixed index order.
+/// Unix watches `[input, wake, winch]`; Windows watches `[input, wake]`
+/// (resize arrives in-band as a console record, so there is no winch fd).
+#[cfg(unix)]
+pub(super) const READY_SLOTS: usize = 3;
+#[cfg(windows)]
+pub(super) const READY_SLOTS: usize = 2;
+/// Index of the input handle in the readiness slice.
+#[cfg(any(unix, windows))]
+pub(super) const READY_INPUT: usize = 0;
+/// Index of the wake handle in the readiness slice.
+#[cfg(any(unix, windows))]
+pub(super) const READY_WAKE: usize = 1;
+/// Index of the SIGWINCH pipe in the readiness slice (Unix only).
+#[cfg(unix)]
+pub(super) const READY_WINCH: usize = 2;
 
 /// Default escape-sequence timeout.
 ///
@@ -137,8 +152,8 @@ pub struct EventSource<I>
 where
     I: Input,
 {
-    /// Owned input handle. Used both as the byte source (`Read`) and,
-    /// on Unix, as the readiness target (its fd is registered with the
+    /// Owned input handle. Used both as the byte source (`Read`) and, on
+    /// Unix, as the readiness target (its fd is registered with the
     /// [`super::poll::Poller`]).
     #[cfg_attr(windows, allow(dead_code))]
     pub(super) input: I,
@@ -167,15 +182,6 @@ where
     /// decoder and are not duplicated. No effect on Windows, where resize
     /// is always delivered in-band through the decoder.
     pub(super) handle_resize: bool,
-
-    /// In-flight query observers. Each freshly produced event is offered
-    /// to every pending observer (see [`Self::emit`]); a match is copied
-    /// into the observer's shared slot for its [`QueryReply`] handle to
-    /// collect, and the event itself still reaches [`Self::queue`], so a
-    /// query never hides input from [`read`](Self::read).
-    ///
-    /// [`QueryReply`]: super::query::QueryReply
-    pub(super) observers: Observers,
 
     // --- Unix-only state ---
     /// Shared readiness poller watching `[input, pipe_rx, winch_rx]` (in
@@ -226,171 +232,6 @@ where
 // _winch_sub (declared before _winch_tx in the struct) is dropped
 // first, removing the SIGWINCH handler before the write end of the
 // pipe is closed.
-
-/// Which timer governs the next wait. Bookkeeping for `pump` so a
-/// `Timeout` outcome can route to the correct expiry handler.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeadlineKind {
-    /// Wait bounded by the caller's `timeout` (or no internal deadline).
-    None,
-    /// Wait bounded by `esc_deadline` — force a bare `Esc` on expiry.
-    Esc,
-    /// Wait bounded by `paste_deadline` — synthesise `PasteEnd` on expiry.
-    Paste,
-}
-
-// ---------------------------------------------------------------------------
-// Query observers (the non-destructive query registry)
-// ---------------------------------------------------------------------------
-
-/// Resolution state of one query observer, behind a [`StdMutex`] so a
-/// [`QueryReply`] handle inspects it without taking the source lock.
-///
-/// [`QueryReply`]: super::query::QueryReply
-struct SlotState {
-    /// `None` while pending; `Some(Some(ev))` once a reply matched;
-    /// `Some(None)` once the deadline elapsed without a reply.
-    result: Option<Option<Event>>,
-    /// Waiter parked on this slot (a blocking thread-unpark waker or an
-    /// async task waker), woken when the slot resolves.
-    waker: Option<TaskWaker>,
-}
-
-/// One registered query observer. Shared (`Arc`) between the source's
-/// registry and the [`QueryReply`] handle that collects its reply.
-///
-/// [`QueryReply`]: super::query::QueryReply
-pub(crate) struct Slot {
-    /// Tests whether a produced event is this query's reply.
-    predicate: Box<dyn Fn(&Event) -> bool + Send + Sync>,
-    /// When the query gives up and resolves to "no reply".
-    deadline: Instant,
-    state: StdMutex<SlotState>,
-}
-
-impl Slot {
-    /// Take this slot's resolved value, lazily expiring on its deadline.
-    ///
-    /// Returns `None` while still pending, `Some(None)` once expired
-    /// without a reply, or `Some(Some(ev))` once a reply matched. After a
-    /// resolved value is taken the slot reports pending again, so callers
-    /// must take at most once.
-    pub(crate) fn take(&self) -> Option<Option<Event>> {
-        let mut st = self.state.lock().unwrap();
-        if st.result.is_none() && Instant::now() >= self.deadline {
-            st.result = Some(None);
-        }
-        st.result.take()
-    }
-
-    /// Whether this slot has resolved (matched or expired).
-    pub(crate) fn is_ready(&self) -> bool {
-        let st = self.state.lock().unwrap();
-        st.result.is_some() || Instant::now() >= self.deadline
-    }
-
-    /// This slot's deadline while it is still pending, else `None`.
-    pub(crate) fn pending_deadline(&self) -> Option<Instant> {
-        let st = self.state.lock().unwrap();
-        if st.result.is_some() {
-            None
-        } else {
-            Some(self.deadline)
-        }
-    }
-
-    /// Park `waker` against this slot if it is still pending; it is woken
-    /// when the slot resolves.
-    pub(crate) fn arm(&self, waker: &TaskWaker) {
-        let mut st = self.state.lock().unwrap();
-        if st.result.is_none() {
-            st.waker = Some(waker.clone());
-        }
-    }
-}
-
-/// The source's registry of in-flight query observers.
-#[derive(Default)]
-pub(crate) struct Observers {
-    slots: Vec<Arc<Slot>>,
-}
-
-impl Observers {
-    /// Register a new observer and return its shared slot.
-    pub(crate) fn register(
-        &mut self,
-        predicate: Box<dyn Fn(&Event) -> bool + Send + Sync>,
-        deadline: Instant,
-    ) -> Arc<Slot> {
-        self.prune();
-        let slot = Arc::new(Slot {
-            predicate,
-            deadline,
-            state: StdMutex::new(SlotState {
-                result: None,
-                waker: None,
-            }),
-        });
-        self.slots.push(Arc::clone(&slot));
-        slot
-    }
-
-    /// Offer a freshly produced event to each pending observer. A match is
-    /// copied into the slot and its waiter woken; the event is left for
-    /// the caller to queue (matching never consumes input).
-    fn offer(&mut self, ev: &Event) {
-        for slot in &self.slots {
-            let mut st = slot.state.lock().unwrap();
-            if st.result.is_some() {
-                continue;
-            }
-            if (slot.predicate)(ev) {
-                st.result = Some(Some(ev.clone()));
-                if let Some(w) = st.waker.take() {
-                    w.wake();
-                }
-            }
-        }
-    }
-
-    /// Resolve every observer whose deadline has passed without a reply,
-    /// waking its waiter.
-    fn expire_due(&mut self, now: Instant) {
-        for slot in &self.slots {
-            if now >= slot.deadline {
-                let mut st = slot.state.lock().unwrap();
-                if st.result.is_none() {
-                    st.result = Some(None);
-                    if let Some(w) = st.waker.take() {
-                        w.wake();
-                    }
-                }
-            }
-        }
-    }
-
-    /// Earliest deadline among still-pending observers, to bound a
-    /// readiness wait so a timeout fires on time.
-    fn nearest_deadline(&self) -> Option<Instant> {
-        self.slots
-            .iter()
-            .filter(|s| s.state.lock().unwrap().result.is_none())
-            .map(|s| s.deadline)
-            .min()
-    }
-
-    /// Drop observers whose [`QueryReply`] handle has been dropped (the
-    /// registry holds the only remaining reference).
-    ///
-    /// [`QueryReply`]: super::query::QueryReply
-    fn prune(&mut self) {
-        self.slots.retain(|s| Arc::strong_count(s) > 1);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.slots.is_empty()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Shared methods (platform-agnostic)
@@ -452,49 +293,6 @@ where
         self.handle_resize = enable;
     }
 
-    /// Shared readiness poller for this source. Cloning the `Arc` lets a
-    /// reader thread wait on readiness without holding a lock on the
-    /// source's decode state (see [`super::EventStream`]).
-    #[cfg(any(unix, windows))]
-    pub(super) fn poller(&self) -> Arc<dyn Poller> {
-        self.poller.clone()
-    }
-
-    /// Number of fds the [`poller`](Self::poller) watches, i.e. the length
-    /// of the readiness slice [`Poller::poll`] expects.
-    #[cfg(unix)]
-    pub(super) fn poll_slot_count(&self) -> usize {
-        3
-    }
-    /// Number of handles the [`poller`](Self::poller) watches.
-    #[cfg(windows)]
-    pub(super) fn poll_slot_count(&self) -> usize {
-        2
-    }
-
-    /// Effective wait for the next readiness poll, plus which deadline (if
-    /// any) governs it, so a timeout can be routed to the right expiry.
-    #[cfg(any(unix, windows))]
-    pub(super) fn next_timeout(&self) -> (Option<Duration>, DeadlineKind) {
-        self.effective_timeout(None)
-    }
-
-    /// Run the expiry a readiness wait timed out on.
-    #[cfg(any(unix, windows))]
-    pub(super) fn expire(&mut self, kind: DeadlineKind) {
-        match kind {
-            DeadlineKind::Esc => self.expire_partial(),
-            DeadlineKind::Paste => self.expire_paste(),
-            DeadlineKind::None => {}
-        }
-    }
-
-    /// Whether at least one decoded event is queued.
-    #[cfg(any(unix, windows))]
-    pub(super) fn has_events(&self) -> bool {
-        !self.queue.is_empty()
-    }
-
     /// Block up to `timeout` for at least one event to become available.
     ///
     /// * `Ok(true)` — the event queue has at least one event; [`Self::try_read`]
@@ -511,7 +309,7 @@ where
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
             let remaining = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-            match self.pump(remaining) {
+            match self.fill(remaining) {
                 Ok(()) => {
                     if !self.queue.is_empty() {
                         return Ok(true);
@@ -534,6 +332,43 @@ where
         self.queue.pop_front()
     }
 
+    /// One read-decode cycle: resolve any overdue decode deadline, wait up
+    /// to `timeout` for readiness, then service it. Winch surfaces a
+    /// [`Event::Resize`]; a [`Waker`] surfaces `Err(Interrupted)` without
+    /// touching decode state; ready input is drained and decoded; a wait
+    /// that returns with no input ready resolves the decode deadline it was
+    /// tightened to. Fills [`Self::queue`].
+    pub(super) fn fill(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        // Resolve an already-overdue deadline before reading, so a late
+        // continuation byte cannot merge with a sequence that has expired.
+        self.expire_elapsed();
+        if !self.queue.is_empty() {
+            return Ok(());
+        }
+
+        let effective = self.effective_timeout(timeout);
+        let mut ready = [false; READY_SLOTS];
+        self.poller.poll(&mut ready, effective)?;
+
+        #[cfg(unix)]
+        if ready[READY_WINCH] {
+            self.handle_winch();
+        }
+
+        if ready[READY_WAKE] {
+            self.drain_wake();
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
+        }
+
+        if ready[READY_INPUT] {
+            self.drain_input()?;
+        } else {
+            // The wait was tightened to a decode deadline that has elapsed.
+            self.expire_elapsed();
+        }
+        Ok(())
+    }
+
     /// Block until the next event is available, then return it.
     ///
     /// Returns [`io::ErrorKind::Interrupted`] if a paired [`Waker`] fired
@@ -549,77 +384,17 @@ where
         }
     }
 
-    /// Remove and return the first queued event satisfying `predicate`,
-    /// leaving every other event in place and in order. Returns `None`
-    /// if no queued event matches. Does not perform I/O.
-    ///
-    /// The non-blocking counterpart to [`read_matching`](Self::read_matching),
-    /// used to pluck a specific reply (e.g. a query response) out of the
-    /// stream without disturbing pending user input.
-    pub fn try_read_matching(&mut self, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
-        let pos = self.queue.iter().position(predicate)?;
-        self.queue.remove(pos)
+    /// Return an event to the front of the queue, so the next
+    /// [`read`](Self::read) or [`try_read`](Self::try_read) yields it
+    /// first. The inverse of [`try_read`](Self::try_read): use it to put
+    /// back an event taken while looking for another one.
+    pub fn unread(&mut self, event: Event) {
+        self.queue.push_front(event);
     }
 
-    /// Block up to `timeout` for an event satisfying `predicate`, remove
-    /// it from the queue, and return it. Events that do not match are left
-    /// queued, in order, for a later [`read`](Self::read).
-    ///
-    /// Returns `Ok(None)` on timeout or a paired [`Waker`] wake. `None`
-    /// for `timeout` blocks until a match arrives or a wake fires.
-    pub fn read_matching(
-        &mut self,
-        predicate: impl Fn(&Event) -> bool,
-        timeout: Option<Duration>,
-    ) -> io::Result<Option<Event>> {
-        if let Some(ev) = self.try_read_matching(&predicate) {
-            return Ok(Some(ev));
-        }
-        let deadline = timeout.map(|t| Instant::now() + t);
-        loop {
-            let remaining = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-            if !self.poll(remaining)? {
-                // Timeout elapsed or a waker fired; nothing new arrived.
-                return Ok(None);
-            }
-            if let Some(ev) = self.try_read_matching(&predicate) {
-                return Ok(Some(ev));
-            }
-            if let Some(left) = remaining
-                && left.is_zero()
-            {
-                return Ok(None);
-            }
-        }
-    }
-
-    /// Push a freshly produced event onto the queue, first offering it to
-    /// any registered query observers. A query whose reply this is gets a
-    /// copy in its slot; the event still reaches the queue, so a query
-    /// never hides input from [`read`](Self::read).
+    /// Push a freshly produced event onto the queue.
     pub(super) fn emit(&mut self, ev: Event) {
-        if !self.observers.is_empty() {
-            self.observers.offer(&ev);
-        }
         self.queue.push_back(ev);
-    }
-
-    /// Mutable handle to the query-observer registry, for registering a
-    /// query's reply matchers (see [`super::query`]).
-    pub(crate) fn observers_mut(&mut self) -> &mut Observers {
-        &mut self.observers
-    }
-
-    /// Earliest deadline among still-pending query observers, to bound a
-    /// thread-backed reader's readiness wait.
-    pub(crate) fn observers_nearest_deadline(&self) -> Option<Instant> {
-        self.observers.nearest_deadline()
-    }
-
-    /// Resolve every query observer whose deadline has passed without a
-    /// reply, waking its waiter.
-    pub(crate) fn expire_observers(&mut self, now: Instant) {
-        self.observers.expire_due(now);
     }
 
     /// Drive the parser as far as it will go against the bytes
@@ -725,38 +500,40 @@ where
         self.expire_paste();
     }
 
-    /// Compute the effective wait, bounded by either the caller
-    /// timeout, the ESC deadline, or the paste-idle deadline
-    /// (whichever is shorter), and report which one won so a
-    /// timeout-return can be routed to the right expiry handler.
-    pub(super) fn effective_timeout(
-        &self,
-        timeout: Option<Duration>,
-    ) -> (Option<Duration>, DeadlineKind) {
+    /// Resolve any decode deadline that has already elapsed, before more
+    /// bytes are read. A buffered partial `ESC` past its window becomes a
+    /// bare `Esc`; an idle bracketed paste past its window is force-closed.
+    /// Run before draining input so a late continuation byte can't merge
+    /// with a sequence whose deadline already passed, and again after a
+    /// wait that returned no input. A no-op when no deadline is overdue;
+    /// the two cases are mutually exclusive (either mid-paste or holding a
+    /// partial escape, never both).
+    pub(super) fn expire_elapsed(&mut self) {
         let now = Instant::now();
-        let esc_remaining = self
-            .esc_deadline
-            .map(|d| (d.saturating_duration_since(now), DeadlineKind::Esc));
-        let paste_remaining = self
-            .paste_deadline
-            .map(|d| (d.saturating_duration_since(now), DeadlineKind::Paste));
-        let internal = match (esc_remaining, paste_remaining) {
-            (None, None) => None,
-            (Some(e), None) => Some(e),
-            (None, Some(p)) => Some(p),
-            (Some(e), Some(p)) => Some(if e.0 <= p.0 { e } else { p }),
-        };
-        match (timeout, internal) {
-            (None, None) => (None, DeadlineKind::None),
-            (Some(t), None) => (Some(t), DeadlineKind::None),
-            (None, Some((d, kind))) => (Some(d), kind),
-            (Some(t), Some((d, kind))) => {
-                if d <= t {
-                    (Some(d), kind)
-                } else {
-                    (Some(t), DeadlineKind::None)
-                }
+        if self.parser.in_paste() {
+            if self.paste_deadline.is_some_and(|d| d <= now) {
+                self.expire_paste();
             }
+        } else if self.esc_deadline.is_some_and(|d| d <= now) {
+            self.expire_partial();
+        }
+    }
+
+    /// Effective wait for the next readiness poll: the caller's `timeout`
+    /// tightened to the nearest decode deadline (ESC or paste-idle,
+    /// whichever is sooner) so a buffered partial sequence resolves
+    /// promptly even when the caller asked to block longer.
+    pub(super) fn effective_timeout(&self, timeout: Option<Duration>) -> Option<Duration> {
+        let now = Instant::now();
+        let deadline = match (self.esc_deadline, self.paste_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let internal = deadline.map(|d| d.saturating_duration_since(now));
+        match (timeout, internal) {
+            (Some(t), Some(i)) => Some(t.min(i)),
+            (None, i) => i,
+            (t, None) => t,
         }
     }
 }
