@@ -293,16 +293,25 @@ impl Style {
 
     /// Write `text` wrapped in this style: the style's SGR sequence,
     /// then `text`, then an SGR reset (`CSI m`) so subsequent output is
-    /// unstyled.
+    /// unstyled. When the style carries a [`link`](Self::link), the span is
+    /// additionally wrapped in the OSC 8 hyperlink start/end sequences.
     pub fn write_styled<W: Write>(&self, w: &mut W, text: &str) -> io::Result<()> {
+        if let Some(link) = &self.link {
+            crate::ansi::hyperlink::write_hyperlink_start(w, &link.url, &link.params)?;
+        }
         sgr::write_style(w, self)?;
         w.write_all(text.as_bytes())?;
-        w.write_all(sgr::RESET)
+        w.write_all(sgr::RESET)?;
+        if self.link.is_some() {
+            crate::ansi::hyperlink::write_hyperlink_end(w)?;
+        }
+        Ok(())
     }
 
     /// Wrap `text` in this style for `Display`. The returned adapter
-    /// renders the style's SGR sequence, the text, then an SGR reset,
-    /// so it composes directly with `format!`/`write!` without a
+    /// renders the style's SGR sequence, the text, then an SGR reset (and,
+    /// for a style with a [`link`](Self::link), the surrounding OSC 8
+    /// hyperlink), so it composes directly with `format!`/`write!` without a
     /// throwaway buffer. The `Display`-friendly companion to
     /// [`Style::write_styled`].
     pub fn styled<'a>(&self, text: &'a str) -> StyledText<'a> {
@@ -413,6 +422,20 @@ mod tests {
         let mut buf = Vec::new();
         Style::EMPTY.bold().write_styled(&mut buf, "hi").unwrap();
         assert_eq!(buf, b"\x1b[1mhi\x1b[m");
+    }
+
+    #[test]
+    fn write_styled_wraps_link_in_osc8() {
+        let mut buf = Vec::new();
+        Style::EMPTY
+            .underline()
+            .link("https://example.com", "")
+            .write_styled(&mut buf, "docs")
+            .unwrap();
+        assert_eq!(
+            buf,
+            b"\x1b]8;;https://example.com\x1b\\\x1b[4mdocs\x1b[m\x1b]8;;\x1b\\"
+        );
     }
 
     #[test]
