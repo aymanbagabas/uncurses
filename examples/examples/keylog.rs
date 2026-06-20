@@ -151,7 +151,7 @@ impl App {
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
-        while let Ok(ev) = self.screen.read() {
+        while let Ok(ev) = self.screen.read_event() {
             match &ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q'),

@@ -89,7 +89,7 @@ impl Default for State {
 /// [`Screen::init`](super::Screen::init) fires. Every field answers a
 /// single question: does the terminal support this? The facade intercepts
 /// the reply events as they flow through
-/// [`read`](super::Screen::read) / [`try_read`](super::Screen::try_read),
+/// [`read_event`](super::Screen::read_event) / [`try_read_event`](super::Screen::try_read_event),
 /// records support here, and applies the render-affecting ones — the app
 /// never sees the reply events. Read back with
 /// [`Screen::capabilities`](super::Screen::capabilities).

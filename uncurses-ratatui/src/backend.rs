@@ -1,16 +1,16 @@
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use ratatui::Viewport;
 use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::Cell as RtCell;
 use ratatui::layout::{Position as RtPosition, Size as RtSize};
 use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
 use uncurses::cell::Cell as CzCell;
-use uncurses::event::{EventSource, Input};
-use uncurses::terminal::Terminal;
-use uncurses::terminal::{State, Stdin, Stdout, TtyInput, TtyOutput};
+use uncurses::event::{Event, Input};
+use uncurses::layout::Position;
+use uncurses::screen::{Screen, ScreenOptions};
+use uncurses::terminal::{Stdin, Stdout, TtyInput, TtyOutput};
 
 use crate::convert::cell_from_ratatui;
 
@@ -27,13 +27,33 @@ pub trait OutputHandle: Write + Copy + std::os::windows::io::AsHandle {}
 #[cfg(windows)]
 impl<T: Write + Copy + std::os::windows::io::AsHandle> OutputHandle for T {}
 
-/// Default geometry when the terminal size cannot be read at construction.
-const DEFAULT_SIZE: (u16, u16) = (80, 24);
+/// How long [`Backend::get_cursor_position`] waits for a cursor-position
+/// report before falling back to the origin. ratatui calls it at most once
+/// per inline-viewport setup, so a small budget keeps setup responsive on
+/// terminals that never answer.
+const CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// A `ratatui` [`Backend`](ratatui::backend::Backend) that owns the whole
-/// terminal stack: the [`Terminal`] handle (raw-mode lifecycle, window
-/// size), the [`Canvas`] it renders through, and a shared [`EventSource`]
-/// for input.
+/// Extract a cursor-position report from a reply event. The report is the
+/// [`Event::CursorPosition`] variant, but at terminal row 1 the wire form
+/// collides with a modified-F3 key and is decoded as an [`Event::Multi`]
+/// carrying both; unwrap that case too.
+fn cursor_position_report(ev: &Event) -> Option<Position> {
+    match ev {
+        Event::CursorPosition(pos) => Some(*pos),
+        Event::Multi(events) => events.iter().find_map(|e| match e {
+            Event::CursorPosition(pos) => Some(*pos),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// A `ratatui` [`Backend`](ratatui::backend::Backend) built on the
+/// high-level [`Screen`] facade. The screen owns the whole terminal stack
+/// (the [`Terminal`](uncurses::terminal::Terminal) raw-mode lifecycle and
+/// window size, the [`Canvas`](uncurses::canvas::Canvas) it renders
+/// through, and a shared event source for input); this backend drives it
+/// to satisfy ratatui's drawing, cursor, and clearing contracts.
 ///
 /// Side-effecting methods (`hide_cursor`, `show_cursor`,
 /// `set_cursor_position`, `clear`, `clear_region`) flush immediately,
@@ -42,22 +62,22 @@ const DEFAULT_SIZE: (u16, u16) = (80, 24);
 ///
 /// # Events
 ///
-/// Read synchronously by locking [`events`](Self::events), or take an
-/// asynchronous `EventStream` with
-/// `event_stream` (the `async` feature) over the
-/// same shared source. Synchronous reads keep working alongside a live
-/// stream, subject to the stream's coexistence caveats.
+/// Read input synchronously with [`poll_event`](Self::poll_event),
+/// [`try_read_event`](Self::try_read_event), and [`read_event`](Self::read_event) (which delegate
+/// to the [`Screen`] and run its capability detection). For an async
+/// ratatui loop, drive the screen's stream directly via
+/// `screen_mut().events()` (the `async` feature).
 ///
 /// # Setup
 ///
-/// Construction is explicit: it does not enter raw mode or the alternate
-/// screen. Call [`init`](Self::init) and the relevant
-/// [`Canvas`](Self::screen_mut) mode setters yourself, and
-/// [`restore`](Self::restore) on exit.
+/// Construction is inert: it does not enter raw mode or the alternate
+/// screen. Call [`init`](Self::init) to begin a session through the
+/// [`Screen`] facade ([`Screen::init`]: raw mode plus the screen's default
+/// modes and capability queries), drive the rest through the facade
+/// ([`screen_mut`](Self::screen_mut)), then [`restore`](Self::restore) on
+/// exit.
 pub struct UncursesBackend<I: Input, O: Write> {
-    terminal: Terminal<I, O>,
-    screen: Canvas<O>,
-    events: Arc<Mutex<EventSource<I>>>,
+    screen: Screen<I, O>,
     /// The ratatui viewport, set via [`set_viewport`](Self::set_viewport)
     /// (by `init_with_options`). Determines the screen buffer height
     /// (inline height vs full terminal height) and whether `draw` /
@@ -94,7 +114,7 @@ pub struct UncursesBackend<I: Input, O: Write> {
 impl UncursesBackend<Stdin, Stdout> {
     /// Build a backend over the process stdio (`stdin` + `stdout`).
     pub fn stdio() -> io::Result<Self> {
-        Self::from_terminal(Terminal::stdio())
+        Ok(Self::new(Screen::stdio()?))
     }
 }
 
@@ -102,28 +122,7 @@ impl UncursesBackend<TtyInput, TtyOutput> {
     /// Build a backend over the controlling terminal (`/dev/tty`, or
     /// `CONIN$`/`CONOUT$` on Windows), bypassing redirected stdio.
     pub fn open() -> io::Result<Self> {
-        Self::from_terminal(Terminal::open()?)
-    }
-}
-
-impl<I, O> UncursesBackend<I, O>
-where
-    I: Input + Copy + 'static,
-    O: OutputHandle,
-{
-    /// Assemble a backend from a `Terminal`, building the source and
-    /// screen from its `Copy` halves. The screen is sized from the
-    /// terminal's current window size, falling back to 80x24.
-    fn from_terminal(terminal: Terminal<I, O>) -> io::Result<Self> {
-        let size = terminal
-            .get_window_size()
-            .map(|w| (w.col, w.row))
-            .ok()
-            .filter(|&(c, r)| c != 0 && r != 0)
-            .unwrap_or(DEFAULT_SIZE);
-        let screen = Canvas::new(terminal.output(), size);
-        let events = EventSource::new(terminal.input())?;
-        Ok(Self::new(terminal, events, screen))
+        Ok(Self::new(Screen::open()?))
     }
 }
 
@@ -132,15 +131,11 @@ where
     I: Input,
     O: Write,
 {
-    /// Build a backend from pre-constructed parts, so a caller can reuse
-    /// an existing terminal, source, and screen. The source is shared
-    /// behind `Arc<Mutex<_>>` so it can be read synchronously and, under
-    /// the `async` feature, also back an `EventStream`.
-    pub fn new(terminal: Terminal<I, O>, events: EventSource<I>, screen: Canvas<O>) -> Self {
+    /// Build a backend over an existing [`Screen`], so a caller can supply
+    /// a screen sized and configured however they like.
+    pub fn new(screen: Screen<I, O>) -> Self {
         Self {
-            terminal,
             screen,
-            events: Arc::new(Mutex::new(events)),
             viewport: Viewport::Fullscreen,
             inline_origin: 0,
             last_size: std::cell::Cell::new((0, 0)),
@@ -171,79 +166,71 @@ where
     /// height and shrinking on the first draw.
     pub fn set_viewport(&mut self, viewport: Viewport) {
         if let Viewport::Inline(height) = viewport {
-            let h = height.min(self.screen.height());
-            self.screen.resize(self.screen.width(), h);
+            let size = self.screen.size();
+            let h = height.min(size.height);
+            self.screen.resize((size.width, h));
         }
         self.viewport = viewport;
     }
 
-    /// Borrow the terminal handle.
-    pub fn terminal(&self) -> &Terminal<I, O> {
-        &self.terminal
-    }
-
-    /// Mutably borrow the terminal handle (raw-mode lifecycle, etc.).
-    pub fn terminal_mut(&mut self) -> &mut Terminal<I, O> {
-        &mut self.terminal
-    }
-
-    /// Borrow the screen.
-    pub fn screen(&self) -> &Canvas<O> {
+    /// Borrow the [`Screen`] facade.
+    pub fn screen(&self) -> &Screen<I, O> {
         &self.screen
     }
 
-    /// Mutably borrow the screen (mode setters, manual rendering).
-    pub fn screen_mut(&mut self) -> &mut Canvas<O> {
+    /// Mutably borrow the [`Screen`] facade (mode setters, manual
+    /// rendering, the alternate screen, etc.).
+    pub fn screen_mut(&mut self) -> &mut Screen<I, O> {
         &mut self.screen
     }
 
-    /// Lock the shared event source for synchronous reading. Returns a
-    /// guard that derefs to the [`EventSource`] (so `poll`, `try_read`,
-    /// `read` work directly).
-    pub fn events(&self) -> MutexGuard<'_, EventSource<I>> {
-        self.events.lock().unwrap()
+    /// Drive the input source for up to `timeout`, returning whether an
+    /// event became available. Delegates to [`Screen::poll_event`].
+    pub fn poll_event(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+        self.screen.poll_event(timeout)
     }
 
-    /// A clone of the shared event source handle, for callers that need
-    /// their own (e.g. to read it on a dedicated thread or build an
-    /// `EventStream`).
-    pub fn shared_events(&self) -> Arc<Mutex<EventSource<I>>> {
-        Arc::clone(&self.events)
+    /// Take the next queued event without blocking, running the screen's
+    /// capability detection as a side effect. Delegates to
+    /// [`Screen::try_read_event`].
+    pub fn try_read_event(&mut self) -> Option<Event> {
+        self.screen.try_read_event()
+    }
+
+    /// Block until the next event, running the screen's capability
+    /// detection as a side effect. Delegates to [`Screen::read_event`].
+    pub fn read_event(&mut self) -> io::Result<Event> {
+        self.screen.read_event()
     }
 }
 
 impl<I, O> UncursesBackend<I, O>
 where
-    I: Input,
+    I: Input + Copy,
     O: OutputHandle,
 {
-    /// Enter raw mode, returning the prior state (also cached for
-    /// [`restore`](Self::restore)). Call once before driving the UI.
-    pub fn init(&mut self) -> io::Result<State> {
-        self.terminal.make_raw()
+    /// Begin a session through the [`Screen`] facade: enter raw mode and
+    /// apply the screen's default setup ([`Screen::init`]), then drive the
+    /// UI. Pair with [`restore`](Self::restore) on exit.
+    pub fn init(&mut self) -> io::Result<()> {
+        self.screen.init()
     }
 
-    /// Restore the terminal: reset the screen (alt-screen, cursor, modes),
-    /// flush, then revert raw mode. The single teardown entry point.
+    /// Begin a session like [`init`](Self::init) but with explicit
+    /// [`ScreenOptions`], to control bracketed paste, keyboard
+    /// enhancements, mouse tracking, in-band resize, and pixel-size
+    /// behavior. Delegates to [`Screen::init_with`].
+    pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
+        self.screen.init_with(options)
+    }
+
+    /// Hand the terminal back: tear down every mode the screen staged,
+    /// reset the canvas (alt-screen, cursor, modes), flush, then revert raw
+    /// mode. The same teardown as [`Screen::finish`], but it keeps the
+    /// screen so it can be driven through ratatui's `&mut`-based restore.
+    /// The single teardown entry point.
     pub fn restore(&mut self) -> io::Result<()> {
-        self.screen.reset();
-        Write::flush(&mut self.screen)?;
-        self.terminal.restore()
-    }
-}
-
-#[cfg(feature = "async")]
-impl<I, O> UncursesBackend<I, O>
-where
-    I: Input + 'static,
-    O: Write,
-{
-    /// Take an asynchronous [`EventStream`](uncurses::event::EventStream)
-    /// over the shared event source. The backend keeps its handle, so
-    /// synchronous reads via [`events`](Self::events) continue to work
-    /// alongside the stream (see the stream's coexistence caveats).
-    pub fn event_stream(&self) -> uncurses::event::EventStream<I> {
-        uncurses::event::EventStream::from_shared(self.shared_events())
+        self.screen.pause()
     }
 }
 
@@ -263,7 +250,7 @@ where
 
 impl<I, O> Backend for UncursesBackend<I, O>
 where
-    I: Input,
+    I: Input + Copy,
     O: OutputHandle,
 {
     type Error = io::Error;
@@ -276,13 +263,14 @@ where
         // For an inline viewport the buffer is only the inline height and
         // ratatui's absolute rows are translated down by the viewport top;
         // otherwise it tracks the full terminal size.
+        let size = self.screen.size();
         let (full_w, full_h) = self
-            .terminal
+            .screen
             .get_window_size()
             .ok()
             .map(|s| (s.col, s.row))
             .filter(|&(c, r)| c != 0 && r != 0)
-            .unwrap_or((self.screen.width(), self.screen.height()));
+            .unwrap_or((size.width, size.height));
         let (w, h, top) = match self.viewport {
             Viewport::Inline(height) => {
                 let h = height.min(full_h);
@@ -298,9 +286,9 @@ where
         if self.size_dirty.take() {
             self.screen.invalidate();
         }
-        if (w, h) != (self.screen.width(), self.screen.height()) {
+        if (w, h) != (size.width, size.height) {
             self.screen.invalidate();
-            self.screen.resize(w, h);
+            self.screen.resize((w, h));
         }
         for (x, y, rc) in content {
             let cell = cell_from_ratatui(rc);
@@ -311,21 +299,56 @@ where
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        self.screen.set_cursor_visible(false);
-        Write::flush(&mut self.screen)
+        self.screen.hide_cursor()
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
-        self.screen.set_cursor_visible(true);
-        Write::flush(&mut self.screen)
+        self.screen.show_cursor()
     }
 
     fn get_cursor_position(&mut self) -> io::Result<RtPosition> {
-        // Cursor-position querying (CPR) is not implemented under the
-        // single-owner event model: a synchronous request/reply cannot
-        // share the input with a reader thread. Report the origin for now;
-        // inline-viewport anchoring that relies on this will be revisited.
-        Ok(RtPosition { x: 0, y: 0 })
+        // Query the terminal for its cursor position (CPR): write the
+        // request, then read events until the report arrives or the timeout
+        // elapses. The reply is absolute, zero-based, and matches ratatui's
+        // coordinate space (the same space `set_cursor_position` writes
+        // absolute moves into), so it needs no translation. Fall back to the
+        // origin if the terminal does not answer.
+        self.screen.request_cursor_position()?;
+        let deadline = Instant::now() + CURSOR_QUERY_TIMEOUT;
+        // Events read while waiting for the report are not ours to consume;
+        // stash them and put them back (in original order) so the app's loop
+        // still sees them.
+        let mut stash: Vec<Event> = Vec::new();
+        let found = loop {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break None;
+            };
+            if !self.screen.poll_event(Some(remaining))? {
+                break None;
+            }
+            match self.screen.try_read_event() {
+                Some(ev) => match cursor_position_report(&ev) {
+                    Some(pos) => break Some(pos),
+                    None => stash.push(ev),
+                },
+                None => continue,
+            }
+        };
+        for ev in stash.into_iter().rev() {
+            self.screen.unread_event(ev);
+        }
+        let pos = found.unwrap_or(Position::new(0, 0));
+        // ratatui calls this to anchor an inline viewport at the cursor row,
+        // then draws content at absolute rows starting there. Seed the
+        // inline origin so the very first `draw` translates those absolute
+        // rows into the inline buffer; before this the origin defaulted to 0
+        // and a cursor below the top clipped the first frame. The exact top
+        // is still re-derived by `clear_region` on later resizes.
+        if matches!(self.viewport, Viewport::Inline(_)) {
+            self.inline_origin = pos.y;
+            self.last_cursor_row = pos.y;
+        }
+        Ok(RtPosition { x: pos.x, y: pos.y })
     }
 
     fn set_cursor_position<P: Into<RtPosition>>(&mut self, position: P) -> io::Result<()> {
@@ -349,7 +372,7 @@ where
             Viewport::Inline(_) => self.inline_origin,
             _ => 0,
         };
-        self.screen.assume_cursor_at(p.x, p.y.saturating_sub(top));
+        self.screen.assume_cursor_position((p.x, p.y.saturating_sub(top)));
         Write::flush(&mut self.screen)
     }
 
@@ -362,9 +385,10 @@ where
     /// renderer's diff emits whatever is needed to bring the wire in
     /// sync on the next [`Backend::flush`].
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
-        let w = self.screen.width();
-        let h = self.screen.height();
-        let cursor = self.screen.cursor_position();
+        let size = self.screen.size();
+        let w = size.width;
+        let h = size.height;
+        let cursor = self.screen.tracked_cursor_position();
         if w == 0 || h == 0 {
             return Ok(());
         }
@@ -417,7 +441,7 @@ where
         if let Some(region) = region {
             self.screen.fill_rect(region, &CzCell::BLANK);
         }
-        self.screen.invalidate_cursor();
+        self.screen.invalidate_tracked_cursor();
         // Push the staged blanks to the wire so the clear takes effect
         // before this call returns, matching the immediate-clear contract.
         self.screen.render();
@@ -428,13 +452,14 @@ where
         // The full terminal size: ratatui needs it to anchor inline
         // viewports and to detect resizes. Fall back to the screen's
         // buffer size if the query fails (e.g. output is not a tty).
+        let size = self.screen.size();
         let (width, height) = self
-            .terminal
+            .screen
             .get_window_size()
             .ok()
             .map(|s| (s.col, s.row))
             .filter(|&(c, r)| c != 0 && r != 0)
-            .unwrap_or((self.screen.width(), self.screen.height()));
+            .unwrap_or((size.width, size.height));
         self.note_size((width, height));
         Ok(RtSize { width, height })
     }
@@ -442,12 +467,13 @@ where
     fn window_size(&mut self) -> io::Result<WindowSize> {
         // One query reports both cell and pixel dimensions; fall back to
         // the screen's buffer size for cells if it fails.
-        let ws = self.terminal.get_window_size().ok();
+        let size = self.screen.size();
+        let ws = self.screen.get_window_size().ok();
         let (width, height) = ws
             .as_ref()
             .map(|w| (w.col, w.row))
             .filter(|&(c, r)| c != 0 && r != 0)
-            .unwrap_or_else(|| (self.screen.width(), self.screen.height()));
+            .unwrap_or((size.width, size.height));
         self.note_size((width, height));
         Ok(WindowSize {
             columns_rows: RtSize { width, height },
@@ -479,5 +505,37 @@ where
         _amount: u16,
     ) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cursor_position_report;
+    use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+    use uncurses::layout::Position;
+
+    #[test]
+    fn report_from_plain_cursor_position() {
+        let ev = Event::CursorPosition(Position::new(4, 9));
+        assert_eq!(cursor_position_report(&ev), Some(Position::new(4, 9)));
+    }
+
+    #[test]
+    fn report_unwraps_multi_for_row1_f3_ambiguity() {
+        // At terminal row 1 the CPR wire form collides with modified-F3, so
+        // the decoder emits both inside a Multi; the report is still found.
+        let ev = Event::Multi(vec![
+            Event::KeyPress(Key::new(KeyCode::F(3), KeyModifiers::empty())),
+            Event::CursorPosition(Position::new(2, 0)),
+        ]);
+        assert_eq!(cursor_position_report(&ev), Some(Position::new(2, 0)));
+    }
+
+    #[test]
+    fn report_ignores_unrelated_events() {
+        let ev = Event::KeyPress(Key::new(KeyCode::Char('x'), KeyModifiers::empty()));
+        assert_eq!(cursor_position_report(&ev), None);
+        let multi = Event::Multi(vec![Event::FocusIn, Event::FocusOut]);
+        assert_eq!(cursor_position_report(&multi), None);
     }
 }

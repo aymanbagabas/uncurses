@@ -384,6 +384,16 @@ where
         }
     }
 
+    /// Return an event to the front of the queue, so the next
+    /// [`read`](Self::read) / [`try_read`](Self::try_read) yields it before
+    /// anything already queued. Use to put back an event read while waiting
+    /// for a specific reply (e.g. a cursor-position report), preserving it
+    /// for normal delivery. Restore a batch in original order by unreading
+    /// in reverse.
+    pub fn unread(&mut self, event: Event) {
+        self.queue.push_front(event);
+    }
+
     /// Push a freshly produced event onto the queue.
     pub(super) fn emit(&mut self, ev: Event) {
         self.queue.push_back(ev);

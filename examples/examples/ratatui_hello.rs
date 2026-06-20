@@ -19,24 +19,24 @@ fn main() -> io::Result<()> {
 }
 
 fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
-    terminal.draw(|f| {
-        let block = Block::default()
-            .title(" uncurses-ratatui ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
-        let para = Paragraph::new(
-            "Hello from a ratatui app rendered through uncurses.\n\nPress any key to exit.",
-        )
-        .alignment(Alignment::Center)
-        .block(block);
-        f.render_widget(para, f.area());
-    })?;
-
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        let mut events = terminal.backend().events();
-        if events.poll(Some(Duration::from_millis(100)))?
-            && let Some(Event::KeyPress(_)) = events.try_read()
+        terminal.draw(|f| {
+            let block = Block::default()
+                .title(" uncurses-ratatui ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+            let para = Paragraph::new(
+                "Hello from a ratatui app rendered through uncurses.\n\nPress any key to exit.",
+            )
+            .alignment(Alignment::Center)
+            .block(block);
+            f.render_widget(para, f.area());
+        })?;
+
+        let events = terminal.backend_mut();
+        if events.poll_event(Some(Duration::from_millis(100)))?
+            && let Some(Event::KeyPress(_)) = events.try_read_event()
         {
             break;
         }

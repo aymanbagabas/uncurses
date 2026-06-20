@@ -33,7 +33,7 @@
 //! screen.enter_alt_screen()?;
 //! screen.set_str((0, 0), "hello", Style::default());
 //! screen.present()?;
-//! let _event = screen.read()?;
+//! let _event = screen.read_event()?;
 //! screen.finish()?; // restore the terminal
 //! # Ok(())
 //! # }
@@ -65,7 +65,7 @@
 //!
 //! With the `async` feature, `events` returns a
 //! [`futures_core::Stream`] adapter that yields the same decoded events as
-//! [`read`](Screen::read) (including the capability-detection side effect),
+//! [`read_event`](Screen::read_event) (including the capability-detection side effect),
 //! driven by a `next().await` loop. The stream borrows the screen only for
 //! the duration of one poll, so the loop body is free to draw.
 //!
@@ -273,6 +273,34 @@ where
         self.canvas.set_cursor_position(pos.x, pos.y);
     }
 
+    /// The renderer's tracked cursor position: the buffer-relative cell
+    /// where the renderer believes the terminal cursor currently sits. This
+    /// is bookkeeping, not a live cursor-position query. See
+    /// [`Canvas::cursor_position`].
+    pub fn tracked_cursor_position(&self) -> Position {
+        self.canvas.cursor_position()
+    }
+
+    /// Mark the tracked cursor position unknown, so the next staged move
+    /// always emits rather than short-circuiting on a matching tracked
+    /// position. Use after moving the terminal cursor by a means the
+    /// renderer cannot see (e.g. a raw escape written directly). See
+    /// [`Canvas::invalidate_cursor`].
+    pub fn invalidate_tracked_cursor(&mut self) {
+        self.canvas.invalidate_cursor();
+    }
+
+    /// Assume the tracked cursor is at buffer-relative `pos`, with both
+    /// axes known, *without* emitting any move. This only updates the
+    /// renderer's belief; the caller must have already placed the terminal
+    /// cursor there (e.g. with a raw escape the renderer cannot see). For an
+    /// actual cursor move use [`move_cursor_to`](Self::move_cursor_to). See
+    /// [`Canvas::assume_cursor_at`].
+    pub fn assume_cursor_position(&mut self, pos: impl Into<Position>) {
+        let pos = pos.into();
+        self.canvas.assume_cursor_at(pos.x, pos.y);
+    }
+
     // --- Render-coupled mode delegates ----------------------------------
 
     /// Enter the alternate screen and flush. See [`Canvas::set_alt_screen`].
@@ -328,14 +356,14 @@ where
 
     /// Drive the input source for up to `timeout`, returning whether any
     /// event became available. See [`EventSource::poll`].
-    pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+    pub fn poll_event(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
         self.source.lock().unwrap().poll(timeout)
     }
 
     /// Take the next queued event without doing I/O. Capability reports are
     /// recorded as a side effect but still returned. See
     /// [`EventSource::try_read`].
-    pub fn try_read(&mut self) -> Option<Event> {
+    pub fn try_read_event(&mut self) -> Option<Event> {
         let ev = self.source.lock().unwrap().try_read()?;
         // A failed flush while applying discovery-driven defaults is
         // best-effort here; it resurfaces on the next explicit flush.
@@ -345,10 +373,17 @@ where
 
     /// Block until the next event. Capability reports are recorded as a
     /// side effect but still returned. See [`EventSource::read`].
-    pub fn read(&mut self) -> io::Result<Event> {
+    pub fn read_event(&mut self) -> io::Result<Event> {
         let ev = self.source.lock().unwrap().read()?;
         self.observe(&ev)?;
         Ok(ev)
+    }
+
+    /// Return an event to the front of the input queue, so the next
+    /// [`read_event`](Self::read_event) / [`try_read_event`](Self::try_read_event)
+    /// yields it before anything already queued. See [`EventSource::unread`].
+    pub fn unread_event(&mut self, event: Event) {
+        self.source.lock().unwrap().unread(event);
     }
 
     /// Terminal capabilities detected so far from intercepted query
@@ -673,8 +708,8 @@ where
     O: Write,
 {
     /// An async event stream that yields decoded events and runs the same
-    /// capability detection ([`observe`](Self::read)) as the synchronous
-    /// [`read`](Self::read) path.
+    /// capability detection ([`observe`](Self::read_event)) as the synchronous
+    /// [`read_event`](Self::read_event) path.
     ///
     /// The thread-backed stream is created on the first call and reused
     /// thereafter; the helper thread waits for input readiness and wakes the

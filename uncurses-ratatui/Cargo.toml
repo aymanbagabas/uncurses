@@ -10,7 +10,8 @@ repository.workspace = true
 default = ["unicode-rs"]
 unicode-rs = ["uncurses/unicode-rs"]
 icu = ["uncurses/icu"]
-# Asynchronous event streaming. Enables `UncursesBackend::event_stream`.
+# Asynchronous event streaming. Re-exports uncurses async so the screen's
+# `events()` stream is available through the backend.
 async = ["uncurses/async"]
 
 [dependencies]

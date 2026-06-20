@@ -188,8 +188,8 @@ impl App {
     fn run(&mut self) -> io::Result<()> {
         loop {
             // Drain pending input without blocking the render loop.
-            while self.screen.poll(Some(Duration::ZERO))? {
-                let Some(ev) = self.screen.try_read() else {
+            while self.screen.poll_event(Some(Duration::ZERO))? {
+                let Some(ev) = self.screen.try_read_event() else {
                     break;
                 };
                 match ev {

@@ -41,7 +41,7 @@ impl App {
             );
             self.screen.present()?;
 
-            match self.screen.read()? {
+            match self.screen.read_event()? {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q'),
                     ..
