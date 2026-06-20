@@ -92,6 +92,7 @@ pub enum ModifyOtherKeysMode {
 }
 
 impl ModifyOtherKeysMode {
+    /// Convert a report value into a modifyOtherKeys mode.
     pub fn from_value(v: u8) -> Self {
         match v {
             1 => Self::Mode1,
@@ -148,11 +149,26 @@ pub enum Event {
     /// `CellPixelSize` instead.
     Resize(Winsize),
     /// Reply to a `CSI 18 t` query — window size in cells.
-    WindowCellSize { width: u16, height: u16 },
+    WindowCellSize {
+        /// Width in terminal cells.
+        width: u16,
+        /// Height in terminal cells.
+        height: u16,
+    },
     /// Reply to a `CSI 14 t` query — window size in pixels.
-    WindowPixelSize { width: u16, height: u16 },
+    WindowPixelSize {
+        /// Width in pixels.
+        width: u16,
+        /// Height in pixels.
+        height: u16,
+    },
     /// Reply to a `CSI 16 t` query — single-cell size in pixels.
-    CellPixelSize { width: u16, height: u16 },
+    CellPixelSize {
+        /// Cell width in pixels.
+        width: u16,
+        /// Cell height in pixels.
+        height: u16,
+    },
 
     // -- Focus / paste -------------------------------------------------------
     /// Focus gained.
@@ -186,7 +202,12 @@ pub enum Event {
 
     // -- Mode / capability reports ------------------------------------------
     /// DECRPM / RM mode report.
-    ModeReport { mode: Mode, setting: ModeSetting },
+    ModeReport {
+        /// Reported mode.
+        mode: Mode,
+        /// Current mode setting.
+        setting: ModeSetting,
+    },
     /// modifyOtherKeys report.
     ModifyOtherKeys(ModifyOtherKeysMode),
     /// Kitty keyboard protocol active-enhancements report
@@ -194,13 +215,23 @@ pub enum Event {
     /// [`crate::ansi::KittyKeyboardFlags`] bitset.
     KittyKeyboardEnhancements(crate::ansi::KittyKeyboardFlags),
     /// XTWINOPS reply (window operation).
-    WindowOp { op: u32, args: Vec<Option<u32>> },
+    WindowOp {
+        /// Window operation number.
+        op: u32,
+        /// Window operation arguments.
+        args: Vec<Option<u32>>,
+    },
     /// XTGETTCAP / termcap capability reply. `recognized` is `true` for a
     /// successful reply (`DCS 1 + r`) and `false` for a failure
     /// (`DCS 0 + r`); `payload` is the decoded `;`-joined `cap[=value]`
     /// string, decoded the same way in both cases (a failure echoes the
     /// requested, now known-unsupported, capability names).
-    Termcap { recognized: bool, payload: String },
+    Termcap {
+        /// Whether the requested capability was recognized.
+        recognized: bool,
+        /// Decoded capability payload.
+        payload: String,
+    },
 
     // -- Colors --------------------------------------------------------------
     /// OSC 10 default foreground color reply.
@@ -210,21 +241,33 @@ pub enum Event {
     /// OSC 12 cursor color reply.
     CursorColor(Color),
     /// OSC 4 indexed palette color reply (`OSC 4 ; index ; color`).
-    PaletteColor { index: u8, color: Color },
+    PaletteColor {
+        /// Palette color index.
+        index: u8,
+        /// Reported palette color.
+        color: Color,
+    },
     /// Color theme report (DEC 2031): `dark` is `true` for a dark theme,
     /// `false` for a light theme. Indicates only the dark/light preference,
     /// not the actual colors.
-    ColorTheme { dark: bool },
+    ColorTheme {
+        /// Whether the reported theme is dark.
+        dark: bool,
+    },
 
     // -- Clipboard / graphics ------------------------------------------------
     /// OSC 52 clipboard content reply.
     Clipboard {
+        /// Clipboard selection that was reported.
         selection: ClipboardSelection,
+        /// Clipboard content.
         content: String,
     },
     /// Kitty graphics response (APC `G ...` payload).
     KittyGraphics {
+        /// Response options.
         options: Vec<(String, String)>,
+        /// Response payload bytes.
         payload: Vec<u8>,
     },
 

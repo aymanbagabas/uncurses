@@ -12,10 +12,12 @@ pub const FOCUS: &[u8] = b"\x1b[I";
 /// Sequence sent when the terminal loses focus (`CSI O`).
 pub const BLUR: &[u8] = b"\x1b[O";
 
+/// Write the focus gained sequence (`CSI I`).
 pub fn write_focus<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(FOCUS)
 }
 
+/// Write the focus lost sequence (`CSI O`).
 pub fn write_blur<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(BLUR)
 }

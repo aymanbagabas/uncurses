@@ -22,18 +22,22 @@ pub const REQUEST_TERTIARY_DA: &[u8] = b"\x1b[=c";
 /// Request the terminal's name and version (XTVERSION, `CSI > q`).
 pub const REQUEST_XTVERSION: &[u8] = b"\x1b[>q";
 
+/// Write the Primary Device Attributes request (`CSI c`).
 pub fn write_request_primary_da<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_PRIMARY_DA)
 }
 
+/// Write the Secondary Device Attributes request (`CSI > c`).
 pub fn write_request_secondary_da<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_SECONDARY_DA)
 }
 
+/// Write the Tertiary Device Attributes request (`CSI = c`).
 pub fn write_request_tertiary_da<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_TERTIARY_DA)
 }
 
+/// Write the terminal name and version request (`CSI > q`).
 pub fn write_request_xtversion<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_XTVERSION)
 }

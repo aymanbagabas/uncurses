@@ -55,8 +55,11 @@ pub enum WrapMode {
 /// it.
 pub struct Painter<'s, S: SurfaceMut + ?Sized> {
     target: &'s mut S,
+    /// Width measurement policy.
     pub mode: WidthMode,
+    /// Whether East Asian Ambiguous characters are treated as wide.
     pub eaw_wide: bool,
+    /// Current painting style.
     pub style: Style,
 }
 

@@ -239,10 +239,12 @@ impl<W: Write> Canvas<W> {
         }
     }
 
+    /// Return the canvas width in cells.
     pub fn width(&self) -> u16 {
         self.width
     }
 
+    /// Return the canvas height in cells.
     pub fn height(&self) -> u16 {
         self.height
     }

@@ -42,7 +42,9 @@ use crate::color::Color;
 /// so cells in a hyperlink span share a single allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Link {
+    /// Hyperlink target URL.
     pub url: String,
+    /// Hyperlink parameter string.
     pub params: String,
 }
 
@@ -50,13 +52,21 @@ bitflags! {
     /// Text attribute flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct AttrFlags: u16 {
+        /// Bold intensity.
         const BOLD          = 0b0000_0000_0001;
+        /// Faint intensity.
         const FAINT         = 0b0000_0000_0010;
+        /// Italic text.
         const ITALIC        = 0b0000_0000_0100;
+        /// Slow blinking text.
         const SLOW_BLINK    = 0b0000_0000_1000;
+        /// Rapid blinking text.
         const RAPID_BLINK   = 0b0000_0001_0000;
+        /// Reverse foreground and background.
         const REVERSE       = 0b0000_0010_0000;
+        /// Concealed text.
         const CONCEAL       = 0b0000_0100_0000;
+        /// Struck-through text.
         const STRIKETHROUGH = 0b0000_1000_0000;
     }
 }
@@ -66,11 +76,17 @@ bitflags! {
 #[repr(u8)]
 pub enum UnderlineStyle {
     #[default]
+    /// No underline.
     None = 0,
+    /// Single underline.
     Single = 1,
+    /// Double underline.
     Double = 2,
+    /// Curly underline.
     Curly = 3,
+    /// Dotted underline.
     Dotted = 4,
+    /// Dashed underline.
     Dashed = 5,
 }
 
@@ -80,11 +96,17 @@ pub enum UnderlineStyle {
 /// keeps a single allocation.
 #[derive(Debug, Clone, Default)]
 pub struct Style {
+    /// Foreground color.
     pub fg: Option<Color>,
+    /// Background color.
     pub bg: Option<Color>,
+    /// Underline color.
     pub underline_color: Option<Color>,
+    /// Underline style.
     pub underline: UnderlineStyle,
+    /// Text attribute flags.
     pub attrs: AttrFlags,
+    /// Optional hyperlink target.
     pub link: Option<Arc<Link>>,
 }
 
@@ -119,6 +141,7 @@ impl std::hash::Hash for Style {
 }
 
 impl Style {
+    /// Style with no colors, attributes, underline, or hyperlink.
     pub const EMPTY: Style = Style {
         fg: None,
         bg: None,
@@ -152,66 +175,79 @@ impl Style {
         self.link.is_none()
     }
 
+    /// Add bold intensity.
     pub fn bold(mut self) -> Self {
         self.attrs |= AttrFlags::BOLD;
         self
     }
 
+    /// Add faint intensity.
     pub fn faint(mut self) -> Self {
         self.attrs |= AttrFlags::FAINT;
         self
     }
 
+    /// Add italic text.
     pub fn italic(mut self) -> Self {
         self.attrs |= AttrFlags::ITALIC;
         self
     }
 
+    /// Use a single underline.
     pub fn underline(mut self) -> Self {
         self.underline = UnderlineStyle::Single;
         self
     }
 
+    /// Add strikethrough text.
     pub fn strikethrough(mut self) -> Self {
         self.attrs |= AttrFlags::STRIKETHROUGH;
         self
     }
 
+    /// Add slow blinking text.
     pub fn blink(mut self) -> Self {
         self.attrs |= AttrFlags::SLOW_BLINK;
         self
     }
 
+    /// Add rapid blinking text.
     pub fn rapid_blink(mut self) -> Self {
         self.attrs |= AttrFlags::RAPID_BLINK;
         self
     }
 
+    /// Reverse foreground and background.
     pub fn reverse(mut self) -> Self {
         self.attrs |= AttrFlags::REVERSE;
         self
     }
 
+    /// Add concealed text.
     pub fn conceal(mut self) -> Self {
         self.attrs |= AttrFlags::CONCEAL;
         self
     }
 
+    /// Set the foreground color.
     pub fn fg(mut self, color: Color) -> Self {
         self.fg = Some(color);
         self
     }
 
+    /// Set the background color.
     pub fn bg(mut self, color: Color) -> Self {
         self.bg = Some(color);
         self
     }
 
+    /// Set the underline color.
     pub fn underline_color(mut self, color: Color) -> Self {
         self.underline_color = Some(color);
         self
     }
 
+    /// Set the underline style.
     pub fn underline_style(mut self, style: UnderlineStyle) -> Self {
         self.underline = style;
         self
