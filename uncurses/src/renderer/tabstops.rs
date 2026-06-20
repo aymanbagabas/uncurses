@@ -28,6 +28,11 @@ pub struct TabStops {
     /// per-iteration lookups become an O(1) array index instead of
     /// an O(width) linear scan.
     next_stop: Vec<u16>,
+    /// Precomputed unclamped next tab stop for every column — the true
+    /// stop a terminal's tab advance lands on, which may lie past the
+    /// right edge (unlike `next_stop`, which clamps to `width - 1`).
+    /// Drives [`TabStops::next_stop`]; see ncurses' `NEXTTAB`.
+    next_unclamped: Vec<u16>,
     /// Precomputed result of [`TabStops::prev`] for every column.
     prev_stop: Vec<u16>,
     interval: u16,
@@ -44,6 +49,7 @@ impl TabStops {
             stops: vec![0u64; words],
             width,
             next_stop: Vec::new(),
+            next_unclamped: Vec::new(),
             prev_stop: Vec::new(),
             interval,
         };
@@ -120,6 +126,20 @@ impl TabStops {
         self.next_stop[idx]
     }
 
+    /// The true next tab stop strictly after `x`, *unclamped*: it may lie
+    /// past the right edge, exactly as a terminal's tab advance would land
+    /// past the last in-canvas stop (a tab from the last interior stop
+    /// goes to the next interval stop, not the screen edge). Mirrors
+    /// ncurses' `NEXTTAB`. The cursor planner uses this so it never emits a
+    /// tab unless the tab genuinely lands at or before the target column.
+    pub fn next_stop(&self, x: u16) -> u16 {
+        let interval = self.interval;
+        if x >= self.width {
+            return (x / interval + 1) * interval;
+        }
+        self.next_unclamped[x as usize]
+    }
+
     /// Previous tab stop strictly before `x`. Returns 0 when no
     /// earlier stop exists or when there are no stops at all. `x` is
     /// 0-based; values past the configured width are clamped first so
@@ -186,19 +206,29 @@ impl TabStops {
     fn rebuild_neighbor_tables(&mut self) {
         let w = self.width as usize;
         self.next_stop.resize(w, 0);
+        self.next_unclamped.resize(w, 0);
         self.prev_stop.resize(w, 0);
         if w == 0 {
             return;
         }
         let last = (w - 1) as u16;
+        let interval = self.interval;
 
         // Forward sweep: scan right-to-left so each entry sees the
-        // nearest stop strictly to its right.
+        // nearest stop strictly to its right. `next_stop` clamps the
+        // "no further stop" case to the right edge; `next_unclamped`
+        // instead reports the true interval stop past the edge.
         let mut nearest: u16 = last;
+        let mut nearest_real: Option<u16> = None;
         for x in (0..w).rev() {
             self.next_stop[x] = nearest;
+            self.next_unclamped[x] = match nearest_real {
+                Some(s) => s,
+                None => (x as u16 / interval + 1) * interval,
+            };
             if self.bit(x) {
                 nearest = x as u16;
+                nearest_real = Some(x as u16);
             }
         }
 
@@ -240,6 +270,23 @@ mod tests {
         assert_eq!(ts.next(7), 8);
         assert_eq!(ts.next(8), 16);
         assert_eq!(ts.next(30), 31);
+    }
+
+    #[test]
+    fn next_stop_is_unclamped_past_the_edge() {
+        // Width 46: stops at 0,8,..,40. `next` clamps "no further stop" to
+        // the edge (45), but `next_stop` reports the true interval stop
+        // past the edge (48) — what a real terminal's tab would reach.
+        let ts = TabStops::default_for(46);
+        assert_eq!(ts.next(24), 32);
+        assert_eq!(ts.next_stop(24), 32); // real in-range stop: same
+        assert_eq!(ts.next(40), 45); // clamped to the right edge
+        assert_eq!(ts.next_stop(40), 48); // true next stop, unclamped
+        assert_eq!(ts.next_stop(41), 48);
+        assert_eq!(ts.next_stop(45), 48);
+        // Out-of-range still follows the interval.
+        assert_eq!(ts.next_stop(46), 48);
+        assert_eq!(ts.next_stop(48), 56);
     }
 
     #[test]

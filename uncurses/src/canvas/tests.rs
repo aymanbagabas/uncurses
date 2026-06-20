@@ -572,6 +572,87 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
 }
 
 #[test]
+fn tab_advance_does_not_overshoot_past_last_stop() {
+    // Width 24: real tab stops are at 0, 8, 16. A move to column 21 sits
+    // past the last interior stop. The renderer must not emit a tab that
+    // relies on landing past that stop (the canvas right edge), because on
+    // a wider display a tab from column 16 goes to 24, not 21. Replaying
+    // the bytes with standard 8-column tab stops must still land "B" at
+    // column 21.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let opts = Optimizations::default().union(Optimizations::TABS);
+        let mut screen = Canvas::new(&mut buf, (24, 1)).with_optimizations(opts);
+        fill(&mut screen, 0, 0, "A");
+        fill(&mut screen, 21, 0, "B");
+        screen.render();
+        screen.flush().unwrap();
+    }
+    let out = s(&buf);
+    assert_eq!(
+        column_of(&out, 'B'),
+        Some(21),
+        "B should land at column 21 under real 8-col tab stops: {out:?}"
+    );
+}
+
+/// Replay `out` against a terminal with standard 8-column tab stops and
+/// return the column where `target` is printed. Handles CR, tab, and the
+/// CUF/CUB/CHA cursor moves the renderer emits.
+#[cfg(test)]
+fn column_of(out: &str, target: char) -> Option<u16> {
+    let bytes = out.as_bytes();
+    let mut col: u16 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0x1b if i + 1 < bytes.len() && bytes[i + 1] == b'[' => {
+                let mut j = i + 2;
+                let mut num: u16 = 0;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    num = num * 10 + u16::from(bytes[j] - b'0');
+                    j += 1;
+                }
+                if j < bytes.len() {
+                    match bytes[j] {
+                        b'C' => col += num.max(1),
+                        b'D' => col = col.saturating_sub(num.max(1)),
+                        b'G' => col = num.saturating_sub(1),
+                        _ => {}
+                    }
+                }
+                i = j + 1;
+            }
+            b'\r' => {
+                col = 0;
+                i += 1;
+            }
+            b'\t' => {
+                col = (col / 8 + 1) * 8;
+                i += 1;
+            }
+            b'\n' => i += 1,
+            c if c < 0x80 => {
+                if c as char == target {
+                    return Some(col);
+                }
+                col += 1;
+                i += 1;
+            }
+            _ => {
+                // Skip a UTF-8 continuation run, count one display column.
+                col += 1;
+                i += 1;
+                while i < bytes.len() && bytes[i] & 0xC0 == 0x80 {
+                    i += 1;
+                }
+            }
+        }
+    }
+    None
+}
+
+#[test]
 fn backspace_optimization_on_emits_bs_for_leftward_move() {
     let mut buf: Vec<u8> = Vec::new();
     {
