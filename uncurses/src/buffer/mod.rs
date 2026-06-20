@@ -2,6 +2,21 @@
 //!
 //! This module provides [`Buffer`], row helpers, rectangular views, and owned [`Window`]s for working with terminal cells.
 //! Reach for it when you need an off-screen grid, a slice of a grid, or a common [`Surface`] / [`SurfaceMut`] API that drawing code can target.
+//!
+//! [`Surface`] (read) and [`SurfaceMut`] (write) are the traits every
+//! drawable shares, so a helper written against them works on a [`Buffer`],
+//! a [`Window`], a [`View`], a [`Canvas`](crate::canvas::Canvas), or a
+//! [`Screen`](crate::screen::Screen):
+//!
+//! ```
+//! use uncurses::buffer::{Buffer, Surface, SurfaceMut};
+//! use uncurses::cell::Cell;
+//! use uncurses::layout::Position;
+//!
+//! let mut buf = Buffer::new(4, 2); // an off-screen 4x2 grid
+//! buf.set_cell(Position::new(0, 0), &Cell::narrow("x"));
+//! assert!(buf.cell(Position::new(0, 0)).is_some());
+//! ```
 
 pub mod ops;
 pub mod surface;

@@ -2,6 +2,18 @@
 //!
 //! A [`Cell`] stores one display cell's content, style, and wide-cell role, including continuation placeholders for two-column graphemes.
 //! Reach for this module when constructing cells directly or when code needs to reason about narrow, wide, and continuation cells.
+//!
+//! ```
+//! use uncurses::cell::Cell;
+//!
+//! let a = Cell::narrow("a"); // a one-column cell
+//! assert!(a.is_narrow());
+//!
+//! // A two-column grapheme is a wide primary plus a continuation cell that
+//! // fills its second column.
+//! let wide = Cell::wide("中");
+//! assert!(!wide.is_narrow());
+//! ```
 
 pub mod segment;
 

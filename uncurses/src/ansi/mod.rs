@@ -3,6 +3,18 @@
 //! This module groups small encoders, parsers, and utilities for terminal control sequences.
 //! It covers cursor movement, modes, colors, titles, hyperlinks, clipboard data, wrapping, and related text handling.
 //! Reach for it when you need to emit or inspect raw control sequences directly instead of going through the higher level rendering APIs.
+//!
+//! The `write_*` functions and request consts target any writer: stage
+//! them into a [`Canvas`](crate::canvas::Canvas) or
+//! [`Screen`](crate::screen::Screen), or write straight to a terminal.
+//!
+//! ```
+//! use uncurses::ansi::title::write_window_title;
+//!
+//! let mut out = Vec::new();
+//! write_window_title(&mut out, "my app").unwrap(); // OSC 2
+//! assert!(out.starts_with(b"\x1b]2;"));
+//! ```
 
 pub mod ascii;
 pub mod background;
