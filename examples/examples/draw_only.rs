@@ -1,60 +1,77 @@
-//! Draw to the screen only: animate a frame loop without acting on input.
+//! Draw to the screen only: render with `Canvas`, no `Screen`, no input.
 //!
-//! Some programs render without reacting to the keyboard: a dashboard, a
-//! progress display, a splash screen. This one drives a [`Screen`] purely
-//! as an output device. It paints a little bouncing marquee for a fixed
-//! number of frames, sleeping between them. It still *drains* input each
-//! frame (so terminal replies and stray keystrokes never leak to the
-//! shell on exit), but it never reacts to it.
+//! A program that only *writes* to the terminal does not need `Screen` —
+//! `Screen` is the bundle you reach for when you both read input and draw.
+//! This one drives a [`Canvas`] (the renderer) over a raw-mode
+//! [`Terminal`] directly: it animates a marquee and never reads an event.
+//! Because nothing here queries the terminal, there are no replies to leak
+//! on exit; we still flush the input queue at teardown so stray keystrokes
+//! do not reach the shell.
 //!
 //! Run with `cargo run --example draw_only`. It plays for a few seconds
-//! and then restores the terminal on its own.
+//! and restores the terminal on its own.
 
+use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
 
-use uncurses::buffer::{Bounded, SurfaceMut};
+use uncurses::buffer::SurfaceMut;
+use uncurses::canvas::Canvas;
 use uncurses::color::BasicColor;
-use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{Stdin, Stdout};
+use uncurses::terminal::{Stdin, Stdout, Terminal};
 use uncurses::text::TextSurface;
 
 const FRAMES: u32 = 160;
 const FRAME_TIME: Duration = Duration::from_millis(40);
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    let mut term = Terminal::stdio();
+    term.make_raw()?;
 
-    let result = play(&mut screen);
+    // The renderer over the terminal's output half, sized to the window.
+    let size = term.get_window_size().unwrap_or_default();
+    let mut canvas = Canvas::new(term.output(), (size.col, size.row));
+    canvas.set_alt_screen(true);
+    canvas.set_cursor_visible(false);
 
-    // One teardown call restores every mode and the prior terminal state.
-    screen.finish()?;
+    let result = play(&term, &mut canvas);
+
+    // Teardown: reset the modes the canvas turned on, flush, discard any
+    // keys typed while it played, and drop raw mode.
+    canvas.reset();
+    let _ = canvas.flush();
+    flush_input(&term);
+    term.restore()?;
     result
 }
 
-fn play(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+fn play(term: &Terminal<Stdin, Stdout>, canvas: &mut Canvas<Stdout>) -> std::io::Result<()> {
     let label = "uncurses";
     let label_w = label.len() as u16;
+
     for frame in 0..FRAMES {
-        // Drain and discard any pending input. We never act on it, but the
-        // terminal still sends bytes (capability-query replies from init,
-        // stray keystrokes); reading them keeps them out of the shell's
-        // input once we exit.
-        while screen.poll_event(Some(Duration::ZERO))? {
-            let _ = screen.try_read_event();
+        // Manual autoresize: re-query the window and resize to follow it,
+        // since there is no Resize event loop here.
+        if let Ok(ws) = term.get_window_size()
+            && (ws.col, ws.row) != (canvas.width(), canvas.height())
+        {
+            canvas.resize(ws.col, ws.row);
         }
 
-        // Refit to the current window each frame so the animation keeps up
-        // with resizes even though we never read a Resize event.
-        screen.autoresize()?;
-        screen.clear();
+        canvas.clear();
+        let w = canvas.width();
+        let h = canvas.height();
 
-        let w = screen.width();
-        let h = screen.height();
+        // Always show, at the top, how long until the demo exits.
+        let remaining_ms = u64::from(FRAMES - frame) * FRAME_TIME.as_millis() as u64;
+        let header = format!(
+            "draw-only demo (Canvas, no input) - exiting in {:.1}s",
+            remaining_ms as f32 / 1000.0,
+        );
+        let dim = Style::default().fg(BasicColor::BrightBlack.into());
+        canvas.set_str((0, 0), &header, dim);
+
         if w >= label_w && h >= 3 {
             // Bounce the label left and right across the width.
             let travel = (w - label_w).max(1) as u32;
@@ -71,16 +88,26 @@ fn play(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
                 BasicColor::BrightMagenta,
             ];
             let color = palette[(frame as usize / 4) % palette.len()];
-            let style = Style::default().bold().fg(color.into());
-            screen.set_str((x, h / 2), label, style);
-
-            let dim = Style::default().fg(BasicColor::BrightBlack.into());
-            screen.set_str((0, 0), "draw-only demo (no input)", dim);
+            canvas.set_str((x, h / 2), label, Style::default().bold().fg(color.into()));
         }
 
         // `present` renders the diff and flushes it in one call.
-        screen.present()?;
+        canvas.present()?;
         sleep(FRAME_TIME);
     }
     Ok(())
 }
+
+/// Discard any unread terminal input so keys typed during the animation do
+/// not spill into the shell once raw mode is dropped.
+#[cfg(unix)]
+fn flush_input(term: &Terminal<Stdin, Stdout>) {
+    use std::os::fd::{AsFd, AsRawFd};
+    // SAFETY: tcflush just clears the input queue for a valid fd.
+    unsafe {
+        libc::tcflush(term.as_fd().as_raw_fd(), libc::TCIFLUSH);
+    }
+}
+
+#[cfg(not(unix))]
+fn flush_input(_term: &Terminal<Stdin, Stdout>) {}
