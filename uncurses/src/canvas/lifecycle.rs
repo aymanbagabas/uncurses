@@ -5,6 +5,7 @@
 use std::io::Write;
 
 use crate::ansi::{self, cursor, kitty, mode};
+use crate::text::TextSurface;
 
 use super::Canvas;
 

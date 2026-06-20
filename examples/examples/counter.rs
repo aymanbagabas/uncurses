@@ -3,23 +3,20 @@
 //! Press `enter` or `space`, or click the button with the mouse, to increment.
 //! `q`, `Esc`, or `Ctrl-C` exits.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, EventSource, Key, MouseButton};
+use uncurses::event::{Event, Key, MouseButton};
+use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::TextSurface;
 
-/// Click-counter app: owns the terminal, screen, and event source, plus
-/// its own UI state. `start` enters raw mode and configures the screen,
-/// `run` drives the event loop, and `stop` restores the terminal.
+/// Click-counter app: owns a self-managing [`Screen`] plus its own UI
+/// state. `start` enters the alternate screen and enables mouse tracking,
+/// `run` drives the event loop, and teardown is handled by
+/// [`Screen::finish`].
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     count: u32,
     button_rect: Option<(u16, u16, u16)>,
     quit_keys: [Key; 3],
@@ -28,20 +25,21 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        // Begin a session and enable plain (click) mouse tracking; the
+        // screen picks the best mode and encoding the terminal supports.
+        screen.init_with(ScreenOptions {
+            mouse: Some(MousePreference::default()),
+            ..ScreenOptions::default()
+        })?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
         // Parse key bindings once. `Key: FromStr`, and `==` compares on
         // the canonical chord identity — so plain equality is the right
         // operator for keyboard-shortcut matching.
         Ok(Self {
-            term,
             screen,
-            events,
             count: 0,
             button_rect: None,
             quit_keys: ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap()),
@@ -59,7 +57,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -74,7 +72,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, ws.row);
+                    self.screen.resize((ws.col, ws.row));
                     dirty = true;
                 }
                 _ => {}
@@ -86,10 +84,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -109,7 +105,7 @@ fn button_label(count: u32) -> String {
     format!("[ {label} ]")
 }
 
-fn button_bounds<W: Write>(screen: &Canvas<W>, count: u32) -> Option<(u16, u16, u16)> {
+fn button_bounds(screen: &Screen<Stdin, Stdout>, count: u32) -> Option<(u16, u16, u16)> {
     let w = screen.width();
     let h = screen.height();
     if w < 20 || h < 5 {
@@ -129,7 +125,7 @@ fn hit(rect: Option<(u16, u16, u16)>, mx: u16, my: u16) -> bool {
     my == y && mx >= x && mx < x + w
 }
 
-fn redraw<W: Write>(screen: &mut Canvas<W>, count: u32) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, count: u32) {
     screen.clear();
     let w = screen.width();
     let h = screen.height();

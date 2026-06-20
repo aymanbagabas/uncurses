@@ -39,8 +39,10 @@
 
 mod mode;
 mod painter;
+mod surface;
 mod width;
 
 pub use mode::{WidthMode, grapheme_cells};
 pub use painter::{Painter, WrapMode};
+pub use surface::TextSurface;
 pub use width::{char_width, grapheme_width};

@@ -9,16 +9,15 @@
 //! match. The screen height is *always* the current frame's height —
 //! never the terminal window.
 
-use std::io::Write;
 use std::time::{Duration, Instant};
 
-use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::screen::Screen;
 use uncurses::style::{Style, write_style};
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::TextSurface;
 
 const CHOICES: &[&str] = &[
     "Plant carrots",
@@ -41,33 +40,27 @@ struct State {
 }
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     state: State,
     term_cols: u16,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let size = term.get_window_size().unwrap_or_default();
-        let term_cols = size.col;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        let term_cols = screen.width();
         let state = State {
             ticks: 10,
             ..Default::default()
         };
         // Start at a single row; the first redraw will grow the screen to
         // match the first frame's measured height.
-        let mut screen = Canvas::new(term.output(), (term_cols, 1));
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        screen.resize((term_cols, 1));
+        screen.hide_cursor()?;
 
         Ok(Self {
-            term,
             screen,
-            events,
             state,
             term_cols,
         })
@@ -94,8 +87,8 @@ impl App {
             let timeout = next.saturating_duration_since(now);
 
             let mut dirty = false;
-            if self.events.poll(Some(timeout))? {
-                while let Some(ev) = self.events.try_read() {
+            if self.screen.poll(Some(timeout))? {
+                while let Some(ev) = self.screen.try_read() {
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q') | KeyCode::Escape,
@@ -173,7 +166,7 @@ impl App {
 
         // Bye: "Bye!" on row 1 plus a trailing blank row so the prompt
         // returns on its own line below the message.
-        self.screen.resize(self.term_cols, 3);
+        self.screen.resize((self.term_cols, 3));
         self.screen.clear();
         self.screen
             .set_str((2, 1), "Bye!", uncurses::style::Style::default());
@@ -182,10 +175,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -201,17 +192,17 @@ fn main() -> std::io::Result<()> {
 /// Each renderer tracks its own intended row count independent of any
 /// clipping, so a too-small initial buffer simply triggers a resize and
 /// a single repaint.
-fn fit_and_redraw<W: Write>(screen: &mut Canvas<W>, s: &State, cols: u16) {
+fn fit_and_redraw(screen: &mut Screen<Stdin, Stdout>, s: &State, cols: u16) {
     screen.clear();
     let needed = paint(screen, s);
     if screen.width() != cols || screen.height() != needed {
-        screen.resize(cols, needed);
+        screen.resize((cols, needed));
         screen.clear();
         paint(screen, s);
     }
 }
 
-fn paint<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
+fn paint(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
     if s.chosen {
         draw_chosen(screen, s)
     } else {
@@ -230,7 +221,7 @@ fn sgr(style: &Style) -> String {
 /// SGR reset (`ESC [ m`) — restores [`Style::default()`] for following cells.
 const RESET: &str = "\x1b[m";
 
-fn draw_choices<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
+fn draw_choices(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
     let subtle = sgr(&Style::default().fg(BasicColor::BrightBlack.into()));
     let checkbox = sgr(&Style::default().fg(BasicColor::Cyan.into()).bold());
     let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
@@ -257,7 +248,7 @@ fn draw_choices<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
     }
 
     y += CHOICES.len() as u16 + 1;
-    let line = format!("Program quits in {ticks_st}{RESET} seconds");
+    let line = format!("Program quits in {ticks_st}{}{RESET} seconds", s.ticks);
     screen.set_str((2, y), &line, uncurses::style::Style::default());
     last = last.max(y);
 
@@ -269,7 +260,7 @@ fn draw_choices<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
     last + 1
 }
 
-fn draw_chosen<W: Write>(screen: &mut Canvas<W>, s: &State) -> u16 {
+fn draw_chosen(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
     let keyword = sgr(&Style::default().fg(BasicColor::BrightMagenta.into()).bold());
     let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow.into()).bold());
     let bar_st = sgr(&Style::default().fg(BasicColor::BrightGreen.into()));

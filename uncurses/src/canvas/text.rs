@@ -2,81 +2,15 @@
 
 use std::io::Write;
 
-use crate::layout::Rect;
-use crate::style::Style;
-use crate::text::{Painter, WidthMode, WrapMode};
+use crate::text::{TextSurface, WidthMode};
 
 use super::Canvas;
 
-impl<W: Write> Canvas<W> {
-    /// Paint `s` into this screen at `pos` with `style` as the starting
-    /// style, truncating at the right edge. See [`Painter::set_str`]
-    /// for full semantics — inline SGR (`CSI … m`) updates the style
-    /// mid-stream and inline OSC 8 sequences attach a hyperlink to
-    /// subsequent cells. Returns the position immediately after the last
-    /// painted cell. Use [`Self::set_str_wrap`] to control wrapping.
-    ///
-    /// ```ignore
-    /// screen.set_str((0, 0), "hi", Style::default());
-    /// ```
-    pub fn set_str(
-        &mut self,
-        pos: impl Into<crate::layout::Position>,
-        s: &str,
-        style: Style,
-    ) -> crate::layout::Position {
-        self.painter().set_str(pos, s, style)
-    }
-
-    /// Like [`Self::set_str`] but with an explicit [`WrapMode`].
-    pub fn set_str_wrap(
-        &mut self,
-        pos: impl Into<crate::layout::Position>,
-        s: &str,
-        wrap: WrapMode,
-        style: Style,
-    ) -> crate::layout::Position {
-        self.painter().set_str_wrap(pos, s, wrap, style)
-    }
-
-    /// Paint `s` clipped to `rect` (in the screen's own coordinate
-    /// space) with `style` as the starting style, truncating at `rect`'s
-    /// right edge. Painting starts at `rect`'s top-left corner; `\n`
-    /// resets `x` to `rect.left()` and advances `y`. Use
-    /// [`Self::set_str_rect_wrap`] to control wrapping. See
-    /// [`Painter::set_str_rect`].
-    pub fn set_str_rect(
-        &mut self,
-        rect: impl Into<Rect>,
-        s: &str,
-        style: Style,
-    ) -> crate::layout::Position {
-        self.painter().set_str_rect(rect, s, style)
-    }
-
-    /// Like [`Self::set_str_rect`] but with an explicit [`WrapMode`].
-    pub fn set_str_rect_wrap(
-        &mut self,
-        rect: impl Into<Rect>,
-        s: &str,
-        wrap: WrapMode,
-        style: Style,
-    ) -> crate::layout::Position {
-        self.painter().set_str_rect_wrap(rect, s, wrap, style)
-    }
-
-    /// Construct a [`Painter`] that writes into this screen, wired up
-    /// with the screen's current [width mode](Self::width_mode) and
-    /// [East-Asian Ambiguous policy](Self::eaw_wide).
-    pub fn painter(&mut self) -> Painter<'_, Self> {
-        let (mode, eaw) = (self.width_mode(), self.eaw_wide);
-        Painter::new(self, mode, eaw)
-    }
-
+impl<W: Write> TextSurface for Canvas<W> {
     /// The width-calculation mode the screen currently uses. Derived
     /// from the terminal's grapheme-cluster mode (DEC 2027): `Grapheme`
     /// when enabled, `Wc` otherwise.
-    pub fn width_mode(&self) -> WidthMode {
+    fn width_mode(&self) -> WidthMode {
         if self.state.grapheme_clusters {
             WidthMode::Grapheme
         } else {
@@ -89,42 +23,31 @@ impl<W: Write> Canvas<W> {
     /// cells instead of 1. Terminals configured for CJK locales
     /// typically want `true`. See [`crate::text::char_width`]. Set at
     /// construction with [`Canvas::with_eaw_wide`].
-    pub fn eaw_wide(&self) -> bool {
+    fn eaw_wide(&self) -> bool {
         self.eaw_wide
     }
+}
 
+impl<W: Write> Canvas<W> {
     /// Whether Unicode core / grapheme-cluster mode (DEC 2027) is on.
     pub fn grapheme_clusters(&self) -> bool {
         self.state.grapheme_clusters
     }
 
-    /// Display width, in columns, of `s` under the screen's current
-    /// [width mode](Self::width_mode) and
-    /// [East-Asian Ambiguous policy](Self::eaw_wide).
-    ///
-    /// Inline ANSI escapes (SGR `CSI … m`, OSC 8 hyperlinks) contribute
-    /// no width, matching how [`Self::set_str`] paints. The result
-    /// saturates at `u16::MAX`.
-    pub fn str_width(&self, s: &str) -> u16 {
-        crate::ansi::string_width(s.as_bytes(), self.width_mode(), self.eaw_wide)
-            .min(u16::MAX as usize) as u16
-    }
-
     /// Display width, in columns, of one extended grapheme cluster `g`
-    /// under the screen's current [width mode](Self::width_mode) and
-    /// [East-Asian Ambiguous policy](Self::eaw_wide).
+    /// under the screen's current width mode and East-Asian Ambiguous
+    /// policy.
     ///
     /// In [`WidthMode::Wc`](crate::text::WidthMode::Wc) this is the width
     /// of `g`'s first code point; in
     /// [`WidthMode::Grapheme`](crate::text::WidthMode::Grapheme) it is the
     /// full cluster width. See [`crate::text::grapheme_width`].
     pub fn grapheme_width(&self, g: &str) -> u8 {
-        self.width_mode().grapheme_width(g, self.eaw_wide)
+        TextSurface::width_mode(self).grapheme_width(g, self.eaw_wide)
     }
 
     /// Iterate `s` as `(cluster, width)` pairs under the screen's current
-    /// [width mode](Self::width_mode) and
-    /// [East-Asian Ambiguous policy](Self::eaw_wide).
+    /// width mode and East-Asian Ambiguous policy.
     ///
     /// Always segments by extended grapheme cluster; only the per-cluster
     /// width follows the mode. See [`crate::text::grapheme_cells`].
@@ -132,6 +55,6 @@ impl<W: Write> Canvas<W> {
         &self,
         s: &'a str,
     ) -> impl Iterator<Item = (&'a str, u8)> + use<'a, W> {
-        crate::text::grapheme_cells(s, self.width_mode(), self.eaw_wide)
+        crate::text::grapheme_cells(s, TextSurface::width_mode(self), self.eaw_wide)
     }
 }

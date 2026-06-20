@@ -70,7 +70,7 @@ impl<W: Write> Canvas<W> {
     }
 
     /// Enable or disable Unicode core / grapheme-cluster mode
-    /// (DEC private mode 2027). When enabled, [`Canvas::set_str`]
+    /// (DEC private mode 2027). When enabled, [`set_str`](crate::text::TextSurface::set_str)
     /// and [`Canvas::insert_above`] calculate cell widths per grapheme
     /// cluster (UTS-29 + emoji presentation rules). When disabled,
     /// widths fall back to per-codepoint wcwidth-style.

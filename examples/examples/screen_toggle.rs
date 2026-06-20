@@ -4,43 +4,31 @@
 //! screen. `q`, `Esc` or `Ctrl-C` exits. On Unix, `Ctrl-Z` suspends the
 //! process and it resumes cleanly with `fg`.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
-use uncurses::canvas::Canvas;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::TextSurface;
+
+// Inline mode: 4 rows is enough for the message + help.
+const INLINE_ROWS: u16 = 4;
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     alt: bool,
-    size_col: u16,
-    size_row: u16,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let size = term.get_window_size().unwrap_or_default();
-        // Inline mode: 4 rows is enough for the message + help.
-        let mut screen = Canvas::new(term.output(), (size.col, 4));
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.hide_cursor()?;
+        let cols = screen.width();
+        screen.resize((cols, INLINE_ROWS));
 
-        Ok(Self {
-            term,
-            screen,
-            events,
-            alt: false,
-            size_col: size.col,
-            size_row: size.row,
-        })
+        Ok(Self { screen, alt: false })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
@@ -52,7 +40,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read()?;
             match ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q') | KeyCode::Escape,
@@ -70,8 +58,10 @@ impl App {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => {
-                    self.suspend()?;
-                    self.resume()?;
+                    // suspend()/resume() preserve the alt-screen state and
+                    // refit the canvas to the current window.
+                    self.screen.suspend()?;
+                    self.screen.resume()?;
                     self.render()?;
                 }
                 Event::KeyPress(Key {
@@ -80,19 +70,20 @@ impl App {
                 }) => {
                     self.alt = !self.alt;
                     if self.alt {
-                        self.screen.resize(self.size_col, self.size_row.max(4));
-                        self.screen.set_alt_screen(true);
+                        self.screen.enter_alt_screen()?;
+                        self.screen.autoresize()?;
                     } else {
-                        self.screen.set_alt_screen(false);
-                        self.screen.resize(self.size_col, 4);
+                        self.screen.exit_alt_screen()?;
+                        let cols = self.screen.width();
+                        self.screen.resize((cols, INLINE_ROWS));
                     }
                     self.render()?;
                 }
                 Event::Resize(ws) => {
                     if self.alt {
-                        self.screen.resize(ws.col, ws.row);
+                        self.screen.resize((ws.col, ws.row));
                     } else {
-                        self.screen.resize(ws.col, 4);
+                        self.screen.resize((ws.col, INLINE_ROWS));
                     }
                     self.render()?;
                 }
@@ -102,44 +93,8 @@ impl App {
         Ok(())
     }
 
-    /// Suspend to job control (Unix-only): tear down the screen, drop
-    /// raw mode, then send `SIGTSTP` to ourselves. The kernel pauses the
-    /// process until a `SIGCONT` (e.g. `fg`) returns control here.
-    #[cfg(unix)]
-    fn suspend(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()?;
-        // SAFETY: raise is async-signal-safe.
-        unsafe { libc::raise(libc::SIGTSTP) };
-        Ok(())
-    }
-
-    /// Resume after [`suspend`](Self::suspend): re-acquire raw mode,
-    /// refit to the current window size, and reinstate the screen modes
-    /// (the alternate screen is re-entered if it was active), then force
-    /// a full repaint.
-    #[cfg(unix)]
-    fn resume(&mut self) -> std::io::Result<()> {
-        self.term.make_raw()?;
-        if let Ok(size) = self.term.get_window_size() {
-            self.size_col = size.col;
-            self.size_row = size.row;
-            if self.alt {
-                self.screen.resize(size.col, size.row.max(4));
-            } else {
-                self.screen.resize(size.col, 4);
-            }
-        }
-        self.screen.restore();
-        self.screen.invalidate();
-        Ok(())
-    }
-
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -150,7 +105,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Canvas<W>, alt: bool) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, alt: bool) {
     screen.clear();
     let mode = if alt {
         " alt-screen mode "

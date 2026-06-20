@@ -362,8 +362,8 @@ impl<I: Input, O: Write> Screen<I, O> {
         if self.state.cursor_color.is_some() {
             self.canvas.write_all(background::RESET_CURSOR_COLOR)?;
         }
-        for &index in self.state.palette.keys() {
-            background::write_reset_palette_color(&mut self.canvas, index)?;
+        if !self.state.palette.is_empty() {
+            self.canvas.write_all(background::RESET_PALETTE_COLORS)?;
         }
         if self.state.title.is_some() {
             ansi::write_window_title(&mut self.canvas, "")?;

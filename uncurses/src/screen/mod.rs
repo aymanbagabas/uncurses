@@ -25,6 +25,7 @@
 //! ```no_run
 //! use uncurses::screen::Screen;
 //! use uncurses::style::Style;
+//! use uncurses::text::TextSurface;
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut screen = Screen::open()?; // build over /dev/tty
@@ -51,16 +52,19 @@ pub use cursor::CursorShape;
 pub use state::Capabilities;
 
 use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::canvas::Canvas;
 use crate::cell::Cell;
+#[cfg(feature = "async")]
+use crate::event::EventStream;
 use crate::event::source::Input;
 use crate::event::{Event, EventSource};
 use crate::layout::{Position, Rect, Size};
 use crate::terminal::Terminal;
-use crate::text::WrapMode;
+use crate::text::{TextSurface, WidthMode};
 
 /// A self-managing terminal application facade composing a [`Terminal`],
 /// a [`Canvas`], and an [`EventSource`] with the non-render terminal and
@@ -76,9 +80,14 @@ where
 {
     terminal: Terminal<I, O>,
     canvas: Canvas<O>,
-    /// Owned input source, read synchronously through [`Self::read`] and
-    /// friends.
-    source: EventSource<I>,
+    /// Input source, shared so the synchronous read path ([`Self::read`]
+    /// and friends) and the async [`EventStream`](Self::events) can both
+    /// drive it. The lock is uncontended in the sync-only case.
+    source: Arc<Mutex<EventSource<I>>>,
+    /// Thread-backed event stream, created lazily on the first
+    /// [`events`](Self::events) call and reused thereafter.
+    #[cfg(feature = "async")]
+    stream: Option<EventStream<I>>,
     state: state::State,
     /// Terminal capabilities detected by intercepting the replies to the
     /// queries [`Self::init`] fires. Capability-report events are absorbed
@@ -132,6 +141,22 @@ pub struct ScreenOptions {
     /// Windows (whose console resize events carry no pixel size) and `false`
     /// elsewhere, where resize reports already include pixel dimensions.
     pub request_pixel_size_on_resize: bool,
+    /// Enable mouse tracking at init with the given motion/pixel preference
+    /// (see [`Screen::enable_mouse`]). The screen picks the best mode and
+    /// encoding the terminal supports once capabilities are known. Defaults
+    /// to `None` (mouse tracking off).
+    pub mouse: Option<MousePreference>,
+}
+
+/// Mouse tracking preference for [`ScreenOptions::mouse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MousePreference {
+    /// Report pointer motion (button-event or any-event tracking) rather
+    /// than presses and releases only.
+    pub motion: bool,
+    /// Request coordinates in pixels rather than cells, when the terminal
+    /// supports pixel reporting.
+    pub pixels: bool,
 }
 
 impl Default for ScreenOptions {
@@ -141,6 +166,7 @@ impl Default for ScreenOptions {
             keyboard_enhancements: crate::ansi::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
             prefer_in_band_resize: true,
             request_pixel_size_on_resize: cfg!(windows),
+            mouse: None,
         }
     }
 }
@@ -151,52 +177,6 @@ where
     O: Write,
 {
     // --- Canvas drawing delegates ---------------------------------------
-
-    /// Paint `s` into the canvas at `pos` with `style`. See
-    /// [`Canvas::set_str`].
-    pub fn set_str(
-        &mut self,
-        pos: impl Into<Position>,
-        s: &str,
-        style: crate::style::Style,
-    ) -> Position {
-        self.canvas.set_str(pos, s, style)
-    }
-
-    /// Like [`Self::set_str`] but with an explicit [`WrapMode`]. See
-    /// [`Canvas::set_str_wrap`].
-    pub fn set_str_wrap(
-        &mut self,
-        pos: impl Into<Position>,
-        s: &str,
-        wrap: WrapMode,
-        style: crate::style::Style,
-    ) -> Position {
-        self.canvas.set_str_wrap(pos, s, wrap, style)
-    }
-
-    /// Paint `s` clipped to `rect` with `style`. See
-    /// [`Canvas::set_str_rect`].
-    pub fn set_str_rect(
-        &mut self,
-        rect: impl Into<crate::layout::Rect>,
-        s: &str,
-        style: crate::style::Style,
-    ) -> Position {
-        self.canvas.set_str_rect(rect, s, style)
-    }
-
-    /// Like [`Self::set_str_rect`] but with an explicit [`WrapMode`]. See
-    /// [`Canvas::set_str_rect_wrap`].
-    pub fn set_str_rect_wrap(
-        &mut self,
-        rect: impl Into<crate::layout::Rect>,
-        s: &str,
-        wrap: WrapMode,
-        style: crate::style::Style,
-    ) -> Position {
-        self.canvas.set_str_rect_wrap(rect, s, wrap, style)
-    }
 
     /// Write `cell` at `pos`. See [`Canvas::set_cell`].
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
@@ -318,14 +298,14 @@ where
     /// Drive the input source for up to `timeout`, returning whether any
     /// event became available. See [`EventSource::poll`].
     pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
-        self.source.poll(timeout)
+        self.source.lock().unwrap().poll(timeout)
     }
 
     /// Take the next queued event without doing I/O. Capability reports are
     /// recorded as a side effect but still returned. See
     /// [`EventSource::try_read`].
     pub fn try_read(&mut self) -> Option<Event> {
-        let ev = self.source.try_read()?;
+        let ev = self.source.lock().unwrap().try_read()?;
         // A failed flush while applying discovery-driven defaults is
         // best-effort here; it resurfaces on the next explicit flush.
         let _ = self.observe(&ev);
@@ -335,7 +315,7 @@ where
     /// Block until the next event. Capability reports are recorded as a
     /// side effect but still returned. See [`EventSource::read`].
     pub fn read(&mut self) -> io::Result<Event> {
-        let ev = self.source.read()?;
+        let ev = self.source.lock().unwrap().read()?;
         self.observe(&ev)?;
         Ok(ev)
     }
@@ -405,10 +385,7 @@ where
                     self.canvas.set_grapheme_clusters(true);
                 }
                 // Recorded only; enabling is the app's choice.
-                Mode::BRACKETED_PASTE => self.caps.bracketed_paste = true,
-                Mode::LIGHT_DARK => self.caps.color_theme_updates = true,
                 Mode::IN_BAND_RESIZE => self.caps.in_band_resize = true,
-                Mode::FOCUS => self.caps.focus_events = true,
                 Mode::MOUSE_NORMAL => self.caps.mouse_normal = true,
                 Mode::MOUSE_BUTTON => self.caps.mouse_button = true,
                 Mode::MOUSE_ANY => self.caps.mouse_any = true,
@@ -421,6 +398,8 @@ where
             // query, so a reply means the terminal recognizes the feature.
             Event::ModifyOtherKeys(_) => self.caps.modify_other_keys = true,
             Event::PrimaryDeviceAttributes(ref attrs) => {
+                // These come for free in the DA1 reply, which is sent as the
+                // capability-query terminator regardless.
                 if attrs.contains(&Some(4)) {
                     self.caps.sixel = true;
                 }
@@ -472,7 +451,7 @@ where
         // Prefer in-band resize over the SIGWINCH path when supported.
         if self.options.prefer_in_band_resize && self.caps.in_band_resize {
             self.enable_in_band_resize()?;
-            self.source.set_handle_resize(false);
+            self.source.lock().unwrap().set_handle_resize(false);
         }
 
         // Keyboard enhancements: prefer the Kitty protocol, falling back to
@@ -484,6 +463,13 @@ where
                 self.set_modify_other_keys(ModifyOtherKeysMode::Mode2)?;
             }
         }
+
+        // Mouse tracking: enable with the requested motion/pixel preference,
+        // letting the screen pick the best mode and encoding the terminal
+        // supports now that capabilities are known.
+        if let Some(pref) = self.options.mouse {
+            self.enable_mouse(pref.motion, pref.pixels)?;
+        }
         Ok(())
     }
 
@@ -491,6 +477,14 @@ where
     /// most of the queried features and mishandles the queries themselves.
     fn is_apple_terminal(&self) -> bool {
         self.terminal.get_env("TERM_PROGRAM").as_deref() == Some("Apple_Terminal")
+    }
+
+    /// The major version of Apple's `Terminal.app`, parsed from
+    /// `TERM_PROGRAM_VERSION` (e.g. `"470"` or `"470.1"` yield `470`).
+    /// `None` when the variable is absent or not numeric.
+    fn apple_terminal_version(&self) -> Option<u32> {
+        let raw = self.terminal.get_env("TERM_PROGRAM_VERSION")?;
+        raw.split('.').next()?.trim().parse().ok()
     }
 
     /// Stage the initial capability queries into the output stream. Their
@@ -519,10 +513,7 @@ where
             for mode in [
                 Mode::SYNCHRONIZED_OUTPUT,
                 Mode::UNICODE_CORE,
-                Mode::BRACKETED_PASTE,
-                Mode::LIGHT_DARK,
                 Mode::IN_BAND_RESIZE,
-                Mode::FOCUS,
                 Mode::MOUSE_NORMAL,
                 Mode::MOUSE_BUTTON,
                 Mode::MOUSE_ANY,
@@ -543,13 +534,22 @@ where
         } else {
             // Terminal.app mishandles the capability queries, but its
             // support for these features is known, so record them directly:
-            // bracketed paste, mouse tracking (X10/normal/button/any), and
-            // the X10/SGR encodings (no pixel reporting).
-            self.caps.bracketed_paste = true;
+            // mouse tracking (normal/button/any) and the SGR encoding (no
+            // pixel reporting). Bracketed paste is enabled unconditionally,
+            // so it needs no capability flag.
             self.caps.mouse_normal = true;
             self.caps.mouse_button = true;
             self.caps.mouse_any = true;
             self.caps.mouse_sgr = true;
+            // Terminal.app gained direct-color support in the build shipped
+            // with macOS Tahoe; record it and upgrade the renderer when the
+            // env-derived profile hasn't already.
+            if profile < Profile::TrueColor
+                && self.apple_terminal_version().is_some_and(|v| v >= 470)
+            {
+                self.caps.true_color = true;
+                self.canvas.use_color_profile(Profile::TrueColor);
+            }
         }
 
         self.canvas.write_all(REQUEST_PRIMARY_DA)?;
@@ -621,6 +621,102 @@ where
     }
 }
 
+impl<I, O> TextSurface for Screen<I, O>
+where
+    I: Input,
+    O: Write,
+{
+    fn width_mode(&self) -> WidthMode {
+        self.canvas.width_mode()
+    }
+
+    fn eaw_wide(&self) -> bool {
+        self.canvas.eaw_wide()
+    }
+}
+
+#[cfg(feature = "async")]
+impl<I, O> Screen<I, O>
+where
+    I: Input + 'static,
+    O: Write,
+{
+    /// An async event stream that yields decoded events and runs the same
+    /// capability detection ([`observe`](Self::read)) as the synchronous
+    /// [`read`](Self::read) path.
+    ///
+    /// The thread-backed stream is created on the first call and reused
+    /// thereafter; the helper thread waits for input readiness and wakes the
+    /// polling task. Drive it with a `Stream` extension trait's `next`:
+    ///
+    /// ```ignore
+    /// while let Some(ev) = screen.events().next().await {
+    ///     let ev = ev?;
+    ///     // draw with `screen` here — the events() borrow has ended
+    /// }
+    /// ```
+    ///
+    /// The returned [`Events`] borrows the screen for the duration of one
+    /// `next().await`, so it cannot be bound across the loop; call
+    /// `screen.events().next()` each iteration (the underlying stream and
+    /// its thread persist on the screen).
+    pub fn events(&mut self) -> Events<'_, I, O> {
+        if self.stream.is_none() {
+            self.stream = Some(EventStream::from_shared(Arc::clone(&self.source)));
+        }
+        Events { screen: self }
+    }
+}
+
+/// Async event stream adapter returned by [`Screen::events`].
+///
+/// Implements [`futures_core::Stream`], yielding `io::Result<Event>` and
+/// running [`Screen`] capability detection on each event before yielding it.
+/// Borrows the screen for the duration of a single poll.
+#[cfg(feature = "async")]
+pub struct Events<'a, I, O>
+where
+    I: Input + 'static,
+    O: Write,
+{
+    screen: &'a mut Screen<I, O>,
+}
+
+#[cfg(feature = "async")]
+impl<I, O> futures_core::Stream for Events<'_, I, O>
+where
+    I: Input + 'static,
+    O: Write,
+{
+    type Item = io::Result<Event>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+
+        let screen = &mut self.get_mut().screen;
+        // Scope the stream-field borrow so it ends before `observe` borrows
+        // the whole screen. The yielded `Poll` owns its event, holding no
+        // borrow of the stream.
+        let polled = {
+            let stream = screen
+                .stream
+                .as_mut()
+                .expect("stream is created in events()");
+            std::pin::Pin::new(stream).poll_next(cx)
+        };
+        match polled {
+            Poll::Ready(Some(Ok(ev))) => match screen.observe(&ev) {
+                Ok(()) => Poll::Ready(Some(Ok(ev))),
+                Err(e) => Poll::Ready(Some(Err(e))),
+            },
+            other => other,
+        }
+    }
+}
+
 #[cfg(unix)]
 impl<I, O> Screen<I, O>
 where
@@ -633,11 +729,13 @@ where
     /// mode and begin a session.
     pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
         let canvas = Canvas::from_terminal(&terminal)?;
-        let source = EventSource::new(terminal.input())?;
+        let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
         Ok(Self {
             terminal,
             canvas,
             source,
+            #[cfg(feature = "async")]
+            stream: None,
             state: state::State::default(),
             caps: Capabilities::default(),
             options: ScreenOptions::default(),
@@ -759,11 +857,13 @@ where
     /// mode and begin a session.
     pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
         let canvas = Canvas::from_terminal(&terminal)?;
-        let source = EventSource::new(terminal.input())?;
+        let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
         Ok(Self {
             terminal,
             canvas,
             source,
+            #[cfg(feature = "async")]
+            stream: None,
             state: state::State::default(),
             caps: Capabilities::default(),
             options: ScreenOptions::default(),

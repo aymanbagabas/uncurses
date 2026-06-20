@@ -101,16 +101,8 @@ pub struct Capabilities {
     /// Unicode core / grapheme-cluster mode (DEC private mode 2027).
     /// Applied: cell widths are measured per grapheme cluster.
     pub grapheme_clusters: bool,
-    /// Bracketed paste (DEC private mode 2004).
-    pub bracketed_paste: bool,
-    /// Color-theme (dark/light) update notifications (DEC private mode
-    /// 2031). Reports the dark/light preference only, not the actual
-    /// colors.
-    pub color_theme_updates: bool,
     /// In-band resize notifications (DEC private mode 2048).
     pub in_band_resize: bool,
-    /// Focus in/out reporting (DEC private mode 1004).
-    pub focus_events: bool,
     /// Normal mouse button tracking (DEC private mode 1000).
     pub mouse_normal: bool,
     /// Button-event mouse tracking (DEC private mode 1002).

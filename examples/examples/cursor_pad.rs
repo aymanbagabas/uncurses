@@ -14,16 +14,17 @@
 
 use std::io::Write;
 
-use uncurses::canvas::Canvas;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, MouseButton};
+use uncurses::buffer::Bounded;
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton};
+use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::TextSurface;
 
 const HEADER: &str = "cursor_pad — arrows/mouse to move, type to write, Ctrl-C to quit";
 const HEADER_ROWS: u16 = 1;
 
-fn redraw<W: Write>(screen: &mut Canvas<W>) -> std::io::Result<()> {
+fn redraw(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     let w = screen.width();
     let header = if (HEADER.len() as u16) <= w {
         HEADER.to_string()
@@ -34,35 +35,31 @@ fn redraw<W: Write>(screen: &mut Canvas<W>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn clamp_to_screen<W: Write>(screen: &Canvas<W>, x: u16, y: u16) -> (u16, u16) {
+fn clamp_to_screen(screen: &Screen<Stdin, Stdout>, x: u16, y: u16) -> (u16, u16) {
     let w = screen.width().saturating_sub(1);
     let h = screen.height().saturating_sub(1);
     (x.min(w), y.min(h))
 }
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     cx: u16,
     cy: u16,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
-
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(true);
-
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        // Enable plain mouse tracking so left clicks reposition the cursor.
+        screen.init_with(ScreenOptions {
+            mouse: Some(MousePreference::default()),
+            ..ScreenOptions::default()
+        })?;
+        screen.enter_alt_screen()?;
+        screen.show_cursor()?;
 
         Ok(Self {
-            term,
             screen,
-            events,
             cx: 0,
             cy: HEADER_ROWS,
         })
@@ -71,7 +68,7 @@ impl App {
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen)?;
         self.screen.render();
-        self.screen.set_cursor_position(self.cx, self.cy);
+        self.screen.move_cursor_to((self.cx, self.cy));
         self.screen.flush()
     }
 
@@ -79,7 +76,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read()?;
             match ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('c'),
@@ -140,7 +137,7 @@ impl App {
                     self.cy = ny;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, ws.row);
+                    self.screen.resize((ws.col, ws.row));
                     let (nx, ny) = clamp_to_screen(&self.screen, self.cx, self.cy);
                     self.cx = nx;
                     self.cy = ny;
@@ -153,10 +150,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 

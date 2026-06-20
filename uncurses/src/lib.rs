@@ -20,6 +20,7 @@
 //! use uncurses::style::Style;
 //! use uncurses::color::{Color, BasicColor};
 //! use uncurses::terminal::stdout;
+//! use uncurses::text::TextSurface;
 //!
 //! let mut screen = Canvas::new(stdout(), (80, 24));
 //! let style = Style::default()

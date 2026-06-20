@@ -2,15 +2,14 @@
 //! glyphs/colors/attrs and renders them as fast as possible. Reports
 //! FPS on exit. `Esc` or `Ctrl-C` quits.
 
-use std::io::Write;
 use std::time::Instant;
 
-use uncurses::canvas::Canvas;
+use uncurses::buffer::Bounded;
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
 
 const NUM_PATTERNS: usize = 100;
@@ -73,9 +72,7 @@ fn build_patterns(width: u16, height: u16, rng: &mut Rng) -> Vec<Vec<Cell>> {
 }
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Canvas<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     rng: Rng,
     w: u16,
     h: u16,
@@ -87,22 +84,17 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        screen.flush()?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
-        let events = EventSource::new(term.input())?;
         let mut rng = Rng::new(seed_from_clock());
         let (w, h) = (screen.width(), screen.height());
         let patterns = build_patterns(w, h, &mut rng);
 
         Ok(Self {
-            term,
             screen,
-            events,
             rng,
             w,
             h,
@@ -128,8 +120,8 @@ impl App {
         loop {
             let mut quit = false;
             while let Some(ev) = {
-                if self.events.poll(Some(std::time::Duration::ZERO))? {
-                    self.events.try_read()
+                if self.screen.poll(Some(std::time::Duration::ZERO))? {
+                    self.screen.try_read()
                 } else {
                     None
                 }
@@ -145,7 +137,7 @@ impl App {
                         ..
                     }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
                     Event::Resize(ws) => {
-                        self.screen.resize(ws.col, ws.row);
+                        self.screen.resize((ws.col, ws.row));
                         self.w = self.screen.width();
                         self.h = self.screen.height();
                         self.patterns = build_patterns(self.w, self.h, &mut self.rng);
@@ -172,25 +164,19 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
-    }
-}
-
-impl Drop for App {
-    fn drop(&mut self) {
-        if let Some((frames, elapsed, fps)) = self.summary {
-            println!("Frames: {frames} in {elapsed:.2}s — {fps:.0} FPS");
-        }
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
 fn main() -> std::io::Result<()> {
     let mut app = App::start()?;
     let result = app.run();
+    let summary = app.summary;
     app.stop()?;
+    if let Some((frames, elapsed, fps)) = summary {
+        println!("Frames: {frames} in {elapsed:.2}s — {fps:.0} FPS");
+    }
     result
 }
 
