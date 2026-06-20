@@ -17,10 +17,25 @@ use crate::renderer::buffer::RenderBuffer;
 use crate::buffer::Surface;
 
 impl Renderer {
-    /// Sync `front` into `back_buf`, then clear `front`'s touched
-    /// flags. Returns `true` when the resulting `back_buf` has any
-    /// rows the diff pipeline must redraw (or when a force-clear is
-    /// pending).
+    /// Sync a caller-facing buffer into the renderer staging buffer.
+    ///
+    /// # Parameters
+    ///
+    /// - `front`: desired cell grid whose touched spans identify writes
+    ///   since the last sync.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the renderer has real work to render: either the
+    /// staging buffer now has touched rows that differ from its previous
+    /// contents, or a force-clear is pending. Returns `false` for pure
+    /// no-op writes.
+    ///
+    /// # Behavior
+    ///
+    /// Copies only cells within `front`'s touched spans, skips
+    /// continuation cells, steps by wide-cell width, and clears
+    /// `front`'s touched flags before returning.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
         let width = front.width();
         let height = front.height();
@@ -57,7 +72,7 @@ impl Renderer {
                     x += 1;
                     continue;
                 }
-                // `RenderBuffer::set_cell` does a reference-equality
+                // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
                 self.back_buf.set_cell(pos, new_cell);

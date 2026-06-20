@@ -1,10 +1,25 @@
-//! Termcap/terminfo capability query (XTGETTCAP, `DCS + q ... ST`).
+//! XTGETTCAP capability queries.
+//!
+//! ## Category
+//!
+//! XTGETTCAP asks a terminal to report termcap/terminfo-style capability values
+//! using a DCS `+q` request.
+//!
+//! ## DCS framing
+//!
+//! The writer emits `ESC P + q <hex-name>[;<hex-name>...] ESC \\`. Capability
+//! names are uppercase hexadecimal byte strings; an empty request emits nothing.
+//!
+//! ## Mode interaction
+//!
+//! XTGETTCAP is a query, not a mode. Replies arrive asynchronously as DCS
+//! strings and must be parsed by input handling code.
 
 use std::io::{self, Write};
 
-/// Encode an `XTGETTCAP` request for the given terminfo capability names.
+/// Request terminal capability values with XTGETTCAP, `ESC P + q <hex-caps> ESC \`.
 ///
-/// Each name is hex-encoded (uppercase) and joined with `;`.
+/// Each capability name in `caps` is hex-encoded as uppercase bytes and separated with `;`. An empty slice emits nothing.
 pub fn write_xtgettcap<W: Write>(w: &mut W, caps: &[&str]) -> io::Result<()> {
     if caps.is_empty() {
         return Ok(());

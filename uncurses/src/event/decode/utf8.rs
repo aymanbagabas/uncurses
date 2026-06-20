@@ -1,10 +1,17 @@
-//! UTF-8 multi-byte character decoder for the ground state.
+//! UTF-8 character decoder for the ground state.
 //!
-//! Consumes a single 2-4 byte UTF-8 sequence and emits a key press for
-//! the resulting character. Invalid leading bytes or malformed
-//! sequences yield [`ParseResult::None`] so the caller can advance
-//! past a single byte.
-
+//! ## Purpose
+//!
+//! When the input stream is not inside an escape sequence, bytes at or above
+//! `0x80` are parsed here as one UTF-8 scalar value and emitted as a character
+//! [`KeyPress`](Event::KeyPress).
+//!
+//! ## Gotchas
+//!
+//! Incomplete multi-byte sequences return [`ParseResult::Incomplete`] so the
+//! caller can wait for more bytes. Malformed starts or invalid complete
+//! sequences return [`ParseResult::None`] and consume a single byte, allowing the
+//! outer decoder to recover. Paste bytes do not pass through this decoder.
 use super::Decoder;
 use super::result::ParseResult;
 use crate::event::{Event, Key, KeyCode, KeyModifiers};

@@ -1,27 +1,42 @@
-//! Unified, wakeable [`EventSource`].
+//! Wakeable event source shared by synchronous and asynchronous readers.
 //!
-//! Owns the input handle, decodes raw bytes into [`Event`]s with the
-//! [`Decoder`], and serves them through [`EventSource::try_read`]
-//! which blocks up to a caller-supplied timeout. Each source is paired
-//! with a cheaply-clonable [`Waker`] that interrupts an in-progress
-//! `try_read` from another thread.
+//! ## Purpose
 //!
-//! Backend per target:
+//! [`EventSource`] owns the input handle, waits for platform readiness, feeds a
+//! [`Decoder`], and queues typed [`Event`] values. It is the high-level entry
+//! point for applications that want blocking, timeout-based, or wakeable event
+//! reads.
 //!
-//! * Unix uses the readiness primitive selected in [`super::poll`]
-//!   (`epoll` on Linux, `kqueue` on the BSDs, with a `select` fallback
-//!   on macOS tty input, and `poll(2)` everywhere else), driving the
-//!   input fd, a self-pipe for the [`Waker`], and a SIGWINCH self-pipe
-//!   for [`Event::Resize`].
-//! * Windows uses `WaitForMultipleObjects` over the console input
-//!   handle and a Win32 event used as the cancellation slot; resize
-//!   events arrive as `WINDOW_BUFFER_SIZE_EVENT` records on the input
+//! ```text
+//! input fd / HANDLE ─┬─▶ Poller ── ready ──▶ read bytes ──▶ Decoder
+//! wake handle ───────┤                         │              │
+//! SIGWINCH pipe ─────┘                         └──────────────┴─▶ queue
+//!      (Unix only)        deadlines: ESC timeout and paste idle timeout
+//! ```
+//!
+//! ## Key types
+//!
+//! * [`Input`] describes the platform capabilities required from an input
 //!   handle.
+//! * [`EventSource`] stores the decoder, bounded pending-byte buffer, readiness
+//!   poller, event queue, timeout deadlines, and resize state.
+//! * [`Waker`] is a cloneable handle that interrupts an in-progress wait from
+//!   another thread.
 //!
-//! The source tightens its effective wait based on the parser's ESC
-//! deadline so a buffered partial escape sequence resolves promptly
-//! even when the caller-supplied timeout is longer.
-
+//! ## Lifecycle
+//!
+//! Construct with [`EventSource::new`] on the platform-specific impl. Call
+//! [`EventSource::poll`] to wait up to a timeout, drain queued events with
+//! [`EventSource::try_read`], or call [`EventSource::read`] to block until one
+//! event arrives. [`EventSource::unread`] can put an unrelated event back while
+//! code waits for a specific terminal reply.
+//!
+//! ## Gotchas
+//!
+//! [`EventSource::try_read`] is purely non-blocking: it only pops the queue.
+//! [`EventSource::poll`] performs I/O and timeout handling. The effective poll
+//! wait is shortened when a partial `ESC` sequence or open paste has an internal
+//! deadline, so a long caller timeout does not delay disambiguation.
 use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
@@ -49,17 +64,27 @@ use crate::event::Event;
 #[cfg(unix)]
 use crate::terminal::size::Winsize;
 
-/// Bound on what the source needs from an input handle.
+/// Platform-specific capabilities required from a Unix event input handle.
 ///
-/// On Unix the source must read bytes (`Read`) and watch the handle for
-/// readiness (`AsFd`). On Windows it must read bytes and expose a
-/// `HANDLE` for the console-input path (`AsHandle`). A blanket impl is
-/// provided for any type that already satisfies the platform bounds.
+/// The handle must implement [`Read`], expose an fd through [`AsFd`], and be
+/// safe to move to the helper thread used by async streams. Any type satisfying
+/// those bounds implements this trait automatically.
+///
+/// Users normally do not implement this trait manually; pass the input half
+/// returned by the terminal API to [`EventSource::new`].
 #[cfg(unix)]
 pub trait Input: Read + AsFd + Send {}
 #[cfg(unix)]
 impl<T: Read + AsFd + Send> Input for T {}
 
+/// Platform-specific capabilities required from a Windows event input handle.
+///
+/// The handle must implement [`Read`], expose a console `HANDLE` through
+/// [`AsHandle`], and be safe to move to the helper thread used by async streams.
+/// Any type satisfying those bounds implements this trait automatically.
+///
+/// Users normally do not implement this trait manually; pass the input half
+/// returned by the terminal API to [`EventSource::new`].
 #[cfg(windows)]
 pub trait Input: Read + AsHandle + Send {}
 #[cfg(windows)]
@@ -88,10 +113,15 @@ pub(super) const READY_WINCH: usize = 2;
 
 /// Default escape-sequence timeout.
 ///
-/// When the read buffer holds a partial `ESC`-prefixed sequence and no
-/// further bytes arrive within this window, the source resolves the
-/// buffered bytes as a best-effort event (typically a bare Escape
-/// keypress).
+/// When the pending buffer holds a partial `ESC`-prefixed sequence or 8-bit C1
+/// introducer and no continuation arrives within this window, the source asks
+/// the decoder to resolve the buffered bytes as best-effort events. This is how
+/// a physical Escape key is distinguished from an Alt-prefixed key or CSI-style
+/// control sequence.
+///
+/// Applications that prefer more responsive Escape handling can lower this
+/// value with [`EventSource::with_esc_timeout`]; applications that need to
+/// tolerate slow byte delivery can raise it.
 pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Default bracketed-paste idle timeout.
@@ -103,9 +133,13 @@ pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 /// that never arrive (truncated stream, malformed input).
 pub const DEFAULT_PASTE_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Cloneable handle that interrupts an in-progress [`EventSource::try_read`].
+/// Cloneable handle that interrupts an in-progress [`EventSource::poll`] or
+/// [`EventSource::read`].
 ///
-/// `Send + Sync`; multiple wakes coalesce.
+/// A waker is bound to one source at construction time. Calling [`Waker::wake`]
+/// makes the source's readiness wait return `Interrupted`; multiple wake calls
+/// may coalesce into one interruption. The handle is cheap to clone and can be
+/// sent to other threads.
 #[derive(Clone)]
 pub struct Waker {
     #[cfg(unix)]
@@ -128,6 +162,12 @@ impl Waker {
     }
 
     /// Interrupt the [`EventSource`] this waker is bound to.
+    ///
+    /// A blocked [`EventSource::poll`] returns `Ok(false)` and a blocked
+    /// [`EventSource::read`] returns an [`io::ErrorKind::Interrupted`] error.
+    /// The wake does not enqueue an [`Event`] and does not mutate decoder state.
+    ///
+    /// Returns any platform error produced while signalling the wake handle.
     pub fn wake(&self) -> io::Result<()> {
         #[cfg(any(unix, windows))]
         {
@@ -145,9 +185,15 @@ impl Waker {
 
 /// Wakeable event source backed by a platform readiness primitive.
 ///
-/// Single public type across platforms; per-target state and methods
-/// are cfg-gated. Construct with [`EventSource::new`] and drive with
-/// [`EventSource::try_read`].
+/// `EventSource` is the synchronous owner of terminal input. It stores pending
+/// bytes, a [`Decoder`], an event queue, deadline state for ambiguous `ESC`
+/// prefixes and open bracketed pastes, and the platform handles needed for
+/// wakeups and resize notifications.
+///
+/// Construct it with [`EventSource::new`]. Use [`EventSource::poll`] to perform
+/// I/O and wait for queued events, [`EventSource::try_read`] to pop an already
+/// queued event, or [`EventSource::read`] to block until one event is available.
+/// The type is generic over the platform [`Input`] handle.
 pub struct EventSource<I>
 where
     I: Input,
@@ -241,38 +287,59 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Configured escape-sequence timeout.
+    /// Return the configured escape-sequence timeout.
+    ///
+    /// This is the duration used to disambiguate a physical Escape key from an
+    /// Alt-prefixed key or a partial control sequence. Reading it has no side
+    /// effects and never performs I/O.
     pub fn esc_timeout(&self) -> Duration {
         self.esc_timeout
     }
 
-    /// Set the escape-sequence timeout — how long to wait for a
-    /// continuation byte before treating a buffered partial sequence as
-    /// a bare `Esc` keypress. Defaults to [`DEFAULT_ESC_TIMEOUT`].
+    /// Set the escape-sequence timeout.
     ///
-    /// Consuming builder; chain after [`EventSource::new`].
+    /// `timeout` is how long the source waits for a continuation byte before a
+    /// buffered partial escape sequence is force-resolved. The default is
+    /// [`DEFAULT_ESC_TIMEOUT`]. A zero duration makes ambiguous prefixes expire
+    /// on the next poll cycle.
+    ///
+    /// This is a consuming builder intended to be chained after
+    /// [`EventSource::new`]. It does not inspect or clear any already-buffered
+    /// input and never panics.
     pub fn with_esc_timeout(mut self, timeout: Duration) -> Self {
         self.esc_timeout = timeout;
         self
     }
 
-    /// Set the idle timeout for a bracketed paste with no closing
-    /// terminator. `None` disables it, so the source waits indefinitely
-    /// for a real `PasteEnd`. Defaults to `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
+    /// Set the idle timeout for an open bracketed paste.
     ///
-    /// Consuming builder; chain after [`EventSource::new`].
+    /// If no further input arrives before `timeout`, the source flushes any
+    /// held bytes as a final [`Event::PasteChunk`], synthesizes
+    /// [`Event::PasteEnd`], and leaves paste mode. Passing `None` disables this
+    /// safety net and waits indefinitely for a real terminator. The default is
+    /// `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
+    ///
+    /// This is a consuming builder intended to be chained after
+    /// [`EventSource::new`]. It never panics.
     pub fn with_paste_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.paste_idle_timeout = timeout;
         self
     }
 
-    /// Cloneable [`Waker`] bound to this source.
+    /// Return a cloneable [`Waker`] bound to this source.
+    ///
+    /// Use the returned handle from another thread to interrupt a blocking
+    /// [`EventSource::poll`] or [`EventSource::read`]. Cloning the waker does
+    /// not clone the source or its input handle.
     pub fn waker(&self) -> Waker {
         self.waker.clone()
     }
 
-    /// Whether the source delivers [`Event::Resize`] from the kernel's
-    /// out-of-band window-resize notification (`SIGWINCH` on Unix).
+    /// Return whether out-of-band resize handling is enabled.
+    ///
+    /// On Unix, `true` means a readable SIGWINCH pipe can produce
+    /// [`Event::Resize`]. On Windows, resize records are delivered in-band and
+    /// this flag has no practical effect.
     pub fn handle_resize(&self) -> bool {
         self.handle_resize
     }
@@ -293,15 +360,19 @@ where
         self.handle_resize = enable;
     }
 
-    /// Block up to `timeout` for at least one event to become available.
+    /// Wait up to `timeout` for at least one event to become available.
     ///
-    /// * `Ok(true)` — the event queue has at least one event; [`Self::try_read`]
-    ///   or [`Self::read`] will return without blocking.
-    /// * `Ok(false)` — `timeout` elapsed without an event, or a paired
-    ///   [`Waker`] interrupted the wait.
-    /// * `Err(_)` — fatal I/O error.
+    /// This method performs I/O, drains decoder output into the internal queue,
+    /// handles resize notifications, and resolves any expired ESC or paste
+    /// deadlines. `None` means block until an event or wake; `Some(Duration::ZERO)`
+    /// means perform a non-blocking readiness pass.
     ///
-    /// `None` for `timeout` means "block until an event or wake".
+    /// Returns:
+    ///
+    /// * `Ok(true)` when the queue has at least one event;
+    /// * `Ok(false)` when the timeout elapsed or a paired [`Waker`] interrupted
+    ///   the wait without producing an event;
+    /// * `Err(_)` for fatal input or platform readiness errors.
     pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
         if !self.queue.is_empty() {
             return Ok(true);
@@ -326,8 +397,11 @@ where
         }
     }
 
-    /// Return the next queued event, or `None` if the queue is empty.
-    /// Does not perform I/O.
+    /// Return the next queued event without performing I/O.
+    ///
+    /// This only pops the internal queue. Call [`EventSource::poll`] first when
+    /// the queue may be empty but input could be ready. Returns `None` when no
+    /// event is currently queued.
     pub fn try_read(&mut self) -> Option<Event> {
         self.queue.pop_front()
     }
@@ -371,8 +445,11 @@ where
 
     /// Block until the next event is available, then return it.
     ///
-    /// Returns [`io::ErrorKind::Interrupted`] if a paired [`Waker`] fired
-    /// while waiting.
+    /// This repeatedly checks the queue and calls [`EventSource::poll`] with no
+    /// caller timeout. It returns the next [`Event`] on success.
+    ///
+    /// Returns [`io::ErrorKind::Interrupted`] if a paired [`Waker`] fired while
+    /// waiting, and propagates fatal input/readiness errors.
     pub fn read(&mut self) -> io::Result<Event> {
         loop {
             if let Some(ev) = self.queue.pop_front() {
@@ -493,11 +570,13 @@ where
         }
     }
 
-    /// Public escape hatch: force-exit bracketed paste mode. Useful
-    /// when the embedding application detects misuse (size cap, user
-    /// cancel, watchdog) and wants to recover the input stream.
+    /// Force-exit bracketed paste mode.
     ///
-    /// Has no effect when the decoder is not in paste.
+    /// If the decoder is currently inside a paste, this flushes any pending
+    /// bytes as a [`Event::PasteChunk`], queues [`Event::PasteEnd`], and clears
+    /// paste state so subsequent bytes parse as ordinary input. Use it when an
+    /// embedding application enforces a paste size cap, user cancellation, or a
+    /// custom watchdog. It has no effect outside paste mode and never panics.
     pub fn end_paste(&mut self) {
         self.expire_paste();
     }

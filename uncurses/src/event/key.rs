@@ -1,5 +1,44 @@
-//! Key types and key codes for terminal input.
-
+//! Key payloads, modifiers, display forms, and binding parsing.
+//!
+//! ## Purpose
+//!
+//! This module defines the key identity used by [`Event::KeyPress`],
+//! [`Event::KeyRepeat`], and [`Event::KeyRelease`]. It normalizes the many wire
+//! encodings a terminal may use into a stable [`Key`] value suitable for
+//! equality, hashing, display, and string-based shortcut matching.
+//!
+//! ```text
+//! terminal encoding ──▶ KeyCode + KeyModifiers ──▶ normalize ──▶ Key
+//!       │                         │
+//!       │                         └─ lock-state bits are informational
+//!       └─ optional text / shifted / base glyph metadata
+//! ```
+//!
+//! ## Key types
+//!
+//! * [`KeyCode`] identifies the logical key: a character, navigation key,
+//!   function key, keypad key, media key, or modifier key.
+//! * [`KeyModifiers`] separates binding modifiers (`Ctrl`, `Alt`, `Shift`,
+//!   `Super`, `Hyper`, `Meta`) from lock states.
+//! * [`Key`] combines a code and modifiers with optional text metadata supplied
+//!   by richer keyboard protocols.
+//! * [`ParseKeyError`] reports why a user-facing binding string did not parse.
+//!
+//! ## Matching and display
+//!
+//! [`Key`] equality and hashing use only the code plus binding modifiers. Text,
+//! alternate-key metadata, and lock-state bits are ignored so bindings are
+//! stable across terminal protocols and keyboard latch states. [`Key::matches`]
+//! first checks exact produced text, then falls back to parsing the pattern as a
+//! key string such as `"ctrl+c"`, `"shift+f1"`, or `"alt+plus"`.
+//!
+//! ## Gotchas
+//!
+//! Uppercase character codes normalize to lowercase plus [`KeyModifiers::SHIFT`]
+//! unless [`KeyModifiers::CAPS_LOCK`] explains the case. Bare legacy encodings
+//! cannot always recover the physical base key for shifted symbols or
+//! Ctrl+Shift letters; richer encodings may provide [`Key::text`],
+//! [`Key::shifted_key`], or [`Key::base_key`] for that extra context.
 use bitflags::bitflags;
 use std::fmt;
 
@@ -316,10 +355,23 @@ impl Key {
     }
 }
 
-/// Identifies which key was pressed.
+/// Logical identity of a key, before modifiers are considered.
+///
+/// `KeyCode` is intentionally broader than printable text: it covers named
+/// navigation/editing keys, keypad keys, media keys, and the richer modifier-key
+/// identities reported by modern keyboard protocols. Combine it with
+/// [`KeyModifiers`] in a [`Key`] to represent a full key event.
+///
+/// Use [`KeyCode::function`] when constructing function keys from untrusted
+/// numeric input; the raw [`KeyCode::F`] variant is public for pattern matching
+/// and decoder construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
-    /// A printable character.
+    /// A Unicode character key.
+    ///
+    /// Printable spaces are normally represented as [`KeyCode::Space`] for
+    /// cross-decoder stability. Other printable and non-control Unicode scalar
+    /// values use this variant after [`Key::normalize`] applies case folding.
     Char(char),
     /// Function key. Valid range is `1..=35` (xterm goes to F20,
     /// kitty extends to F35). Construct via [`KeyCode::function`] for
@@ -497,13 +549,19 @@ pub enum KeyCode {
 }
 
 impl KeyCode {
-    /// Highest valid function-key index. Matches the kitty keyboard
-    /// protocol's F1..F35 range (xterm tops out at F20).
+    /// Highest valid function-key index accepted by [`KeyCode::function`].
+    ///
+    /// Function keys are represented as `F(1)` through `F(35)`. Values outside
+    /// that range are not produced by the checked constructor.
     pub const FUNCTION_KEY_MAX: u8 = 35;
 
-    /// Construct a function-key code, validating that `n` is in
-    /// `1..=FUNCTION_KEY_MAX`. Returns `None` for `n == 0` or values
-    /// above the supported range.
+    /// Construct a checked function-key code.
+    ///
+    /// Returns `Some(KeyCode::F(n))` when `n` is in
+    /// `1..=KeyCode::FUNCTION_KEY_MAX`; returns `None` for `0` or values above
+    /// the supported range. This function is useful when decoding or accepting
+    /// user input that may contain an invalid function-key number. It never
+    /// panics.
     pub fn function(n: u8) -> Option<KeyCode> {
         if (1..=Self::FUNCTION_KEY_MAX).contains(&n) {
             Some(KeyCode::F(n))
@@ -647,19 +705,35 @@ impl fmt::Display for KeyCode {
     }
 }
 
-/// Errors produced when parsing a [`Key`] or [`KeyCode`] from a string.
+/// Error produced when parsing a [`Key`] or [`KeyCode`] from a binding string.
+///
+/// Parsing is used by [`Key::matches`], [`std::str::FromStr`] for [`Key`], and
+/// [`std::str::FromStr`] for [`KeyCode`]. The variants retain the offending
+/// token where useful so configuration UIs can report actionable messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseKeyError {
     /// Input was empty or whitespace-only.
     Empty,
-    /// A `+`-separated component was empty (e.g. `"ctrl++a"` or
-    /// `"ctrl+"`).
+    /// A `+`-separated component was empty.
+    ///
+    /// Examples include `"ctrl++a"`, `"ctrl+"`, and strings with a leading
+    /// separator such as `"+a"`.
     EmptyComponent,
     /// A modifier token was not recognized.
+    ///
+    /// The contained string is the exact modifier component that failed to
+    /// parse, before any case normalization beyond comparison.
     UnknownModifier(String),
     /// The terminal key token was not recognized.
+    ///
+    /// The contained string is the key component after modifiers have been
+    /// split off. Single-character tokens are accepted as [`KeyCode::Char`], so
+    /// this usually indicates an unknown named key.
     UnknownKey(String),
     /// A function-key token (`f<n>`) had an out-of-range index.
+    ///
+    /// Valid function keys are `f1` through `f35`, matching
+    /// [`KeyCode::FUNCTION_KEY_MAX`].
     InvalidFunctionKey(String),
 }
 

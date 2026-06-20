@@ -14,9 +14,30 @@ use crate::ansi::{kitty, mode};
 use super::Canvas;
 
 impl<W: Write> Canvas<W> {
-    /// Toggle alternate screen mode. Entering saves the cursor and
-    /// switches to the alternate buffer; exiting restores both. No-op
-    /// when already in the requested state.
+    /// Toggle alternate-screen rendering.
+    ///
+    /// # Parameters
+    ///
+    /// - `alt_screen`: `true` to enter the alternate screen, `false` to
+    ///   return to the normal screen.
+    ///
+    /// # Behavior
+    ///
+    /// Entering saves the renderer cursor model, stages DECSET 1049,
+    /// switches the renderer to fullscreen/absolute positioning, and
+    /// requests a clear redraw. Exiting stages DECRST 1049, restores the
+    /// saved renderer cursor model, and returns to inline/relative
+    /// positioning. Re-applies tracked Kitty keyboard flags on the newly
+    /// active screen buffer.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; bytes are staged into memory.
+    ///
+    /// # Usage notes
+    ///
+    /// This stages mode bytes only. Call [`std::io::Write::flush`] or
+    /// [`Canvas::present`] to send them to the terminal.
     pub fn set_alt_screen(&mut self, alt_screen: bool) {
         if self.state.alt_screen == alt_screen {
             return;
@@ -52,7 +73,21 @@ impl<W: Write> Canvas<W> {
         }
     }
 
-    /// Set cursor visibility.
+    /// Set terminal cursor visibility.
+    ///
+    /// # Parameters
+    ///
+    /// - `visible`: `true` to show the cursor, `false` to hide it.
+    ///
+    /// # Behavior
+    ///
+    /// Stages the cursor-visible mode change only when the tracked state
+    /// changes. [`Canvas::render`] temporarily hides the cursor during a
+    /// frame when this tracked state is visible.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; bytes are staged into memory.
     pub fn set_cursor_visible(&mut self, visible: bool) {
         if self.state.cursor_visible != visible {
             if visible {
@@ -64,16 +99,43 @@ impl<W: Write> Canvas<W> {
         }
     }
 
-    /// Set synchronized updates.
+    /// Enable or disable synchronized frame wrappers.
+    ///
+    /// # Parameters
+    ///
+    /// - `enable`: when `true`, each non-empty render is wrapped in
+    ///   synchronized-output begin/end sequences.
+    ///
+    /// # Behavior
+    ///
+    /// Updates only canvas state. The mode bytes are emitted around the
+    /// next frame that actually has render work.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     pub fn set_sync_updates(&mut self, enable: bool) {
         self.state.sync_updates = enable;
     }
 
-    /// Enable or disable Unicode core / grapheme-cluster mode
-    /// (DEC private mode 2027). When enabled, [`set_str`](crate::text::TextSurface::set_str)
-    /// and [`Canvas::insert_above`] calculate cell widths per grapheme
-    /// cluster (UTS-29 + emoji presentation rules). When disabled,
+    /// Enable or disable Unicode core / grapheme-cluster mode.
+    ///
+    /// # Parameters
+    ///
+    /// - `enable`: `true` to stage DECSET 2027 and measure text by
+    ///   extended grapheme cluster; `false` to stage DECRST 2027 and use
+    ///   per-codepoint wcwidth-style measurement.
+    ///
+    /// # Behavior
+    ///
+    /// When enabled, [`set_str`](crate::text::TextSurface::set_str) and
+    /// [`Canvas::insert_above`] calculate cell widths per grapheme
+    /// cluster (UTS-29 plus emoji presentation rules). When disabled,
     /// widths fall back to per-codepoint wcwidth-style.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; bytes are staged into memory.
     pub fn set_grapheme_clusters(&mut self, enable: bool) {
         if self.state.grapheme_clusters != enable {
             if enable {

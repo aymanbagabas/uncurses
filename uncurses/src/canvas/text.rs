@@ -29,14 +29,33 @@ impl<W: Write> TextSurface for Canvas<W> {
 }
 
 impl<W: Write> Canvas<W> {
-    /// Whether Unicode core / grapheme-cluster mode (DEC 2027) is on.
+    /// Return whether Unicode core / grapheme-cluster mode is enabled.
+    ///
+    /// # Returns
+    ///
+    /// `true` when DEC private mode 2027 is tracked as enabled and text
+    /// width is measured by grapheme cluster; `false` when wcwidth-style
+    /// per-codepoint measurement is used.
     pub fn grapheme_clusters(&self) -> bool {
         self.state.grapheme_clusters
     }
 
-    /// Display width, in columns, of one extended grapheme cluster `g`
-    /// under the screen's current width mode and East-Asian Ambiguous
-    /// policy.
+    /// Measure one extended grapheme cluster in terminal cells.
+    ///
+    /// # Parameters
+    ///
+    /// - `g`: string slice containing the cluster to measure. If more
+    ///   than one cluster is supplied, only the width rules of
+    ///   [`crate::text::grapheme_width`] determine the result.
+    ///
+    /// # Returns
+    ///
+    /// The display width, in cells, under the canvas's current
+    /// grapheme-cluster mode and East-Asian Ambiguous policy.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     ///
     /// In [`WidthMode::Wc`] this is the width
     /// of `g`'s first code point; in
@@ -46,8 +65,20 @@ impl<W: Write> Canvas<W> {
         TextSurface::width_mode(self).grapheme_width(g, self.eaw_wide)
     }
 
-    /// Iterate `s` as `(cluster, width)` pairs under the screen's current
-    /// width mode and East-Asian Ambiguous policy.
+    /// Iterate a string as `(cluster, width)` pairs.
+    ///
+    /// # Parameters
+    ///
+    /// - `s`: UTF-8 text to segment into extended grapheme clusters.
+    ///
+    /// # Returns
+    ///
+    /// An iterator yielding each cluster and its display width under the
+    /// canvas's current width mode and East-Asian Ambiguous policy.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     ///
     /// Always segments by extended grapheme cluster; only the per-cluster
     /// width follows the mode. See [`crate::text::grapheme_cells`].

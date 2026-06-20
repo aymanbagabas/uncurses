@@ -1,13 +1,31 @@
-//! Sixel and Kitty graphics protocols.
+//! Inline graphics encoders for DCS and APC image protocols.
+//!
+//! ## Category
+//!
+//! This module frames image payloads as either Sixel DCS strings or APC graphics
+//! strings. It does not inspect, compress, or validate the image payload itself.
+//!
+//! ## String-control framing
+//!
+//! Both writers use 7-bit string controls terminated by `ST` (`ESC \\`):
+//!
+//! ```text
+//! ESC P ... q payload ESC \\     DCS Sixel
+//! ESC _ G opts ; payload ESC \\  APC graphics
+//! ──┬──                 ──┬──
+//! intro               terminator
+//! ```
+//!
+//! ## Mode interaction
+//!
+//! Inline graphics are not toggled by a mode in this module. Terminals may impose
+//! their own size, capability, or security policy on received payloads.
 
 use std::io::{self, Write};
 
-/// Encode a Sixel image (`DCS p1 ; p2 ; p3 q <payload> ST`).
+/// Frame a Sixel payload as `ESC P <p1> ; <p2> [;<p3>] q <payload> ESC \`.
 ///
-/// * `p1` — pixel aspect ratio (deprecated; pass `-1` to omit).
-/// * `p2` — background-color treatment (0 = transparent; many terminals only
-///   render correctly with 1). Pass `-1` to omit.
-/// * `p3` — horizontal grid size (rarely used; pass `0` to omit).
+/// `p1` and `p2` are omitted when negative, while their semicolon separator remains. `p3` is emitted only when greater than zero. `payload` is copied verbatim between the `q` final byte and `ST`.
 pub fn write_sixel<W: Write>(
     w: &mut W,
     p1: i32,
@@ -31,10 +49,9 @@ pub fn write_sixel<W: Write>(
     w.write_all(b"\x1b\\")
 }
 
-/// Encode a Kitty graphics image (`APC G opts ; payload ST`).
+/// Frame a graphics payload as `ESC _ G <options> [;<payload>] ESC \`.
 ///
-/// `options` is a slice of `"key=value"` strings (the function joins them with
-/// `,`). When `payload` is empty, the `;` separator is omitted.
+/// `options` are emitted verbatim and joined with commas. The semicolon before `payload` is omitted when `payload` is empty.
 pub fn write_kitty_graphics<W: Write>(
     w: &mut W,
     options: &[&str],

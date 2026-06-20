@@ -1,12 +1,21 @@
-//! Byte-length predictors for the ANSI escape sequences the renderer
-//! emits. Used by the cursor planner and the per-line transform to
-//! pick the shortest of several equivalent emissions without actually
-//! formatting them.
+//! Byte-length predictors for emitted ANSI sequences.
 //!
-//! Every helper is paired with a `write_*` builder in
-//! [`crate::ansi::cursor`] or [`crate::ansi::screen`]; the test
-//! module asserts that `cost(args) == write(args).len()` for every
-//! representative input so the two cannot silently drift.
+//! ## Category
+//!
+//! Cost functions mirror writer functions in [`crate::ansi::cursor`] and
+//! [`crate::ansi::screen`]. They let render planning compare equivalent cursor,
+//! erase, scroll, and overwrite strategies without allocating formatted strings.
+//!
+//! ## Conventions
+//!
+//! Costs are byte counts for the exact 7-bit sequences emitted by this crate,
+//! including omitted default parameters such as `ESC [ A` for `CUU 1` and
+//! `ESC [ H` for home.
+//!
+//! ## Mode interaction
+//!
+//! The predictors do not change terminal modes. For mode-sensitive sequences,
+//! such as left/right margins requiring [`Mode::LEFT_RIGHT_MARGIN`](crate::ansi::mode::Mode::LEFT_RIGHT_MARGIN), the cost still describes only the bytes emitted.
 
 /// Bytes in a CSI introducer (`ESC [`).
 const CSI_LEN: usize = 2;

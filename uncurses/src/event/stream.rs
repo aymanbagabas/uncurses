@@ -1,46 +1,41 @@
-//! Thread-backed asynchronous event stream over a shared source.
+//! Thread-backed asynchronous stream over a shared [`EventSource`].
+//!
+//! ## Purpose
 //!
 //! [`EventStream`] adapts a blocking [`EventSource`] into a
-//! [`futures_core::Stream`] of `io::Result<Event>` without taking the
-//! source away from synchronous readers. The source is shared behind
-//! `Arc<Mutex<_>>`, so the same source can still be driven with
-//! [`EventSource::poll`]/[`read`](EventSource::read) elsewhere while the
-//! stream is live.
+//! [`futures_core::Stream`] of `io::Result<Event>`. It preserves the same
+//! decoder and queue semantics as synchronous reading while avoiding blocking
+//! the async task that polls the stream.
 //!
-//! Two wakers cooperate:
+//! ```text
+//! async task poll_next ─┬─ try lock + drain ready events ──▶ Poll::Ready
+//!                       └─ arm helper thread ──▶ source.poll(None) ──▶ wake task
+//! drop stream ──▶ source Waker ──▶ helper exits
+//! ```
 //!
-//! * The decode happens on the polling task. [`poll_next`] takes the
-//!   source lock without blocking, drains any ready input, and yields the
-//!   next decoded event. When nothing is ready it hands the task's waker to
-//!   a helper thread.
-//! * The helper thread blocks on the source's readiness (holding the lock
-//!   only while it waits, exactly as a blocking [`read`](EventSource::read)
-//!   would) and wakes the task once input arrives or a decode deadline
-//!   elapses. While it is parked there, [`poll_next`]'s non-blocking lock
-//!   attempt fails and the task simply stays pending, so the two never
-//!   deadlock.
+//! ## Key types
 //!
-//! Read errors and end-of-input are surfaced once as `Some(Err(_))`, after
-//! which the stream fuses and yields `None`.
+//! * [`EventStream`] owns or shares an `Arc<Mutex<EventSource<_>>>`, a source
+//!   [`Waker`], and a helper thread channel.
+//! * A private `Wait` value tells the helper whether a wait is in flight and
+//!   whether stream drop requested shutdown.
+//!
+//! ## Lifecycle
+//!
+//! Use [`EventSource::into_stream`] when the stream should be the sole owner of
+//! the source. Use [`EventStream::from_shared`] when synchronous code keeps an
+//! `Arc<Mutex<_>>` clone. Dropping the stream wakes the helper so it can stop;
+//! the underlying shared source is not closed or drained.
 //!
 //! ## Coexistence caveats
 //!
-//! Sharing one source between a live stream and a synchronous reader is
-//! supported but best-effort, matching the established behaviour for this
-//! kind of adapter:
+//! Sharing one source between a live stream and synchronous readers is
+//! supported but best-effort. The helper holds the source lock while parked in
+//! readiness wait, events go to whichever consumer drains first, and events are
+//! not broadcast. Read errors surface once as `Some(Err(_))`; after that the
+//! stream fuses to `None`.
 //!
-//! * The helper thread holds the source lock while it blocks for
-//!   readiness, so a blocking synchronous `source.lock().read()` may wait
-//!   until the next input arrives.
-//! * A decoded event goes to whichever consumer holds the lock first;
-//!   events are not broadcast, so two simultaneous consumers split the
-//!   input nondeterministically.
-//! * Dropping the stream stops its helper promptly when the stream is the
-//!   sole reader; with a competing synchronous reader, shutdown is still
-//!   best-effort.
-//!
-//! [`poll_next`]: futures_core::Stream::poll_next
-
+//! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,12 +64,13 @@ struct Wait {
 /// shared [`EventSource`].
 ///
 /// Build one with [`EventSource::into_stream`] (sole owner) or
-/// [`EventStream::from_shared`] (sharing a source kept elsewhere). The
-/// decode happens on the task that polls the stream; a helper thread only
-/// waits for input readiness and wakes the task. The stream yields
-/// `Some(Ok(event))` per decoded event and, once, `Some(Err(_))` on a read
-/// error or end-of-input, then fuses to `None`. Dropping it ends the helper
-/// thread; the shared source is left intact for any other holder.
+/// [`EventStream::from_shared`] (sharing a source kept elsewhere). A helper
+/// thread blocks in [`EventSource::poll`], which reads and decodes input
+/// into the source's queue, then wakes the polling task; the task drains
+/// queued events (and may itself decode via a non-blocking poll). The stream
+/// yields `Some(Ok(event))` per decoded event and, once, `Some(Err(_))` on a
+/// read error or end-of-input, then fuses to `None`. Dropping it ends the
+/// helper thread; the shared source is left intact for any other holder.
 pub struct EventStream<I: Input> {
     source: Arc<Mutex<EventSource<I>>>,
     /// Cloned source waker, used on drop to break the helper's blocking

@@ -1,11 +1,25 @@
-//! Current working directory notification (OSC 7).
+//! Current working directory notifications through OSC 7.
+//!
+//! ## Category
+//!
+//! OSC 7 communicates a process working-directory URL to the terminal so shell
+//! integration can associate panes, tabs, or windows with a path.
+//!
+//! ## OSC framing
+//!
+//! The writer emits `ESC ] 7 ; <url> BEL`. The URL payload is passed through
+//! unchanged and should normally be a `file://host/path` URL.
+//!
+//! ## Mode interaction
+//!
+//! No terminal mode controls OSC 7 emission. Terminals that do not implement the
+//! notification ignore it as an ordinary OSC string.
 
 use std::io::{self, Write};
 
-/// Notify the terminal of the current working directory (`OSC 7 ; URL ST`).
+/// Notify the terminal of the current working directory with `ESC ] 7 ; <url> BEL`.
 ///
-/// `url` should be a `file://[host]/[path]` URL; pass `localhost` for `host`
-/// when the path lives on the local machine.
+/// `url` is emitted verbatim and should normally be a `file://host/path` URL such as `file://localhost/home/user/project`.
 pub fn write_notify_working_directory<W: Write>(w: &mut W, url: &str) -> io::Result<()> {
     write!(w, "\x1b]7;{url}\x07")
 }

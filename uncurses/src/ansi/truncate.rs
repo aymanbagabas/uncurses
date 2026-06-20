@@ -1,4 +1,22 @@
-//! Width-aware truncation of strings that may contain ANSI escapes.
+//! Width-aware truncation and cutting for ANSI-decorated strings.
+//!
+//! ## Category
+//!
+//! This module shortens strings by terminal display columns while preserving
+//! escape sequences such as SGR resets and OSC hyperlinks. Escape bytes do not
+//! count toward width.
+//!
+//! ## Width conventions
+//!
+//! Width is computed by [`crate::ansi::text::tokenize`] using [`WidthMode`].
+//! Visible text is truncated only on token boundaries; escape sequences before,
+//! inside, or after the retained text are copied so terminal state remains
+//! attached to the result.
+//!
+//! ## Mode interaction
+//!
+//! Truncation does not emulate terminal modes. Mode-dependent sequence semantics
+//! are preserved as bytes but not interpreted.
 
 use super::text::{Token, WidthMode, string_width, tokenize};
 
@@ -8,17 +26,16 @@ fn bs(b: &[u8]) -> &str {
     unsafe { std::str::from_utf8_unchecked(b) }
 }
 
-/// Truncate `s` to at most `length` display columns, appending `tail` if the
-/// string was truncated. ANSI escape sequences are preserved verbatim and do
-/// not count toward the width budget.
+/// Truncate `s` to at most `length` display columns, appending `tail` if truncation occurs.
 ///
-/// If `length` is `0`, returns the tail (or empty if the input was already
-/// narrower than the tail).
+/// ANSI escape sequences are preserved verbatim and do not count toward the width budget. When `length == 0`, this function returns an empty string.
 pub fn truncate(s: &str, length: usize, tail: &str) -> String {
     truncate_mode(s, length, tail, WidthMode::default(), false)
 }
 
-/// Like [`truncate`] but using [`WidthMode`] for width calculation.
+/// Width-mode variant of [`truncate`].
+///
+/// `mode` and `eaw_wide` control grapheme width calculation. If the input already fits, it is returned unchanged; otherwise the visible prefix is shortened enough to fit `tail`, and trailing escape sequences are still copied.
 pub fn truncate_mode(
     s: &str,
     length: usize,
@@ -67,13 +84,16 @@ pub fn truncate_mode(
     out
 }
 
-/// Truncate `s` from the left, removing characters until at most `length`
-/// display columns remain. `prefix` is prepended if truncation occurred.
+/// Truncate `s` from the left until at most `length` display columns remain.
+///
+/// If truncation occurs, `prefix` is prepended after any leading escape sequences needed to preserve active terminal state.
 pub fn truncate_left(s: &str, length: usize, prefix: &str) -> String {
     truncate_left_mode(s, length, prefix, WidthMode::default(), false)
 }
 
-/// Like [`truncate_left`] but using [`WidthMode`].
+/// Width-mode variant of [`truncate_left`].
+///
+/// `mode` and `eaw_wide` control grapheme width calculation. Escape sequences before the cut are retained before `prefix` so styling can carry into the visible suffix.
 pub fn truncate_left_mode(
     s: &str,
     length: usize,
@@ -127,12 +147,16 @@ pub fn truncate_left_mode(
     result
 }
 
-/// Remove `left` columns from the start and `right` columns from the end.
+/// Remove `left` display columns from the start and `right` display columns from the end of `s`.
+///
+/// ANSI escape sequences are preserved and do not count toward either cut amount.
 pub fn cut(s: &str, left: usize, right: usize) -> String {
     cut_mode(s, left, right, WidthMode::default(), false)
 }
 
-/// Like [`cut`] but using [`WidthMode`].
+/// Width-mode variant of [`cut`].
+///
+/// `mode` and `eaw_wide` control grapheme width calculation. If the requested cuts leave no visible columns, the result is empty; otherwise trailing escape sequences are retained.
 pub fn cut_mode(s: &str, left: usize, right: usize, mode: WidthMode, eaw_wide: bool) -> String {
     if left == 0 && right == 0 {
         return s.to_string();

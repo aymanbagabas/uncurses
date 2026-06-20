@@ -1,14 +1,16 @@
 //! Linux `epoll` readiness backend.
 //!
-//! Registers its watched fds once at construction and keeps the epoll
-//! instance for its lifetime, so [`Epoll::poll`] only waits — it
-//! takes `&self` and holds no mutable state, which lets the poller be
-//! shared (e.g. behind `Arc`) and waited on concurrently. All fds are
-//! watched in level-triggered mode (so the source's existing generic
-//! `Read` path keeps working against potentially blocking fds) and
-//! `EPOLLHUP | EPOLLERR` fold into readiness so the read path surfaces
-//! the actual error.
-
+//! ## Purpose
+//!
+//! [`Epoll`] registers the source's fixed fd set once and then waits for
+//! level-triggered read readiness. Registration indices are stored in the epoll
+//! event token so readiness maps directly back into the caller's boolean slice.
+//!
+//! ## Gotchas
+//!
+//! `EPOLLERR` and `EPOLLHUP` are reported as readiness; the subsequent read path
+//! is responsible for surfacing the actual EOF or error. Timeouts are recomputed
+//! across `EINTR` from an absolute deadline.
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};

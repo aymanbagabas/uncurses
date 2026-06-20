@@ -1,40 +1,55 @@
-//! Device Status Reports (DSR) and Cursor Position Reports.
+//! Device Status Reports and cursor-position reports.
+//!
+//! ## Category
+//!
+//! This module emits DSR requests and report responses: cursor position, extended
+//! cursor position, and light/dark preference reporting.
+//!
+//! ## CSI conventions
+//!
+//! ANSI DSR uses `ESC [ Ps n`; DEC-private DSR inserts `?`. Cursor reports use
+//! final byte `R`, while light/dark reports use private DSR numbers.
+//!
+//! ## Mode interaction
+//!
+//! The light/dark notification request is related to
+//! [`Mode::LIGHT_DARK`](crate::ansi::mode::Mode::LIGHT_DARK), DEC private mode
+//! 2031. Cursor-position reports are independent of modes but may be interpreted
+//! relative to terminal origin behavior.
 
 use std::io::{self, Write};
 
-/// Request cursor position report (CPR, `CSI 6 n`).
+/// Request standard cursor position: exact bytes `ESC [ 6 n` (`b"\x1b[6n"`).
 ///
-/// The terminal responds with `CSI Pl;Pc R`.
+/// The terminal replies with CPR, `ESC [ <line> ; <column> R`, using one-based coordinates.
 pub const REQUEST_CURSOR_POSITION: &[u8] = b"\x1b[6n";
 
-/// Request extended cursor position report (DECXCPR, `CSI ? 6 n`).
+/// Request extended cursor position: exact bytes `ESC [ ? 6 n` (`b"\x1b[?6n"`).
 ///
-/// The terminal responds with `CSI ? Pl;Pc[;Pp] R`.
+/// The terminal replies with a private cursor-position report, optionally including page.
 pub const REQUEST_EXTENDED_CURSOR_POSITION: &[u8] = b"\x1b[?6n";
 
-/// Request the terminal's operating-system light/dark color preference
-/// (`CSI ? 996 n`).
+/// Request light/dark preference report: exact bytes `ESC [ ? 996 n` (`b"\x1b[?996n"`).
 pub const REQUEST_LIGHT_DARK_REPORT: &[u8] = b"\x1b[?996n";
 
-/// Write the cursor position request (`CSI 6 n`).
+/// Write [`REQUEST_CURSOR_POSITION`], the standard DSR 6 cursor-position request.
 pub fn write_request_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_CURSOR_POSITION)
 }
 
-/// Write the extended cursor position request (`CSI ? 6 n`).
+/// Write [`REQUEST_EXTENDED_CURSOR_POSITION`], the DEC private extended cursor-position request.
 pub fn write_request_extended_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_EXTENDED_CURSOR_POSITION)
 }
 
-/// Write the light or dark preference request (`CSI ? 996 n`).
+/// Write [`REQUEST_LIGHT_DARK_REPORT`], the light/dark preference query.
 pub fn write_request_light_dark_report<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_LIGHT_DARK_REPORT)
 }
 
-/// Encode a Device Status Report request (DSR).
+/// Encode a Device Status Report request.
 ///
-/// * If `dec` is `true`, emits a DEC-style request (`CSI ? Ps n`).
-/// * Otherwise emits the ANSI form (`CSI Ps n`).
+/// When `dec` is `false`, the format is `ESC [ <ps> n`; when `dec` is `true`, the format is `ESC [ ? <ps> n`.
 pub fn write_dsr_request<W: Write>(w: &mut W, dec: bool, ps: u16) -> io::Result<()> {
     if dec {
         write!(w, "\x1b[?{ps}n")
@@ -43,16 +58,18 @@ pub fn write_dsr_request<W: Write>(w: &mut W, dec: bool, ps: u16) -> io::Result<
     }
 }
 
-/// Encode a Cursor Position Report response (CPR, `CSI Pl;Pc R`).
-/// Both `line` and `column` are 1-based.
+/// Encode a standard Cursor Position Report response, `ESC [ <line> ; <column> R`.
+///
+/// `line` and `column` are one-based terminal coordinates; values less than `1` are clamped to `1`.
 pub fn write_cpr<W: Write>(w: &mut W, line: u16, column: u16) -> io::Result<()> {
     let l = line.max(1);
     let c = column.max(1);
     write!(w, "\x1b[{l};{c}R")
 }
 
-/// Encode an extended Cursor Position Report response (DECXCPR,
-/// `CSI ? Pl;Pc[;Pp] R`). `page` of 0 omits the page parameter.
+/// Encode an extended Cursor Position Report response.
+///
+/// With `page == 0`, emits `ESC [ ? <line> ; <column> R`; otherwise emits `ESC [ ? <line> ; <column> ; <page> R`. `line` and `column` are clamped to at least `1`.
 pub fn write_decxcpr<W: Write>(w: &mut W, line: u16, column: u16, page: u16) -> io::Result<()> {
     let l = line.max(1);
     let c = column.max(1);
@@ -63,8 +80,9 @@ pub fn write_decxcpr<W: Write>(w: &mut W, line: u16, column: u16, page: u16) -> 
     }
 }
 
-/// Encode a light/dark mode report (`CSI ? 997 ; 1 n` for dark,
-/// `CSI ? 997 ; 2 n` for light).
+/// Encode a light/dark report response.
+///
+/// `dark == true` emits `ESC [ ? 997 ; 1 n`; `false` emits `ESC [ ? 997 ; 2 n`.
 pub fn write_light_dark_report<W: Write>(w: &mut W, dark: bool) -> io::Result<()> {
     if dark {
         w.write_all(b"\x1b[?997;1n")

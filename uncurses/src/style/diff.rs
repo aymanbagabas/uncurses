@@ -1,18 +1,27 @@
-//! Style diff algorithm — generates the minimal SGR sequence to transition
-//! between styles.
+//! Style diffing for compact SGR transitions.
 //!
-//! emitted as a *single* `CSI ... m` sequence whose parameters are joined by
-//! `;` (with `:` only inside the underline sub-style token).
+//! A diff compares only the SGR-relevant fields of two [`Style`] values and
+//! emits a single `CSI … m` sequence that moves the terminal from `from` to
+//! `to`. Hyperlinks are intentionally ignored here because OSC 8 state is
+//! independent of SGR state.
+//!
+//! The diff uses targeted reset parameters when possible (`22`, `23`, `24`,
+//! `25`, `27`, `28`, `29`, `39`, `49`, `59`) and falls back to a full reset
+//! only when transitioning to an SGR-empty style.
 
 use std::io::{self, Write};
 
 use super::sgr::{SgrSeq, push_bg_params, push_fg_params, push_sep, push_underline_color_params};
 use super::{AttrFlags, RESET, Style, UnderlineStyle};
 
-/// Write the minimal SGR sequence to transition from `from` to `to`.
+/// Write a compact SGR sequence that transitions from `from` to `to`.
 ///
-/// Returns `true` if any output was written. Hyperlinks (OSC 8) are
-/// orthogonal to SGR and ignored here — emit them separately.
+/// Returns `Ok(true)` if any bytes were written and `Ok(false)` if the two
+/// styles have identical SGR state. The emitted bytes, when present, are one
+/// `CSI … m` sequence. Hyperlinks (OSC 8) are orthogonal to SGR and ignored;
+/// callers that track links must emit hyperlink changes separately.
+///
+/// The function returns I/O errors from `w` and does not panic.
 pub fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<bool> {
     let from_sgr = sgr_eq(from, to);
     if from_sgr {
@@ -154,7 +163,14 @@ pub fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Re
     Ok(true)
 }
 
-/// Downsample a style to the given color profile.
+/// Convert a style to fit a color capability profile.
+///
+/// [`Profile::Disabled`](crate::color::Profile::Disabled) returns a fully
+/// empty style. [`Profile::Ascii`](crate::color::Profile::Ascii) preserves
+/// non-color state (attributes, underline style, and link) while clearing all
+/// colors. Color-capable profiles downsample foreground, background, and
+/// underline colors through [`Profile::convert`](crate::color::Profile::convert)
+/// and preserve the rest of the style.
 pub fn convert_style(style: &Style, profile: crate::color::Profile) -> Style {
     use crate::color::Profile;
     match profile {
@@ -175,7 +191,7 @@ pub fn convert_style(style: &Style, profile: crate::color::Profile) -> Style {
 }
 
 /// Whether two styles are equal in their SGR-relevant fields (colors,
-/// attributes, underline). Hyperlinks are ignored — they're emitted
+/// attributes, underline). Hyperlinks are ignored, they are emitted
 /// via OSC 8 separately from SGR, so a hyperlink-only change doesn't
 /// require any SGR transition.
 fn sgr_eq(a: &Style, b: &Style) -> bool {

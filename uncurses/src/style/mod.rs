@@ -1,26 +1,68 @@
-//! Text style representation and SGR helpers.
+//! Text style values and terminal SGR/OSC 8 rendering.
 //!
-//! This module defines [`Style`], attribute flags, underline variants, and optional hyperlink targets for cells.
-//! Reach for it when building styled text or when parsing, diffing, or emitting style changes.
+//! ## Style as a value
 //!
-//! A [`Style`] is built fluently, then written to any writer. SGR
-//! attributes ([`bold`](Style::bold), [`underline`](Style::underline),
-//! colors) and an OSC 8 [`link`](Style::link) compose on the same value:
+//! [`Style`] is an owned description of how text should look: optional
+//! foreground/background colors, optional underline color, an
+//! [`UnderlineStyle`], an [`AttrFlags`] bitset, and an optional OSC 8
+//! [`Link`]. Builder methods take and return `Self`, so styles can be composed
+//! fluently and then cloned into cells or spans.
 //!
+//! ## Open/close versus wrapped rendering
+//!
+//! [`Style::write`] and the [`std::fmt::Display`] implementation for
+//! [`Style`] emit only the SGR opener (`CSI … m`). They do not reset the
+//! terminal afterward; following output remains in that style until another
+//! style or reset is written.
+//!
+//! [`Style::write_styled`] and [`Style::styled`] render a complete span. If a
+//! link is present, the OSC 8 opener is written before the SGR sequence and
+//! the OSC 8 terminator is written after the SGR reset:
+//!
+//! ```text
+//! without link: ┌─────────┐ ┌──────┐ ┌───────┐
+//!               │ CSI … m │▶│ text │▶│ CSI m │
+//!               └─────────┘ └──────┘ └───────┘
+//! with link:    ┌───────┐ ┌─────────┐ ┌──────┐ ┌───────┐ ┌───────────┐
+//!               │ OSC 8 │▶│ CSI … m │▶│ text │▶│ CSI m │▶│ OSC 8 end │
+//!               └───────┘ └─────────┘ └──────┘ └───────┘ └───────────┘
 //! ```
+//!
+//! ## Attributes and underline
+//!
+//! Boolean SGR attributes such as bold, italic, blinking, reverse video,
+//! conceal, and strikethrough live in [`AttrFlags`]. Underlining is modeled
+//! separately with [`UnderlineStyle`] because SGR supports multiple underline
+//! shapes (`4`, `4:2`, `4:3`, `4:4`, `4:5`) and an independent underline
+//! color.
+//!
+//! ## SGR encoding
+//!
+//! Style emission uses a single `CSI … m` sequence for all SGR state. Standard
+//! foreground/background colors use `30`–`37`/`40`–`47`, bright colors use
+//! `90`–`97`/`100`–`107`, indexed colors use `38;5;n`/`48;5;n`, true color
+//! uses `38;2;r;g;b`/`48;2;r;g;b`, and underline color uses the colon
+//! subparameter form (`58:5:n` or `58:2::r:g:b`).
+//!
+//! ```text
+//! ESC [   1 ;   4:3  ;    38;2;255;128;0  ; 58:2::0:255:255     m
+//! └─┬─┘ └─────────────── SGR parameters ─────────────────────┘ └┬┘
+//!  CSI  attrs  underline   fg truecolor     ul color          final
+//! ```
+//!
+//! ```rust,ignore
 //! use uncurses::color::BasicColor;
 //! use uncurses::style::Style;
 //!
-//! // Bold, green text written to any writer (here a byte buffer).
 //! let heading = Style::default().bold().fg(BasicColor::Green);
 //! let mut out = Vec::new();
-//! heading.write_styled(&mut out, "Hello").unwrap();
+//! heading.write_styled(&mut out, "Hello")?;
 //!
-//! // An underlined hyperlink (OSC 8). Pass empty params for no id.
 //! let link = Style::default()
 //!     .underline()
 //!     .link("https://example.com", "");
-//! println!("{}", link.styled("docs")); // Display adapter for format!/write!
+//! println!("{}", link.styled("docs"));
+//! # Ok::<(), std::io::Error>(())
 //! ```
 
 pub mod diff;
@@ -38,75 +80,125 @@ use bitflags::bitflags;
 
 use crate::color::Color;
 
-/// Hyperlink target carried by a [`Style`]. Stored behind an [`Arc`]
-/// so cells in a hyperlink span share a single allocation.
+/// OSC 8 hyperlink target carried by a [`Style`].
+///
+/// A link is used when styled text should also open a terminal hyperlink.
+/// [`Style::link`] stores non-empty URLs behind an [`Arc`] so many cells in
+/// the same hyperlink span can share one allocation. The URL and parameter
+/// string are emitted verbatim as `OSC 8 ; params ; url ST`; callers are
+/// responsible for passing values that are appropriate for the target
+/// terminal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Link {
-    /// Hyperlink target URL.
+    /// Target URI written into the OSC 8 sequence.
+    ///
+    /// Empty URLs are not stored by [`Style::link`]; passing an empty URL to
+    /// that builder clears the current link instead.
     pub url: String,
-    /// Hyperlink parameter string.
+    /// OSC 8 parameter string written between the two semicolons.
+    ///
+    /// Use an empty string for no parameters, or terminal-supported
+    /// `key=value` pairs such as `id=section`.
     pub params: String,
 }
 
 bitflags! {
-    /// Text attribute flags.
+    /// Bitflags for SGR text attributes.
+    ///
+    /// These are the boolean attributes that can be combined freely on a
+    /// [`Style`]. Underline shape is tracked separately by
+    /// [`UnderlineStyle`], and colors are stored as [`Color`](crate::color::Color).
+    /// Use [`Style::attrs`] when replacing the whole set, or the convenience
+    /// builders such as [`Style::bold`] and [`Style::italic`] when adding one
+    /// flag at a time.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct AttrFlags: u16 {
-        /// Bold intensity.
+        /// Bold/intense text (`SGR 1`).
+        ///
+        /// Cleared together with [`FAINT`](Self::FAINT) by `SGR 22`.
         const BOLD          = 0b0000_0000_0001;
-        /// Faint intensity.
+        /// Faint/decreased-intensity text (`SGR 2`).
+        ///
+        /// Cleared together with [`BOLD`](Self::BOLD) by `SGR 22`.
         const FAINT         = 0b0000_0000_0010;
-        /// Italic text.
+        /// Italic text (`SGR 3`, cleared by `SGR 23`).
         const ITALIC        = 0b0000_0000_0100;
-        /// Slow blinking text.
+        /// Slow blinking text (`SGR 5`).
+        ///
+        /// Cleared together with [`RAPID_BLINK`](Self::RAPID_BLINK) by
+        /// `SGR 25`.
         const SLOW_BLINK    = 0b0000_0000_1000;
-        /// Rapid blinking text.
+        /// Rapid blinking text (`SGR 6`).
+        ///
+        /// Cleared together with [`SLOW_BLINK`](Self::SLOW_BLINK) by
+        /// `SGR 25`.
         const RAPID_BLINK   = 0b0000_0001_0000;
-        /// Reverse foreground and background.
+        /// Reverse foreground and background (`SGR 7`, cleared by `SGR 27`).
         const REVERSE       = 0b0000_0010_0000;
-        /// Concealed text.
+        /// Concealed text (`SGR 8`, cleared by `SGR 28`).
         const CONCEAL       = 0b0000_0100_0000;
-        /// Struck-through text.
+        /// Struck-through text (`SGR 9`, cleared by `SGR 29`).
         const STRIKETHROUGH = 0b0000_1000_0000;
     }
 }
 
-/// Underline style.
+/// Underline shape encoded in SGR underline parameters.
+///
+/// Use [`Style::underline`] for the common single underline or
+/// [`Style::underline_style`] to select an explicit shape. [`None`](Self::None)
+/// means no underline; it emits no parameter when writing a full [`Style`] and
+/// emits `SGR 24` when a diff needs to clear an existing underline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum UnderlineStyle {
     #[default]
     /// No underline.
     None = 0,
-    /// Single underline.
+    /// Single underline (`SGR 4` or `4:1` when parsed).
     Single = 1,
-    /// Double underline.
+    /// Double underline (`SGR 4:2`; `SGR 21` is parsed as this variant).
     Double = 2,
-    /// Curly underline.
+    /// Curly underline (`SGR 4:3`).
     Curly = 3,
-    /// Dotted underline.
+    /// Dotted underline (`SGR 4:4`).
     Dotted = 4,
-    /// Dashed underline.
+    /// Dashed underline (`SGR 4:5`).
     Dashed = 5,
 }
 
-/// A complete text style: colors, attributes, underline style, and
-/// optional hyperlink target. Cloning a styled cell only bumps the
-/// shared link refcount, so a long span of identically-linked cells
-/// keeps a single allocation.
+/// A complete terminal text style.
+///
+/// `Style` is the central value used by cells, text painters, and renderers.
+/// It stores SGR state (foreground/background/underline colors, underline
+/// shape, and attributes) plus an optional OSC 8 hyperlink. Build styles with
+/// the provided value-taking builders, then either emit the opener with
+/// [`Style::write`] / [`std::fmt::Display`] or wrap text with
+/// [`Style::write_styled`] / [`Style::styled`].
+///
+/// Cloning is cheap for hyperlinks: the [`Link`] is reference-counted so a
+/// long span of identically-linked cells keeps a single shared allocation.
 #[derive(Debug, Clone, Default)]
 pub struct Style {
-    /// Foreground color.
+    /// Foreground/text color.
+    ///
+    /// `None` leaves the terminal's current/default foreground unchanged when
+    /// writing a full style; diffs use `SGR 39` to clear a previous foreground.
     pub fg: Option<Color>,
     /// Background color.
+    ///
+    /// `None` leaves the terminal's current/default background unchanged when
+    /// writing a full style; diffs use `SGR 49` to clear a previous background.
     pub bg: Option<Color>,
     /// Underline color.
+    ///
+    /// Encoded with SGR `58` when present. `None` means use the terminal's
+    /// default underline color; diffs use `SGR 59` to clear a previous value.
     pub underline_color: Option<Color>,
-    /// Underline style.
+    /// Underline shape.
     pub underline: UnderlineStyle,
-    /// Text attribute flags.
+    /// Boolean SGR text attributes.
     pub attrs: AttrFlags,
-    /// Optional hyperlink target.
+    /// Optional OSC 8 hyperlink target.
     pub link: Option<Arc<Link>>,
 }
 
@@ -142,6 +234,10 @@ impl std::hash::Hash for Style {
 
 impl Style {
     /// Style with no colors, attributes, underline, or hyperlink.
+    ///
+    /// This is equivalent to [`Style::default()`]. Writing it as a style
+    /// opener emits the SGR reset sequence (`CSI m`); converting to an empty
+    /// style value does not by itself write anything.
     pub const EMPTY: Style = Style {
         fg: None,
         bg: None,
@@ -151,15 +247,19 @@ impl Style {
         link: None,
     };
 
-    /// Whether this style is entirely empty — no colors, attributes,
-    /// underline, or hyperlink. Equivalent to `*self == Style::EMPTY`.
+    /// Return whether this style is entirely empty.
+    ///
+    /// Empty means no SGR-relevant fields and no OSC 8 hyperlink. This is
+    /// equivalent to `*self == Style::EMPTY`.
     pub fn is_empty(&self) -> bool {
         self.is_sgr_empty() && self.is_link_empty()
     }
 
-    /// Whether this style has no SGR-relevant settings (colors,
-    /// attributes, underline). The hyperlink is intentionally
-    /// ignored — it's orthogonal to SGR and emitted via OSC 8.
+    /// Return whether this style has no SGR-relevant settings.
+    ///
+    /// Colors, attributes, underline shape, and underline color are checked.
+    /// The hyperlink is intentionally ignored because it is emitted via OSC 8,
+    /// not SGR.
     pub(crate) fn is_sgr_empty(&self) -> bool {
         self.fg.is_none()
             && self.bg.is_none()
@@ -168,109 +268,144 @@ impl Style {
             && self.attrs.is_empty()
     }
 
-    /// Whether this style carries no hyperlink. Companion to
-    /// [`Style::is_sgr_empty`]; together they decide whether the
-    /// style would emit any bytes at all.
+    /// Return whether this style carries no hyperlink.
+    ///
+    /// Companion to [`Style::is_sgr_empty`]; together they decide whether the
+    /// style value has any terminal-visible state.
     pub(crate) fn is_link_empty(&self) -> bool {
         self.link.is_none()
     }
 
-    /// Add bold intensity.
+    /// Add bold intensity and return the updated style.
+    ///
+    /// This sets [`AttrFlags::BOLD`] and leaves all other fields unchanged.
     pub fn bold(mut self) -> Self {
         self.attrs |= AttrFlags::BOLD;
         self
     }
 
-    /// Add faint intensity.
+    /// Add faint intensity and return the updated style.
+    ///
+    /// This sets [`AttrFlags::FAINT`] and leaves all other fields unchanged.
     pub fn faint(mut self) -> Self {
         self.attrs |= AttrFlags::FAINT;
         self
     }
 
-    /// Add italic text.
+    /// Add italic text and return the updated style.
+    ///
+    /// This sets [`AttrFlags::ITALIC`] and leaves all other fields unchanged.
     pub fn italic(mut self) -> Self {
         self.attrs |= AttrFlags::ITALIC;
         self
     }
 
-    /// Use a single underline.
+    /// Use a single underline and return the updated style.
+    ///
+    /// Equivalent to [`Style::underline_style`] with
+    /// [`UnderlineStyle::Single`].
     pub fn underline(mut self) -> Self {
         self.underline = UnderlineStyle::Single;
         self
     }
 
-    /// Add strikethrough text.
+    /// Add strikethrough text and return the updated style.
+    ///
+    /// This sets [`AttrFlags::STRIKETHROUGH`] and leaves all other fields
+    /// unchanged.
     pub fn strikethrough(mut self) -> Self {
         self.attrs |= AttrFlags::STRIKETHROUGH;
         self
     }
 
-    /// Add slow blinking text.
+    /// Add slow blinking text and return the updated style.
+    ///
+    /// This sets [`AttrFlags::SLOW_BLINK`] and leaves all other fields
+    /// unchanged.
     pub fn blink(mut self) -> Self {
         self.attrs |= AttrFlags::SLOW_BLINK;
         self
     }
 
-    /// Add rapid blinking text.
+    /// Add rapid blinking text and return the updated style.
+    ///
+    /// This sets [`AttrFlags::RAPID_BLINK`] and leaves all other fields
+    /// unchanged.
     pub fn rapid_blink(mut self) -> Self {
         self.attrs |= AttrFlags::RAPID_BLINK;
         self
     }
 
-    /// Reverse foreground and background.
+    /// Reverse foreground and background and return the updated style.
+    ///
+    /// This sets [`AttrFlags::REVERSE`]; it does not swap the stored `fg` and
+    /// `bg` values.
     pub fn reverse(mut self) -> Self {
         self.attrs |= AttrFlags::REVERSE;
         self
     }
 
-    /// Add concealed text.
+    /// Add concealed text and return the updated style.
+    ///
+    /// This sets [`AttrFlags::CONCEAL`] and leaves all other fields unchanged.
     pub fn conceal(mut self) -> Self {
         self.attrs |= AttrFlags::CONCEAL;
         self
     }
 
-    /// Set the foreground color.
+    /// Set or clear the foreground color and return the updated style.
     ///
-    /// Accepts a [`Color`] or `None`; passing `None` clears any color a base
-    /// style carried, which is handy when reusing one style across cells.
+    /// Accepts any value convertible into `Option<Color>`, including a
+    /// [`Color`], a [`BasicColor`](crate::color::BasicColor), or `None`.
+    /// Passing `None` clears any foreground color carried by the base style.
     pub fn fg(mut self, color: impl Into<Option<Color>>) -> Self {
         self.fg = color.into();
         self
     }
 
-    /// Set the background color.
+    /// Set or clear the background color and return the updated style.
     ///
-    /// Accepts a [`Color`] or `None`; passing `None` clears any color a base
-    /// style carried, which is handy when reusing one style across cells.
+    /// Accepts any value convertible into `Option<Color>`, including a
+    /// [`Color`], a [`BasicColor`](crate::color::BasicColor), or `None`.
+    /// Passing `None` clears any background color carried by the base style.
     pub fn bg(mut self, color: impl Into<Option<Color>>) -> Self {
         self.bg = color.into();
         self
     }
 
-    /// Set the underline color.
+    /// Set or clear the underline color and return the updated style.
     ///
-    /// Accepts a [`Color`] or `None`; passing `None` clears any color a base
-    /// style carried, which is handy when reusing one style across cells.
+    /// Accepts any value convertible into `Option<Color>`, including a
+    /// [`Color`], a [`BasicColor`](crate::color::BasicColor), or `None`.
+    /// Passing `None` clears any underline color carried by the base style.
     pub fn underline_color(mut self, color: impl Into<Option<Color>>) -> Self {
         self.underline_color = color.into();
         self
     }
 
-    /// Set the underline style.
+    /// Set the underline shape and return the updated style.
+    ///
+    /// Use [`UnderlineStyle::None`] to clear underlining.
     pub fn underline_style(mut self, style: UnderlineStyle) -> Self {
         self.underline = style;
         self
     }
 
-    /// Replace the entire attribute flag set.
+    /// Replace the entire attribute flag set and return the updated style.
+    ///
+    /// This is useful when applying a previously computed [`AttrFlags`] value.
+    /// Use the convenience builders when adding a single flag.
     pub fn attrs(mut self, attrs: AttrFlags) -> Self {
         self.attrs = attrs;
         self
     }
 
-    /// Attach a hyperlink to this style. Pass an empty `url` to clear
-    /// the link; `params` are OSC 8 parameter pairs (e.g. `"id=foo"`)
-    /// or empty.
+    /// Attach or clear an OSC 8 hyperlink and return the updated style.
+    ///
+    /// A non-empty `url` stores a [`Link`] with the supplied `params`. An empty
+    /// `url` clears any existing link and ignores `params`. Parameters are the
+    /// raw OSC 8 parameter string, commonly empty or a terminal-supported value
+    /// such as `id=foo`.
     pub fn link(mut self, url: impl Into<String>, params: impl Into<String>) -> Self {
         let url = url.into();
         if url.is_empty() {
@@ -284,17 +419,22 @@ impl Style {
         self
     }
 
-    /// Write this style's SGR sequence (`CSI ... m`) to `w`. An empty
-    /// style writes the reset sequence (`CSI m`). Does not reset
-    /// afterwards — following output stays in this style until changed.
+    /// Write this style's SGR opener (`CSI … m`) to `w`.
+    ///
+    /// An SGR-empty style writes the reset sequence (`CSI m`). The opener does
+    /// not include any OSC 8 hyperlink state and does not reset afterward, so
+    /// following output stays in this style until changed. Returns any I/O
+    /// error from `w`; it does not panic.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         sgr::write_style(w, self)
     }
 
-    /// Write `text` wrapped in this style: the style's SGR sequence,
-    /// then `text`, then an SGR reset (`CSI m`) so subsequent output is
-    /// unstyled. When the style carries a [`link`](Self::link), the span is
-    /// additionally wrapped in the OSC 8 hyperlink start/end sequences.
+    /// Write `text` as a complete styled span.
+    ///
+    /// The emitted order is: optional OSC 8 hyperlink start, this style's SGR
+    /// opener, `text` bytes, SGR reset (`CSI m`), and optional OSC 8 hyperlink
+    /// end. The reset prevents the SGR style from leaking into later output.
+    /// Returns any I/O error from `w`; it does not panic.
     pub fn write_styled<W: Write>(&self, w: &mut W, text: &str) -> io::Result<()> {
         if let Some(link) = &self.link {
             crate::ansi::hyperlink::write_hyperlink_start(w, &link.url, &link.params)?;
@@ -308,12 +448,13 @@ impl Style {
         Ok(())
     }
 
-    /// Wrap `text` in this style for `Display`. The returned adapter
-    /// renders the style's SGR sequence, the text, then an SGR reset (and,
-    /// for a style with a [`link`](Self::link), the surrounding OSC 8
-    /// hyperlink), so it composes directly with `format!`/`write!` without a
-    /// throwaway buffer. The `Display`-friendly companion to
-    /// [`Style::write_styled`].
+    /// Return a [`std::fmt::Display`] adapter that renders `text` as a span.
+    ///
+    /// Formatting the returned [`StyledText`] is equivalent to calling
+    /// [`Style::write_styled`]: it includes the SGR opener, text, reset, and
+    /// any OSC 8 hyperlink wrapper. Use this with `format!`, `println!`, or
+    /// `write!` when a `Display` value is more convenient than an
+    /// [`std::io::Write`].
     pub fn styled<'a>(&self, text: &'a str) -> StyledText<'a> {
         StyledText {
             style: self.clone(),
@@ -322,10 +463,12 @@ impl Style {
     }
 }
 
-/// Renders this style's SGR sequence (`CSI ... m`) — the opener only,
-/// with no trailing reset, so it can be used as a standalone token. An
-/// empty style renders the reset sequence (`CSI m`). For a wrapped span
-/// (opener, text, reset) use [`Style::styled`].
+/// Render this style's SGR opener (`CSI … m`).
+///
+/// This implementation is intentionally opener-only: it does not include a
+/// trailing reset and does not emit OSC 8 hyperlink state. An SGR-empty style
+/// renders the reset sequence (`CSI m`). For a complete span, use
+/// [`Style::styled`].
 impl std::fmt::Display for Style {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // SGR sequences are pure ASCII, so the bytes are valid UTF-8.
@@ -336,12 +479,13 @@ impl std::fmt::Display for Style {
     }
 }
 
-/// A piece of text bound to a [`Style`], renderable via [`Display`].
+/// A borrowed text span bound to an owned [`Style`].
 ///
-/// Created by [`Style::styled`]. Emitting it writes the style's SGR
-/// sequence, the text, then an SGR reset.
-///
-/// [`Display`]: std::fmt::Display
+/// Created by [`Style::styled`]. Formatting it writes the optional OSC 8
+/// hyperlink start, the style's SGR opener, the borrowed text, an SGR reset,
+/// and the optional OSC 8 hyperlink terminator. Use it when composing styled
+/// text through formatting macros; use [`Style::write_styled`] when writing to
+/// an [`std::io::Write`] directly.
 #[derive(Debug, Clone)]
 pub struct StyledText<'a> {
     style: Style,

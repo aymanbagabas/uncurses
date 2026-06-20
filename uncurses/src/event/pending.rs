@@ -1,15 +1,28 @@
-//! Bounded byte buffer with head/tail cursors used by the event
-//! source's read path.
+//! Fixed-capacity byte buffer used by [`EventSource`](crate::event::EventSource).
 //!
-//! The buffer is allocated once at construction to its full capacity
-//! and never resizes. Read paths write into the spare slice at the
-//! tail; parse paths consume from the head. The buffer compacts
-//! lazily — only when the wasted prefix reaches half the capacity, or
-//! when the tail has hit the end of the buffer and there is room to
-//! shift the unread region down.
+//! ## Purpose
 //!
-//! This is a private helper for `event::source` / `event::source_windows`.
-
+//! `Pending` stores unread bytes between readiness notifications and parser
+//! calls. It avoids repeated `Vec::drain` memmoves by maintaining head and tail
+//! cursors over a single allocation.
+//!
+//! ```text
+//! [ consumed ][ unread bytes ][ spare tail ]
+//!             ▲              ▲
+//!           head            tail
+//! ```
+//!
+//! ## Key type
+//!
+//! [`Pending`] is private to the event subsystem. Unix reads directly into
+//! [`Pending::spare_mut`], while Windows appends already-serialized bytes with
+//! [`Pending::append`].
+//!
+//! ## Gotchas
+//!
+//! Capacity is a hard cap on any single undecoded sequence. The buffer compacts
+//! lazily when the consumed prefix is large enough or when the tail reaches the
+//! end and there is reclaimable room.
 /// Fixed-capacity byte buffer with head/tail cursors.
 ///
 /// `slice()` exposes the unread region; `spare_mut()` exposes a

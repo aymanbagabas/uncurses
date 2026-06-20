@@ -1,11 +1,27 @@
-//! Strip ANSI escape sequences from a string.
+//! ANSI escape stripping built on the byte tokenizer.
+//!
+//! ## Category
+//!
+//! [`strip`] removes ANSI escape/string/control sequences while preserving
+//! printable text and non-ESC control bytes such as newlines and tabs.
+//!
+//! ## Parser conventions
+//!
+//! Tokenization recognizes CSI, OSC, DCS, SOS, PM, APC, and two-byte ESC
+//! sequences in both 7-bit and 8-bit forms. Escape tokens contribute no output.
+//!
+//! ## Mode interaction
+//!
+//! Stripping does not emulate terminal modes. It is a byte-stream transformation
+//! suitable for display-width and plain-text extraction paths.
 
 use super::text::{Token, WidthMode, tokenize};
 
-/// Return a copy of `s` with all ANSI escape sequences removed.
+/// Return `s` with ANSI escape sequences removed.
 ///
-/// C0 control bytes other than ESC (e.g. `\n`, `\r`, `\t`) are preserved. Plain
-/// text including UTF-8 and grapheme clusters passes through unchanged.
+/// CSI, OSC, DCS, SOS, PM, APC, and short ESC sequences are dropped. Printable
+/// UTF-8 text and non-ESC control bytes such as `\n`, `\r`, and `\t` are
+/// preserved.
 pub fn strip(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for tok in tokenize(s.as_bytes(), WidthMode::default(), false) {

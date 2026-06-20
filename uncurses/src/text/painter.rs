@@ -1,10 +1,15 @@
-//! [`Painter`] — bind a target [`SurfaceMut`] and paint styled strings,
-//! interpreting inline SGR (`CSI … m`) and OSC 8 hyperlinks in the
-//! input.
+//! [`Painter`] — styled string painting into a mutable surface.
+//!
+//! A painter owns no cells. It temporarily binds a
+//! [`SurfaceMut`](crate::buffer::SurfaceMut), a [`WidthMode`], an
+//! East-Asian Ambiguous policy, and a running [`Style`]. Calls to
+//! [`set_str`](Painter::set_str) or [`set_str_rect`](Painter::set_str_rect)
+//! tokenize the input into text clusters, inline escapes, and control bytes,
+//! then write terminal cells into the target.
 //!
 //! Construct a painter over any [`SurfaceMut`]:
 //!
-//! ```ignore
+//! ```rust,ignore
 //! use uncurses::text::Painter;
 //! use uncurses::style::Style;
 //!
@@ -12,12 +17,35 @@
 //!     .set_str((0, 0), "hello \x1b[1mworld\x1b[m", Style::default());
 //! ```
 //!
-//! Each call takes a starting [`Style`]; inline SGR sequences then update
-//! the painter's current [`Style`] and OSC 8 sequences attach a hyperlink
-//! to subsequent cells via the same [`Style`]. The running style is
-//! readable from [`Painter::style`] after a call, so a single painter can
-//! stitch many styled segments together by feeding it back in. Call
-//! [`Painter::reset`] to clear the style back to its empty value.
+//! ## Style and hyperlink state
+//!
+//! Each paint call takes a starting [`Style`]. Inline SGR sequences update the
+//! painter's current style, and OSC 8 sequences attach or clear a hyperlink on
+//! that same style. The resulting style is readable from [`Painter::style`]
+//! after the call. Feed it into a later call to continue a styled stream, or
+//! call [`Painter::reset`] to return to [`Style::default()`].
+//!
+//! ## Cells, clipping, and wrapping
+//!
+//! Non-zero-width grapheme clusters are written as one-cell or two-cell
+//! [`Cell`](crate::cell::Cell) values. Two-cell clusters occupy a primary wide
+//! cell plus the continuation cell maintained by the buffer layer. Zero-width
+//! clusters are appended to the previous pending cluster before it is flushed.
+//!
+//! ```text
+//! input clusters      pending cell       surface cells
+//! ┌────┬──────┐       ┌────────────┐         ┌────┬────┬────┐
+//! │ e  │ ◌́    │ ───▶  │ "e\u{301}" │ ─────▶  │ é  │    │    │
+//! └────┴──────┘       └────────────┘         └────┴────┴────┘
+//!
+//! ┌────┐              ┌─────────┐        ┌────┬────┬────┐
+//! │ 中 │ ─────────▶   │ width 2 │ ────▶  │ 中 │ ▶  │    │
+//! └────┘              └─────────┘        └────┴────┴────┘
+//! ```
+//!
+//! Painting is clipped to either the target bounds or the intersection of a
+//! supplied rectangle with those bounds. [`WrapMode`] applies only when a
+//! non-zero-width cluster would cross the right edge.
 
 use crate::ansi::hyperlink::parse_hyperlink;
 use crate::ansi::params::Params;
@@ -29,30 +57,34 @@ use crate::style::{Style, read_style};
 
 use super::WidthMode;
 
-/// Behavior when a cluster would extend past the right edge of the
-/// painter's clip rectangle.
+/// Behavior when a cluster would extend past the right edge of the clip
+/// rectangle.
+///
+/// Newlines and carriage returns are handled independently of this setting:
+/// `\n` advances to the next row at the clip rectangle's left edge, and `\r`
+/// returns to that left edge on the current row.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum WrapMode {
     /// Stop painting at the right edge of the current row.
+    ///
+    /// The cluster that would cross the edge is not written, and the returned
+    /// cursor position is where painting stopped.
     #[default]
     Truncate,
-    /// Continue on the next row at the left edge of the clip rect, until
-    /// the bottom edge is reached.
+    /// Continue on the next row at the left edge of the clip rectangle.
+    ///
+    /// Wrapping stops when the bottom edge is reached. If a cluster is wider
+    /// than the clip rectangle itself, it is not written.
     Wrap,
 }
 
-/// Paints strings into a [`SurfaceMut`], honouring inline SGR + OSC 8
-/// sequences in the input.
+/// Paint styled strings into a [`SurfaceMut`].
 ///
-/// The painter is parameterised by a [`WidthMode`] and an East-Asian
-/// Ambiguous policy (`eaw_wide`) — both fixed for the lifetime of the
-/// painter — plus a *current* [`Style`] (including any active
-/// hyperlink). Each [`set_str`](Self::set_str) /
-/// [`set_str_rect`](Self::set_str_rect) call takes a starting style and
-/// then mutates it in-place as the input yields `CSI … m` or
-/// `OSC 8 ; … ; … ST` sequences; the resulting style is readable from
-/// [`style`](Self::style) afterwards. Use [`reset`](Self::reset) to clear
-/// it.
+/// The painter is parameterized by a [`WidthMode`] and an `eaw_wide` policy,
+/// both fixed for the painter's lifetime. Its public [`style`](Self::style)
+/// field records the current style after parsing inline SGR and OSC 8
+/// sequences. Text is written into the borrowed target surface; dropping a
+/// painter has no side effects.
 pub struct Painter<'s, S: SurfaceMut + ?Sized> {
     target: &'s mut S,
     /// Width measurement policy.
@@ -64,9 +96,21 @@ pub struct Painter<'s, S: SurfaceMut + ?Sized> {
 }
 
 impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
-    /// New painter writing into `target` with the given width-measurement
-    /// policy and East-Asian Ambiguous policy. Starts with an empty
-    /// current style.
+    /// Create a new painter over `target`.
+    ///
+    /// # Parameters
+    ///
+    /// * `target` — mutable surface receiving painted cells.
+    /// * `mode` — grapheme-cluster width policy.
+    /// * `eaw_wide` — East-Asian Ambiguous width policy.
+    ///
+    /// # Returns
+    ///
+    /// A painter with [`Style::default()`] as its current style.
+    ///
+    /// # Errors and panics
+    ///
+    /// This constructor does not fail or intentionally panic.
     pub fn new(target: &'s mut S, mode: WidthMode, eaw_wide: bool) -> Self {
         Self {
             target,
@@ -76,35 +120,72 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         }
     }
 
-    /// Clear the current style back to [`Style::default()`]. Returns
-    /// `&mut self` for chaining.
+    /// Clear the current style back to [`Style::default()`].
+    ///
+    /// This removes any active attributes, colors, and hyperlink from
+    /// [`style`](Self::style). It does not modify the target surface.
+    ///
+    /// # Returns
+    ///
+    /// `self`, for method chaining.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
     pub fn reset(&mut self) -> &mut Self {
         self.style = Style::default();
         self
     }
 
-    /// Paint `s` starting at `pos`, clipped to the target's bounds, with
-    /// `style` as the starting style (truncating at the right edge).
+    /// Paint `s` starting at `pos`, clipped to the target bounds.
     ///
-    /// `style` replaces the painter's current [`Style`] before painting;
-    /// inline SGR (`CSI … m`) then updates it, and inline OSC 8 attaches
-    /// a hyperlink to the same style. `\n` advances to the next row at
-    /// the bounds' left edge; `\r` returns to that left edge on the
-    /// current row. Use [`set_str_wrap`](Self::set_str_wrap) to control
-    /// wrapping. After the call, the running style is readable from
-    /// [`style`](Self::style) and can be fed into the next call to stitch
-    /// styled segments together.
+    /// `style` replaces the painter's current [`Style`] before painting.
+    /// Inline SGR and OSC 8 sequences then update [`style`](Self::style) as
+    /// the input is processed. Newline advances to the next row at the bounds'
+    /// left edge; carriage return returns to that left edge on the current row.
+    /// Right-edge behavior is [`WrapMode::Truncate`].
     ///
-    /// Returns the position immediately after the last written cell.
+    /// # Parameters
+    ///
+    /// * `pos` — starting cell position.
+    /// * `s` — UTF-8 input string.
+    /// * `style` — initial style for this call.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
     pub fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: Style) -> Position {
         self.style = style;
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, WrapMode::default())
     }
 
-    /// Like [`set_str`](Self::set_str) but with an explicit [`WrapMode`]:
-    /// [`WrapMode::Truncate`] stops at the right edge, [`WrapMode::Wrap`]
-    /// continues on the next row until the bottom edge is reached.
+    /// Paint `s` starting at `pos` with explicit wrapping behavior.
+    ///
+    /// The target bounds are the clipping rectangle. [`WrapMode::Truncate`]
+    /// stops at the right edge; [`WrapMode::Wrap`] continues on the next row
+    /// at the bounds' left edge until the bottom edge is reached.
+    ///
+    /// # Parameters
+    ///
+    /// * `pos` — starting cell position.
+    /// * `s` — UTF-8 input string.
+    /// * `wrap` — right-edge behavior for non-zero-width clusters.
+    /// * `style` — initial style for this call.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
     pub fn set_str_wrap(
         &mut self,
         pos: impl Into<Position>,
@@ -117,13 +198,26 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         self.paint(pos.into(), clip, s, wrap)
     }
 
-    /// Paint `s` into `rect`, clipped to `rect ∩ target.bounds()`, with
-    /// `style` as the starting style (truncating at `rect`'s right edge).
-    /// Painting starts at `rect`'s top-left.
+    /// Paint `s` into `rect`, clipped to `rect ∩ target.bounds()`.
     ///
-    /// `\n` / `\r` use `rect`'s left edge as the carriage-return column.
-    /// Use [`set_str_rect_wrap`](Self::set_str_rect_wrap) to control
-    /// wrapping.
+    /// Painting starts at `rect`'s top-left. Newline and carriage return use
+    /// `rect`'s left edge as the return column. Right-edge behavior is
+    /// [`WrapMode::Truncate`].
+    ///
+    /// # Parameters
+    ///
+    /// * `rect` — origin and clipping rectangle.
+    /// * `s` — UTF-8 input string.
+    /// * `style` — initial style for this call.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
     pub fn set_str_rect(&mut self, rect: impl Into<Rect>, s: &str, style: Style) -> Position {
         self.style = style;
         let rect = rect.into();
@@ -131,9 +225,27 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         self.paint(rect.position(), clip, s, WrapMode::default())
     }
 
-    /// Like [`set_str_rect`](Self::set_str_rect) but with an explicit
-    /// [`WrapMode`]: [`WrapMode::Wrap`] flows down inside `rect`,
-    /// [`WrapMode::Truncate`] stops at `rect`'s right edge.
+    /// Paint `s` into `rect` with explicit wrapping behavior.
+    ///
+    /// The clipping rectangle is `rect ∩ target.bounds()`. [`WrapMode::Wrap`]
+    /// flows down inside `rect`; [`WrapMode::Truncate`] stops at `rect`'s
+    /// right edge.
+    ///
+    /// # Parameters
+    ///
+    /// * `rect` — origin and clipping rectangle.
+    /// * `s` — UTF-8 input string.
+    /// * `wrap` — right-edge behavior for non-zero-width clusters.
+    /// * `style` — initial style for this call.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
     pub fn set_str_rect_wrap(
         &mut self,
         rect: impl Into<Rect>,

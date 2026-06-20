@@ -1,56 +1,186 @@
 //! Cell-grid surface traits.
 //!
-//! The buffer-like types ([`Buffer`](super::Buffer), `RenderBuffer`,
-//! [`Window`](super::Window), [`View`](super::View),
-//! [`Canvas`](crate::canvas::Canvas)) all share the same shape: a
-//! rectangular region of [`Cell`]s with read and/or write access. This
-//! module defines the three small traits that capture that shape.
+//! Buffer-like types ([`Buffer`](super::Buffer), [`Window`](super::Window),
+//! [`View`](super::View), [`Canvas`](crate::canvas::Canvas), and
+//! [`Screen`](crate::screen::Screen)) all expose a rectangular region of
+//! [`Cell`]s. This module defines the traits that let drawing code use
+//! those regions without depending on a concrete storage type.
 //!
-//! | trait        | adds                          | required methods           |
-//! |--------------|-------------------------------|----------------------------|
-//! | [`Bounded`]  | "I have a rectangular extent" | [`bounds`](Bounded::bounds) |
-//! | [`Surface`]  | "you can read my cells"       | [`cell`](Surface::cell)    |
-//! | [`SurfaceMut`] | "you can write to my cells" | [`set_cell`](SurfaceMut::set_cell) |
+//! ## Trait layers
 //!
-//! `Surface: Bounded` and `SurfaceMut: Surface`. Default methods on
-//! each trait expose the rest of the API (`width`, `height`,
-//! [`draw`](Surface::draw), [`fill`](SurfaceMut::fill),
-//! [`clear`](SurfaceMut::clear), [`fill_rect`](SurfaceMut::fill_rect),
-//! [`clear_rect`](SurfaceMut::clear_rect)). Implementations may
-//! override any default for a faster path.
+//! | trait          | adds                            | required methods                         |
+//! |----------------|---------------------------------|------------------------------------------|
+//! | [`Bounded`]    | rectangular extent              | [`bounds`](Bounded::bounds)              |
+//! | [`Surface`]    | read-only cell access           | [`cell`](Surface::cell)                  |
+//! | [`SurfaceMut`] | writes and terminal operations  | [`set_cell`](SurfaceMut::set_cell), [`cell_mut`](SurfaceMut::cell_mut) |
+//!
+//! [`Surface`] extends [`Bounded`], and [`SurfaceMut`] extends
+//! [`Surface`]. Default methods supply common behavior such as
+//! [`Surface::draw`], [`SurfaceMut::fill_rect`],
+//! [`SurfaceMut::insert_lines`], and [`SurfaceMut::delete_cells`].
+//! Implementations may override defaults for storage-specific fast paths
+//! as long as they preserve the same visible semantics.
+//!
+//! ## Coordinates and bounds
+//!
+//! Coordinates are terminal-cell coordinates in the implementer's own
+//! coordinate space. A surface reports the rectangle where reads and writes
+//! are meaningful through [`Bounded::bounds`]; attempts outside that region
+//! should either return `None` or have no effect, as documented by each
+//! method.
+//!
+//! ```text
+//! Rect::new(2, 1, 4, 2)
+//!
+//! y=1      x=2 x=3 x=4 x=5
+//!        ┌───┬───┬───┬───┐
+//!        │   │   │   │   │
+//! y=2    ├───┼───┼───┼───┤
+//!        │   │   │   │   │
+//!        └───┴───┴───┴───┘
+//! ```
+//!
+//! ## Wide-cell invariants
+//!
+//! A wide grapheme occupies a primary cell plus a continuation placeholder
+//! in the following column. Methods that copy or fill cells step by the
+//! primary cell's display width and substitute blanks when a wide grapheme
+//! would be split by a source slice, a destination edge, or a fill region.
 
 use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 
-/// A type with a rectangular extent in cell-grid coordinates.
+/// A value with a rectangular extent in terminal-cell coordinates.
+///
+/// `Bounded` is the base trait for readable and writable surfaces. It does
+/// not imply that cells can be inspected or modified; it only describes the
+/// region where a value exists in its own coordinate space.
+///
+/// Implement this trait for types that can answer "what rectangle do I
+/// cover?" and then add [`Surface`] or [`SurfaceMut`] when cell access is
+/// available.
 pub trait Bounded {
-    /// The valid region in this type's own coordinate space.
+    /// Return the valid region in this value's own coordinate space.
+    ///
+    /// # Returns
+    ///
+    /// A [`Rect`] whose `x`/`y` form the top-left coordinate and whose
+    /// `width`/`height` form the extent in terminal cells.
+    ///
+    /// # Panics
+    ///
+    /// Implementations should not panic.
+    ///
+    /// # Usage notes
+    ///
+    /// For most storage-backed surfaces the origin is `(0, 0)`. Clipping
+    /// adaptors may report non-zero origins when they expose a sub-rectangle
+    /// in the wrapped surface's coordinate space.
     fn bounds(&self) -> Rect;
 
-    /// Width of the region in cells.
+    /// Return the width of [`Self::bounds`] in terminal cell columns.
+    ///
+    /// # Returns
+    ///
+    /// `self.bounds().width`.
+    ///
+    /// # Panics
+    ///
+    /// Never panics unless [`Self::bounds`] panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This is a convenience method; override only if computing full bounds
+    /// is meaningfully more expensive than returning the width.
     fn width(&self) -> u16 {
         self.bounds().width
     }
 
-    /// Height of the region in cells.
+    /// Return the height of [`Self::bounds`] in terminal cell rows.
+    ///
+    /// # Returns
+    ///
+    /// `self.bounds().height`.
+    ///
+    /// # Panics
+    ///
+    /// Never panics unless [`Self::bounds`] panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This is a convenience method; override only if computing full bounds
+    /// is meaningfully more expensive than returning the height.
     fn height(&self) -> u16 {
         self.bounds().height
     }
 
-    /// True when `pos` lies inside [`Self::bounds`].
+    /// Test whether a position lies inside [`Self::bounds`].
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: coordinate in this value's coordinate space.
+    ///
+    /// # Returns
+    ///
+    /// `true` when `pos` is inside the half-open rectangle described by
+    /// [`Self::bounds`], otherwise `false`.
+    ///
+    /// # Panics
+    ///
+    /// Never panics unless [`Self::bounds`] panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Surfaces commonly use this to clip reads and writes before touching
+    /// their backing storage.
     fn contains(&self, pos: Position) -> bool {
         self.bounds().contains(pos)
     }
 }
 
-/// A surface whose cells can be read.
+/// A rectangular cell grid that can be read.
+///
+/// `Surface` adds immutable cell access to [`Bounded`]. It is the trait to
+/// use for render sources, snapshots, and helpers that only need to inspect
+/// cells or copy them into another surface.
+///
+/// The provided [`Surface::draw`] method is intentionally conservative
+/// about wide cells: it avoids producing orphan continuation columns and
+/// blanks wide primaries that would be split by source or destination
+/// bounds.
 pub trait Surface: Bounded {
-    /// Read the cell at `pos`. Returns `None` for positions outside
-    /// [`Bounded::bounds`].
+    /// Read the cell at a position.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: coordinate in this surface's coordinate space.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&Cell)` when `pos` is readable, or `None` when it is outside
+    /// [`Bounded::bounds`] or otherwise unavailable.
+    ///
+    /// # Panics
+    ///
+    /// Implementations should not panic for out-of-bounds positions.
+    ///
+    /// # Usage notes
+    ///
+    /// A returned cell may be a wide primary or a continuation placeholder.
+    /// Callers that walk rows should advance by `cell.width().max(1)` for
+    /// primary cells and handle continuations explicitly.
     fn cell(&self, pos: Position) -> Option<&Cell>;
 
     /// Copy `self`'s cells into `target`, mapping the top-left of
     /// `self.bounds()` to `at` in target coordinates.
+    ///
+    /// # Parameters
+    ///
+    /// - `target`: writable destination surface.
+    /// - `at`: destination coordinate for the source bounds' top-left
+    ///   corner.
+    ///
+    /// # Behavior
     ///
     /// The default walks the source row by row and emits one
     /// [`SurfaceMut::set_cell`] call per source cell. Wide-cell
@@ -69,6 +199,17 @@ pub trait Surface: Bounded {
     ///
     /// Implementations may override for a faster path (e.g. bulk line
     /// copies), but must preserve the wide-cell invariants above.
+    ///
+    /// # Panics
+    ///
+    /// The default implementation does not panic unless the destination's
+    /// [`SurfaceMut::set_cell`] implementation panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Destination clipping is delegated to `target`. Cells whose
+    /// destination coordinate lies outside the target bounds are passed to
+    /// `set_cell`, which is expected to ignore them.
     fn draw<T: SurfaceMut + ?Sized>(&self, target: &mut T, at: Position) {
         let b = self.bounds();
         let tb = target.bounds();
@@ -114,27 +255,89 @@ pub trait Surface: Bounded {
     }
 }
 
-/// A surface whose cells can be written.
+/// A rectangular cell grid that can be modified.
+///
+/// `SurfaceMut` is the trait to use for render targets. It includes a
+/// primitive cell write plus higher-level operations used by terminal
+/// emulation and drawing code: fills, clears, line insertion/deletion, and
+/// cell insertion/deletion within a row.
+///
+/// Implementations are responsible for preserving the same wide-cell
+/// invariants as [`Buffer`](super::Buffer): a wide primary owns the
+/// following continuation slot, continuations should not become visible
+/// without their primary, and clipped wide writes should leave blanks
+/// rather than half a grapheme.
 pub trait SurfaceMut: Surface {
     /// Place `cell` at `pos`. Implementations are responsible for
     /// wide-cell semantics (continuation markers, blanking covered
     /// cells) and any dirty tracking they care to do. Taking `&Cell`
     /// lets implementations skip the clone when the destination
     /// already matches.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: destination coordinate in this surface's coordinate space.
+    /// - `cell`: cell to write.
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Implementations should not panic for out-of-bounds positions.
+    ///
+    /// # Usage notes
+    ///
+    /// Out-of-bounds writes should be ignored. Use this method instead of
+    /// [`Self::cell_mut`] whenever changing content could affect display
+    /// width or neighboring continuation slots.
     fn set_cell(&mut self, pos: Position, cell: &Cell);
 
     /// Mutable handle to the cell at `pos`. Returns `None` for
     /// out-of-bounds positions.
     ///
+    /// # Parameters
+    ///
+    /// - `pos`: coordinate in this surface's coordinate space.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&mut Cell)` for an in-bounds cell, or `None` when `pos` is not
+    /// writable.
+    ///
+    /// # Panics
+    ///
+    /// Implementations should not panic for out-of-bounds positions.
+    ///
+    /// # Usage notes
+    ///
     /// Implementations that track dirty state must mark the cell as
     /// touched eagerly — the caller may mutate any field through this
     /// handle and the surface has no way to observe a write. Callers
-    /// must not change [`Cell::width`] through this handle; use
+    /// must not change the cell's display width through this handle; use
     /// [`Self::set_cell`] for wide-cell writes that need
     /// continuation-column accounting.
     fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell>;
 
-    /// Fill the entire [`Bounded::bounds`] with `cell`.
+    /// Fill the entire surface bounds with `cell`.
+    ///
+    /// # Parameters
+    ///
+    /// - `cell`: fill cell to write repeatedly.
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic unless [`Self::fill_rect`] panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This delegates to [`Self::fill_rect`] with [`Bounded::bounds`].
+    /// Wide fills are handled by `fill_rect`.
     fn fill(&mut self, cell: &Cell) {
         let b = self.bounds();
         self.fill_rect(b, cell);
@@ -143,10 +346,29 @@ pub trait SurfaceMut: Surface {
     /// Fill the intersection of `rect` and [`Bounded::bounds`] with
     /// `cell`.
     ///
+    /// # Parameters
+    ///
+    /// - `rect`: requested fill rectangle in this surface's coordinate
+    ///   space.
+    /// - `cell`: fill cell to write.
+    ///
+    /// # Behavior
+    ///
     /// Stepped by `cell.width()` so wide cells lay down clean
     /// primary/continuation pairs; a trailing partial slot at the
     /// right edge falls back to a blank. Implementations may override
     /// for a bulk-blit fast path.
+    ///
+    /// # Panics
+    ///
+    /// The default implementation does not panic unless [`Self::set_cell`]
+    /// panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Empty intersections are no-ops. A wide fill into an odd-width region
+    /// leaves the final single column blank because a two-column grapheme
+    /// cannot fit there.
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         let step = (cell.width() as u16).max(1);
@@ -163,13 +385,41 @@ pub trait SurfaceMut: Surface {
         }
     }
 
-    /// Clear the entire [`Bounded::bounds`] to [`Cell::BLANK`].
+    /// Clear the entire surface bounds to [`Cell::BLANK`].
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic unless [`Self::fill`] panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This is equivalent to `self.fill(&Cell::BLANK)`.
     fn clear(&mut self) {
         self.fill(&Cell::BLANK);
     }
 
-    /// Clear the intersection of `rect` and [`Bounded::bounds`] to
-    /// [`Cell::BLANK`].
+    /// Clear a rectangle to [`Cell::BLANK`].
+    ///
+    /// # Parameters
+    ///
+    /// - `rect`: requested clear rectangle in this surface's coordinate
+    ///   space.
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic unless [`Self::fill_rect`] panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Only the intersection of `rect` and [`Bounded::bounds`] is modified.
     fn clear_rect(&mut self, rect: Rect) {
         self.fill_rect(rect, &Cell::BLANK);
     }
@@ -178,6 +428,15 @@ pub trait SurfaceMut: Surface {
     /// `[y, bounds_bottom)`. Rows pushed past `bounds_bottom` are lost.
     /// Freed top rows are filled with `fill`.
     ///
+    /// # Parameters
+    ///
+    /// - `y`: first row to insert at, in this surface's coordinate space.
+    /// - `n`: number of rows to insert.
+    /// - `bounds_bottom`: exclusive lower row bound for the affected region.
+    /// - `fill`: cell used to fill the newly opened rows.
+    ///
+    /// # Behavior
+    ///
     /// The default implementation copies cells through [`Self::set_cell`]
     /// row-by-row from the bottom up, advancing along each source row by
     /// the source cell's width so wide-primary cells move as a unit and
@@ -185,6 +444,16 @@ pub trait SurfaceMut: Surface {
     /// Wide primaries that no longer fit are replaced by a blank.
     /// Implementations backed by contiguous row storage may override
     /// with a row-swap fast path.
+    ///
+    /// # Panics
+    ///
+    /// The default implementation does not panic unless [`Self::set_cell`]
+    /// panics.
+    ///
+    /// # Usage notes
+    ///
+    /// `bounds_bottom` is clamped to the surface height. Calls with
+    /// `n == 0` or `y >= bounds_bottom` are no-ops.
     fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         let h = self.bounds().height;
         let bottom = bounds_bottom.min(h);
@@ -208,6 +477,15 @@ pub trait SurfaceMut: Surface {
     /// `[y, bounds_bottom)`. The bottom `n` rows of the window are
     /// filled with `fill`.
     ///
+    /// # Parameters
+    ///
+    /// - `y`: first row to delete, in this surface's coordinate space.
+    /// - `n`: number of rows to delete.
+    /// - `bounds_bottom`: exclusive lower row bound for the affected region.
+    /// - `fill`: cell used to fill the freed bottom rows.
+    ///
+    /// # Behavior
+    ///
     /// The default implementation copies cells through [`Self::set_cell`]
     /// row-by-row from top down, advancing along each source row by the
     /// source cell's width so wide-primary cells move as a unit and
@@ -215,6 +493,16 @@ pub trait SurfaceMut: Surface {
     /// Wide primaries that no longer fit are replaced by a blank.
     /// Implementations backed by contiguous row storage may override
     /// with a row-swap fast path.
+    ///
+    /// # Panics
+    ///
+    /// The default implementation does not panic unless [`Self::set_cell`]
+    /// panics.
+    ///
+    /// # Usage notes
+    ///
+    /// `bounds_bottom` is clamped to the surface height. Calls with
+    /// `n == 0` or `y >= bounds_bottom` are no-ops.
     fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         let h = self.bounds().height;
         let bottom = bounds_bottom.min(h);
@@ -237,12 +525,32 @@ pub trait SurfaceMut: Surface {
     /// past `bounds_right` are lost. The freed slots `[pos.x, pos.x + n)`
     /// are filled with `fill`.
     ///
+    /// # Parameters
+    ///
+    /// - `pos`: row and starting column for insertion.
+    /// - `n`: number of cells to insert.
+    /// - `bounds_right`: exclusive right column bound for the affected row
+    ///   region.
+    /// - `fill`: cell used to fill the newly opened slots.
+    ///
+    /// # Behavior
+    ///
     /// The default implementation snapshots the row's primary cells in
     /// the affected window through [`Surface::cell`], blanks the window
     /// via [`Self::set_cell`], then replays each surviving primary at
     /// its shifted position. Wide primaries whose new footprint would
     /// cross `bounds_right` are dropped. Implementations backed by a
     /// contiguous row slice may override with an in-place rotate.
+    ///
+    /// # Panics
+    ///
+    /// The default implementation does not panic unless [`Self::set_cell`]
+    /// panics.
+    ///
+    /// # Usage notes
+    ///
+    /// `bounds_right` is clamped to the surface width. Calls with `n == 0`,
+    /// an out-of-bounds row, or `pos.x >= bounds_right` are no-ops.
     fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
         let bounds = self.bounds();
         if pos.y >= bounds.height || pos.x >= bounds.width || n == 0 {
@@ -273,12 +581,32 @@ pub trait SurfaceMut: Surface {
     /// `[pos.x + n, bounds_right)` left within row `pos.y`. The freed
     /// slots `[bounds_right - n, bounds_right)` are filled with `fill`.
     ///
+    /// # Parameters
+    ///
+    /// - `pos`: row and starting column for deletion.
+    /// - `n`: number of cells to delete.
+    /// - `bounds_right`: exclusive right column bound for the affected row
+    ///   region.
+    /// - `fill`: cell used to fill the freed right-edge slots.
+    ///
+    /// # Behavior
+    ///
     /// The default implementation snapshots the row's primary cells in
     /// the affected window through [`Surface::cell`], blanks the window
     /// via [`Self::set_cell`], then replays each surviving primary at
     /// its shifted position. Primaries whose source column falls inside
     /// `[pos.x, pos.x + n)` are dropped. Implementations backed by a
     /// contiguous row slice may override with an in-place rotate.
+    ///
+    /// # Panics
+    ///
+    /// The default implementation does not panic unless [`Self::set_cell`]
+    /// panics.
+    ///
+    /// # Usage notes
+    ///
+    /// `bounds_right` is clamped to the surface width. Calls with `n == 0`,
+    /// an out-of-bounds row, or `pos.x >= bounds_right` are no-ops.
     fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
         let bounds = self.bounds();
         if pos.y >= bounds.height || pos.x >= bounds.width || n == 0 {

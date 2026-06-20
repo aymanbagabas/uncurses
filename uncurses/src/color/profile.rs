@@ -1,44 +1,85 @@
 //! Terminal color profile detection and color downsampling.
 //!
-//! Detection consults a number of environment variables and TERM heuristics:
+//! ## Detection inputs
 //!
-//! * `NO_COLOR` — disables color entirely (text decoration still allowed).
-//!   See <https://no-color.org/>.
-//! * `CLICOLOR` / `CLICOLOR_FORCE` — opt in to / force colors.
-//!   See <https://bixense.com/clicolors/>.
-//! * `COLORTERM=truecolor|24bit|yes|true` — upgrade to TrueColor.
-//! * `TERM` — terminal-database name; `dumb` disables, `*-256color` →
-//!   ANSI256, `*-direct` → TrueColor, and a few known-good terminals are
-//!   recognized by name.
-//! * `WT_SESSION` — Windows Terminal advertises itself this way → TrueColor.
-//! * `GOOGLE_CLOUD_SHELL` → TrueColor.
-//! * `CI` — CI runners render ANSI color in logs → TrueColor.
+//! Detection combines TTY state with environment variables and `TERM`
+//! heuristics:
+//!
+//! * Non-TTY output is [`Profile::Disabled`] unless `TTY_FORCE` or
+//!   `CLICOLOR_FORCE` is set.
+//! * `NO_COLOR` clamps a TTY to [`Profile::Ascii`]: colors are disabled, but
+//!   text decoration may still be emitted.
+//! * `CLICOLOR_FORCE` forces at least [`Profile::Ansi`] and can still be
+//!   upgraded by other environment evidence.
+//! * `CLICOLOR` bumps a non-dumb TTY to at least [`Profile::Ansi`].
+//! * `COLORTERM=truecolor|24bit|yes|true` upgrades to [`Profile::TrueColor`],
+//!   except inside `screen`.
+//! * `TERM=dumb` starts as [`Profile::Disabled`]; `*-256color` upgrades to
+//!   [`Profile::Ansi256`]; `*-direct` upgrades to [`Profile::TrueColor`];
+//!   selected known true-color terminal names are recognized by substring.
+//! * `WT_SESSION`, `GOOGLE_CLOUD_SHELL`, and `CI` upgrade to
+//!   [`Profile::TrueColor`].
+//!
+//! ## Downsampling
+//!
+//! [`Profile::convert`] maps any [`Color`] into the best representation this
+//! profile should emit:
+//!
+//! ```text
+//! TrueColor ─────────► Some(original Color)
+//! Ansi256   ─────────► Some(nearest Color::Indexed(_))
+//! Ansi      ─────────► Some(nearest Color::Basic(_))
+//! Ascii     ─┐
+//! Disabled  ─┴──────► None
+//! ```
 
 use super::Color;
 use crate::terminal::Env;
 
 /// Terminal color capability profile.
 ///
-/// Ordered: variants compare as `Disabled < Ascii < Ansi < Ansi256 < TrueColor`.
+/// Profiles are ordered by increasing capability:
+/// `Disabled < Ascii < Ansi < Ansi256 < TrueColor`. Use this ordering when
+/// clamping or choosing the maximum capability discovered from multiple
+/// sources.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Profile {
-    /// No styling output at all — used when the output is not a TTY or
-    /// when `TERM` is empty / `dumb`, where SGR escape sequences would
-    /// be rendered as literal text.
+    /// No styling output at all.
+    ///
+    /// Used for non-TTY output and terminals that should not receive escape
+    /// sequences. Color conversion returns `None`; callers that convert whole
+    /// styles generally drop colors, attributes, underline state, and links.
     Disabled,
-    /// ASCII only — no color, decoration allowed.
+    /// ASCII/no-color profile where text decoration is still allowed.
+    ///
+    /// Color conversion returns `None`, but higher-level style conversion may
+    /// preserve non-color SGR attributes such as bold or underline.
     Ascii,
-    /// 16 ANSI colors.
+    /// Standard 16-color ANSI palette.
+    ///
+    /// Color conversion returns the nearest [`Color::Basic`](super::Color::Basic)
+    /// using weighted RGB distance against the xterm palette entries `0..=15`.
     Ansi,
-    /// 256 xterm colors.
+    /// xterm 256-color palette.
+    ///
+    /// Color conversion returns the nearest
+    /// [`Color::Indexed`](super::Color::Indexed), choosing between the 6×6×6
+    /// color cube and grayscale ramp by weighted RGB distance.
     Ansi256,
     /// 24-bit true color.
+    ///
+    /// Color conversion returns the original [`Color`] unchanged.
     #[default]
     TrueColor,
 }
 
 impl Profile {
     /// Downsample a color to fit this profile.
+    ///
+    /// Returns `Some(color)` when this profile supports color output and
+    /// `None` for [`Profile::Disabled`] or [`Profile::Ascii`]. `TrueColor`
+    /// preserves the original value; `Ansi256` and `Ansi` resolve the input to
+    /// RGB and quantize to the nearest supported palette.
     pub fn convert(self, color: Color) -> Option<Color> {
         use super::convert::*;
         match self {
@@ -49,21 +90,22 @@ impl Profile {
         }
     }
 
-    /// Detect the profile from the current process environment, assuming
-    /// the output is a TTY.
+    /// Detect the color profile from the current process environment.
     ///
-    /// For testability, see [`Profile::detect_from`].
+    /// This assumes the output stream is a TTY. For explicit TTY state or
+    /// deterministic tests, use [`Profile::detect_from`].
     pub fn detect() -> Self {
         let env = Env::from_process();
         Self::detect_from(&env, true)
     }
 
-    /// Detect the profile from an explicit environment snapshot.
+    /// Detect the color profile from an explicit environment snapshot.
     ///
-    /// `is_tty` should be true if the output stream is a terminal. When
-    /// false, or when `TERM` indicates no styling capability (empty or
-    /// `dumb`), the result is clamped to [`Profile::Disabled`]
-    /// unless `CLICOLOR_FORCE` (or `TTY_FORCE`) overrides it.
+    /// `is_tty` should be `true` if the output stream is a terminal. A false
+    /// value clamps to [`Profile::Disabled`] unless `TTY_FORCE` makes the
+    /// stream act like a TTY or `CLICOLOR_FORCE` forces color. `TERM=dumb` and,
+    /// on non-Windows platforms, an empty `TERM` start as disabled before other
+    /// forcing/upgrading rules are applied.
     pub fn detect_from(env: &Env, is_tty: bool) -> Self {
         let is_tty = is_tty || env.bool("TTY_FORCE");
         let term = env.get("TERM").unwrap_or_default();

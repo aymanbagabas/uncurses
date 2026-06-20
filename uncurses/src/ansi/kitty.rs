@@ -1,28 +1,49 @@
-//! Kitty keyboard protocol — progressive enhancement.
+//! Progressive keyboard enhancement protocol.
 //!
-//! See: <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
+//! ## Category
+//!
+//! This module emits CSI `u` queries and setters for enhanced keyboard reporting:
+//! requesting active flags, setting/add/removing flags, and pushing/popping a
+//! keyboard flag stack.
+//!
+//! ## CSI format
+//!
+//! The protocol uses private CSI prefixes before the final `u`:
+//!
+//! ```text
+//! ESC [ = flags ; mode u     set/add/remove flags
+//! ESC [ > flags u            push stack frame
+//! ESC [ < count u            pop stack frame(s)
+//! ESC [ ? u                  query active flags
+//! ```
+//!
+//! ## Mode interaction
+//!
+//! These controls manage their own keyboard-reporting state and are independent
+//! of modifyOtherKeys controls in [`crate::ansi::xterm`].
 
 use std::io::{self, Write};
 
 bitflags::bitflags! {
-    /// Kitty keyboard enhancement flags.
+    /// Bitflags for progressive keyboard reporting.
+    ///
+    /// The numeric value of the flag set is written as the `flags` parameter in
+    /// CSI `u` requests such as `ESC [ = <flags> ; <mode> u`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct KittyKeyboardFlags: u8 {
-        /// Empty flag set. Equivalent to disabling every enhancement
-        /// when passed to a setter — terminals interpret a zero-bit
-        /// push as "no enhancements active for this stack frame".
+        /// No keyboard enhancements enabled; flag value `0`.
         const NONE                        = 0;
-        /// Disambiguate keys that share escape-coded sequences.
+        /// Flag bit `1`: request disambiguated escape-coded keys.
         const DISAMBIGUATE_ESCAPE_CODES   = 0b0000_0001;
-        /// Report key press, repeat, and release event types.
+        /// Flag bit `2`: request press, repeat, and release event-type reporting.
         const REPORT_EVENT_TYPES          = 0b0000_0010;
-        /// Report alternate shifted and base key values.
+        /// Flag bit `4`: request shifted and base alternate key values.
         const REPORT_ALTERNATE_KEYS       = 0b0000_0100;
-        /// Report every key as an escape sequence.
+        /// Flag bit `8`: request escape-sequence reports for all keys.
         const REPORT_ALL_KEYS_AS_ESCAPE   = 0b0000_1000;
-        /// Report associated text for key events.
+        /// Flag bit `16`: request associated text for key events.
         const REPORT_ASSOCIATED_TEXT      = 0b0001_0000;
-        /// All supported keyboard enhancement flags.
+        /// All defined keyboard enhancement flags combined.
         const ALL = Self::DISAMBIGUATE_ESCAPE_CODES.bits()
                   | Self::REPORT_EVENT_TYPES.bits()
                   | Self::REPORT_ALTERNATE_KEYS.bits()
@@ -31,28 +52,31 @@ bitflags::bitflags! {
     }
 }
 
-/// Request the terminal's currently-active Kitty keyboard flags
-/// (`CSI ? u`). The terminal responds with `CSI ? <flags> u`.
+/// Request active keyboard enhancement flags: exact bytes `ESC [ ? u` (`b"\x1b[?u"`).
+///
+/// A compatible terminal replies with CSI `? <flags> u`.
 pub const REQUEST_KITTY_KEYBOARD: &[u8] = b"\x1b[?u";
 
-/// Write the keyboard flags request (`CSI ? u`).
+/// Write [`REQUEST_KITTY_KEYBOARD`], the `ESC [ ? u` active-flag query.
 pub fn write_request_kitty_keyboard<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_KITTY_KEYBOARD)
 }
 
-/// Modes for [`write_set_kitty_keyboard`].
+/// Operation mode used by [`write_set_kitty_keyboard`] for CSI `= flags ; mode u`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum KittyKeyboardMode {
-    /// Set given flags, unset all others.
+    /// Replace the active keyboard flags with exactly the supplied flag set; parameter value `1`.
     Set = 1,
-    /// Set given flags, keep existing flags.
+    /// Add the supplied keyboard flags to the active set; parameter value `2`.
     Add = 2,
-    /// Unset given flags, keep existing flags.
+    /// Remove the supplied keyboard flags from the active set; parameter value `3`.
     Remove = 3,
 }
 
-/// Set Kitty keyboard flags (`CSI = flags ; mode u`).
+/// Set, add, or remove keyboard enhancement flags with `ESC [ = <flags> ; <mode> u`.
+///
+/// `flags.bits()` supplies the decimal flag mask; [`KittyKeyboardMode`] supplies the operation parameter.
 pub fn write_set_kitty_keyboard<W: Write>(
     w: &mut W,
     flags: KittyKeyboardFlags,
@@ -61,12 +85,16 @@ pub fn write_set_kitty_keyboard<W: Write>(
     write!(w, "\x1b[={};{}u", flags.bits(), mode as u8)
 }
 
-/// Push Kitty keyboard enhancement flags onto the stack (`CSI > flags u`).
+/// Push a keyboard enhancement stack frame with `ESC [ > <flags> u`.
+///
+/// The decimal flag mask is taken from `flags.bits()`.
 pub fn write_push_kitty_keyboard<W: Write>(w: &mut W, flags: KittyKeyboardFlags) -> io::Result<()> {
     write!(w, "\x1b[>{}u", flags.bits())
 }
 
-/// Pop `count` levels off the Kitty keyboard stack (`CSI < count u`).
+/// Pop keyboard enhancement stack frames with `ESC [ < <count> u`.
+///
+/// `count <= 1` emits the short form `ESC [ < u`; larger counts include the decimal count.
 pub fn write_pop_kitty_keyboard<W: Write>(w: &mut W, count: u16) -> io::Result<()> {
     if count <= 1 {
         w.write_all(b"\x1b[<u")

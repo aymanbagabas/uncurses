@@ -1,9 +1,22 @@
 //! OSC (Operating System Command) decoder.
 //!
-//! Format: `ESC ]` (or 8-bit `0x9D`) followed by a payload terminated by
-//! BEL (`0x07`), 8-bit ST (`0x9C`), or 7-bit ST (`ESC \`). OSC is the
-//! only sequence class that accepts BEL as a terminator.
-
+//! ## Purpose
+//!
+//! OSC sequences carry host/terminal data such as color replies, palette
+//! entries, and clipboard replies. The decoder recognizes the reply forms used
+//! by the public event API and preserves other payloads as [`Event::UnknownOsc`].
+//!
+//! ## Wire format
+//!
+//! OSC starts with `ESC ]` or the 8-bit C1 byte `0x9D`, then a payload, then
+//! BEL (`0x07`), 7-bit ST (`ESC \`), or 8-bit ST (`0x9C`). OSC is the only
+//! string class in this decoder that accepts BEL as a terminator.
+//!
+//! ## Gotchas
+//!
+//! OSC 52 clipboard content is surfaced as the wire payload string; decoding or
+//! interpreting that content is left to callers. Color channels with 1-4 hex
+//! digits are scaled down to 8-bit RGB.
 use super::Decoder;
 use super::result::ParseResult;
 use super::util::intro_prefix_len;

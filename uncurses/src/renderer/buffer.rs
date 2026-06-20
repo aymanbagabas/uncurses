@@ -1,18 +1,36 @@
-//! RenderBuffer — a Buffer with per-line dirty tracking.
+//! Touch-tracked render buffer.
+//!
+//! [`RenderBuffer`] wraps the core cell [`Buffer`] with per-row touched
+//! spans. Drawing code can update only the cells it changed, while the
+//! renderer later visits touched spans and compares them against tracked
+//! terminal state before emitting bytes.
 
 use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 
 use crate::buffer::{Bounded, Buffer, Surface, SurfaceMut};
 
-/// Tracks which span of cells on a line has been modified.
+/// Inclusive modified-column span for one row.
+///
+/// `first` and `last` are zero-based columns. A row with no touches is
+/// represented by `None` in the owning [`RenderBuffer`], not by an empty
+/// span.
 #[derive(Debug, Clone, Copy)]
 pub struct TouchedSpan {
+    /// Leftmost touched column.
     pub first: u16,
+    /// Rightmost touched column.
     pub last: u16,
 }
 
-/// A buffer that tracks which lines/cells have been modified since last render.
+/// Cell buffer with per-line dirty tracking for renderer diffs.
+///
+/// # Model
+///
+/// The embedded [`Buffer`] holds cell contents. The `touched` table says
+/// which inclusive column span changed on each row since the last clear.
+/// Mutating helpers update both structures; read-only helpers leave touch
+/// state unchanged.
 #[derive(Debug, Clone)]
 pub struct RenderBuffer {
     /// Backing cell buffer.
@@ -22,6 +40,15 @@ pub struct RenderBuffer {
 
 impl RenderBuffer {
     /// Create a render buffer with all lines initially untouched.
+    ///
+    /// # Parameters
+    ///
+    /// - `width`: number of columns.
+    /// - `height`: number of rows.
+    ///
+    /// # Returns
+    ///
+    /// A blank buffer of the requested size with no touched rows.
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             buffer: Buffer::new(width, height),
@@ -39,7 +66,10 @@ impl RenderBuffer {
         self.buffer.height()
     }
 
-    /// Mark a line as touched, expanding the span to include `pos.x`.
+    /// Mark one cell position as touched.
+    ///
+    /// Expands the row's existing touched span to include `pos.x`.
+    /// Out-of-bounds rows are ignored.
     #[allow(dead_code)]
     pub fn touch(&mut self, pos: impl Into<Position>) {
         let pos = pos.into();
@@ -61,7 +91,16 @@ impl RenderBuffer {
         }
     }
 
-    /// Mark a range of columns on a line as touched. `y` is the 0-based row.
+    /// Mark an inclusive column range on one row as touched.
+    ///
+    /// # Parameters
+    ///
+    /// - `y`: zero-based row.
+    /// - `first`: leftmost touched column.
+    /// - `last`: rightmost touched column.
+    ///
+    /// Out-of-bounds rows are ignored. The range is recorded as supplied;
+    /// callers should pass in-bounds columns for precise later diffs.
     pub fn touch_line(&mut self, y: u16, first: u16, last: u16) {
         let y = y as usize;
         if y >= self.touched.len() {
@@ -85,7 +124,19 @@ impl RenderBuffer {
         }
     }
 
-    /// Set a cell and mark it as touched if changed.
+    /// Set a cell and mark its occupied columns touched if changed.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: zero-based destination coordinate.
+    /// - `cell`: cell to clone into the buffer.
+    ///
+    /// # Behavior
+    ///
+    /// Delegates wide-cell accounting to [`Buffer::set`]. If the new
+    /// value equals the existing cell, no touched span is recorded. When
+    /// a wide cell is overwritten by a narrower cell, the touched span is
+    /// widened to cover stale continuation columns.
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
         let pos = pos.into();
         let existing = self.buffer.cell(pos);
@@ -104,12 +155,21 @@ impl RenderBuffer {
         }
     }
 
-    /// Get the touched span for a line, if any. `y` is the 0-based row.
+    /// Get the touched span for one row.
+    ///
+    /// # Parameters
+    ///
+    /// - `y`: zero-based row.
+    ///
+    /// # Returns
+    ///
+    /// `Some(TouchedSpan)` when the row has touched columns, otherwise
+    /// `None`.
     pub fn touched(&self, y: u16) -> Option<TouchedSpan> {
         self.touched.get(y as usize).copied().flatten()
     }
 
-    /// Whether any line has been touched.
+    /// Return whether any row has touched columns.
     pub fn has_changes(&self) -> bool {
         self.touched.iter().any(|t| t.is_some())
     }
@@ -120,14 +180,17 @@ impl RenderBuffer {
         self.touched.iter().filter(|t| t.is_some()).count()
     }
 
-    /// Clear all touched flags.
+    /// Clear all touched flags without changing cell contents.
     pub fn clear_touched(&mut self) {
         for t in &mut self.touched {
             *t = None;
         }
     }
 
-    /// Mark all lines as touched (force full redraw).
+    /// Mark every row as touched across the full width.
+    ///
+    /// Rows in a zero-width buffer remain untouched because there are no
+    /// columns to render.
     pub fn touch_all(&mut self) {
         let width = self.width();
         for y in 0..self.height() {
@@ -135,14 +198,26 @@ impl RenderBuffer {
         }
     }
 
-    /// Resize the buffer, marking everything as touched.
+    /// Resize the buffer and mark all rows touched.
+    ///
+    /// # Parameters
+    ///
+    /// - `width`: new column count.
+    /// - `height`: new row count.
+    ///
+    /// Existing contents are preserved according to [`Buffer::resize`];
+    /// newly exposed cells are blank.
     pub fn resize(&mut self, width: u16, height: u16) {
         self.buffer.resize(width, height);
         self.touched.resize(height as usize, None);
         self.touch_all();
     }
 
-    /// Get line reference. `y` is the 0-based row.
+    /// Borrow one row.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&[Cell])` for an in-bounds row, otherwise `None`.
     pub fn line(&self, y: u16) -> Option<&[Cell]> {
         self.buffer.line(y)
     }
@@ -161,7 +236,7 @@ impl RenderBuffer {
     /// Unlike [`Self::set_cell`], this does not compare against the
     /// existing cell — the touched span is extended unconditionally and
     /// `Renderer::sync_front` filters unchanged
-    /// cells by reference equality. Callers must not change
+    /// cells by value equality. Callers must not change
     /// [`Cell::width`] through this handle; use [`Self::set_cell`] for
     /// wide-cell writes that need continuation-column accounting.
     pub fn cell_mut(&mut self, pos: impl Into<Position>) -> Option<&mut Cell> {
@@ -191,9 +266,11 @@ impl RenderBuffer {
             .filter_map(|(i, t)| t.map(|span| (i as u16, span)))
     }
 
-    /// Insert `n` lines at `y`. Freed rows are filled with `fill`. All
-    /// rows in `[y, bounds_bottom)` are marked touched across the full
-    /// width so the renderer redraws them on the next frame.
+    /// Insert `n` lines at `y` within a bounded region.
+    ///
+    /// Freed rows are filled with `fill`. All rows in
+    /// `[y, bounds_bottom)` are marked touched across the full width so
+    /// the renderer redraws the affected region on the next frame.
     pub fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         self.buffer.insert_lines(y, n, bounds_bottom, fill);
         let bottom = bounds_bottom.min(self.height());
@@ -206,9 +283,11 @@ impl RenderBuffer {
         }
     }
 
-    /// Delete `n` lines at `y`. Freed rows are filled with `fill`. All
-    /// rows in `[y, bounds_bottom)` are marked touched across the full
-    /// width so the renderer redraws them on the next frame.
+    /// Delete `n` lines at `y` within a bounded region.
+    ///
+    /// Freed rows are filled with `fill`. All rows in
+    /// `[y, bounds_bottom)` are marked touched across the full width so
+    /// the renderer redraws the affected region on the next frame.
     pub fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         self.buffer.delete_lines(y, n, bounds_bottom, fill);
         let bottom = bounds_bottom.min(self.height());
@@ -221,9 +300,10 @@ impl RenderBuffer {
         }
     }
 
-    /// Insert `n` cells at `pos`, touching the line. Delegates to
-    /// [`Buffer::insert_cells`] and tracks the touch. Freed cells are
-    /// filled with `fill`.
+    /// Insert `n` cells at `pos` within a row-bounded region.
+    ///
+    /// Delegates to [`Buffer::insert_cells`], fills freed cells with
+    /// `fill`, and marks the affected row span touched.
     #[allow(dead_code)]
     pub fn insert_cells(
         &mut self,
@@ -241,9 +321,10 @@ impl RenderBuffer {
         );
     }
 
-    /// Delete `n` cells at `pos`, touching the line. Delegates to
-    /// [`Buffer::delete_cells`] and tracks the touch. Freed cells at
-    /// the right edge are filled with `fill`.
+    /// Delete `n` cells at `pos` within a row-bounded region.
+    ///
+    /// Delegates to [`Buffer::delete_cells`], fills freed right-edge
+    /// cells with `fill`, and marks the affected row span touched.
     #[allow(dead_code)]
     pub fn delete_cells(
         &mut self,

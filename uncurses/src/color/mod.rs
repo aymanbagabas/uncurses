@@ -1,22 +1,57 @@
-//! Terminal color types and capability profiles.
+//! Terminal color values, palettes, and capability profiles.
 //!
-//! This module defines [`Color`], the standard [`BasicColor`] palette, and [`Profile`] for choosing how colors should be encoded.
-//! Reach for it when styling text, converting palette entries to RGB, or adapting output to a terminal's color support.
+//! ## Color values
 //!
-//! A [`Color`] is RGB, an indexed palette entry, or a named [`BasicColor`].
-//! A [`Profile`] downsamples a color to what a terminal can render, so the
-//! same UI code works on a true-color terminal and a 16-color one:
+//! [`Color`] has three representations: [`Color::Basic`] for the standard
+//! 16-color ANSI palette, [`Color::Indexed`] for the xterm 256-color palette,
+//! and [`Color::Rgb`] for 24-bit true color. All three can be converted to RGB
+//! with [`Color::to_rgb`], which makes palette colors usable with true-color
+//! helpers such as [`Color::to_hex`] and [`Color::to_hsl`].
 //!
+//! ## Basic colors
+//!
+//! [`BasicColor`] is the named 16-color ANSI palette. Its discriminants are
+//! the palette indices `0..=15`; `0..=7` are normal intensity and `8..=15` are
+//! bright/high-intensity variants. Converting a [`BasicColor`] into [`Color`]
+//! yields [`Color::Basic`], and converting into `Option<Color>` yields
+//! `Some(Color::Basic(_))` for builder ergonomics.
+//!
+//! ## Hex and HSL helpers
+//!
+//! [`Color::hex`] accepts optional-`#` three-, six-, or eight-digit hex input
+//! and returns [`Color::Rgb`]. Eight-digit input parses and ignores the final
+//! alpha byte because terminal colors carry no alpha channel. [`Color::hsl`]
+//! wraps hue into `0..360`, clamps saturation/lightness into `0.0..=1.0`, and
+//! rounds computed RGB channels to the nearest byte.
+//!
+//! [`Color::to_hex`] and [`Color::to_hsl`] first resolve basic/indexed colors
+//! through the xterm palette. Gray HSL colors report hue `0.0` because the hue
+//! is undefined when saturation is zero.
+//!
+//! ## Profile downsampling
+//!
+//! [`Profile`] describes the color capability of an output stream. Converting a
+//! color through a profile preserves true color when possible, quantizes to the
+//! nearest supported palette for `Ansi256`/`Ansi`, and drops color entirely for
+//! `Ascii`/`Disabled`.
+//!
+//! ```text
+//! Color::Rgb / Indexed / Basic
+//!          │
+//!          ├─ Profile::TrueColor ──► original color
+//!          ├─ Profile::Ansi256   ──► nearest xterm index
+//!          ├─ Profile::Ansi      ──► nearest BasicColor
+//!          └─ Ascii / Disabled   ──► None
 //! ```
+//!
+//! ```rust,ignore
 //! use uncurses::color::{BasicColor, Color, Profile};
 //!
 //! let orange = Color::Rgb(255, 128, 0);
 //! let green: Color = BasicColor::Green.into();
 //!
-//! // TrueColor keeps the exact value; lesser profiles quantize it; the
-//! // colorless profiles drop it entirely (`None`).
 //! assert_eq!(Profile::TrueColor.convert(orange), Some(orange));
-//! assert!(Profile::Ansi256.convert(orange).is_some());
+//! assert!(matches!(Profile::Ansi256.convert(orange), Some(Color::Indexed(_))));
 //! assert_eq!(Profile::Disabled.convert(green), None);
 //! ```
 
@@ -25,24 +60,38 @@ mod profile;
 
 pub use profile::*;
 
-/// A terminal color.
+/// A terminal color in one of the supported palette spaces.
+///
+/// Use [`Color::Rgb`] when exact 24-bit color should be preserved on
+/// true-color terminals, [`Color::Indexed`] when targeting a specific xterm
+/// 256-color palette entry, and [`Color::Basic`] for the portable 16-color ANSI
+/// palette. A [`Profile`] can downsample any variant to the capability of a
+/// particular output stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
-    /// Standard 16 ANSI colors (0-15).
+    /// Standard 16-color ANSI palette entry.
     Basic(BasicColor),
-    /// Extended 256-color palette (0-255).
+    /// Extended xterm 256-color palette index (`0..=255`).
     Indexed(u8),
-    /// 24-bit true color.
+    /// 24-bit true color as red, green, and blue bytes.
     Rgb(u8, u8, u8),
 }
 
 impl Color {
     /// Construct a 24-bit RGB color.
+    ///
+    /// Returns [`Color::Rgb`] with the supplied red, green, and blue bytes.
+    /// This is a `const` convenience constructor for code that prefers named
+    /// parameters over the enum variant.
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self::Rgb(r, g, b)
     }
 
-    /// Convert this color to (r, g, b) components.
+    /// Convert this color to `(red, green, blue)` bytes.
+    ///
+    /// [`Color::Rgb`] returns its stored components unchanged. [`Color::Basic`]
+    /// and [`Color::Indexed`] are resolved through the xterm 256-color palette,
+    /// where basic colors use their `0..=15` palette index.
     pub fn to_rgb(self) -> (u8, u8, u8) {
         match self {
             Color::Rgb(r, g, b) => (r, g, b),
@@ -51,10 +100,11 @@ impl Color {
         }
     }
 
-    /// Format this color as a `#rrggbb` hex string.
+    /// Format this color as a lower-case `#rrggbb` hex string.
     ///
-    /// Palette and indexed colors are resolved to their RGB values first, so
-    /// the result is always the six-digit true-color form.
+    /// Palette and indexed colors are resolved with [`Color::to_rgb`] first,
+    /// so the result is always the six-digit true-color form. The returned
+    /// string never includes alpha.
     pub fn to_hex(self) -> String {
         let (r, g, b) = self.to_rgb();
         format!("#{r:02x}{g:02x}{b:02x}")
@@ -62,9 +112,10 @@ impl Color {
 
     /// Convert this color to HSL components.
     ///
-    /// Returns `(h, s, l)` with the hue `h` in degrees (`0.0..360.0`) and the
-    /// saturation `s` and lightness `l` in `0.0..=1.0`. Palette and indexed
-    /// colors are resolved to RGB first.
+    /// Returns `(h, s, l)` with hue in degrees (`0.0..360.0`) and saturation
+    /// and lightness in `0.0..=1.0`. Palette and indexed colors are resolved to
+    /// RGB first. If the color is gray (`r == g == b`), saturation is `0.0` and
+    /// hue is reported as `0.0`.
     pub fn to_hsl(self) -> (f32, f32, f32) {
         let (r, g, b) = self.to_rgb();
         let r = f32::from(r) / 255.0;
@@ -88,16 +139,17 @@ impl Color {
         (h, s, l)
     }
 
-    /// Parse a hex color string into an [`Color::Rgb`].
+    /// Parse a hex color string into [`Color::Rgb`].
     ///
-    /// The leading `#` is optional. Accepts three forms:
+    /// The leading `#` is optional. Accepted forms are:
     ///
-    /// - 3 digits (`#fff`): shorthand, each nibble is doubled (`f` -> `ff`).
-    /// - 6 digits (`#ffffff`): one byte per channel.
-    /// - 8 digits (`#ffffff00`): a trailing alpha pair is parsed but ignored,
-    ///   since colors carry no alpha channel.
+    /// - `rgb` / `#rgb`: shorthand, each nibble is doubled (`f` becomes `ff`).
+    /// - `rrggbb` / `#rrggbb`: one byte per channel.
+    /// - `rrggbbaa` / `#rrggbbaa`: a trailing alpha byte is parsed for
+    ///   validity but ignored.
     ///
-    /// Returns `None` for any other length or for non-hexadecimal input.
+    /// Returns `None` for any other length or for non-hexadecimal input. The
+    /// function does not panic.
     pub fn hex(s: &str) -> Option<Color> {
         let s = s.strip_prefix('#').unwrap_or(s);
         let bytes = s.as_bytes();
@@ -112,6 +164,12 @@ impl Color {
                 let r = hex_byte(bytes[0], bytes[1])?;
                 let g = hex_byte(bytes[2], bytes[3])?;
                 let b = hex_byte(bytes[4], bytes[5])?;
+                // For the 8-digit form, validate the trailing alpha pair so
+                // non-hex input is rejected, then discard it: terminal colors
+                // carry no alpha channel.
+                if bytes.len() == 8 {
+                    hex_byte(bytes[6], bytes[7])?;
+                }
                 (r, g, b)
             }
             _ => return None,
@@ -119,10 +177,12 @@ impl Color {
         Some(Color::Rgb(r, g, b))
     }
 
-    /// Construct an [`Color::Rgb`] from HSL.
+    /// Construct [`Color::Rgb`] from HSL.
     ///
-    /// `h` is the hue in degrees (wrapped into `0..360`); `s` (saturation) and
-    /// `l` (lightness) are clamped to `0.0..=1.0`.
+    /// `h` is hue in degrees and is wrapped into `0.0..360.0` with
+    /// `f32::rem_euclid`. `s` (saturation) and `l` (lightness) are clamped to
+    /// `0.0..=1.0`. The intermediate RGB values are rounded to the nearest byte
+    /// and clamped to `0..=255`.
     pub fn hsl(h: f32, s: f32, l: f32) -> Color {
         let h = h.rem_euclid(360.0);
         let s = s.clamp(0.0, 1.0);
@@ -144,7 +204,7 @@ impl Color {
     }
 }
 
-/// Parse one ASCII hex digit into its `0..16` value.
+/// Parse one ASCII hex digit into its `0..=15` value.
 fn hex_nibble(b: u8) -> Option<u8> {
     (b as char).to_digit(16).map(|d| d as u8)
 }
@@ -155,55 +215,67 @@ fn hex_byte(hi: u8, lo: u8) -> Option<u8> {
 }
 
 /// The 16 standard ANSI colors.
+///
+/// The numeric value of each variant is its ANSI/xterm palette index. Normal
+/// colors occupy `0..=7`; bright colors occupy `8..=15` and encode as bright
+/// foreground/background SGR parameters when used in a [`Style`](crate::style::Style).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum BasicColor {
-    /// Black.
+    /// Black (`0`, foreground `30`, background `40`).
     Black = 0,
-    /// Red.
+    /// Red (`1`, foreground `31`, background `41`).
     Red = 1,
-    /// Green.
+    /// Green (`2`, foreground `32`, background `42`).
     Green = 2,
-    /// Yellow.
+    /// Yellow (`3`, foreground `33`, background `43`).
     Yellow = 3,
-    /// Blue.
+    /// Blue (`4`, foreground `34`, background `44`).
     Blue = 4,
-    /// Magenta.
+    /// Magenta (`5`, foreground `35`, background `45`).
     Magenta = 5,
-    /// Cyan.
+    /// Cyan (`6`, foreground `36`, background `46`).
     Cyan = 6,
-    /// White.
+    /// White (`7`, foreground `37`, background `47`).
     White = 7,
-    /// Bright black.
+    /// Bright black (`8`, foreground `90`, background `100`).
     BrightBlack = 8,
-    /// Bright red.
+    /// Bright red (`9`, foreground `91`, background `101`).
     BrightRed = 9,
-    /// Bright green.
+    /// Bright green (`10`, foreground `92`, background `102`).
     BrightGreen = 10,
-    /// Bright yellow.
+    /// Bright yellow (`11`, foreground `93`, background `103`).
     BrightYellow = 11,
-    /// Bright blue.
+    /// Bright blue (`12`, foreground `94`, background `104`).
     BrightBlue = 12,
-    /// Bright magenta.
+    /// Bright magenta (`13`, foreground `95`, background `105`).
     BrightMagenta = 13,
-    /// Bright cyan.
+    /// Bright cyan (`14`, foreground `96`, background `106`).
     BrightCyan = 14,
-    /// Bright white.
+    /// Bright white (`15`, foreground `97`, background `107`).
     BrightWhite = 15,
 }
 
 impl BasicColor {
-    /// Return the 0..=15 palette index.
+    /// Return the `0..=15` ANSI palette index.
+    ///
+    /// This value is also the xterm 256-color palette index used when
+    /// resolving a basic color through [`Color::to_rgb`].
     pub const fn as_u8(self) -> u8 {
         self as u8
     }
 
-    /// Whether this is a bright/high-intensity color.
+    /// Return whether this is a bright/high-intensity color.
+    ///
+    /// Bright colors are variants with indices `8..=15` and encode as
+    /// foreground SGR `90..=97` or background SGR `100..=107`.
     pub const fn is_bright(self) -> bool {
         self as u8 >= 8
     }
 
-    /// Convert a 0..=15 value to a `BasicColor`, returning `None` if out of range.
+    /// Convert a palette index to a [`BasicColor`].
+    ///
+    /// Returns `Some` for values in `0..=15` and `None` for any higher value.
     pub const fn from_u8(v: u8) -> Option<Self> {
         Some(match v {
             0 => Self::Black,
@@ -228,12 +300,16 @@ impl BasicColor {
 }
 
 impl From<BasicColor> for Color {
+    /// Convert a [`BasicColor`] into [`Color::Basic`].
     fn from(c: BasicColor) -> Self {
         Color::Basic(c)
     }
 }
 
 impl From<BasicColor> for Option<Color> {
+    /// Convert a [`BasicColor`] into `Some(Color::Basic(_))`.
+    ///
+    /// This supports style builders that accept `impl Into<Option<Color>>`.
     fn from(c: BasicColor) -> Self {
         Some(Color::Basic(c))
     }
@@ -290,7 +366,11 @@ const XTERM_COLORS: [(u8, u8, u8); 256] = {
     table
 };
 
-/// Look up the RGB values for a 256-color palette index.
+/// Look up the RGB values for an xterm 256-color palette index.
+///
+/// Indices `0..=15` are the standard ANSI colors, `16..=231` are the 6×6×6
+/// color cube, and `232..=255` are the grayscale ramp. Every `u8` is a valid
+/// palette index, so this function does not fail or panic.
 pub fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
     XTERM_COLORS[idx as usize]
 }
@@ -338,6 +418,7 @@ mod tests {
         assert_eq!(Color::hex("#ff"), None); // wrong length
         assert_eq!(Color::hex("#fffff"), None); // wrong length
         assert_eq!(Color::hex("#gggggg"), None); // non-hex digits
+        assert_eq!(Color::hex("#ff8800zz"), None); // non-hex alpha pair
         assert_eq!(Color::hex(""), None);
     }
 

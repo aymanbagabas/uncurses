@@ -1,11 +1,25 @@
-//! Win32 console input mode decoder.
+//! Windows console input-mode packet decoder.
 //!
-//! Decodes `CSI Pn ; ... _` parameter packets produced by
-//! `ENABLE_VIRTUAL_TERMINAL_INPUT` / win32-input-mode on Windows
-//! consoles. Each packet carries one INPUT_RECORD-style key event with
-//! virtual-key code, scan code, unicode codepoint, key-down flag,
-//! control-key state, and a repeat count.
-
+//! ## Purpose
+//!
+//! Windows sources can serialize `INPUT_RECORD` key events as
+//! `CSI vk;sc;ch;kd;cks;rep _`. This module turns those packets back into
+//! canonical [`Key`](crate::event::Key) events, preserving key-up/key-down,
+//! repeat counts, lock states, left/right modifier identity, AltGr text, and
+//! UTF-16 surrogate pairs.
+//!
+//! ## Packet fields
+//!
+//! `vk` is the virtual-key code, `sc` the scan code, `ch` the Unicode scalar or
+//! UTF-16 code unit, `kd` the key-down flag, `cks` the control-key-state bitset,
+//! and `rep` the repeat count. Repeat counts greater than one queue additional
+//! events for later parse iterations.
+//!
+//! ## Gotchas
+//!
+//! Modifier-key release records can lose their left/right bit; the decoder uses
+//! the previous control-key state to recover direction. A `vk == 0` packet may
+//! be a surrogate fragment and can consume bytes without producing an event.
 use super::Decoder;
 use super::result::ParseResult;
 use super::util::Params;

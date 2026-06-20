@@ -5,6 +5,24 @@
 //! platform-specific [`EventSource`] that drives the decoder from a
 //! tty, and the key/mouse types that events carry.
 //!
+//! ## The decode pipeline
+//!
+//! Input arrives as a raw byte stream. The source reads bytes (waking on a
+//! self-pipe so another thread can interrupt a blocking read), feeds them to
+//! the decoder, and hands back fully-formed [`Event`] values. Escape
+//! sequences may straddle reads, so the decoder buffers partial input and a
+//! short timeout disambiguates a lone `Esc` key from the start of a CSI/SS3
+//! sequence.
+//!
+//! ```text
+//!   tty input        EventSource              Decoder            caller
+//!   ─────────        ───────────              ───────            ──────
+//!   bytes  ───────▶  read + buffer  ───────▶  scan sequences ─▶  Event
+//!     │                   ▲                        │
+//!     │                   └── Esc-timeout ◀────────┘ (Esc key vs CSI/SS3?)
+//!     └── self-pipe wake ─┘  (interrupt a blocking read from another thread)
+//! ```
+//!
 //! Build an [`EventSource`] over a terminal's input half and read typed
 //! events in a loop. Keys parse from strings and compare by canonical
 //! chord, so matching a shortcut is plain equality.
@@ -31,14 +49,21 @@
 //! # }
 //! ```
 //!
+//! ## Queries
+//!
 //! To ask the terminal a question (its background color, cell size,
 //! device attributes, and so on), write the request bytes from the
 //! [`ansi`](crate::ansi) module to the output and read the matching reply
 //! event back through the same source. The high-level
 //! [`Screen`](crate::screen::Screen) wraps this in `request_*` methods
 //! whose replies surface as ordinary events, never swallowing the user's
-//! keystrokes in between. With the `async` feature, `EventStream` reads
-//! the same events through a [`futures_core::Stream`].
+//! keystrokes in between.
+//!
+//! ## Async
+//!
+//! With the `async` feature, [`EventStream`] reads the same events through a
+//! [`futures_core::Stream`], so the loop becomes `while let Some(ev) =
+//! stream.next().await`.
 //!
 //! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 

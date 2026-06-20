@@ -1,14 +1,23 @@
-//! Decoder behavior flags.
+//! Decoder behavior flags for ambiguous legacy input bytes.
 //!
-//! These flags toggle ambiguous mappings in the legacy (non-kitty) input
-//! parser. With no flags set the decoder reports each C0 byte as its
-//! "semantic" key (Tab/Enter/Escape/Backspace) and reports the VT220
-//! Find/Select numeric tilde codes as Home/End.
+//! ## Purpose
 //!
-//! When the kitty keyboard protocol is negotiated the terminal sends
-//! unambiguous codes in-band, so these flags only affect the legacy parse
-//! paths.
-
+//! [`DecoderFlags`] toggles byte sequences that have more than one historical
+//! interpretation when the terminal is not using an unambiguous keyboard
+//! protocol. With no flags set, the decoder favors semantic keys such as Tab,
+//! Enter, Escape, Backspace, Home, and End.
+//!
+//! ## Affected paths
+//!
+//! The flags affect C0 controls, a timed-out lone `ESC`, Delete/Backspace, and
+//! VT220 Find/Select tilde codes. They do not change richer keyboard encodings
+//! that carry explicit key identity.
+//!
+//! ## Gotchas
+//!
+//! These flags are decoder construction-time policy. Choose them to match the
+//! bindings your application wants to expose; they are not terminal mode
+//! negotiation flags.
 use bitflags::bitflags;
 
 bitflags! {
@@ -33,7 +42,12 @@ bitflags! {
         const CTRL_I              = 1 << 1;
         /// Report `0x0d` as `Ctrl+m` instead of `Enter`.
         const CTRL_M              = 1 << 2;
-        /// Report a lone (timed-out) `0x1b` as `Ctrl+[` instead of `Escape`.
+        /// Report a source-expired lone `0x1b` as `Ctrl+[` instead of `Escape`.
+        ///
+        /// This applies to the [`EventSource`](crate::event::EventSource)
+        /// timeout path that calls the decoder's leading-byte expiry helper.
+        /// The legacy buffered [`Decoder::drain`](super::Decoder::drain)
+        /// method still emits Escape for a lone `ESC`.
         const CTRL_OPEN_BRACKET   = 1 << 3;
         /// Report `0x7f` as `Delete` instead of `Backspace`.
         const BACKSPACE_IS_DELETE = 1 << 4;
