@@ -1,328 +1,282 @@
 # uncurses
 
-The core of [uncurses](https://github.com/aymanbagabas/uncurses): a
-low-level toolkit for building terminal UIs in Rust. Grab the parts you
-need, wire them together, and keep your hands on the loop.
+A terminal rendering library for Rust that hands you the building blocks
+and then gets out of the way.
 
-New here? The [workspace README](../README.md) has the overview and a
-step-by-step [tutorial](../docs/tutorial.md). This page is the map of the
-core crate, module by module.
+There is no terminfo database here, no widget tree, no hidden global state,
+and no framework to wrestle. uncurses assumes a modern, VT100/xterm-style
+terminal and talks to it directly. You own the event loop. You decide when
+bytes hit the wire. The library just makes the bytes correct and minimal.
 
-## The model
+## The mental model
 
-Three types do most of the heavy lifting, and they stay out of each
-other's way:
+A terminal UI is, at heart, three jobs:
 
-- `Terminal` is the device handle. It owns the input and output halves
-  plus a snapshot of the environment, flips raw mode on and off, and
-  reports the window size. It is not `Copy`: it stashes the prior state on
-  `make_raw` so `restore` can put things back with no arguments. Build
-  `Screen` and `EventSource` from its `Copy` `output`/`input` halves and
-  keep the `Terminal` around for the raw-mode lifecycle.
-- `Screen` is a cell grid wrapped around a diffing renderer. You draw into
-  it, then render a frame, and it emits only the bytes that changed. It
-  remembers every terminal mode it switched on so it can put them all back
-  on exit, and it implements `Write` (staging into its buffer) so raw
-  escapes and queries ride along on the same flush.
-- `EventSource` reads the input half and decodes raw bytes into typed
-  `Event` values. It is wakeable: a cheaply-clonable `Waker` can knock a
-  blocked read loose from another thread.
+1. **Decide what the screen should look like** — a grid of cells, each with
+   a character and a style.
+2. **Get that picture onto the terminal** — without redrawing everything
+   every frame.
+3. **React to what the user does** — keys, mouse, paste, resize.
 
-A typical app builds all three from a `Terminal`, draws into the `Screen`,
-reads from the `EventSource`, and restores the terminal on the way out.
-Flip on the `async` feature and an `EventStream` wraps that same
-`EventSource`, handing you events through a `futures_core::Stream`.
+uncurses gives you one type for each job, and one type that bundles all
+three when you just want to ship an app.
 
-## Buffering, in one paragraph
-
-Drawing never touches the terminal. Every method that emits bytes, whether
-it sets a cell, changes a mode, or renders a frame, stages those bytes
-into an in-memory buffer. Nothing leaves until you `flush`. That is why
-draw calls are infallible and return `()`: the only place I/O can fail is
-`flush` (and `present`, which renders then flushes). When you want a frame
-on screen, reach for `present`.
-
-## Module map
-
-| Module | What lives there |
+| You want to... | Reach for |
 | --- | --- |
-| `terminal` | `Terminal` handle, raw mode, window size, stdio helpers. |
-| `screen` | `Screen`: cell grid, frame diffing, terminal modes, lifecycle. |
-| `event` | Input decoding, `EventSource`, terminal `query` helpers, async `stream`. |
-| `style` | `Style`, attributes, colors, underline, hyperlinks, SGR emission. |
-| `color` | Color types and the terminal color `Profile`. |
-| `cell` | The `Cell`: one styled grapheme on the grid. |
-| `buffer` | `Surface` traits and the cell buffer behind a `Screen`. |
-| `layout` | `Position` and `Rect`. |
-| `text` | Width measurement and wrapping. |
-| `ansi` | Escape sequence builders and parsers for the protocols above. |
+| Ship an interactive app fast | [`Screen`](#screen-the-easy-button) |
+| Render cells to *anything* that's `Write` | [`Canvas`](#canvas-the-renderer) |
+| Turn raw bytes into typed events | [`EventSource`](#eventsource-the-input) |
+| Enter raw mode, ask the window size | [`Terminal`](#terminal-the-device) |
+| Emit a specific escape sequence | [`ansi`](#the-rest-of-the-map) |
 
-## Queries
+Drawing is **infallible**. Every draw call writes into an in-memory buffer
+and returns nothing to check. The single place I/O can fail is the
+*flush*, when that buffer goes to the terminal. The hot path stays simple;
+the error handling stays honest.
 
-Terminals will answer a surprising number of questions, if you know how
-to ask. The `event::query` module models each request as a `Query`: a
-value that pairs the request bytes with a matcher for the reply. The
-predefined queries are consts (say `query::BACKGROUND_COLOR`);
-parameterised ones are constructors (say `query::mode(...)`). Either way a
-query never eats your input. Anything the user types in the meantime stays
-queued, in order, for a later `read`, and the matched reply event rides
-through a later `read` too.
+## `Screen`: the easy button
 
-Two methods run a query, on either an `EventSource` or (with the `async`
-feature) an `EventStream`:
-
-- **`query_blocking`** fires the request and **blocks** until the reply
-  lands or `timeout` runs out, handing back the decoded value
-  (`Option<T>`, `None` on timeout). On an `EventSource` it drives the
-  source inline; on an `EventStream` it parks until the reader thread
-  delivers. Great for a one-shot probe at startup, but in an event loop it
-  stalls everything else.
-- **`query`** fires the request and returns right away with an in-flight
-  handle, **without blocking**. Collect it whenever: drive the source
-  yourself and call `try_take` on an `EventSource`, or `.await` the handle
-  on an `EventStream` (see [async queries](#async-queries)). You can keep
-  several in flight at once.
-
-The request goes out through a writer of your choosing, paired with the
-`EventSource` reading the same terminal. Already rendering with a
-`Screen`? Write the request through it: the bytes stage into the screen's
-buffer, ship on the next flush in order with everything else, and in debug
-builds land in the output trace. Just probing, with no `Screen` in play?
-Write straight to the `Terminal` output (or stdout). Simpler, and every
-bit as correct.
+`Screen` owns a terminal, a renderer, and an input source, and manages raw
+mode, capability detection, sensible default modes, and teardown for you.
+It is the fastest way from `cargo new` to a running TUI.
 
 ```rust,no_run
-use std::time::Duration;
-use uncurses::terminal::Terminal;
-use uncurses::event::{EventSource, query};
+use uncurses::buffer::SurfaceMut;
+use uncurses::color::BasicColor;
+use uncurses::event::{Event, Key};
+use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut term = Terminal::open()?;
-    term.make_raw()?;
-    let mut out = term.output();
-    let mut source = EventSource::new(term.input())?;
+    let mut screen = Screen::stdio()?;
+    screen.init()?;             // raw mode + capability detection
+    screen.enter_alt_screen()?; // take over the whole window
+    screen.hide_cursor()?;
 
-    // One-shot probe, no Screen, so write straight to the output.
-    // Blocks this thread until the reply or the timeout.
-    let bg = source.query_blocking(&mut out, query::BACKGROUND_COLOR, Duration::from_millis(100))?;
-
-    term.restore()?; // leave raw mode before returning
-    println!("background: {bg:?}");
-    Ok(())
-}
-```
-
-### Querying by hand
-
-The helpers are not magic, and you do not have to use them. A `Query`
-exposes the two pieces it is built from: `request()` gives you the bytes to
-send, and `matches(&event)` tests whether some event is the reply (and
-decodes it). So you can skip the registry entirely, write the request
-yourself, and let one arm of your normal event loop catch the reply:
-
-```rust,no_run
-use std::io::Write;
-use uncurses::terminal::Terminal;
-use uncurses::event::{Event, EventSource, query};
-
-fn main() -> std::io::Result<()> {
-    let mut term = Terminal::open()?;
-    term.make_raw()?;
-    let mut out = term.output();
-    let mut source = EventSource::new(term.input())?;
-
-    out.write_all(query::BACKGROUND_COLOR.request())?; // fire the request
-    out.flush()?;
-
+    let quit: [Key; 2] = ["q", "esc"].map(|s| s.parse().unwrap());
     loop {
-        let ev = source.read()?;
-        // The reply rides in as an ordinary event; the query's own matcher
-        // recognises and decodes it. Everything else is normal input.
-        if let Some(color) = query::BACKGROUND_COLOR.matches(&ev) {
-            println!("background: {color:?}");
-        }
-        if let Event::KeyPress(_) = ev {
-            break; // any key quits, for the sake of the example
+        screen.clear();
+        let style = Style::default().bold().fg(BasicColor::Green);
+        screen.set_str((0, 0), "Hello, terminal! Press q to quit.", style);
+        screen.present()?;       // render the diff and flush it
+
+        match screen.read_event()? {
+            Event::KeyPress(ref k) if quit.contains(k) => break,
+            Event::Resize(ws) => screen.resize((ws.col, ws.row)),
+            _ => {}
         }
     }
 
-    term.restore()?;
-    Ok(())
+    screen.finish() // restore the terminal: one call, always
 }
 ```
 
-The reply rides in as just another event, so keystrokes and resizes keep
-flowing while you wait, same as with the helpers, and catching it is one
-extra branch in a loop you already run. A blocking `read` waits forever, so
-the loop above never gives up on a silent terminal. If you want a deadline,
-you can add one by hand: swap `read` for `poll(Some(remaining))` against a
-deadline you track yourself, and break when the budget runs out. That is
-real bookkeeping though, recomputed every iteration as input trickles in,
-and it is per query, so a shared budget across a batch becomes a small
-state machine you maintain.
+The lifecycle is explicit and there is no `Drop` magic:
 
-This inline match works the same whether you hold an `EventSource` or an
-`EventStream`. The stream's reader thread blocks on the terminal and fills
-a shared queue; its `read` and `try_read` just pop from that queue, so the
-match arm is identical. What the helpers add is that bookkeeping done for
-you: a deadline, a typed result, and a whole batch resolved on one
-round-trip. Under async they pull the most weight, because
-`EventStream::query` hands back a `Future` that resolves on its own through
-the observer registry. You can `.await` it, or race it against a timeout,
-without weaving reply detection into your `Stream` loop or parking an
-executor thread on a blocking `read`. The `query_inline` and
-`capabilities` examples show both sides.
+- [`Screen::stdio`] / [`Screen::open`] build it; [`init`](Screen::init) (or
+  [`init_with`](Screen::init_with) for [`ScreenOptions`]) begins the
+  session.
+- [`finish`](Screen::finish) consumes the screen and restores the
+  terminal. [`pause`](Screen::pause) / [`resume`](Screen::resume) hand the
+  terminal back temporarily (shell out, then come back), and
+  [`suspend`](Screen::suspend) does that plus `SIGTSTP`.
 
-## Async input
+Read events with [`read_event`](Screen::read_event) (blocking),
+[`poll_event`](Screen::poll_event) + [`try_read_event`](Screen::try_read_event)
+(non-blocking), or, with the `async` feature,
+[`events`](Screen::events) (a `Stream` you `.await`).
 
-Flip on the `async` feature and an `EventSource` becomes an `EventStream`,
-a `futures_core::Stream` of events. It stays runtime agnostic: it leans on
-`futures-core` alone and runs on any executor. A dedicated reader thread
-handles the blocking readiness waits, since there is no reactor to hand
-the terminal handle to.
+## `Canvas`: the renderer
 
-The stream shares the `EventSource` (it holds an `Arc<Mutex<…>>`) instead
-of swallowing it, so you can still run a `query` against the same source
-while the stream is live. The reply gets plucked out and the rest of the
-events keep flowing to the stream.
+`Canvas<W>` is the cell grid and the diffing renderer on their own, over
+**any** `Write` sink. It has no opinion about input, raw mode, or
+lifecycle. Drive it yourself when you want full control, or point it at
+something that isn't a terminal at all:
+
+```rust
+use std::io::Write;
+use uncurses::canvas::Canvas;
+use uncurses::color::BasicColor;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
+
+// Render into a byte buffer. No terminal required.
+let mut canvas: Canvas<Vec<u8>> = Canvas::new(Vec::new(), (40, 1));
+canvas.set_str((0, 0), "rendered off-screen", Style::default().fg(BasicColor::Cyan));
+canvas.render();
+canvas.flush().unwrap();
+
+// `canvas.writer()` now holds the exact bytes the renderer produced.
+assert!(!canvas.writer().is_empty());
+```
+
+That sink can be a `Vec<u8>`, a pipe, a socket, a snapshot test, or a
+transcript recorder. `Screen` always owns input and a terminal lifecycle;
+`Canvas` is what you want when you only need pixels-as-cells out.
+
+Both `Canvas` and `Screen` buffer everything they emit and only touch the
+writer on flush. `render()` computes the minimal diff and stages the
+bytes; `flush()` ships them; [`present`](uncurses::canvas::Canvas::present)
+does both.
+
+## `EventSource`: the input
+
+`EventSource<I>` turns the raw byte stream into typed [`Event`] values:
+keys, mouse, paste chunks, focus, resize, and terminal query replies. It
+handles the gnarly parts — multi-byte escape sequences, ambiguous prefixes,
+the `ESC`-key-versus-escape-sequence timeout — so you match on an enum
+instead of a byte soup.
+
+```rust,no_run
+use uncurses::event::{Event, EventSource};
+use uncurses::terminal::Terminal;
+
+let mut term = Terminal::stdio();
+term.make_raw()?;
+let mut events = EventSource::new(term.input())?;
+
+match events.read()? {
+    Event::KeyPress(key) => println!("key: {key:?}\r"),
+    Event::Resize(size)  => println!("resized to {}x{}\r", size.col, size.row),
+    _ => {}
+}
+# Ok::<(), std::io::Error>(())
+```
+
+Keys compare by their canonical chord, and [`Key`] implements `FromStr`, so
+matching a shortcut is plain equality: `key == "ctrl+c".parse().unwrap()`.
+
+## `Terminal`: the device
+
+`Terminal<I, O>` is the thin handle over the tty: raw mode on and off
+(remembering the prior state so teardown takes no arguments), the window
+size, and a snapshot of the relevant environment. [`Terminal::stdio`] uses
+the process stdio; [`Terminal::open`] talks to the controlling terminal
+directly (`/dev/tty`, or `CONIN$`/`CONOUT$` on Windows) even when stdio is
+redirected.
+
+## The rest of the map
+
+| Module | What lives there |
+| --- | --- |
+| [`screen`] | The self-managing [`Screen`](screen::Screen) facade. |
+| [`canvas`] | The [`Canvas`](canvas::Canvas) cell grid and diffing renderer. |
+| [`buffer`] | Cell storage and the [`Surface`](buffer::Surface) / [`SurfaceMut`](buffer::SurfaceMut) traits every drawable shares. |
+| [`text`] | Width measurement, grapheme handling, and the [`TextSurface`](text::TextSurface) trait that adds `set_str` to any surface. |
+| [`style`] | [`Style`](style::Style), attributes, and SGR plus hyperlink (OSC 8) encoding. |
+| [`color`] | Color types and capability [`Profile`](color::Profile)s with automatic downsampling. |
+| [`event`] | The [`EventSource`](event::EventSource) decoder, [`Event`](event::Event) values, and (with `async`) an `EventStream`. |
+| [`ansi`] | Raw escape encoders and parsers for the cursor, modes, colors, queries, and the long tail of terminal control. |
+| [`terminal`] | The [`Terminal`](terminal::Terminal) handle, raw-mode lifecycle, and window-size queries. |
+| [`cell`] | The [`Cell`](cell::Cell) value type and grapheme segmentation. |
+| [`layout`] | [`Position`](layout::Position), [`Size`](layout::Size), and [`Rect`](layout::Rect) geometry. |
+
+## Styling and color
+
+Build a [`Style`] fluently and hand it to any draw call:
+
+```rust
+use uncurses::color::{BasicColor, Color};
+use uncurses::style::Style;
+
+let style = Style::default()
+    .bold()
+    .italic()
+    .fg(BasicColor::BrightWhite)
+    .bg(Color::Indexed(236));
+```
+
+A color setter accepts a `Color`, a `BasicColor`, or `None` to clear it
+when reusing a base style. Colors can be built from hex or HSL and read
+back the same way:
+
+```rust
+use uncurses::color::Color;
+use uncurses::style::Style;
+
+let pink = Color::hex("#ff69b4").unwrap(); // -> Color::Rgb(255, 105, 180)
+let teal = Color::hsl(180.0, 0.5, 0.4);
+let hex = teal.to_hex();                   // "#339999"
+let (_h, _s, _l) = pink.to_hsl();
+
+let base = Style::default().bold().fg(pink);
+let plain = base.clone().fg(None);         // keep bold, drop the color
+```
+
+Colors are 24-bit RGB, 256-indexed, or the 16 basics, and downsample
+automatically to whatever the active [`Profile`](color::Profile) allows, so
+you write true color once and degrade gracefully on a 16-color terminal.
+
+A [`Style`] is also a value you can render by hand: its `Display` is the
+opening SGR sequence (no reset) and an empty `Style` is the reset, so a
+style and `Style::default()` work as open/close tokens in plain `write!`
+calls. The `styles` example uses exactly that.
+
+## Asking the terminal what it can do
+
+uncurses does not ship a capability database, and it does not guess. If you
+need to know something — the background color, the cell size in pixels,
+which protocols are supported — you *ask*, by writing a request and reading
+the reply back as an ordinary [`Event`]. The Primary Device Attributes
+reply is conventionally sent last, so it marks the end of a batch of
+answers. See the `query` example for the full pattern, and
+[`Screen::capabilities`] for what the facade detects on `init` for you.
+
+## Inline vs. fullscreen
+
+With the alternate screen on (after
+[`enter_alt_screen`](Screen::enter_alt_screen)) you own the whole window.
+Without it — the default — the surface is *inline*: it occupies the full
+width but only as many rows as you draw, anchored in the normal buffer so
+scrollback above and the returning shell prompt below stay intact. Both are
+diffed cell by cell.
+
+## Features
+
+- `unicode-rs` *(default)* — pure-Rust width and segmentation tables. Small
+  and fast.
+- `icu` — ICU4X-backed segmentation and properties. Larger build, more
+  correct on emoji and grapheme edge cases. Takes precedence when both are
+  on.
+- `async` — adds [`EventStream`], a runtime-agnostic
+  `futures_core::Stream` of events. Pulls in only `futures-core`.
+
+## Install
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses", features = ["async"] }
+uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
 
-### Async queries
+uncurses runs on Linux, macOS, Windows, and the BSDs, and tracks the latest
+stable Rust on the 2024 edition.
 
-`EventStream::query` fires the request without blocking and hands back an
-in-flight handle that is a `Future`: `.await` it to get the reply
-(`Option<T>`, `None` on timeout). The task yields while it waits, so the
-executor keeps doing other work; the reader thread delivers the reply when
-it lands. The same writer choice applies: write through your `Screen` if
-you have one, or straight to the terminal output if you are only probing.
-(Prefer to collect it synchronously? Drive it with `try_take`, or call
-`EventStream::query_blocking` to park until it arrives.)
+## Learn by example
 
-```rust,ignore
-use std::time::Duration;
-use uncurses::color::Color;
-use uncurses::event::{EventStream, Input, query};
-use uncurses::screen::Screen;
+The workspace [`examples/`](../examples/README.md) directory is full of
+runnable demos grouped by use case — read input only, draw only, the full
+mix, mouse, async, inline prompts, and a two-pane file explorer. A few good
+first stops:
 
-// Runtime-agnostic: drive this with whatever executor you use.
-async fn background_color<I: Input + 'static, W: std::io::Write>(
-    stream: &mut EventStream<I>,
-    screen: &mut Screen<W>,
-) -> std::io::Result<Option<Color>> {
-    // Issue the query (non-blocking), then await the reply: the task
-    // yields until the answer arrives or the timeout elapses.
-    Ok(stream
-        .query(screen, query::BACKGROUND_COLOR, Duration::from_millis(100))?
-        .await)
-}
+```sh
+cargo run --example input_only   # decode and print events, no rendering
+cargo run --example draw_only    # animate the screen, no input
+cargo run --example offscreen    # render to a Vec<u8>, no terminal
+cargo run --example counter      # the full loop: render + keys + mouse
 ```
-
-Build the stream from a source with `EventSource::into_stream()`. To keep
-a synchronous query handle to the same source alongside the stream, share
-it with `Arc<Mutex<EventSource>>` and `EventStream::from_shared(...)`.
-
-## Unicode features
-
-### Character widths
-
-Every cell on the grid is one or two columns wide. uncurses decides how
-many columns a character or cluster occupies with two functions in the
-`text` module:
-
-- `char_width(c, eaw_wide)` measures a single code point, wcwidth-style.
-  Controls, combining marks, format characters, and default-ignorable
-  code points are 0; code points whose East-Asian-Width property is
-  `Wide` or `Fullwidth` (most CJK) are 2; everything else is 1.
-- `grapheme_width(g, eaw_wide)` measures one extended grapheme cluster as
-  a whole. It honours variation selectors (VS15 text, VS16 emoji),
-  Regional Indicator pairs (flag emoji), ZWJ sequences, and
-  `Extended_Pictographic` default presentation per UTS #51. Combining
-  marks and joiners in the tail of a cluster add no columns.
-
-### East-Asian Ambiguous policy (`eaw_wide`)
-
-A block of code points carry East-Asian-Width `Ambiguous`: characters
-that existed in both legacy CJK encodings (drawn double-width) and
-Western text (drawn single-width), so their column count genuinely
-depends on context. Examples are box-drawing glyphs, the horizontal
-ellipsis, and many Greek and Cyrillic letters. The `eaw_wide` flag picks
-the policy:
-
-- `false` (default): Ambiguous code points are 1 column.
-- `true`: Ambiguous code points are 2 columns.
-
-Terminals configured for CJK locales usually render these double-wide
-and want `true`; most others want `false`. The policy is orthogonal to
-clustering and applies in both width modes.
-
-There is no universally correct choice. The only hard rule is that your
-measurement and the terminal's must use the same policy: if the library
-counts an Ambiguous character as 1 column while the terminal draws it as
-2 (or the reverse), every following cell on the line is misaligned, which
-shows up as overlapping glyphs, gaps, or garbled tables. The terminal's
-policy is usually tied to its locale or a config setting, and the font in
-use can pull the glyph's visual width the other way again. uncurses does
-not probe any of this; you set the policy to match your target with
-`Screen::with_eaw_wide`, and it then flows into `str_width`,
-`grapheme_width`, `set_str`, and the rest.
-
-### Grapheme-cluster mode (Unicode core, DEC 2027)
-
-How a string is split into cells is a separate choice from `eaw_wide`,
-captured by `WidthMode`:
-
-- `Wc` (default): each cluster's width is the width of its first code
-  point alone. Cluster-blind, so VS16, ZWJ joins, and emoji-presentation
-  overrides do not change the result.
-- `Grapheme`: the full cluster is measured via `grapheme_width`, so a
-  `✋` + VS16 sequence is 2 columns and a `✋` + VS15 sequence is 1.
-
-This mirrors the terminal's Unicode core mode (DEC private mode 2027).
-When the terminal advertises that it measures whole clusters, enabling
-the mode keeps the library's accounting in step with what the terminal
-actually draws; otherwise the wcwidth-style `Wc` mode matches the more
-common per-code-point behaviour.
-
-### How `Screen` measures strings
-
-A `Screen` combines both choices when it paints. `set_str`,
-`set_str_rect`, and `insert_above` all measure through the screen's
-current `width_mode()` and `eaw_wide()`:
-
-- `width_mode()` is derived from grapheme-cluster mode: `Grapheme` once
-  `set_grapheme_clusters(true)` has emitted DEC 2027, `Wc` otherwise.
-- `eaw_wide()` is fixed at construction with `Screen::with_eaw_wide(true)`
-  and defaults to `false`.
-
-```rust,ignore
-let mut screen = Screen::new(out, (80, 24)).with_eaw_wide(true);
-screen.set_grapheme_clusters(true); // measure whole clusters
-
-// Advances the cursor by the measured column count, here 2.
-let end = screen.set_str((0, 0), "中", WrapMode::Truncate);
-```
-
-To measure without painting, the screen exposes helpers that already
-carry its current mode and policy: `screen.str_width(s)` for a whole
-string's column count (inline SGR and OSC 8 are ignored, as in
-`set_str`), `screen.grapheme_width(g)` for one cluster, and
-`screen.grapheme_cells(s)` to iterate `(cluster, width)` pairs. The
-underlying `text::char_width`, `text::grapheme_width`, and
-`text::grapheme_cells` functions are also available if you want to pass a
-mode and policy explicitly.
-
-### Backends
-
-Width and grapheme segmentation come from one of two backends:
-
-- `unicode-rs` (default): pure-Rust tables, small and fast.
-- `icu`: ICU4X-backed, larger but more correct on emoji and grapheme
-  edge cases. Takes precedence when both are enabled.
 
 ## License
 
 MIT. See [LICENSE](../LICENSE).
+
+[`Screen`]: https://docs.rs/uncurses/latest/uncurses/screen/struct.Screen.html
+[`Screen::stdio`]: https://docs.rs/uncurses/latest/uncurses/screen/struct.Screen.html
+[`Screen::open`]: https://docs.rs/uncurses/latest/uncurses/screen/struct.Screen.html
+[`ScreenOptions`]: https://docs.rs/uncurses/latest/uncurses/screen/struct.ScreenOptions.html
+[`Event`]: https://docs.rs/uncurses/latest/uncurses/event/enum.Event.html
+[`Key`]: https://docs.rs/uncurses/latest/uncurses/event/struct.Key.html
+[`Style`]: https://docs.rs/uncurses/latest/uncurses/style/struct.Style.html
+[`Terminal::stdio`]: https://docs.rs/uncurses/latest/uncurses/terminal/struct.Terminal.html
+[`Terminal::open`]: https://docs.rs/uncurses/latest/uncurses/terminal/struct.Terminal.html
+[`EventStream`]: https://docs.rs/uncurses/latest/uncurses/event/struct.EventStream.html

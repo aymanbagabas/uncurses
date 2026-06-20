@@ -5,56 +5,62 @@ you click (or press a key) to bump a counter. By the end you will have
 touched raw mode, the alternate screen, drawing, the event loop, and a
 clean teardown. The full source lives in `examples/counter.rs`.
 
-## The three pieces
+## One type to start with
 
-uncurses hands you three types and then stays out of the way:
+The high-level [`Screen`] is a self-managing facade. It owns three things
+you would otherwise wire up yourself:
 
-- `Terminal` owns the input and output halves and the raw-mode lifecycle.
-- `Screen` is a cell grid with a diffing renderer. You draw into it.
-- `EventSource` decodes input bytes into typed `Event` values.
+- a `Terminal` (the input and output halves, plus the raw-mode lifecycle),
+- a `Canvas` (a cell grid with a diffing renderer that you draw into), and
+- an `EventSource` (the decoder that turns input bytes into typed `Event`
+  values).
 
-We will wrap them in an `App` struct with three methods: `start` sets
-everything up, `run` is the loop, and `stop` puts the terminal back.
+You can use those three pieces directly when you want the control (see the
+[uncurses README](../uncurses/README.md)), but `Screen` is the fastest way
+to a working app. We will wrap it in an `App` struct with three methods:
+`start` sets everything up, `run` is the loop, and `stop` puts the terminal
+back.
 
 ## Setting up
 
-`start` enters raw mode, builds a `Screen` and an `EventSource` from the
-terminal's halves, and switches on the alternate screen, a hidden cursor,
-and mouse reporting.
+`start` builds a `Screen` over the process stdio, begins a session, and
+switches on the alternate screen, a hidden cursor, and mouse reporting.
 
 ```rust,ignore
-use uncurses::terminal::Terminal;
-use uncurses::ansi::mode::{MouseEncoding, MouseMode};
-use uncurses::event::EventSource;
-use uncurses::screen::Screen;
+use uncurses::event::{Event, Key, MouseButton};
+use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::terminal::{Stdin, Stdout};
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     count: u32,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
+        let mut screen = Screen::stdio()?;
 
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        screen.set_mouse_mode(MouseMode::Normal, MouseEncoding::Sgr);
+        // init enters raw mode and queries the terminal's capabilities. The
+        // options describe the defaults we want: here, enable mouse
+        // tracking so clicks arrive as events. The screen picks the best
+        // mouse mode and encoding the terminal actually supports.
+        screen.init_with(ScreenOptions {
+            mouse: Some(MousePreference::default()),
+            ..ScreenOptions::default()
+        })?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
-        let events = EventSource::new(term.input())?;
-        Ok(Self { term, screen, events, count: 0 })
+        Ok(Self { screen, count: 0 })
     }
 }
 ```
 
-Notice the mode setters return nothing. They just stage bytes into the
-screen's buffer, so they can't fail. Those bytes reach the terminal on the
-next flush.
+`init` (and `init_with`) does the busywork: raw mode, a batch of capability
+queries, and the always-on defaults like bracketed paste. The mode setters
+(`enter_alt_screen`, `hide_cursor`, `enable_mouse`, and the rest) write
+their escape sequences immediately and flush, so each one returns an
+`io::Result`.
 
 ## Drawing a frame
 
@@ -62,11 +68,15 @@ Drawing writes cells into the screen, then commits a frame. `render`
 stages the diff and `flush` sends it; `present` does both in one go. A
 frame only emits the cells that actually changed since the last one.
 
+The drawing methods come from two traits. `clear`, `width`, and `height`
+come from the surface traits in [`buffer`]; the string painters
+(`set_str` and friends) come from [`TextSurface`]. Bring them into scope.
+
 ```rust,ignore
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
 use uncurses::style::Style;
-use uncurses::text::WrapMode;
+use uncurses::text::TextSurface;
 
 impl App {
     fn render(&mut self) -> std::io::Result<()> {
@@ -77,10 +87,10 @@ impl App {
         let x = w.saturating_sub(label.len() as u16) / 2;
 
         let style = Style::default()
-            .fg(BasicColor::BrightWhite.into())
-            .bg(BasicColor::Blue.into())
+            .fg(BasicColor::BrightWhite)
+            .bg(BasicColor::Blue)
             .bold();
-        self.screen.set_str_with((x, h / 2), &label, WrapMode::Truncate, style);
+        self.screen.set_str((x, h / 2), &label, style);
 
         self.screen.present()
     }
@@ -89,14 +99,12 @@ impl App {
 
 ## The event loop
 
-`run` draws once, then blocks on `events.read()` and reacts. Keys parse
+`run` draws once, then blocks on `screen.read_event()` and reacts. Keys parse
 straight from strings, and `==` compares the canonical chord, so matching
 a shortcut is plain equality. A resize event just tells the screen its new
-size.
+size, and a mouse click bumps the counter too.
 
 ```rust,ignore
-use uncurses::event::{Event, Key};
-
 impl App {
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
@@ -104,14 +112,18 @@ impl App {
         let click: [Key; 2] = ["enter", "space"].map(|s| s.parse().unwrap());
 
         loop {
-            match self.events.read()? {
+            match self.screen.read_event()? {
                 Event::KeyPress(ref k) if quit.contains(k) => break,
                 Event::KeyPress(ref k) if click.contains(k) => {
                     self.count += 1;
                     self.render()?;
                 }
+                Event::MouseClick(m) if m.button == MouseButton::Left => {
+                    self.count += 1;
+                    self.render()?;
+                }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, ws.row);
+                    self.screen.resize((ws.col, ws.row));
                     self.render()?;
                 }
                 _ => {}
@@ -122,19 +134,23 @@ impl App {
 }
 ```
 
+`read` returns each event and, as a side effect, records the capability
+replies to the queries `init` fired. Those replies never reach your match
+arms; you just see the keys, mouse, paste, and resize events you care
+about.
+
 ## Putting the terminal back
 
-`stop` is the mirror of `start`. `Screen::reset` emits the teardown for
-every mode the screen turned on (alt screen, cursor, mouse), a flush sends
-it, and `Terminal::restore` drops raw mode. Run it even when the loop
-returns an error, so a crash never leaves the terminal in a wrecked state.
+`stop` is the mirror of `start`, and it is a single call. `Screen::finish`
+tears down every mode the screen turned on (alt screen, cursor, mouse),
+flushes, and restores the terminal's prior state. It consumes the screen,
+so `stop` takes `self` by value. Run it even when the loop returns an
+error, so a crash never leaves the terminal in a wrecked state.
 
 ```rust,ignore
 impl App {
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -150,9 +166,15 @@ fn main() -> std::io::Result<()> {
 
 - `examples/keylog.rs` shows every decoded event, plus suspend and resume.
 - `examples/screen_toggle.rs` flips between inline and alternate screen.
+- `examples/inline_input.rs` grows a multi-line prompt in place and commits
+  it into the scrollback.
 - `examples/file_explorer.rs` reads input asynchronously with the `async`
   feature and a small runtime.
 - [How terminals actually work](terminals.md) is the mental model behind
   everything you just did: byte streams, raw mode, and VT modes.
 - The [uncurses README](../uncurses/README.md) maps the rest of the API,
-  including terminal queries and styling.
+  including the low-level `Canvas`, terminal queries, and styling.
+
+[`Screen`]: https://docs.rs/uncurses/latest/uncurses/screen/struct.Screen.html
+[`TextSurface`]: https://docs.rs/uncurses/latest/uncurses/text/trait.TextSurface.html
+[`buffer`]: https://docs.rs/uncurses/latest/uncurses/buffer/index.html
