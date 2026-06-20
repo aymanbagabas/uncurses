@@ -12,20 +12,20 @@ mod key;
 mod mouse;
 mod pending;
 pub mod poll;
-pub mod query;
 mod sigwinch;
 pub mod source;
 #[cfg(unix)]
 pub mod source_unix;
 #[cfg(windows)]
 pub mod source_windows;
+#[cfg(feature = "async")]
 pub mod stream;
 
 pub use decode::*;
 pub use key::*;
 pub use mouse::*;
-pub use query::{Query, QueryReply, Single};
 pub use source::*;
+#[cfg(feature = "async")]
 pub use stream::EventStream;
 
 use crate::ansi::mode::{Mode, ModeSetting};

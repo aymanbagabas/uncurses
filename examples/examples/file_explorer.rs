@@ -485,10 +485,7 @@ impl App {
         self.render()?;
 
         while let Some(ev) = self.events.next().await {
-            let ev = match ev {
-                Ok(ev) => ev,
-                Err(_) => break,
-            };
+            let ev = ev?;
             let mut dirty = true;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,

@@ -25,7 +25,6 @@
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Console::{
@@ -38,8 +37,8 @@ use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DeadlineKind,
-    EventSource, Input, Observers, Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
+    Waker,
 };
 
 const READ_BATCH: usize = 64;
@@ -128,7 +127,6 @@ where
             queue: VecDeque::with_capacity(16),
             waker,
             handle_resize: true,
-            observers: Observers::default(),
             poller,
             wake_event,
             vt_input,
@@ -138,52 +136,18 @@ where
         })
     }
 
-    pub(super) fn pump(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        let (effective, kind) = self.effective_timeout(timeout);
-        let mut ready = [false; 2];
-        self.poller.poll(&mut ready, effective)?;
-        self.ingest(ready, kind)
+    /// Reset the wake event after a [`Waker`] fired. Platform hook for
+    /// [`EventSource::fill`].
+    pub(super) fn drain_wake(&mut self) {
+        unsafe {
+            ResetEvent(self.wake_event);
+        }
     }
 
-    /// Act on a readiness result `[input, wake]` (the poller's fixed
-    /// index order): surface a wake as `Interrupted`, drain ready console
-    /// records, or run a deadline expiry when nothing was ready. Performs
-    /// no blocking wait of its own, so it is safe to call under a lock
-    /// after a separate lock-free [`Poller::poll`] — the path an
-    /// [`super::EventStream`] reader thread takes. Resize arrives as a
-    /// console record, so there is no separate winch fd here.
-    pub(super) fn ingest(&mut self, ready: [bool; 2], kind: DeadlineKind) -> io::Result<()> {
-        let input_ready = ready[0];
-        let wake_ready = ready[1];
-
-        if wake_ready {
-            unsafe {
-                ResetEvent(self.wake_event);
-            }
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
-        }
-
-        if input_ready {
-            self.read_records()?;
-        } else {
-            match kind {
-                DeadlineKind::Esc => self.expire_partial(),
-                DeadlineKind::Paste => self.expire_paste(),
-                DeadlineKind::None => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Re-check readiness with a zero-timeout poll and ingest whatever is
-    /// ready, all under the caller's lock — the reader-thread path (see
-    /// the unix counterpart for the rationale). Deadline expiry is the
-    /// caller's responsibility (see [`EventSource::expire`]).
-    pub(super) fn drain_after_wait(&mut self) -> io::Result<()> {
-        let mut ready = [false; 2];
-        self.poller.poll(&mut ready, Some(Duration::ZERO))?;
-        self.ingest(ready, DeadlineKind::None)
+    /// Read whatever console records are ready and serialise them through
+    /// the decoder. Platform hook for [`EventSource::fill`].
+    pub(super) fn drain_input(&mut self) -> io::Result<()> {
+        self.read_records()
     }
 
     fn input_handle(&self) -> HANDLE {
