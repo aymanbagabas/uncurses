@@ -218,8 +218,8 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
         && params.get_or(0, 0) == 997
     {
         return match params.get_or(1, 0) {
-            1 => Some(Event::DarkColorScheme),
-            2 => Some(Event::LightColorScheme),
+            1 => Some(Event::ColorTheme { dark: true }),
+            2 => Some(Event::ColorTheme { dark: false }),
             _ => None,
         };
     }

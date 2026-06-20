@@ -29,7 +29,7 @@ impl App {
         term.make_raw()?;
         let mut screen = Canvas::new(
             term.output(),
-            (term.window_size().unwrap_or_default().col, VIEW_H),
+            (term.get_window_size().unwrap_or_default().col, VIEW_H),
         );
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;

@@ -21,6 +21,8 @@
 
 mod position;
 mod rect;
+mod size;
 
 pub use position::Position;
 pub use rect::Rect;
+pub use size::Size;

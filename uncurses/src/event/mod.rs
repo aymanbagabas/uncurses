@@ -143,8 +143,9 @@ pub enum Event {
     SecondaryDeviceAttributes(Vec<Option<u32>>),
     /// Tertiary device attributes (DA3) — terminal ID string.
     TertiaryDeviceAttributes(String),
-    /// Terminal version reply (XTVERSION / OSC).
-    TerminalVersion(String),
+    /// Terminal name reply (XTVERSION). Carries the raw identifier string,
+    /// which typically combines a name and version (e.g. `"XTerm(380)"`).
+    TerminalName(String),
 
     // -- Mode / capability reports ------------------------------------------
     /// DECRPM / RM mode report.
@@ -157,8 +158,12 @@ pub enum Event {
     KittyKeyboardEnhancements(crate::ansi::KittyKeyboardFlags),
     /// XTWINOPS reply (window operation).
     WindowOp { op: u32, args: Vec<Option<u32>> },
-    /// XTGETTCAP / termcap capability reply.
-    Termcap(String),
+    /// XTGETTCAP / termcap capability reply. `recognized` is `true` for a
+    /// successful reply (`DCS 1 + r`) and `false` for a failure
+    /// (`DCS 0 + r`); `payload` is the decoded `;`-joined `cap[=value]`
+    /// string, decoded the same way in both cases (a failure echoes the
+    /// requested, now known-unsupported, capability names).
+    Termcap { recognized: bool, payload: String },
 
     // -- Colors --------------------------------------------------------------
     /// OSC 10 default foreground color reply.
@@ -167,10 +172,12 @@ pub enum Event {
     BackgroundColor(Color),
     /// OSC 12 cursor color reply.
     CursorColor(Color),
-    /// Color scheme is dark (DEC 2031 report).
-    DarkColorScheme,
-    /// Color scheme is light (DEC 2031 report).
-    LightColorScheme,
+    /// OSC 4 indexed palette color reply (`OSC 4 ; index ; color`).
+    PaletteColor { index: u8, color: Color },
+    /// Color theme report (DEC 2031): `dark` is `true` for a dark theme,
+    /// `false` for a light theme. Indicates only the dark/light preference,
+    /// not the actual colors.
+    ColorTheme { dark: bool },
 
     // -- Clipboard / graphics ------------------------------------------------
     /// OSC 52 clipboard content reply.

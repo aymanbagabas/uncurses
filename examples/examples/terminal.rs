@@ -20,7 +20,7 @@ fn main() -> io::Result<()> {
     let mut term = Terminal::open()?;
     term.make_raw()?;
 
-    let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
+    let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
     let mut source = EventSource::new(term.input())?;
 
     screen.set_alt_screen(true);

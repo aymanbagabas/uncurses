@@ -384,14 +384,6 @@ where
         }
     }
 
-    /// Return an event to the front of the queue, so the next
-    /// [`read`](Self::read) or [`try_read`](Self::try_read) yields it
-    /// first. The inverse of [`try_read`](Self::try_read): use it to put
-    /// back an event taken while looking for another one.
-    pub fn unread(&mut self, event: Event) {
-        self.queue.push_front(event);
-    }
-
     /// Push a freshly produced event onto the queue.
     pub(super) fn emit(&mut self, ev: Event) {
         self.queue.push_back(ev);

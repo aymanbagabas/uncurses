@@ -427,7 +427,7 @@ impl App {
         let mut term = Terminal::stdio();
         term.make_raw()?;
 
-        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
 
         // Enter the alt screen, hide the cursor, and enable SGR-encoded
         // mouse tracking via the screen API so internal state stays in

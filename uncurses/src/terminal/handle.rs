@@ -24,7 +24,7 @@
 //! # fn main() -> std::io::Result<()> {
 //! let mut term = Terminal::open()?; // owns fds + env; not Copy
 //! let _prev = term.make_raw()?;     // caches the prior state
-//! let mut screen = Canvas::new(term.output(), term.window_size()?);
+//! let mut screen = Canvas::new(term.output(), term.get_window_size()?);
 //! let mut source = EventSource::new(term.input())?;
 //! // ... draw to `screen`, read from `source` ...
 //! screen.reset();
@@ -221,9 +221,10 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     ///
     /// Tries the output half first, then falls back to the input half if
     /// the output query fails (for example when stdout is redirected to a
-    /// pipe while stdin is still attached to the terminal).
-    pub fn window_size(&self) -> io::Result<Winsize> {
-        get_window_size(&self.output).or_else(|_| get_window_size(&self.input))
+    /// pipe while stdin is still attached to the terminal). If both halves
+    /// fail, the output half's error is returned.
+    pub fn get_window_size(&self) -> io::Result<Winsize> {
+        get_window_size(&self.output).or_else(|e| get_window_size(&self.input).map_err(|_| e))
     }
 }
 
@@ -283,7 +284,7 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     /// Query the current window size from the output's console screen
     /// buffer (`GetConsoleScreenBufferInfo`). Pixel dimensions are
     /// unavailable on this platform and report as `0`.
-    pub fn window_size(&self) -> io::Result<Winsize> {
+    pub fn get_window_size(&self) -> io::Result<Winsize> {
         get_window_size(&self.output)
     }
 }

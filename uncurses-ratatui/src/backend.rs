@@ -116,7 +116,7 @@ where
     /// terminal's current window size, falling back to 80x24.
     fn from_terminal(terminal: Terminal<I, O>) -> io::Result<Self> {
         let size = terminal
-            .window_size()
+            .get_window_size()
             .map(|w| (w.col, w.row))
             .ok()
             .filter(|&(c, r)| c != 0 && r != 0)
@@ -278,7 +278,7 @@ where
         // otherwise it tracks the full terminal size.
         let (full_w, full_h) = self
             .terminal
-            .window_size()
+            .get_window_size()
             .ok()
             .map(|s| (s.col, s.row))
             .filter(|&(c, r)| c != 0 && r != 0)
@@ -430,7 +430,7 @@ where
         // buffer size if the query fails (e.g. output is not a tty).
         let (width, height) = self
             .terminal
-            .window_size()
+            .get_window_size()
             .ok()
             .map(|s| (s.col, s.row))
             .filter(|&(c, r)| c != 0 && r != 0)
@@ -442,7 +442,7 @@ where
     fn window_size(&mut self) -> io::Result<WindowSize> {
         // One query reports both cell and pixel dimensions; fall back to
         // the screen's buffer size for cells if it fails.
-        let ws = self.terminal.window_size().ok();
+        let ws = self.terminal.get_window_size().ok();
         let (width, height) = ws
             .as_ref()
             .map(|w| (w.col, w.row))
