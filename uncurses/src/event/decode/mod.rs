@@ -617,6 +617,37 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_in_band_resize_with_pixels() {
+        // CSI 48 ; rows ; cols ; ypix ; xpix t — full five-param form.
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[48;30;100;480;800t");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::Resize(ws) => {
+                assert_eq!((ws.row, ws.col), (30, 100));
+                assert_eq!((ws.ypixel, ws.xpixel), (480, 800));
+            }
+            other => panic!("expected Resize, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_band_resize_without_pixels() {
+        // CSI 48 ; rows ; cols t — pixel fields omitted. Must still decode
+        // as a resize (not a generic window-op) with zero pixel size.
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[48;30;100t");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::Resize(ws) => {
+                assert_eq!((ws.row, ws.col), (30, 100));
+                assert_eq!((ws.ypixel, ws.xpixel), (0, 0));
+            }
+            other => panic!("expected Resize, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_parse_csi_z_shift_tab() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[Z");
