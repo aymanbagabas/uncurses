@@ -1,3 +1,8 @@
+//! Terminal cell values and grapheme segmentation.
+//!
+//! A [`Cell`] stores one display cell's content, style, and wide-cell role, including continuation placeholders for two-column graphemes.
+//! Reach for this module when constructing cells directly or when code needs to reason about narrow, wide, and continuation cells.
+
 pub mod segment;
 
 pub use segment::graphemes;

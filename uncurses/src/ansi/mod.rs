@@ -1,3 +1,9 @@
+//! ANSI escape sequence helpers.
+//!
+//! This module groups small encoders, parsers, and utilities for terminal control sequences.
+//! It covers cursor movement, modes, colors, titles, hyperlinks, clipboard data, wrapping, and related text handling.
+//! Reach for it when you need to emit or inspect raw control sequences directly instead of going through the higher level rendering APIs.
+
 pub mod ascii;
 pub mod background;
 pub mod c0;

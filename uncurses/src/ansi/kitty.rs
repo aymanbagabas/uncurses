@@ -1,6 +1,6 @@
 //! Kitty keyboard protocol — progressive enhancement.
 //!
-//! See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
+//! See: <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
 
 use std::io::{self, Write};
 

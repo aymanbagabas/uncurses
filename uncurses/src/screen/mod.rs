@@ -39,9 +39,40 @@
 //! # }
 //! ```
 //!
+//! # Inline and fullscreen
+//!
+//! With the alternate screen on (after [`enter_alt_screen`](Screen::enter_alt_screen))
+//! the managed area is the whole terminal viewport, addressed with absolute
+//! moves. Without it (the default) the screen is *inline*: it occupies the
+//! full terminal width but only as many rows as you draw, anchored in the
+//! normal buffer so scrollback above and the returning shell prompt below
+//! stay intact. Set the inline height with [`resize`](Screen::resize), and
+//! push lines into the scrollback above the surface with
+//! [`insert_above`](Screen::insert_above). Call
+//! [`autoresize`](Screen::autoresize) to refit to the current window.
+//!
+//! # Options and defaults
+//!
+//! [`init`](Screen::init) uses [`ScreenOptions::default`];
+//! [`init_with`](Screen::init_with) takes an explicit [`ScreenOptions`] to
+//! choose the desired keyboard enhancements, whether to enable mouse
+//! tracking at startup, and the in-band-resize and pixel-size behaviors.
+//! Always-on defaults (such as bracketed paste) take effect immediately;
+//! discovery-driven defaults are applied once the terminal answers the
+//! capability queries (see [`capabilities`](Screen::capabilities)).
+//!
+//! # Async events
+//!
+//! With the `async` feature, `events` returns a
+//! [`futures_core::Stream`] adapter that yields the same decoded events as
+//! [`read`](Screen::read) (including the capability-detection side effect),
+//! driven by a `next().await` loop. The stream borrows the screen only for
+//! the duration of one poll, so the loop body is free to draw.
+//!
 //! [`Terminal`]: crate::terminal::Terminal
 //! [`Canvas`]: crate::canvas::Canvas
 //! [`EventSource`]: crate::event::EventSource
+//! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 
 mod cursor;
 mod modes;

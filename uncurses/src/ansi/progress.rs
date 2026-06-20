@@ -1,6 +1,6 @@
 //! Windows Terminal / ConEmu progress-bar sequences (OSC 9 ; 4).
 //!
-//! See: https://learn.microsoft.com/en-us/windows/terminal/tutorials/progress-bar-sequences
+//! See: <https://learn.microsoft.com/en-us/windows/terminal/tutorials/progress-bar-sequences>
 
 use std::io::{self, Write};
 

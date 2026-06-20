@@ -10,7 +10,7 @@ pub fn write_notify<W: Write>(w: &mut W, body: &str) -> io::Result<()> {
 /// Send a Kitty-compatible desktop notification (`OSC 99 ; meta ; body ST`).
 ///
 /// `metadata` is a list of key-value strings joined with `:`. See:
-/// https://sw.kovidgoyal.net/kitty/desktop-notifications/
+/// <https://sw.kovidgoyal.net/kitty/desktop-notifications/>
 pub fn write_desktop_notification<W: Write>(
     w: &mut W,
     body: &str,
