@@ -317,137 +317,13 @@ impl Event {
     }
 }
 
-/// Reassemble streaming [`Event::PasteChunk`] payloads back into a
-/// single owned buffer.
-///
-/// Bracketed pastes are emitted as a sequence of `PasteChunk(Vec<u8>)`
-/// events bracketed by [`Event::PasteStart`] and [`Event::PasteEnd`].
-/// Callers that want the whole paste as one value push every chunk's
-/// bytes into a `PasteBuffer` and call [`PasteBuffer::into_string`] (or
-/// [`PasteBuffer::into_bytes`]) once `PasteEnd` arrives.
-#[derive(Debug, Default, Clone)]
-pub struct PasteBuffer {
-    buf: Vec<u8>,
-}
-
-impl PasteBuffer {
-    /// Create an empty buffer.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Append the bytes of one `PasteChunk` payload.
-    pub fn push(&mut self, chunk: &[u8]) {
-        self.buf.extend_from_slice(chunk);
-    }
-
-    /// Total bytes accumulated so far.
-    pub fn len(&self) -> usize {
-        self.buf.len()
-    }
-
-    /// Whether no bytes have been pushed yet.
-    pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
-    }
-
-    /// Borrow the accumulated bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.buf
-    }
-
-    /// Consume the accumulator and return the raw bytes.
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.buf
-    }
-
-    /// Consume the accumulator and decode as UTF-8, replacing invalid
-    /// sequences with `U+FFFD`. Use this when paste content is expected
-    /// to be text and lossy recovery is acceptable.
-    pub fn into_string_lossy(self) -> String {
-        match String::from_utf8(self.buf) {
-            Ok(s) => s,
-            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-        }
-    }
-
-    /// Consume the accumulator and decode as UTF-8, returning the raw
-    /// bytes back if the content is not valid UTF-8.
-    pub fn into_string(self) -> Result<String, Vec<u8>> {
-        String::from_utf8(self.buf).map_err(|e| e.into_bytes())
-    }
-}
-
-/// One-shot convenience: concatenate every `PasteChunk` payload from an
-/// iterator and decode as UTF-8 (lossy).
-///
-/// Equivalent to feeding each chunk to a [`PasteBuffer`] and calling
-/// [`PasteBuffer::into_string_lossy`].
-pub fn decode_paste_chunks<'a, I>(chunks: I) -> String
-where
-    I: IntoIterator<Item = &'a [u8]>,
-{
-    let mut buf = PasteBuffer::new();
-    for c in chunks {
-        buf.push(c);
-    }
-    buf.into_string_lossy()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn paste_buffer_concatenates_chunks() {
-        let mut b = PasteBuffer::new();
-        assert!(b.is_empty());
-        b.push(b"hello ");
-        b.push(b"world");
-        assert_eq!(b.len(), 11);
-        assert_eq!(b.as_bytes(), b"hello world");
-        assert_eq!(b.into_string().unwrap(), "hello world");
-    }
-
-    #[test]
     fn color_scheme_display() {
         assert_eq!(ColorScheme::Dark.to_string(), "dark");
         assert_eq!(ColorScheme::Light.to_string(), "light");
-    }
-
-    #[test]
-    fn paste_buffer_into_string_lossy_replaces_invalid_utf8() {
-        let mut b = PasteBuffer::new();
-        b.push(b"ok \xff bad");
-        let s = b.into_string_lossy();
-        assert!(s.contains("ok "));
-        assert!(s.contains("bad"));
-        assert!(s.contains("\u{FFFD}"));
-    }
-
-    #[test]
-    fn paste_buffer_into_string_strict_returns_bytes_on_invalid() {
-        let mut b = PasteBuffer::new();
-        b.push(b"\xff\xfe");
-        let err = b.into_string().unwrap_err();
-        assert_eq!(err, vec![0xff, 0xfe]);
-    }
-
-    #[test]
-    fn paste_buffer_reassembles_split_codepoint() {
-        // The 4-byte emoji split across two chunks must reassemble
-        // cleanly when decoded after all chunks are pushed.
-        let bytes = "📺".as_bytes();
-        let (a, b) = bytes.split_at(2);
-        let mut buf = PasteBuffer::new();
-        buf.push(a);
-        buf.push(b);
-        assert_eq!(buf.into_string().unwrap(), "📺");
-    }
-
-    #[test]
-    fn decode_paste_chunks_helper() {
-        let chunks: Vec<&[u8]> = vec![b"foo ", b"bar ", b"baz"];
-        assert_eq!(decode_paste_chunks(chunks), "foo bar baz");
     }
 }
