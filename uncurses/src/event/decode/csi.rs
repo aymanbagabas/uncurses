@@ -307,11 +307,14 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
 
     // In-band resize report (mode 2048):
     // CSI 48 ; height_chars ; width_chars ; height_pix ; width_pix t.
-    // No private, no intermediate, exactly 5 params.
+    // The pixel fields are optional: terminals that omit them send just
+    // CSI 48 ; height ; width t, so accept three or more params (the `48`
+    // discriminator distinguishes this from the generic window-op `t`
+    // reports below) and default any absent pixel size to zero.
     if final_byte == b't'
         && no_private
         && no_intermediate
-        && params.len() == 5
+        && params.len() >= 3
         && params.get_or(0, 0) == 48
     {
         return Some(Event::Resize(crate::terminal::size::Winsize {
