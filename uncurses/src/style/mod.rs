@@ -12,7 +12,7 @@
 //! use uncurses::style::Style;
 //!
 //! // Bold, green text written to any writer (here a byte buffer).
-//! let heading = Style::default().bold().fg(BasicColor::Green.into());
+//! let heading = Style::default().bold().fg(BasicColor::Green);
 //! let mut out = Vec::new();
 //! heading.write_styled(&mut out, "Hello").unwrap();
 //!
@@ -230,20 +230,29 @@ impl Style {
     }
 
     /// Set the foreground color.
-    pub fn fg(mut self, color: Color) -> Self {
-        self.fg = Some(color);
+    ///
+    /// Accepts a [`Color`] or `None`; passing `None` clears any color a base
+    /// style carried, which is handy when reusing one style across cells.
+    pub fn fg(mut self, color: impl Into<Option<Color>>) -> Self {
+        self.fg = color.into();
         self
     }
 
     /// Set the background color.
-    pub fn bg(mut self, color: Color) -> Self {
-        self.bg = Some(color);
+    ///
+    /// Accepts a [`Color`] or `None`; passing `None` clears any color a base
+    /// style carried, which is handy when reusing one style across cells.
+    pub fn bg(mut self, color: impl Into<Option<Color>>) -> Self {
+        self.bg = color.into();
         self
     }
 
     /// Set the underline color.
-    pub fn underline_color(mut self, color: Color) -> Self {
-        self.underline_color = Some(color);
+    ///
+    /// Accepts a [`Color`] or `None`; passing `None` clears any color a base
+    /// style carried, which is handy when reusing one style across cells.
+    pub fn underline_color(mut self, color: impl Into<Option<Color>>) -> Self {
+        self.underline_color = color.into();
         self
     }
 

@@ -33,7 +33,7 @@
 //! let mut screen = Screen::stdio()?;
 //! screen.init()?; // raw mode + capability detection
 //!
-//! let style = Style::default().bold().fg(BasicColor::Green.into());
+//! let style = Style::default().bold().fg(BasicColor::Green);
 //! screen.set_str((0, 0), "Hello, terminal!", style);
 //! screen.present()?; // stage the diff and flush it
 //!

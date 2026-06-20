@@ -74,7 +74,7 @@ fn redraw(canvas: &mut Canvas<Stdout>) {
     let h = canvas.height();
 
     let msg = "Low-level Canvas. Press any key to quit.";
-    let style = Style::default().bold().fg(BasicColor::BrightCyan.into());
+    let style = Style::default().bold().fg(BasicColor::BrightCyan);
     let x = w.saturating_sub(msg.len() as u16) / 2;
     canvas.set_str((x, h / 2), msg, style);
 }

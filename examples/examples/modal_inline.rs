@@ -120,9 +120,9 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
 }
 
 fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
-    let cyan = Style::default().fg(BasicColor::BrightCyan.into());
+    let cyan = Style::default().fg(BasicColor::BrightCyan);
     let plain = Style::default();
-    let bullet_color = Style::default().fg(BasicColor::Yellow.into());
+    let bullet_color = Style::default().fg(BasicColor::Yellow);
 
     screen.set_str((0, 1), "Press m to toggle the modal.", cyan);
     screen.set_str(
@@ -132,7 +132,7 @@ fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
     );
     for (i, label) in ["item 1", "item 2", "item 3", "item 4"].iter().enumerate() {
         let y = 3 + i as u16;
-        screen.set_str((0, y), "•", Style::default().fg(BasicColor::Yellow.into()));
+        screen.set_str((0, y), "•", Style::default().fg(BasicColor::Yellow));
         screen.set_str((2, y), label, bullet_color.clone());
     }
 }
@@ -159,15 +159,15 @@ fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
 
 fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue)
         .bold();
     let body = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into());
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue);
     let hint = Style::default()
-        .fg(BasicColor::BrightYellow.into())
-        .bg(BasicColor::Blue.into());
+        .fg(BasicColor::BrightYellow)
+        .bg(BasicColor::Blue);
 
     screen.fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
 
@@ -194,8 +194,8 @@ fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
         rect.height.saturating_sub(2),
     );
     let title = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue)
         .bold();
     screen.set_str_rect(
         Rect::new(inner.x, inner.y, inner.width, 1),

@@ -41,8 +41,14 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 
     loop {
         match screen.read_event()? {
-            Event::KeyPress(Key { code: KeyCode::Char('q'), .. }) => break,
-            Event::KeyPress(Key { code: KeyCode::Char('e'), .. }) => {
+            Event::KeyPress(Key {
+                code: KeyCode::Char('q'),
+                ..
+            }) => break,
+            Event::KeyPress(Key {
+                code: KeyCode::Char('e'),
+                ..
+            }) => {
                 status = match edit_in_editor(screen, &text) {
                     Ok(edited) => {
                         text = edited;
@@ -88,10 +94,10 @@ fn edit_in_editor(screen: &mut Screen<Stdin, Stdout>, text: &str) -> std::io::Re
 
 fn render(screen: &mut Screen<Stdin, Stdout>, text: &str, status: &str) {
     screen.clear();
-    let dim = Style::default().fg(BasicColor::BrightBlack.into());
+    let dim = Style::default().fg(BasicColor::BrightBlack);
     screen.set_str((0, 0), "e: edit in $EDITOR   q: quit", dim.clone());
     if !status.is_empty() {
-        screen.set_str((0, 1), status, Style::default().fg(BasicColor::BrightGreen.into()));
+        screen.set_str((0, 1), status, Style::default().fg(BasicColor::BrightGreen));
     }
 
     let height = screen.height();

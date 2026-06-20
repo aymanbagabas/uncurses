@@ -36,7 +36,11 @@ struct PasteSink {
 
 impl PasteSink {
     fn new() -> Self {
-        Self { mem: Vec::new(), total: 0, spill: None }
+        Self {
+            mem: Vec::new(),
+            total: 0,
+            spill: None,
+        }
     }
 
     /// Append one chunk, spilling to disk if the in-memory buffer grows
@@ -53,8 +57,8 @@ impl PasteSink {
         if self.mem.len() > THRESHOLD {
             // Cross the threshold: open a file, flush what we have, and
             // switch to file mode for the rest of the stream.
-            let path = std::env::temp_dir()
-                .join(format!("uncurses_paste_{}.txt", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("uncurses_paste_{}.txt", std::process::id()));
             let mut file = BufWriter::new(File::create(&path)?);
             file.write_all(&self.mem)?;
             self.mem = Vec::new();
@@ -68,7 +72,10 @@ impl PasteSink {
         match self.spill.take() {
             Some((path, mut file)) => {
                 file.flush()?;
-                Ok(Outcome::File { path, bytes: self.total })
+                Ok(Outcome::File {
+                    path,
+                    bytes: self.total,
+                })
             }
             None => Ok(Outcome::Memory {
                 preview: String::from_utf8_lossy(&self.mem).into_owned(),
@@ -127,7 +134,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 
 fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
     screen.clear();
-    let dim = Style::default().fg(BasicColor::BrightBlack.into());
+    let dim = Style::default().fg(BasicColor::BrightBlack);
     let hint = format!("Paste text. Pastes over {THRESHOLD} bytes spill to a file. q quits.");
     screen.set_str((0, 0), &hint, dim.clone());
 
@@ -139,7 +146,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
         Some(Outcome::Memory { preview, bytes }) => {
             let head = format!("kept {bytes} bytes in memory:");
             screen.set_str((0, 2), &head, Style::default());
-            let body = Style::default().fg(BasicColor::BrightGreen.into());
+            let body = Style::default().fg(BasicColor::BrightGreen);
             for (i, line) in preview.lines().enumerate() {
                 let row = 4 + i as u16;
                 if row >= height {
@@ -151,7 +158,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
         Some(Outcome::File { path, bytes }) => {
             let head = format!("spilled {bytes} bytes to a file:");
             screen.set_str((0, 2), &head, Style::default());
-            let body = Style::default().fg(BasicColor::BrightYellow.into());
+            let body = Style::default().fg(BasicColor::BrightYellow);
             screen.set_str((0, 4), &path.display().to_string(), body);
         }
     }

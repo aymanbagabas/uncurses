@@ -62,7 +62,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 
 fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&str>) {
     screen.clear();
-    let dim = Style::default().fg(BasicColor::BrightBlack.into());
+    let dim = Style::default().fg(BasicColor::BrightBlack);
     screen.set_str((0, 0), "Paste some text. q quits.", dim.clone());
 
     match last {
@@ -75,7 +75,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&str>) {
             let summary = format!("pasted {chars} chars across {lines} line(s):");
             screen.set_str((0, 2), &summary, Style::default());
 
-            let body = Style::default().fg(BasicColor::BrightGreen.into());
+            let body = Style::default().fg(BasicColor::BrightGreen);
             let height = screen.height();
             for (i, line) in text.lines().enumerate() {
                 let row = 4 + i as u16;
