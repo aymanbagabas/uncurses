@@ -50,6 +50,108 @@ impl Color {
             Color::Basic(c) => indexed_to_rgb(c.as_u8()),
         }
     }
+
+    /// Format this color as a `#rrggbb` hex string.
+    ///
+    /// Palette and indexed colors are resolved to their RGB values first, so
+    /// the result is always the six-digit true-color form.
+    pub fn to_hex(self) -> String {
+        let (r, g, b) = self.to_rgb();
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+
+    /// Convert this color to HSL components.
+    ///
+    /// Returns `(h, s, l)` with the hue `h` in degrees (`0.0..360.0`) and the
+    /// saturation `s` and lightness `l` in `0.0..=1.0`. Palette and indexed
+    /// colors are resolved to RGB first.
+    pub fn to_hsl(self) -> (f32, f32, f32) {
+        let (r, g, b) = self.to_rgb();
+        let r = f32::from(r) / 255.0;
+        let g = f32::from(g) / 255.0;
+        let b = f32::from(b) / 255.0;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        let l = (max + min) / 2.0;
+        if delta == 0.0 {
+            return (0.0, 0.0, l);
+        }
+        let s = delta / (1.0 - (2.0 * l - 1.0).abs());
+        let h = if max == r {
+            60.0 * ((g - b) / delta).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / delta + 2.0)
+        } else {
+            60.0 * ((r - g) / delta + 4.0)
+        };
+        (h, s, l)
+    }
+
+    /// Parse a hex color string into an [`Color::Rgb`].
+    ///
+    /// The leading `#` is optional. Accepts three forms:
+    ///
+    /// - 3 digits (`#fff`): shorthand, each nibble is doubled (`f` -> `ff`).
+    /// - 6 digits (`#ffffff`): one byte per channel.
+    /// - 8 digits (`#ffffff00`): a trailing alpha pair is parsed but ignored,
+    ///   since colors carry no alpha channel.
+    ///
+    /// Returns `None` for any other length or for non-hexadecimal input.
+    pub fn hex(s: &str) -> Option<Color> {
+        let s = s.strip_prefix('#').unwrap_or(s);
+        let bytes = s.as_bytes();
+        let (r, g, b) = match bytes.len() {
+            3 => {
+                let r = hex_nibble(bytes[0])?;
+                let g = hex_nibble(bytes[1])?;
+                let b = hex_nibble(bytes[2])?;
+                (r * 17, g * 17, b * 17)
+            }
+            6 | 8 => {
+                let r = hex_byte(bytes[0], bytes[1])?;
+                let g = hex_byte(bytes[2], bytes[3])?;
+                let b = hex_byte(bytes[4], bytes[5])?;
+                (r, g, b)
+            }
+            _ => return None,
+        };
+        Some(Color::Rgb(r, g, b))
+    }
+
+    /// Construct an [`Color::Rgb`] from HSL.
+    ///
+    /// `h` is the hue in degrees (wrapped into `0..360`); `s` (saturation) and
+    /// `l` (lightness) are clamped to `0.0..=1.0`.
+    pub fn hsl(h: f32, s: f32, l: f32) -> Color {
+        let h = h.rem_euclid(360.0);
+        let s = s.clamp(0.0, 1.0);
+        let l = l.clamp(0.0, 1.0);
+        let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+        let hp = h / 60.0;
+        let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+        let (r1, g1, b1) = match hp as u32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+        let m = l - c / 2.0;
+        let to = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+        Color::Rgb(to(r1), to(g1), to(b1))
+    }
+}
+
+/// Parse one ASCII hex digit into its `0..16` value.
+fn hex_nibble(b: u8) -> Option<u8> {
+    (b as char).to_digit(16).map(|d| d as u8)
+}
+
+/// Parse two ASCII hex digits into a byte.
+fn hex_byte(hi: u8, lo: u8) -> Option<u8> {
+    Some(hex_nibble(hi)? * 16 + hex_nibble(lo)?)
 }
 
 /// The 16 standard ANSI colors.
@@ -128,6 +230,12 @@ impl BasicColor {
 impl From<BasicColor> for Color {
     fn from(c: BasicColor) -> Self {
         Color::Basic(c)
+    }
+}
+
+impl From<BasicColor> for Option<Color> {
+    fn from(c: BasicColor) -> Self {
+        Some(Color::Basic(c))
     }
 }
 
@@ -213,5 +321,69 @@ mod tests {
     fn test_xterm_grayscale() {
         assert_eq!(indexed_to_rgb(232), (8, 8, 8));
         assert_eq!(indexed_to_rgb(255), (238, 238, 238));
+    }
+
+    #[test]
+    fn test_hex_forms() {
+        assert_eq!(Color::hex("#fff"), Some(Color::Rgb(255, 255, 255)));
+        assert_eq!(Color::hex("fff"), Some(Color::Rgb(255, 255, 255)));
+        assert_eq!(Color::hex("#abc"), Some(Color::Rgb(0xaa, 0xbb, 0xcc)));
+        assert_eq!(Color::hex("#ff8800"), Some(Color::Rgb(255, 136, 0)));
+        // 8-digit form: the trailing alpha pair is parsed but ignored.
+        assert_eq!(Color::hex("#ff880042"), Some(Color::Rgb(255, 136, 0)));
+    }
+
+    #[test]
+    fn test_hex_rejects_bad_input() {
+        assert_eq!(Color::hex("#ff"), None); // wrong length
+        assert_eq!(Color::hex("#fffff"), None); // wrong length
+        assert_eq!(Color::hex("#gggggg"), None); // non-hex digits
+        assert_eq!(Color::hex(""), None);
+    }
+
+    #[test]
+    fn test_hsl() {
+        assert_eq!(Color::hsl(0.0, 1.0, 0.5), Color::Rgb(255, 0, 0));
+        assert_eq!(Color::hsl(120.0, 1.0, 0.5), Color::Rgb(0, 255, 0));
+        assert_eq!(Color::hsl(240.0, 1.0, 0.5), Color::Rgb(0, 0, 255));
+        // Hue wraps and full lightness is white regardless of hue.
+        assert_eq!(Color::hsl(360.0, 1.0, 0.5), Color::Rgb(255, 0, 0));
+        assert_eq!(Color::hsl(123.0, 0.5, 1.0), Color::Rgb(255, 255, 255));
+        assert_eq!(Color::hsl(200.0, 0.7, 0.0), Color::Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn test_to_hex() {
+        assert_eq!(Color::Rgb(255, 136, 0).to_hex(), "#ff8800");
+        assert_eq!(Color::Rgb(0, 0, 0).to_hex(), "#000000");
+        assert_eq!(Color::Basic(BasicColor::Black).to_hex(), "#000000");
+        // Round-trips with `hex`.
+        assert_eq!(
+            Color::hex(&Color::Rgb(18, 52, 86).to_hex()),
+            Some(Color::Rgb(18, 52, 86))
+        );
+    }
+
+    #[test]
+    fn test_to_hsl() {
+        let approx = |a: f32, b: f32| (a - b).abs() < 0.01;
+        let (h, s, l) = Color::Rgb(255, 0, 0).to_hsl();
+        assert!(approx(h, 0.0) && approx(s, 1.0) && approx(l, 0.5));
+        let (h, s, l) = Color::Rgb(0, 255, 0).to_hsl();
+        assert!(approx(h, 120.0) && approx(s, 1.0) && approx(l, 0.5));
+        let (h, s, l) = Color::Rgb(0, 0, 255).to_hsl();
+        assert!(approx(h, 240.0) && approx(s, 1.0) && approx(l, 0.5));
+        // Gray: undefined hue reported as 0, zero saturation.
+        let (_, s, l) = Color::Rgb(128, 128, 128).to_hsl();
+        assert!(approx(s, 0.0) && approx(l, 128.0 / 255.0));
+        // hsl -> rgb -> hsl round-trip stays close.
+        let (h, s, l) = Color::hsl(210.0, 0.6, 0.45).to_hsl();
+        assert!(approx(h, 210.0) && approx(s, 0.6) && approx(l, 0.45));
+    }
+
+    #[test]
+    fn test_basic_color_into_option() {
+        let c: Option<Color> = BasicColor::Red.into();
+        assert_eq!(c, Some(Color::Basic(BasicColor::Red)));
     }
 }
