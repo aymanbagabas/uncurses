@@ -50,11 +50,11 @@ impl App {
         let mut next_tick = Instant::now() + TICK;
         loop {
             let remaining = next_tick.saturating_duration_since(Instant::now());
-            let got = self.screen.poll(Some(remaining))?;
+            let got = self.screen.poll_event(Some(remaining))?;
             let mut dirty = false;
 
             if got {
-                while let Some(ev) = self.screen.try_read() {
+                while let Some(ev) = self.screen.try_read_event() {
                     match &ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),

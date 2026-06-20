@@ -1,13 +1,13 @@
-//! A [`ratatui`] `Backend` that renders through a
-//! [`uncurses::canvas::Canvas`]. Write your UI with ratatui widgets and
-//! let uncurses diff frames and ship the minimal byte changes.
+//! A [`ratatui`] `Backend` that renders through the high-level
+//! [`uncurses::screen::Screen`] facade. Write your UI with ratatui widgets
+//! and let uncurses diff frames and ship the minimal byte changes.
 //!
-//! [`UncursesBackend`] owns the whole terminal stack: the
+//! [`UncursesBackend`] wraps a [`Screen`](uncurses::screen::Screen), which
+//! bundles the whole terminal stack: the
 //! [`Terminal`](uncurses::terminal::Terminal) handle, the
-//! [`Canvas`](uncurses::canvas::Canvas), and a shared
-//! [`EventSource`](uncurses::event::EventSource). A single value drives
-//! rendering, input, and the raw-mode lifecycle, and you still run your
-//! own event loop through the same backend.
+//! [`Canvas`](uncurses::canvas::Canvas), and the event source. A single
+//! value drives rendering, input, and the raw-mode lifecycle, and you still
+//! run your own event loop through the same backend.
 //!
 //! # Quick start
 //!
@@ -43,3 +43,5 @@ pub use convert::{to_uncurses_color, to_uncurses_style};
 pub use init::{
     DefaultTerminal, init, init_with_options, restore, try_init, try_init_with_options, try_restore,
 };
+#[doc(no_inline)]
+pub use uncurses::screen::{MousePreference, ScreenOptions};

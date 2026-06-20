@@ -1,25 +1,22 @@
 //! Uncapped variant of the [`ratatui_space`] example.
 //!
 //! Renders the animated grayscale starfield through ratatui as fast as
-//! the renderer can push frames out. Input runs on a dedicated thread
-//! that forwards events through a channel so the render loop never
-//! blocks waiting on the keyboard. Useful for measuring raw renderer
-//! throughput through the ratatui backend.
+//! the renderer can push frames out. Input is drained non-blocking at the
+//! top of each frame so the render loop never waits on the keyboard.
+//! Useful for measuring raw renderer throughput through the ratatui
+//! backend.
 //!
 //! Run with `cargo run --release --example ratatui_space_unlimited`.
 //! Press `q` or `Ctrl-C` to quit.
 
 use std::io;
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Stylize};
 use ratatui::widgets::{Paragraph, Widget};
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::terminal::Stdin;
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 
 struct Fps {
     frames: u32,
@@ -169,29 +166,14 @@ impl Widget for StatsWidget<'_> {
     }
 }
 
-enum InputMsg {
-    Resize,
-    Quit,
-}
-
 fn main() -> io::Result<()> {
     let mut terminal = uncurses_ratatui::try_init()?;
-    let events = terminal.backend().shared_events();
-    let result = run(&mut terminal, events);
+    let result = run(&mut terminal);
     uncurses_ratatui::restore(&mut terminal);
     result
 }
 
-fn run(
-    terminal: &mut uncurses_ratatui::DefaultTerminal,
-    events: Arc<Mutex<EventSource<Stdin>>>,
-) -> io::Result<()> {
-    let (tx, rx) = mpsc::channel::<InputMsg>();
-    let input_handle = thread::Builder::new()
-        .name("input".into())
-        .spawn(move || input_loop(events, tx))
-        .expect("spawn input thread");
-
+fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
     let mut rng = Rng::new(seed_from_clock());
     let mut field = Field::new();
     let mut fps = Fps::new();
@@ -199,20 +181,23 @@ fn run(
     let mut quit = false;
 
     while !quit {
-        loop {
-            match rx.try_recv() {
-                Ok(InputMsg::Quit) => {
-                    quit = true;
-                    break;
-                }
-                Ok(InputMsg::Resize) => {
-                    field = Field::new();
-                }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    quit = true;
-                    break;
-                }
+        // Drain input without blocking so the render loop runs flat out.
+        let events = terminal.backend_mut();
+        while events.poll_event(Some(Duration::ZERO))? {
+            match events.try_read_event() {
+                Some(Event::KeyPress(Key {
+                    code: KeyCode::Char('q'),
+                    modifiers,
+                    ..
+                })) if modifiers.is_empty() => quit = true,
+                Some(Event::KeyPress(Key {
+                    code: KeyCode::Char('c'),
+                    modifiers,
+                    ..
+                })) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
+                Some(Event::Resize(_)) => field = Field::new(),
+                Some(_) => {}
+                None => break,
             }
         }
         if quit {
@@ -249,39 +234,7 @@ fn run(
         fps.record(t1 - t0);
     }
 
-    drop(input_handle);
     Ok(())
-}
-
-fn input_loop(events: Arc<Mutex<EventSource<Stdin>>>, tx: mpsc::Sender<InputMsg>) {
-    loop {
-        let ev = events.lock().unwrap().read();
-        match ev {
-            Ok(ev) => match ev {
-                Event::KeyPress(Key {
-                    code: KeyCode::Char('q'),
-                    modifiers,
-                    ..
-                }) if modifiers.is_empty() => {
-                    let _ = tx.send(InputMsg::Quit);
-                    return;
-                }
-                Event::KeyPress(Key {
-                    code: KeyCode::Char('c'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CTRL) => {
-                    let _ = tx.send(InputMsg::Quit);
-                    return;
-                }
-                Event::Resize(_) if tx.send(InputMsg::Resize).is_err() => {
-                    return;
-                }
-                _ => {}
-            },
-            Err(_) => return,
-        }
-    }
 }
 
 fn seed_from_clock() -> u64 {

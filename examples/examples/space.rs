@@ -161,8 +161,8 @@ impl App {
             let remaining = next_frame.saturating_duration_since(now);
             let mut quit = false;
 
-            if !remaining.is_zero() && self.screen.poll(Some(remaining))? {
-                while let Some(ev) = self.screen.try_read() {
+            if !remaining.is_zero() && self.screen.poll_event(Some(remaining))? {
+                while let Some(ev) = self.screen.try_read_event() {
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),

@@ -87,8 +87,8 @@ impl App {
             let timeout = next.saturating_duration_since(now);
 
             let mut dirty = false;
-            if self.screen.poll(Some(timeout))? {
-                while let Some(ev) = self.screen.try_read() {
+            if self.screen.poll_event(Some(timeout))? {
+                while let Some(ev) = self.screen.try_read_event() {
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q') | KeyCode::Escape,

@@ -25,9 +25,9 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
 
     loop {
         terminal.draw(|frame| render(frame, show_popup))?;
-        let mut events = terminal.backend().events();
-        if events.poll(None)?
-            && let Some(Event::KeyPress(key)) = events.try_read()
+        let events = terminal.backend_mut();
+        if events.poll_event(None)?
+            && let Some(Event::KeyPress(key)) = events.try_read_event()
         {
             match key.code {
                 KeyCode::Char('q') => break,

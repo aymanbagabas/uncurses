@@ -91,14 +91,13 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
 
     'outer: loop {
         terminal.draw(|frame| render(frame, &app))?;
-        let mut events = terminal.backend().events();
-        if !events.poll(None)? {
+        let events = terminal.backend_mut();
+        if !events.poll_event(None)? {
             continue;
         }
-        let Some(Event::KeyPress(key)) = events.try_read() else {
+        let Some(Event::KeyPress(key)) = events.try_read_event() else {
             continue;
         };
-        drop(events);
         match app.input_mode {
             InputMode::Normal => match key.code {
                 KeyCode::Char('e') => app.input_mode = InputMode::Editing,

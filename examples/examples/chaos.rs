@@ -120,8 +120,8 @@ impl App {
         loop {
             let mut quit = false;
             while let Some(ev) = {
-                if self.screen.poll(Some(std::time::Duration::ZERO))? {
-                    self.screen.try_read()
+                if self.screen.poll_event(Some(std::time::Duration::ZERO))? {
+                    self.screen.try_read_event()
                 } else {
                     None
                 }

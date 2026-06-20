@@ -44,7 +44,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.screen.read()?;
+            let ev = self.screen.read_event()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(Key {

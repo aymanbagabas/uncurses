@@ -219,7 +219,7 @@ impl App {
         self.screen.resize((w, self.buffer.lines.len() as u16));
         self.render()?;
 
-        while let Ok(ev) = self.screen.read() {
+        while let Ok(ev) = self.screen.read_event() {
             match ev {
                 Event::KeyPress(Key {
                     code, modifiers, ..

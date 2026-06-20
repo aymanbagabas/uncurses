@@ -40,7 +40,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.screen.read()?;
+            let ev = self.screen.read_event()?;
             match ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q') | KeyCode::Escape,

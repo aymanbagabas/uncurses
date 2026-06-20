@@ -131,7 +131,7 @@ fn run_scene(
     dur: Option<Duration>,
     mut tick: impl FnMut(&mut Screen<Stdin, Stdout>, Duration) -> std::io::Result<()>,
 ) -> std::io::Result<bool> {
-    while screen.try_read().is_some() {}
+    while screen.try_read_event().is_some() {}
     let start = Instant::now();
     let end = dur.map(|d| start + d);
     let mut next_frame = start + FRAME;
@@ -151,8 +151,8 @@ fn run_scene(
             Some(end) => frame_remaining.min(end - now),
             None => frame_remaining,
         };
-        if screen.poll(Some(timeout))? {
-            while let Some(ev) = screen.try_read() {
+        if screen.poll_event(Some(timeout))? {
+            while let Some(ev) = screen.try_read_event() {
                 match ev {
                     Event::KeyPress(Key {
                         code: KeyCode::Char('q' | 'Q') | KeyCode::Escape,

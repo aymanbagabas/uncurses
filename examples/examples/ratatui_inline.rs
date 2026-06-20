@@ -16,9 +16,12 @@ use uncurses::event::Event;
 const INLINE_HEIGHT: u16 = 3;
 
 fn main() -> io::Result<()> {
-    let mut terminal = uncurses_ratatui::try_init_with_options(TerminalOptions {
-        viewport: Viewport::Inline(INLINE_HEIGHT),
-    })?;
+    let mut terminal = uncurses_ratatui::try_init_with_options(
+        TerminalOptions {
+            viewport: Viewport::Inline(INLINE_HEIGHT),
+        },
+        uncurses_ratatui::ScreenOptions::default(),
+    )?;
     let result = run(&mut terminal);
     uncurses_ratatui::restore(&mut terminal);
     result
@@ -34,9 +37,9 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
                 area,
             );
         })?;
-        let mut events = terminal.backend().events();
-        if events.poll(None)?
-            && let Some(Event::KeyPress(_)) = events.try_read()
+        let events = terminal.backend_mut();
+        if events.poll_event(None)?
+            && let Some(Event::KeyPress(_)) = events.try_read_event()
         {
             break;
         }
