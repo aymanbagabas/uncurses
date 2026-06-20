@@ -866,18 +866,34 @@ where
         Ok(())
     }
 
-    /// Consume the screen and hand the terminal back to the shell: tear
-    /// down every staged mode, reset the canvas, flush, and restore the
-    /// terminal's prior state.
+    /// Consume the screen and hand the terminal back to the shell: stop the
+    /// async event stream if one is running, tear down every staged mode,
+    /// reset the canvas, flush, and restore the terminal's prior state.
     pub fn finish(mut self) -> io::Result<()> {
+        // Stop the async event stream's helper thread, if one was started.
+        // Consuming `self` would drop it anyway, but doing it explicitly here
+        // marks the difference from `pause`, which keeps the stream alive for
+        // `resume`.
+        #[cfg(feature = "async")]
+        drop(self.stream.take());
         self.stage_teardown()?;
         self.terminal.restore()
     }
 
     /// Hand the terminal back to the shell without consuming the screen,
     /// e.g. to run a child process. Re-enter with [`Self::resume`]. Like
-    /// [`Self::finish`] but keeps the screen.
+    /// [`Self::finish`] but keeps the screen so the session can continue.
+    /// Any running async event stream is stopped first, so its reader thread
+    /// does not compete with the child for input; the next
+    /// [`events`](Self::events) call after [`resume`](Self::resume) starts a
+    /// fresh one.
     pub fn pause(&mut self) -> io::Result<()> {
+        // Stop the async reader thread before handing off the terminal. The
+        // stream is recreated lazily by the next `events()` call.
+        #[cfg(feature = "async")]
+        {
+            self.stream = None;
+        }
         self.stage_teardown()?;
         self.terminal.restore()
     }
@@ -994,18 +1010,34 @@ where
         Ok(())
     }
 
-    /// Consume the screen and hand the terminal back to the shell: tear
-    /// down every staged mode, reset the canvas, flush, and restore the
-    /// terminal's prior state.
+    /// Consume the screen and hand the terminal back to the shell: stop the
+    /// async event stream if one is running, tear down every staged mode,
+    /// reset the canvas, flush, and restore the terminal's prior state.
     pub fn finish(mut self) -> io::Result<()> {
+        // Stop the async event stream's helper thread, if one was started.
+        // Consuming `self` would drop it anyway, but doing it explicitly here
+        // marks the difference from `pause`, which keeps the stream alive for
+        // `resume`.
+        #[cfg(feature = "async")]
+        drop(self.stream.take());
         self.stage_teardown()?;
         self.terminal.restore()
     }
 
     /// Hand the terminal back to the shell without consuming the screen,
     /// e.g. to run a child process. Re-enter with [`Self::resume`]. Like
-    /// [`Self::finish`] but keeps the screen.
+    /// [`Self::finish`] but keeps the screen so the session can continue.
+    /// Any running async event stream is stopped first, so its reader thread
+    /// does not compete with the child for input; the next
+    /// [`events`](Self::events) call after [`resume`](Self::resume) starts a
+    /// fresh one.
     pub fn pause(&mut self) -> io::Result<()> {
+        // Stop the async reader thread before handing off the terminal. The
+        // stream is recreated lazily by the next `events()` call.
+        #[cfg(feature = "async")]
+        {
+            self.stream = None;
+        }
         self.stage_teardown()?;
         self.terminal.restore()
     }
