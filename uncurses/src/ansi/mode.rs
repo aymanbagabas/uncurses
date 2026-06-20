@@ -146,6 +146,13 @@ impl ModeSetting {
     pub fn is_reset(self) -> bool {
         matches!(self, ModeSetting::Reset | ModeSetting::PermanentlyReset)
     }
+
+    /// Did the terminal recognize the mode? A reply of anything other than
+    /// [`NotRecognized`](ModeSetting::NotRecognized) means the terminal
+    /// knows the mode, i.e. it is supported.
+    pub fn is_recognized(self) -> bool {
+        !matches!(self, ModeSetting::NotRecognized)
+    }
 }
 
 impl std::fmt::Display for ModeSetting {
@@ -252,78 +259,6 @@ pub fn write_report_mode<W: Write>(w: &mut W, mode: Mode, setting: ModeSetting) 
     }
 }
 
-/// Mouse mode convenience — enables/disables mouse tracking + encoding together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MouseMode {
-    #[default]
-    None,
-    X10,
-    Normal,
-    Button,
-    Any,
-}
-
-/// Mouse encoding format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MouseEncoding {
-    #[default]
-    X10,
-    Sgr,
-    SgrPixel,
-}
-
-/// Write sequences to enable mouse tracking with the given mode and encoding.
-pub fn write_enable_mouse<W: Write>(
-    w: &mut W,
-    mode: MouseMode,
-    encoding: MouseEncoding,
-) -> io::Result<()> {
-    let tracking = match mode {
-        MouseMode::None => return Ok(()),
-        MouseMode::X10 => Mode::MOUSE_X10,
-        MouseMode::Normal => Mode::MOUSE_NORMAL,
-        MouseMode::Button => Mode::MOUSE_BUTTON,
-        MouseMode::Any => Mode::MOUSE_ANY,
-    };
-    let enc = match encoding {
-        MouseEncoding::X10 => None,
-        MouseEncoding::Sgr => Some(Mode::MOUSE_SGR),
-        MouseEncoding::SgrPixel => Some(Mode::MOUSE_SGR_PIXEL),
-    };
-
-    let mut modes = vec![tracking];
-    if let Some(e) = enc {
-        modes.push(e);
-    }
-    write_set_mode(w, &modes)
-}
-
-/// Write sequences to disable mouse tracking.
-pub fn write_disable_mouse<W: Write>(
-    w: &mut W,
-    mode: MouseMode,
-    encoding: MouseEncoding,
-) -> io::Result<()> {
-    let tracking = match mode {
-        MouseMode::None => return Ok(()),
-        MouseMode::X10 => Mode::MOUSE_X10,
-        MouseMode::Normal => Mode::MOUSE_NORMAL,
-        MouseMode::Button => Mode::MOUSE_BUTTON,
-        MouseMode::Any => Mode::MOUSE_ANY,
-    };
-    let enc = match encoding {
-        MouseEncoding::X10 => None,
-        MouseEncoding::Sgr => Some(Mode::MOUSE_SGR),
-        MouseEncoding::SgrPixel => Some(Mode::MOUSE_SGR_PIXEL),
-    };
-
-    let mut modes = vec![tracking];
-    if let Some(e) = enc {
-        modes.push(e);
-    }
-    write_reset_mode(w, &modes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +300,16 @@ mod tests {
         assert!(!ModeSetting::Reset.is_set());
         assert!(ModeSetting::Reset.is_reset());
         assert!(ModeSetting::PermanentlyReset.is_reset());
+        // A recognized mode is anything other than NotRecognized.
+        assert!(!ModeSetting::NotRecognized.is_recognized());
+        for s in [
+            ModeSetting::Set,
+            ModeSetting::Reset,
+            ModeSetting::PermanentlySet,
+            ModeSetting::PermanentlyReset,
+        ] {
+            assert!(s.is_recognized());
+        }
     }
 
     #[test]

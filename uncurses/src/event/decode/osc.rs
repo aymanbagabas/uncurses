@@ -44,12 +44,22 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     let cmd: u32 = std::str::from_utf8(cmd_bytes).ok()?.parse().ok()?;
 
     match cmd {
+        4 => parse_osc_palette_color(rest),
         10 => parse_osc_color(rest).map(Event::ForegroundColor),
         11 => parse_osc_color(rest).map(Event::BackgroundColor),
         12 => parse_osc_color(rest).map(Event::CursorColor),
         52 => parse_osc_clipboard(rest),
         _ => None,
     }
+}
+
+/// Parse an OSC 4 palette reply body: `<index>;<color>` where `color` is
+/// an xterm `rgb:` value. Returns `None` if unrecognized.
+fn parse_osc_palette_color(s: &[u8]) -> Option<Event> {
+    let semi = s.iter().position(|&b| b == b';')?;
+    let index: u8 = std::str::from_utf8(&s[..semi]).ok()?.parse().ok()?;
+    let color = parse_osc_color(&s[semi + 1..])?;
+    Some(Event::PaletteColor { index, color })
 }
 
 /// Parse an OSC color value like `rgb:RRRR/GGGG/BBBB` (xterm common form) or

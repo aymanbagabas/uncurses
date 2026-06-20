@@ -27,7 +27,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let size = term.window_size().unwrap_or_default();
+        let size = term.get_window_size().unwrap_or_default();
         // Inline mode: 4 rows is enough for the message + help.
         let mut screen = Canvas::new(term.output(), (size.col, 4));
         screen.set_cursor_visible(false);
@@ -122,7 +122,7 @@ impl App {
     #[cfg(unix)]
     fn resume(&mut self) -> std::io::Result<()> {
         self.term.make_raw()?;
-        if let Ok(size) = self.term.window_size() {
+        if let Ok(size) = self.term.get_window_size() {
             self.size_col = size.col;
             self.size_row = size.row;
             if self.alt {

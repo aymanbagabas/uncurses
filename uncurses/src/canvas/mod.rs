@@ -247,6 +247,11 @@ impl<W: Write> Canvas<W> {
         self.height
     }
 
+    /// Whether the alternate screen is currently active.
+    pub fn alt_screen(&self) -> bool {
+        self.state.alt_screen
+    }
+
     /// Borrow the underlying writer immutably. Useful for inspecting
     /// buffered output in tests / benches when the writer is a
     /// `Vec<u8>` or similar in-memory sink.
@@ -419,7 +424,7 @@ impl<O: Write + Copy + std::os::fd::AsFd> Canvas<O> {
     /// the raw-mode lifecycle (`make_raw` / `restore`). The screen drives
     /// the `Copy` output half, leaving the input half free for an
     /// [`EventSource`](crate::event::EventSource). Equivalent to
-    /// `Canvas::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
+    /// `Canvas::from_env(terminal.output(), terminal.get_window_size()?, terminal.env())`.
     ///
     /// Fails only if the window size query fails.
     ///
@@ -444,7 +449,7 @@ impl<O: Write + Copy + std::os::fd::AsFd> Canvas<O> {
     pub fn from_terminal<I: std::os::fd::AsFd>(terminal: &Terminal<I, O>) -> io::Result<Self> {
         Ok(Self::from_env(
             terminal.output(),
-            terminal.window_size()?,
+            terminal.get_window_size()?,
             terminal.env(),
         ))
     }
@@ -460,7 +465,7 @@ impl<O: Write + Copy + std::os::windows::io::AsHandle> Canvas<O> {
     /// the raw-mode lifecycle (`make_raw` / `restore`). The screen drives
     /// the `Copy` output half, leaving the input half free for an
     /// [`EventSource`](crate::event::EventSource). Equivalent to
-    /// `Canvas::from_env(terminal.output(), terminal.window_size()?, terminal.env())`.
+    /// `Canvas::from_env(terminal.output(), terminal.get_window_size()?, terminal.env())`.
     ///
     /// Fails only if the window size query fails.
     ///
@@ -487,7 +492,7 @@ impl<O: Write + Copy + std::os::windows::io::AsHandle> Canvas<O> {
     ) -> io::Result<Self> {
         Ok(Self::from_env(
             terminal.output(),
-            terminal.window_size()?,
+            terminal.get_window_size()?,
             terminal.env(),
         ))
     }

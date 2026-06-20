@@ -17,6 +17,11 @@ pub fn write_set_cursor_color<W: Write>(w: &mut W, color: &str) -> io::Result<()
     write!(w, "\x1b]12;{color}\x07")
 }
 
+/// Set a terminal palette color by index (`OSC 4 ; index ; color ST`).
+pub fn write_set_palette_color<W: Write>(w: &mut W, index: u8, color: &str) -> io::Result<()> {
+    write!(w, "\x1b]4;{index};{color}\x07")
+}
+
 /// Request the current default foreground color (`OSC 10 ; ? ST`).
 pub const REQUEST_FOREGROUND_COLOR: &[u8] = b"\x1b]10;?\x07";
 
@@ -25,6 +30,20 @@ pub const REQUEST_BACKGROUND_COLOR: &[u8] = b"\x1b]11;?\x07";
 
 /// Request the current cursor color (`OSC 12 ; ? ST`).
 pub const REQUEST_CURSOR_COLOR: &[u8] = b"\x1b]12;?\x07";
+
+/// Request a terminal palette color by index (`OSC 4 ; index ; ? ST`).
+/// The terminal replies with `OSC 4 ; index ; rgb:RRRR/GGGG/BBBB ST`.
+pub fn write_request_palette_color<W: Write>(w: &mut W, index: u8) -> io::Result<()> {
+    write!(w, "\x1b]4;{index};?\x07")
+}
+
+/// Reset a single palette color to its default (`OSC 104 ; index ST`).
+pub fn write_reset_palette_color<W: Write>(w: &mut W, index: u8) -> io::Result<()> {
+    write!(w, "\x1b]104;{index}\x07")
+}
+
+/// Reset the entire indexed color palette to defaults (`OSC 104 ST`).
+pub const RESET_PALETTE_COLORS: &[u8] = b"\x1b]104\x07";
 
 /// Reset default foreground color (`OSC 110 ST`).
 pub const RESET_FOREGROUND_COLOR: &[u8] = b"\x1b]110\x07";
@@ -59,5 +78,31 @@ mod tests {
     #[test]
     fn test_xparse_rgb() {
         assert_eq!(xparse_rgb(0xff, 0x00, 0x80), "rgb:ffff/0000/8080");
+    }
+
+    #[test]
+    fn test_set_palette_color() {
+        let mut buf = Vec::new();
+        write_set_palette_color(&mut buf, 1, "rgb:ffff/0000/8080").unwrap();
+        assert_eq!(buf, b"\x1b]4;1;rgb:ffff/0000/8080\x07");
+    }
+
+    #[test]
+    fn test_request_palette_color() {
+        let mut buf = Vec::new();
+        write_request_palette_color(&mut buf, 5).unwrap();
+        assert_eq!(buf, b"\x1b]4;5;?\x07");
+    }
+
+    #[test]
+    fn test_reset_palette_color_one() {
+        let mut buf = Vec::new();
+        write_reset_palette_color(&mut buf, 5).unwrap();
+        assert_eq!(buf, b"\x1b]104;5\x07");
+    }
+
+    #[test]
+    fn test_reset_palette_color_all() {
+        assert_eq!(RESET_PALETTE_COLORS, b"\x1b]104\x07");
     }
 }

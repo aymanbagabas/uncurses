@@ -33,6 +33,17 @@ mod tests {
     }
 
     #[test]
+    fn test_xtgettcap_single_key() {
+        // The truecolor-probe path queries one capability per request.
+        let mut buf = Vec::new();
+        write_xtgettcap(&mut buf, &["RGB"]).unwrap();
+        assert_eq!(buf, b"\x1bP+q524742\x1b\\");
+        let mut buf = Vec::new();
+        write_xtgettcap(&mut buf, &["Tc"]).unwrap();
+        assert_eq!(buf, b"\x1bP+q5463\x1b\\");
+    }
+
+    #[test]
     fn test_xtgettcap_empty() {
         let mut buf = Vec::new();
         write_xtgettcap(&mut buf, &[]).unwrap();

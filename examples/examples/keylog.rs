@@ -133,7 +133,7 @@ impl App {
         term.make_raw()?;
         // Inline status area is two rows tall; insert_above scrolls events
         // into the scrollback above it.
-        let cols = term.window_size().unwrap_or_default().col;
+        let cols = term.get_window_size().unwrap_or_default().col;
         let mut screen = Canvas::new(term.output(), (cols, 2));
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
@@ -210,7 +210,7 @@ impl App {
     #[cfg(unix)]
     fn resume(&mut self) -> std::io::Result<()> {
         self.term.make_raw()?;
-        if let Ok(size) = self.term.window_size() {
+        if let Ok(size) = self.term.get_window_size() {
             self.screen.resize(size.col, 2);
         }
         self.screen.restore();

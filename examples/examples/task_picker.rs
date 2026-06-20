@@ -52,7 +52,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let size = term.window_size().unwrap_or_default();
+        let size = term.get_window_size().unwrap_or_default();
         let term_cols = size.col;
         let state = State {
             ticks: 10,

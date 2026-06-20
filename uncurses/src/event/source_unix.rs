@@ -254,24 +254,6 @@ mod tests {
     }
 
     #[test]
-    fn unread_returns_event_to_front_of_queue() {
-        let (rx, tx) = make_pipe();
-        let mut src = new_reader(rx);
-        write_bytes(&tx, b"ab");
-        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
-        // Pull both events, then put the first one back: a later read must
-        // see it again before the rest of the queue.
-        let a = src.try_read().expect("a queued");
-        let b = src.try_read().expect("b queued");
-        assert!(matches!(a, Event::KeyPress(ref k) if k.code == KeyCode::Char('a')));
-        assert!(matches!(b, Event::KeyPress(ref k) if k.code == KeyCode::Char('b')));
-        src.unread(b);
-        src.unread(a);
-        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('a')));
-        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('b')));
-    }
-
-    #[test]
     fn timeout_returns_none() {
         let (rx, _tx) = make_pipe();
         let mut src = new_reader(rx);

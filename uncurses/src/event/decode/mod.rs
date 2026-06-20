@@ -579,32 +579,26 @@ mod tests {
     #[test]
     fn test_parse_color_scheme_report() {
         let mut parser = Decoder::new(DecoderFlags::empty());
-        assert_eq!(parser.parse(b"\x1b[?997;1n"), vec![Event::DarkColorScheme]);
-        assert_eq!(parser.parse(b"\x1b[?997;2n"), vec![Event::LightColorScheme]);
+        assert_eq!(
+            parser.parse(b"\x1b[?997;1n"),
+            vec![Event::ColorTheme { dark: true }]
+        );
+        assert_eq!(
+            parser.parse(b"\x1b[?997;2n"),
+            vec![Event::ColorTheme { dark: false }]
+        );
         // Unknown sub-report value: branch returns None; consumer may
-        // see a fallthrough Unknown event but never DarkColorScheme/Light.
+        // see a fallthrough Unknown event but never a ColorTheme.
         let evs = parser.parse(b"\x1b[?997;9n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
-        // Wrong primary param is not a color scheme report.
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
+        // Wrong primary param is not a color theme report.
         let evs = parser.parse(b"\x1b[?996;1n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
         // Wrong number of params (1 or 3) is rejected.
         let evs = parser.parse(b"\x1b[?997n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
         let evs = parser.parse(b"\x1b[?997;1;0n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
     }
 
     #[test]
@@ -875,7 +869,13 @@ mod tests {
         // DCS 1+r 626f3d31 ST -> bo=1 (hex-encoded)
         let events = parser.parse(b"\x1bP1+r626F=31\x1b\\");
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], Event::Termcap(_)));
+        assert!(matches!(
+            &events[0],
+            Event::Termcap {
+                recognized: true,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1051,6 +1051,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_osc_palette_color() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        // OSC 4 ; 5 ; rgb:.... reply for palette index 5.
+        let events = parser.parse(b"\x1b]4;5;rgb:abcd/0000/ffff\x1b\\");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::PaletteColor {
+                index,
+                color: Color::Rgb(r, g, b),
+            } => {
+                assert_eq!(*index, 5);
+                assert_eq!((*r, *g, *b), (0xab, 0x00, 0xff));
+            }
+            other => panic!("Expected PaletteColor, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_parse_osc_clipboard() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b]52;c;SGVsbG8=\x07");
@@ -1221,7 +1239,7 @@ mod tests {
         buf.push(0x9c);
         let evs = p.parse(&buf);
         match evs.first() {
-            Some(Event::Termcap(s)) => assert!(s.starts_with("TN=")),
+            Some(Event::Termcap { payload, .. }) => assert!(payload.starts_with("TN=")),
             other => panic!("expected Capability event, got {:?}", other),
         }
     }
@@ -1236,10 +1254,10 @@ mod tests {
         // embedded). The parser must NOT split it on BEL.
         assert_eq!(evs.len(), 1, "expected 1 event, got {:?}", evs);
         match &evs[0] {
-            Event::Termcap(s) => {
-                assert!(s.starts_with("1$r0"));
-                assert!(s.contains('\u{07}'));
-                assert!(s.ends_with("more"));
+            Event::Termcap { payload, .. } => {
+                assert!(payload.starts_with("1$r0"));
+                assert!(payload.contains('\u{07}'));
+                assert!(payload.ends_with("more"));
             }
             other => panic!("expected Capability, got {:?}", other),
         }
@@ -1453,8 +1471,8 @@ mod tests {
         let evs = p.parse(b"\x1bP>|xterm 380\x1b\\");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
-            Event::TerminalVersion(s) => assert_eq!(s, "xterm 380"),
-            other => panic!("expected TerminalVersion, got {:?}", other),
+            Event::TerminalName(s) => assert_eq!(s, "xterm 380"),
+            other => panic!("expected TerminalName, got {:?}", other),
         }
     }
 
@@ -1478,7 +1496,7 @@ mod tests {
         let evs = p.parse(b"\x1bP1+r544E=787465726D;436F=323536\x1b\\");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
-            Event::Termcap(s) => assert_eq!(s, "TN=xterm;Co=256"),
+            Event::Termcap { payload, .. } => assert_eq!(payload, "TN=xterm;Co=256"),
             other => panic!("expected Capability, got {:?}", other),
         }
     }
@@ -1491,8 +1509,59 @@ mod tests {
         assert_eq!(evs.len(), 1);
         match &evs[0] {
             // "TN=x" and "kb" survive; the bogus "ZZ=AA" entry is skipped.
-            Event::Termcap(s) => assert_eq!(s, "TN=x;kb"),
+            Event::Termcap { payload, .. } => assert_eq!(payload, "TN=x;kb"),
             other => panic!("expected Capability, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtgettcap_failure_is_reported() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // DCS 0 + r 524742 ST — a failure reply echoing the unsupported
+        // "RGB" cap. It must surface as a Termcap with recognized=false and
+        // the decoded payload, not be dropped.
+        let evs = p.parse(b"\x1bP0+r524742\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Termcap {
+                recognized,
+                payload,
+            } => {
+                assert!(!recognized);
+                assert_eq!(payload, "RGB");
+            }
+            other => panic!("expected Termcap, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtgettcap_truecolor_success() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // DCS 1 + r 524742 ST — a successful reply for the boolean "RGB"
+        // cap (name only, no value): recognized truecolor support.
+        let evs = p.parse(b"\x1bP1+r524742\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Termcap {
+                recognized,
+                payload,
+            } => {
+                assert!(recognized);
+                assert_eq!(payload, "RGB");
+            }
+            other => panic!("expected Termcap, got {:?}", other),
+        }
+        // Same for the "Tc" boolean cap (hex 5463).
+        let evs = p.parse(b"\x1bP1+r5463\x1b\\");
+        match &evs[0] {
+            Event::Termcap {
+                recognized,
+                payload,
+            } => {
+                assert!(recognized);
+                assert_eq!(payload, "Tc");
+            }
+            other => panic!("expected Termcap, got {:?}", other),
         }
     }
 

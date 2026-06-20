@@ -30,7 +30,7 @@ impl App {
     fn start() -> std::io::Result<Self> {
         let mut term = Terminal::stdio();
         term.make_raw()?;
-        let mut screen = Canvas::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Canvas::new(term.output(), term.get_window_size().unwrap_or_default());
         screen.set_alt_screen(true);
         screen.set_cursor_visible(false);
         let events = EventSource::new(term.input())?;
