@@ -51,6 +51,28 @@
 //! [`insert_above`](Screen::insert_above). Call
 //! [`autoresize`](Screen::autoresize) to refit to the current window.
 //!
+//! ```text
+//!  Inline (default): the surface lives in the normal buffer, only as
+//!  many rows as you draw; scrollback and the shell prompt stay intact.
+//!
+//!    $ earlier shell output
+//!    $ ... scrollback ...
+//!    ┌─────────────────────────┐
+//!    │ managed surface         │  <- only the rows you draw, full width
+//!    └─────────────────────────┘
+//!    $ shell prompt resumes
+//!
+//!  Fullscreen (after enter_alt_screen): the whole viewport is the
+//!  surface, addressed with absolute moves, and restored on exit.
+//!
+//!    ┌─────────────────────────────┐
+//!    │                             │
+//!    │  the whole terminal         │
+//!    │  viewport is the surface    │
+//!    │                             │
+//!    └─────────────────────────────┘
+//! ```
+//!
 //! # Options and defaults
 //!
 //! [`init`](Screen::init) uses [`ScreenOptions::default`];

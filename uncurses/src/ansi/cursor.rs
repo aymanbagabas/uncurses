@@ -1,8 +1,34 @@
-//! Cursor movement escape sequences.
+//! Cursor addressing, movement, saving, reporting, and style sequences.
+//!
+//! ## Category
+//!
+//! This module emits cursor-related CSI, ESC, and OSC controls: absolute and
+//! relative movement, line/index movement, cursor save/restore forms, cursor
+//! style, pointer shape, and cursor-position reports.
+//!
+//! ## Coordinate conventions
+//!
+//! Public cursor-position arguments are zero-based unless the item explicitly
+//! says otherwise. Writers add one when the terminal sequence is one-based and
+//! omit default parameters when the emitted bytes support a shorter spelling.
+//!
+//! ```text
+//! row=10 col=20  →  ESC [ 11 ; 21 H
+//!                   ──┬── ─┬─  ┬─ ┬
+//!                    CSI  row  col final
+//! ```
+//!
+//! ## Mode interaction
+//!
+//! Origin mode ([`Mode::ORIGIN`](crate::ansi::mode::Mode::ORIGIN)) changes how
+//! terminals interpret absolute row/column positions relative to scroll margins.
+//! Cursor visibility is controlled by [`Mode::CURSOR_VISIBLE`](crate::ansi::mode::Mode::CURSOR_VISIBLE), while this module emits movement and report bytes.
 
 use std::io::{self, Write};
 
-/// Move cursor to absolute position (CUP). Both row and col are 0-based.
+/// Move the cursor to an absolute position with CUP, `ESC [ <row+1> ; <col+1> H`.
+///
+/// `row` and `col` are zero-based API coordinates. The writer omits the column when `col == 0` and emits bare `ESC [ H` for the origin.
 pub fn write_cup<W: Write>(w: &mut W, row: u16, col: u16) -> io::Result<()> {
     if row == 0 && col == 0 {
         w.write_all(b"\x1b[H")
@@ -13,7 +39,9 @@ pub fn write_cup<W: Write>(w: &mut W, row: u16, col: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor up `n` rows (CUU).
+/// Move the cursor up `n` rows with CUU.
+///
+/// `n == 0` emits nothing, `n == 1` emits `ESC [ A`, and larger counts emit `ESC [ <n> A`.
 pub fn write_cuu<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -22,7 +50,9 @@ pub fn write_cuu<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor down `n` rows (CUD).
+/// Move the cursor down `n` rows with CUD.
+///
+/// `n == 0` emits nothing, `n == 1` emits `ESC [ B`, and larger counts emit `ESC [ <n> B`.
 pub fn write_cud<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -31,7 +61,9 @@ pub fn write_cud<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor forward `n` columns (CUF).
+/// Move the cursor forward/right `n` columns with CUF.
+///
+/// `n == 0` emits nothing, `n == 1` emits `ESC [ C`, and larger counts emit `ESC [ <n> C`.
 pub fn write_cuf<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -40,7 +72,9 @@ pub fn write_cuf<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor backward `n` columns (CUB).
+/// Move the cursor backward/left `n` columns with CUB.
+///
+/// `n == 0` emits nothing, `n == 1` emits `ESC [ D`, and larger counts emit `ESC [ <n> D`.
 pub fn write_cub<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -49,7 +83,9 @@ pub fn write_cub<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor to column `col` (CHA). 0-based.
+/// Move the cursor to an absolute column with CHA, `ESC [ <col+1> G`.
+///
+/// `col` is zero-based; `col == 0` emits the shorter `ESC [ G`.
 pub fn write_cha<W: Write>(w: &mut W, col: u16) -> io::Result<()> {
     if col == 0 {
         w.write_all(b"\x1b[G")
@@ -58,7 +94,9 @@ pub fn write_cha<W: Write>(w: &mut W, col: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor to row `row` (VPA). 0-based.
+/// Move the cursor to an absolute row with VPA, `ESC [ <row+1> d`.
+///
+/// `row` is zero-based; `row == 0` emits the shorter `ESC [ d`.
 pub fn write_vpa<W: Write>(w: &mut W, row: u16) -> io::Result<()> {
     if row == 0 {
         w.write_all(b"\x1b[d")
@@ -67,7 +105,9 @@ pub fn write_vpa<W: Write>(w: &mut W, row: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor to next line (CNL).
+/// Move to the first column of a following line with CNL.
+///
+/// `n == 0` emits nothing, `n == 1` emits `ESC [ E`, and larger counts emit `ESC [ <n> E`.
 pub fn write_cnl<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -76,7 +116,9 @@ pub fn write_cnl<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Move cursor to previous line (CPL).
+/// Move to the first column of a preceding line with CPL.
+///
+/// `n == 0` emits nothing, `n == 1` emits `ESC [ F`, and larger counts emit `ESC [ <n> F`.
 pub fn write_cpl<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -85,34 +127,37 @@ pub fn write_cpl<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Save cursor position (DECSC).
+/// Save the cursor with the DEC form `ESC 7` (DECSC).
+///
+/// This is distinct from [`write_save_cursor_position`], which emits the CSI `s` form.
 pub fn write_save_cursor<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b7")
 }
 
-/// Restore cursor position (DECRC).
+/// Restore the cursor with the DEC form `ESC 8` (DECRC).
+///
+/// This restores the state saved by [`write_save_cursor`] on terminals that support DECSC/DECRC.
 pub fn write_restore_cursor<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b8")
 }
 
-/// Reverse Index (RI) — move cursor up one line, scrolling if at top.
+/// Move up one line with Reverse Index, `ESC M`.
 ///
-/// Writes the 7-bit form `ESC M`; the 8-bit form is the single byte
-/// [`crate::ansi::c1::RI`] (0x8D).
+/// If the cursor is at the top margin, terminals scroll the region down. The single-byte 8-bit C1 equivalent is [`crate::ansi::c1::RI`].
 pub fn write_reverse_index<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1bM")
 }
 
-/// Index (IND) — move cursor down one line, scrolling if at bottom.
+/// Move down one line with Index, `ESC D`.
 ///
-/// Writes the 7-bit form `ESC D`; the 8-bit form is the single byte
-/// [`crate::ansi::c1::IND`] (0x84).
+/// If the cursor is at the bottom margin, terminals scroll the region up. The single-byte 8-bit C1 equivalent is [`crate::ansi::c1::IND`].
 pub fn write_index<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1bD")
 }
 
-/// Horizontal-Vertical Position (HVP, `CSI Pl;Pc f`). Alias of CUP but with
-/// final byte `f`. Both row and col are 0-based.
+/// Move the cursor with HVP, `ESC [ <row+1> ; <col+1> f`.
+///
+/// Arguments are zero-based API coordinates. The writer uses the same omission rules as [`write_cup`] but with final byte `f`.
 pub fn write_hvp<W: Write>(w: &mut W, row: u16, col: u16) -> io::Result<()> {
     if row == 0 && col == 0 {
         w.write_all(b"\x1b[f")
@@ -123,7 +168,9 @@ pub fn write_hvp<W: Write>(w: &mut W, row: u16, col: u16) -> io::Result<()> {
     }
 }
 
-/// Horizontal Position Absolute (HPA, `CSI Pn ``). 0-based column.
+/// Move to an absolute horizontal position with HPA, ``ESC [ <col+1> ` ``.
+///
+/// `col` is zero-based; `col == 0` emits the shorter ``ESC [ ` ``.
 pub fn write_hpa<W: Write>(w: &mut W, col: u16) -> io::Result<()> {
     if col == 0 {
         w.write_all(b"\x1b[`")
@@ -132,7 +179,9 @@ pub fn write_hpa<W: Write>(w: &mut W, col: u16) -> io::Result<()> {
     }
 }
 
-/// Horizontal Position Relative (HPR, `CSI Pn a`). Move cursor right `n`.
+/// Move horizontally right by `n` columns with HPR, `ESC [ <n> a`.
+///
+/// `n == 0` emits nothing and `n == 1` omits the parameter.
 pub fn write_hpr<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -141,7 +190,9 @@ pub fn write_hpr<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Vertical Position Relative (VPR, `CSI Pn e`). Move cursor down `n`.
+/// Move vertically down by `n` rows with VPR, `ESC [ <n> e`.
+///
+/// `n == 0` emits nothing and `n == 1` omits the parameter.
 pub fn write_vpr<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -150,8 +201,9 @@ pub fn write_vpr<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Cursor Horizontal forward Tab (CHT, `CSI Pn I`). Move cursor forward
-/// `n` tab stops.
+/// Advance `n` horizontal tab stops with CHT, `ESC [ <n> I`.
+///
+/// `n == 0` emits nothing and `n == 1` emits `ESC [ I`.
 pub fn write_cht<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),
@@ -160,47 +212,54 @@ pub fn write_cht<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Save cursor position via the alternate ANSI form (`CSI s`).
+/// Save the cursor position with CSI `s`, exact bytes `ESC [ s`.
 ///
-/// This is the SCO form; [`write_save_cursor`] emits the DEC form `ESC 7`.
+/// This is the alternate save form; [`write_save_cursor`] emits DEC `ESC 7`.
 pub fn write_save_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b[s")
 }
 
-/// Restore cursor position via the alternate ANSI form (`CSI u`).
+/// Restore the cursor position with CSI `u`, exact bytes `ESC [ u`.
 ///
-/// This is the SCO form; [`write_restore_cursor`] emits the DEC form `ESC 8`.
+/// This is the alternate restore form; [`write_restore_cursor`] emits DEC `ESC 8`.
 pub fn write_restore_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b[u")
 }
 
-/// Set pointer (mouse cursor) shape (OSC 22).
+/// Set the pointer shape with OSC 22, `ESC ] 22 ; <shape> ESC \`.
+///
+/// `shape` is emitted verbatim. The sequence uses the `ST` terminator rather than BEL.
 pub fn write_set_pointer_shape<W: Write>(w: &mut W, shape: &str) -> io::Result<()> {
     write!(w, "\x1b]22;{shape}\x1b\\")
 }
 
-/// Request extended cursor position report (DECXCPR, `CSI ? 6 n`).
+/// Request an extended cursor-position report with `ESC [ ? 6 n` (DECXCPR).
+///
+/// Compatible terminals reply with a private cursor-position report such as `ESC [ ? <line> ; <column> R`.
 pub fn write_request_extended_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b[?6n")
 }
 
-/// Cursor style.
+/// Cursor style values for DECSCUSR (`ESC [ Ps SP q`).
+///
+/// The variants map directly to the numeric `Ps` parameter used by
+/// [`write_cursor_style`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CursorStyle {
+    /// Use terminal default cursor style, DECSCUSR parameter `0`.
     #[default]
-    /// Terminal default cursor style.
     Default,
-    /// Blinking block cursor.
+    /// Blinking block cursor, DECSCUSR parameter `1`.
     BlinkingBlock,
-    /// Steady block cursor.
+    /// Steady block cursor, DECSCUSR parameter `2`.
     SteadyBlock,
-    /// Blinking underline cursor.
+    /// Blinking underline cursor, DECSCUSR parameter `3`.
     BlinkingUnderline,
-    /// Steady underline cursor.
+    /// Steady underline cursor, DECSCUSR parameter `4`.
     SteadyUnderline,
-    /// Blinking bar cursor.
+    /// Blinking bar cursor, DECSCUSR parameter `5`.
     BlinkingBar,
-    /// Steady bar cursor.
+    /// Steady bar cursor, DECSCUSR parameter `6`.
     SteadyBar,
 }
 
@@ -218,22 +277,30 @@ impl CursorStyle {
     }
 }
 
-/// Set cursor style (DECSCUSR).
+/// Set the cursor style with DECSCUSR, `ESC [ <style> SP q`.
+///
+/// The numeric parameter comes from [`CursorStyle`]: `0` for default, `1/2` block, `3/4` underline, and `5/6` bar.
 pub fn write_cursor_style<W: Write>(w: &mut W, style: CursorStyle) -> io::Result<()> {
     write!(w, "\x1b[{} q", style.param())
 }
 
-/// Request cursor position (CPR — DSR 6).
+/// Request a standard cursor-position report with `ESC [ 6 n` (DSR 6).
+///
+/// Compatible terminals reply with `ESC [ <line> ; <column> R`, using one-based coordinates.
 pub fn write_request_cursor_position<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b[6n")
 }
 
-/// Tab forward.
+/// Write a literal horizontal tab byte, `HT` (`0x09`).
+///
+/// This is not a CSI sequence; the terminal advances according to its current tab stops.
 pub fn write_tab<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\t")
 }
 
-/// Cursor backward tab (CBT).
+/// Move backward by `n` tab stops with CBT, `ESC [ <n> Z`.
+///
+/// `n == 0` emits nothing, `n == 1` emits `ESC [ Z`, and larger counts include the decimal count.
 pub fn write_backtab<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => Ok(()),

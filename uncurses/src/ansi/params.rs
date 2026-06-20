@@ -1,31 +1,27 @@
-//! Lazy walker over CSI / DCS parameter bodies.
+//! Lazy parser for CSI and DCS parameter bodies.
 //!
-//! A parameter body is the bytes between the introducer (`\x1b[`,
-//! `\x9b`, `\x1bP`, `\x90`) and the final byte. Top-level parameters
-//! are separated by `;`; each top-level parameter may itself carry
-//! colon-separated sub-parameters.
+//! ## Category
 //!
-//! [`Params`] borrows the raw body and decodes it on demand:
+//! [`Params`] and [`Group`] expose the bytes between a control-sequence
+//! introducer and its final byte. They handle semicolon-separated parameters and
+//! colon-separated subparameters without allocating.
 //!
-//! * [`Params::get`] / [`Params::get_or`] — the first sub-parameter of
-//!   one top-level group (random access).
-//! * [`Params::group`] — the n-th top-level group as a [`Group`].
-//! * [`Params::iter`] — sequential walk over groups.
-//! * [`Group::iter`] — sequential walk over the sub-parameters of one
-//!   group.
+//! ## Parameter grammar
 //!
-//! No allocations are performed. Each slot decodes to `Option<u32>`:
-//! `None` for an omitted slot (empty `;;` or empty between two `:`s,
-//! and non-numeric input), `Some(v)` for an explicit value (including
-//! `Some(0)`).
+//! A body such as `38:2::255:100:50;1` is viewed as two top-level groups. Empty
+//! slots decode to `None`; numeric slots decode to `Some(value)`.
 //!
-//! Per ECMA-48 §5.4.2 the default for an omitted parameter is
-//! sequence-specific (e.g. `1` for `CUU`/`CUD`/`CUP`, `0` for
-//! `SGR`/`ED`); callers apply that default with [`Params::get_or`].
+//! ```text
+//! 38:2::255:100:50  ;  1
+//! ─────────┬────────   ┬
+//!      group 0       group 1
+//! ```
 //!
-//! `u32` accommodates astral-plane codepoints carried by extensions
-//! like `modifyOtherKeys` (`CSI 27 ; mod ; codepoint ~`) and the Kitty
-//! keyboard protocol.
+//! ## Mode interaction
+//!
+//! Parameter defaults are sequence-specific. Callers apply defaults with
+//! [`Params::get_or`] after they know which CSI/DCS final byte and mode context
+//! they are handling.
 
 use std::fmt;
 

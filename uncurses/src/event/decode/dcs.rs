@@ -1,10 +1,23 @@
 //! DCS (Device Control String) decoder.
 //!
-//! Format: `ESC P` (or 8-bit `0x90`) followed by a payload terminated by
-//! ST (`ESC \`) or the 8-bit `0x9C`. Used for terminal capability
-//! responses (XTGETTCAP), DECRQSS replies, XTVersion, and tertiary
-//! device attributes.
-
+//! ## Purpose
+//!
+//! DCS sequences carry terminal-control reply strings. This decoder recognizes
+//! capability replies, DECRQSS-style status replies, terminal-name replies, and
+//! tertiary device attributes, while preserving unknown payloads as
+//! [`Event::UnknownDcs`].
+//!
+//! ## Wire format
+//!
+//! DCS starts with `ESC P` or the 8-bit C1 byte `0x90`, then a payload, then ST
+//! (`ESC \` or `0x9C`). BEL is intentionally not accepted as a terminator in
+//! DCS payloads.
+//!
+//! ## Gotchas
+//!
+//! XTGETTCAP success and failure replies both decode their hex payloads; the
+//! [`Event::Termcap`] `recognized` field carries the success bit. Malformed hex entries are skipped rather than
+//! making the whole reply fail.
 use super::Decoder;
 use super::result::ParseResult;
 use super::util::{decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len};

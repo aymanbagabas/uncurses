@@ -1,25 +1,35 @@
-//! Windows-specific construction and event-pump for [`EventSource`].
+//! Windows-specific construction and console-record serialization for
+//! [`EventSource`].
 //!
-//! Provides the Windows `impl` block on the unified
-//! [`super::source::EventSource`] type: [`EventSource::new`], the
-//! `WaitForMultipleObjects`-backed [`EventSource::try_read`], and the
-//! `INPUT_RECORD` → VT-byte serialiser. Resize events arrive as
-//! `WINDOW_BUFFER_SIZE_EVENT` records on the input handle, so no
-//! sibling pipe / signal plumbing is needed on this target.
+//! ## Purpose
 //!
-//! Encoding rules for [`Self::serialize_record`]:
+//! This module supplies the Windows [`EventSource::new`] implementation and the
+//! platform hooks used by the shared source pump. It waits on the console input
+//! handle plus a manual-reset wake event, reads `INPUT_RECORD`s, serializes
+//! them into the same byte grammar used elsewhere, and lets [`Decoder`] produce
+//! typed [`Event`] values.
 //!
-//! * `KEY_EVENT` with VT input mode active and a non-zero `UnicodeChar`:
-//!   emit the UTF-8 encoding of the (possibly surrogate-paired) code
-//!   point. Non-VT input emits the win32-input-mode sequence
-//!   `CSI vk;sc;ch;kd;cks;rep _` for downstream handling.
-//! * `MOUSE_EVENT`: emit an SGR mouse sequence.
-//! * `WINDOW_BUFFER_SIZE_EVENT`: emit `CSI 48 ; rows ; cols ; 0 ; 0 t`
-//!   (pixel dimensions are unavailable on this target). The decoder
-//!   turns it into [`Event::Resize`].
-//! * `FOCUS_EVENT`: emit `CSI I` (focus in) or `CSI O` (focus out).
-//! * `MENU_EVENT`: ignored.
-
+//! ```text
+//! INPUT_RECORD ──▶ serializer ──▶ VT / win32-input bytes ──▶ Decoder ──▶ Event
+//!       │              ├─ KEY_EVENT: UTF-8 or CSI vk;sc;ch;kd;cks;rep _
+//!       │              ├─ MOUSE_EVENT: SGR mouse
+//!       │              └─ WINDOW_BUFFER_SIZE_EVENT: CSI 48 ... t
+//! wake event ──▶ WaitForMultipleObjects ──▶ Interrupted wait
+//! ```
+//!
+//! ## Key types
+//!
+//! [`WindowsWakerInner`] owns the Win32 event used by
+//! [`Waker`](crate::event::Waker). The [`EventSource`] also stores VT-input
+//! mode detection, pending surrogate halves, last window size, and last mouse
+//! button state needed to translate console records accurately.
+//!
+//! ## Gotchas
+//!
+//! Resize notifications arrive as console input records, not through a signal.
+//! UTF-16 surrogate pairs can be split across key records; the source buffers
+//! high surrogates separately for key-up and key-down directions before writing
+//! UTF-8 to the decoder.
 #![cfg(windows)]
 
 use std::collections::VecDeque;
@@ -83,13 +93,22 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Build a new source reading from `input`. Resize events arrive
-    /// as `WINDOW_BUFFER_SIZE_EVENT` records on the input handle, so
-    /// no separate winch plumbing is needed.
+    /// Build a new Windows event source for `input`.
     ///
-    /// Timeouts start at their documented defaults; override them with
+    /// Construction captures the console input handle, creates the wake event,
+    /// detects whether virtual-terminal input is enabled, and registers the
+    /// input and wake handles with the Windows poll backend. Resize events arrive
+    /// as `WINDOW_BUFFER_SIZE_EVENT` records on the input handle, so no separate
+    /// signal or resize pipe is needed.
+    ///
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and
+    /// [`DEFAULT_PASTE_IDLE_TIMEOUT`]; override them with
     /// [`EventSource::with_esc_timeout`] and
     /// [`EventSource::with_paste_idle_timeout`].
+    ///
+    /// Returns any OS error from wake-event creation or poller construction. It
+    /// does not read console records until [`EventSource::poll`] or
+    /// [`EventSource::read`] is called.
     pub fn new(input: I) -> io::Result<Self> {
         let input_handle = {
             use std::os::windows::io::AsRawHandle;
@@ -136,16 +155,22 @@ where
         })
     }
 
-    /// Reset the wake event after a [`Waker`] fired. Platform hook for
-    /// [`EventSource::fill`].
+    /// Reset the wake event after a [`Waker`] fired.
+    ///
+    /// Platform hook for [`EventSource::fill`]. Resetting consumes the wake so a
+    /// later wait can block again.
     pub(super) fn drain_wake(&mut self) {
         unsafe {
             ResetEvent(self.wake_event);
         }
     }
 
-    /// Read whatever console records are ready and serialise them through
-    /// the decoder. Platform hook for [`EventSource::fill`].
+    /// Read ready console records and serialize them through the decoder.
+    ///
+    /// Platform hook for [`EventSource::fill`]. This drains at most one record
+    /// batch, translates records to bytes, appends them to the pending buffer,
+    /// and queues decoded events. OS errors from console APIs are returned to
+    /// the caller.
     pub(super) fn drain_input(&mut self) -> io::Result<()> {
         self.read_records()
     }
@@ -707,12 +732,11 @@ mod tests {
         assert_eq!(decoded, body);
     }
 
-    /// Same as the round-trip test above but with a UTF-16 surrogate
-    /// pair (the 4-byte emoji) split across the decoder's read
-    /// boundary: the serializer's two records for the high + low
-    /// surrogate are produced first, then the rest of the body. Even
-    /// when those bytes are fed to the decoder in two separate calls,
-    /// the assembled paste must equal the original.
+    /// Same as the round-trip test above, but the paste body is split
+    /// across two decoder calls. A 4-byte emoji (a UTF-16 surrogate pair)
+    /// is kept whole inside the first chunk, and the rest of the body is
+    /// fed in a second call. Even when assembled from two separate decoder
+    /// calls, the paste must equal the original.
     #[test]
     fn windows_paste_pipeline_chunked_feed_preserves_emoji() {
         use crate::event::{Decoder, Event};

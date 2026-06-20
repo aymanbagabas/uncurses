@@ -190,10 +190,15 @@ impl Renderer {
 
     // -------- horizontal -----------------------------------------------
 
-    /// Cost-pass for the horizontal leg. Picks the shortest shape,
-    /// folding the tabs / backspace capability cross product
-    /// internally so the caller can plan with a single combined
-    /// horizontal cost instead of looping over capability flags.
+    /// Cost-pass for the horizontal leg.
+    ///
+    /// Picks the shortest shape, folding the tabs / backspace capability
+    /// cross product internally so the caller can plan with a single
+    /// combined horizontal cost instead of looping over capability
+    /// flags. Forward tabs are counted with
+    /// [`crate::renderer::tabstops::TabStops::next_stop`], the unclamped
+    /// terminal stop, so the planner never treats a tab that would
+    /// overshoot the target as landing on the canvas edge.
     pub(super) fn plan_horizontal_cost(
         &self,
         fx: u16,

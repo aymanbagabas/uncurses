@@ -1,32 +1,60 @@
-//! Character set selection (SCS) and locking-shift sequences.
+//! Character-set designation and locking-shift sequences.
+//!
+//! ## Category
+//!
+//! This module emits SCS (`ESC` plus a G-set selector and charset designator)
+//! and the locking-shift controls that map G1/G2/G3 into GL or GR.
+//!
+//! ## Escape format
+//!
+//! SCS is a short 7-bit ESC sequence rather than CSI/OSC/DCS:
+//!
+//! ```text
+//! ESC ( B
+//! ─┬─ ┬ ┬
+//! intro G0 charset
+//! ```
+//!
+//! The caller supplies the G-set selector byte and charset identifier exactly as
+//! they should appear on the wire.
+//!
+//! ## Mode interaction
+//!
+//! Charset selection affects how subsequent bytes are rendered by terminals that
+//! honor ISO-2022 character sets. It is independent of DECSET/DECRST modes.
 
 use std::io::{self, Write};
 
-/// Select a 94-character or 96-character set for a G-set designator.
+/// Designate a character set with `ESC <gset> <charset>`.
 ///
-/// `gset` selects the destination:
-/// * `b'('` G0, `b')'` G1, `b'*'` G2, `b'+'` G3 (94-char sets).
-/// * `b'-'` G1, `b'.'` G2, `b'/'` G3 (96-char sets).
-///
-/// `charset` is the identifier (e.g. `b'B'` USASCII, `b'0'` DEC Special
-/// Drawing).
+/// `gset` is the designator selector byte: `b'('`/`b')'`/`b'*'`/`b'+'` for G0-G3 94-character sets, or `b'-'`/`b'.'`/`b'/'` for G1-G3 96-character sets. `charset` is emitted as the final designator byte, for example `b'B'` or `b'0'`.
 pub fn write_select_charset<W: Write>(w: &mut W, gset: u8, charset: u8) -> io::Result<()> {
     w.write_all(&[0x1b, gset, charset])
 }
 
-/// Locking Shift 1 Right — shift G1 into GR (`ESC ~`).
+/// Lock G1 into GR: exact bytes `ESC ~`.
+///
+/// Use after designating G-sets with [`write_select_charset`] when a terminal honors ISO-2022 locking shifts.
 pub const LS1R: &[u8] = b"\x1b~";
 
-/// Locking Shift 2 — shift G2 into GL (`ESC n`).
+/// Lock G2 into GL: exact bytes `ESC n`.
+///
+/// Use after designating G-sets with [`write_select_charset`] when a terminal honors ISO-2022 locking shifts.
 pub const LS2: &[u8] = b"\x1bn";
 
-/// Locking Shift 2 Right — shift G2 into GR (`ESC }`).
+/// Lock G2 into GR: exact bytes `ESC }`.
+///
+/// Use after designating G-sets with [`write_select_charset`] when a terminal honors ISO-2022 locking shifts.
 pub const LS2R: &[u8] = b"\x1b}";
 
-/// Locking Shift 3 — shift G3 into GL (`ESC o`).
+/// Lock G3 into GL: exact bytes `ESC o`.
+///
+/// Use after designating G-sets with [`write_select_charset`] when a terminal honors ISO-2022 locking shifts.
 pub const LS3: &[u8] = b"\x1bo";
 
-/// Locking Shift 3 Right — shift G3 into GR (`ESC |`).
+/// Lock G3 into GR: exact bytes `ESC |`.
+///
+/// Use after designating G-sets with [`write_select_charset`] when a terminal honors ISO-2022 locking shifts.
 pub const LS3R: &[u8] = b"\x1b|";
 
 #[cfg(test)]

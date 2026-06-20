@@ -1,4 +1,20 @@
-//! Word- and hard-wrap utilities that preserve ANSI escape sequences.
+//! Width-aware wrapping for ANSI-decorated strings.
+//!
+//! ## Category
+//!
+//! Hard wrap, word wrap, and combined wrap utilities insert newlines based on
+//! terminal display columns while preserving ANSI escape sequences verbatim.
+//!
+//! ## Width conventions
+//!
+//! Visible text width comes from [`crate::ansi::text::tokenize`] and [`WidthMode`].
+//! Escape tokens are zero-width and stay attached to the current word, separator,
+//! or line segment so styling and hyperlinks survive wrapping.
+//!
+//! ## Mode interaction
+//!
+//! Wrapping does not interpret terminal modes. It treats mode-setting and
+//! mode-dependent sequences as bytes to preserve, not as state transitions.
 
 use super::text::{Token, WidthMode, tokenize};
 
@@ -8,20 +24,19 @@ fn bs(b: &[u8]) -> &str {
     unsafe { std::str::from_utf8_unchecked(b) }
 }
 
-/// Default word-break runes used by [`wordwrap`].
+/// Default break characters for [`wordwrap`] and [`wrap`]: hyphen, comma, period, semicolon, colon, and space (`"-,.;: "`).
 pub const DEFAULT_BREAKPOINTS: &str = "-,.;: ";
 
-/// Hard-wrap `s` so no visible line exceeds `limit` columns. Breaks happen at
-/// exact column boundaries, in the middle of words if necessary. ANSI escapes
-/// are preserved verbatim.
+/// Hard-wrap `s` so no visible line exceeds `limit` columns.
 ///
-/// If `preserve_space` is `false`, whitespace at break boundaries is collapsed
-/// in the same way wordwrap collapses it.
+/// Breaks occur at exact width boundaries, including inside words. ANSI escapes are copied verbatim and contribute zero width. If `preserve_space` is `false`, a space that lands at a break boundary is dropped.
 pub fn hardwrap(s: &str, limit: usize, preserve_space: bool) -> String {
     hardwrap_mode(s, limit, preserve_space, WidthMode::default(), false)
 }
 
-/// Like [`hardwrap`] but with [`WidthMode`].
+/// Width-mode variant of [`hardwrap`].
+///
+/// `mode` and `eaw_wide` control grapheme width calculation. `limit == 0` returns the input unchanged.
 pub fn hardwrap_mode(
     s: &str,
     limit: usize,
@@ -63,14 +78,16 @@ pub fn hardwrap_mode(
     out
 }
 
-/// Word-wrap `s` at `breakpoints` so no visible line exceeds `limit` columns.
-/// Long words that exceed `limit` are not broken (use [`wrap`] for that).
-/// ANSI escapes are preserved verbatim.
+/// Word-wrap `s` at `breakpoints` so visible lines fit within `limit` where possible.
+///
+/// Long words are not split; use [`wrap`] when oversized words should be hard-wrapped. ANSI escapes are preserved and do not contribute width.
 pub fn wordwrap(s: &str, limit: usize, breakpoints: &str) -> String {
     wordwrap_mode(s, limit, breakpoints, WidthMode::default(), false)
 }
 
-/// Like [`wordwrap`] but with [`WidthMode`].
+/// Width-mode variant of [`wordwrap`].
+///
+/// `breakpoints` is a set of characters where a line may break. `mode` and `eaw_wide` control grapheme width calculation; `limit == 0` returns the input unchanged.
 pub fn wordwrap_mode(
     s: &str,
     limit: usize,
@@ -232,13 +249,16 @@ pub fn wordwrap_mode(
     out
 }
 
-/// Soft-wrap: try word-wrap at `breakpoints`, but hard-wrap any single word that
-/// is longer than `limit`. Combines [`wordwrap`] with a hardwrap fallback.
+/// Soft-wrap `s` at word breakpoints, then hard-wrap any remaining overlong line.
+///
+/// This combines [`wordwrap`] with [`hardwrap`] so every visible line fits within `limit` when `limit > 0`.
 pub fn wrap(s: &str, limit: usize, breakpoints: &str) -> String {
     wrap_mode(s, limit, breakpoints, WidthMode::default(), false)
 }
 
-/// Like [`wrap`] but with [`WidthMode`].
+/// Width-mode variant of [`wrap`].
+///
+/// `mode` and `eaw_wide` control grapheme width calculation. `limit == 0` returns the input unchanged.
 pub fn wrap_mode(
     s: &str,
     limit: usize,

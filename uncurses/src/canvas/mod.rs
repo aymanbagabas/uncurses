@@ -1,7 +1,58 @@
-//! Canvas — the orchestrator for rendering + terminal state management.
+//! Cell-grid canvas over any [`Write`] sink.
 //!
-//! Owns the RenderBuffer (touch-tracked cell grid), the Renderer (output
-//! diffing), and the underlying writer.
+//! A [`Canvas`] is the high-level rendering surface for terminal
+//! applications. It owns the caller-facing cell grid, tracks terminal
+//! modes that must be restored around shell handoffs, and delegates
+//! byte-level diffing to the renderer.
+//!
+//! ## Buffer model
+//!
+//! Drawing APIs mutate a touch-tracked `RenderBuffer` owned by the
+//! canvas. On [`Canvas::render`], touched spans are copied into the
+//! renderer's staging buffer only when the cell value actually differs
+//! from the previously staged value. The renderer then compares that
+//! staging buffer with its tracked on-screen buffer and updates the
+//! tracked buffer as bytes are emitted.
+//!
+//! ```text
+//! set_cell / set_str ─▶ front_buf (the desired frame)
+//!                         │ touched spans
+//!                         ▼
+//! render() ─▶ diff front_buf vs the renderer's tracked screen
+//!                         │
+//!                         ├─▶ minimal escape bytes ─▶ canvas byte buffer
+//!                         ▼
+//!             tracked screen updated to match
+//!                                  │
+//!             flush() / present() ─┴─▶ Write
+//! ```
+//!
+//! ## `render`, `flush`, and `present`
+//!
+//! [`Canvas::render`] is infallible because it writes only into an
+//! internal `Vec<u8>`. It stages mode wrappers, cursor moves, style
+//! changes, and cell bytes, but it does not touch the underlying
+//! writer. [`std::io::Write::flush`] drains all staged bytes (including
+//! raw bytes written through the `Write` implementation) into the owned
+//! writer and flushes that writer. [`Canvas::present`] is the
+//! convenience boundary: render one frame, then flush it.
+//!
+//! ## Managed area
+//!
+//! In inline mode the canvas manages a full-width rectangle anchored at
+//! the current terminal cursor and uses relative cursor movement so
+//! scrollback above the application stays intact. In alternate-screen
+//! mode the managed rectangle is the whole viewport and absolute cursor
+//! movement is available.
+//!
+//! ## Optimizations
+//!
+//! [`Optimizations`] describe terminal capabilities the renderer may use
+//! when two byte sequences are visually equivalent: erase-character,
+//! repeat-character, insert/delete cells or lines, scroll regions,
+//! absolute column/row addressing, hardware tabs, backspace, and ONLCR
+//! newline behavior. Disabling a flag makes the renderer choose more
+//! conservative bytes; it should not change the intended cell result.
 
 use std::io::{self, Write};
 
@@ -24,25 +75,42 @@ mod text;
 mod tests;
 
 /// Cell-diff capability flags that control which escape sequences the
-/// screen's internal renderer is allowed to emit.
+/// canvas renderer may emit.
 ///
-/// Re-exported so callers can read or mutate the screen's optimizations
-/// without depending on internal renderer modules.
+/// # Usage
+///
+/// Use [`Canvas::optimizations`] to inspect the active set and
+/// [`Canvas::use_optimizations`] or [`Canvas::with_optimizations`] to
+/// override auto-detection. The type is re-exported here so applications
+/// can configure rendering without depending on renderer internals.
 pub use crate::renderer::Optimizations;
 
-/// The main screen abstraction — write cells to a buffer, then render
-/// diffs to a terminal.
+/// Terminal drawing surface backed by a cell grid and an owned byte sink.
 ///
-/// The screen owns the underlying writer. Methods that emit output
-/// write directly to the owned writer and never flush; flushing is the
-/// caller's responsibility — wrap the terminal output in a
-/// [`std::io::BufWriter`] (or any other `Write`) and call
-/// [`std::io::Write::flush`] on the screen when bytes should hit the
-/// wire. Stage everything into a `Vec<u8>` for tests.
+/// `Canvas<W>` owns `W`, an in-memory byte buffer, a desired cell grid,
+/// and a renderer with tracked terminal state. Drawing methods update
+/// cells; terminal-mode methods stage escape bytes; [`Canvas::render`]
+/// turns changed cells into escape bytes; [`std::io::Write::flush`]
+/// sends staged bytes to `W`.
 ///
-/// The screen itself implements [`io::Write`] as a passthrough to the
-/// owned writer — handy for emitting arbitrary escape sequences around
-/// a frame, or flushing pending bytes via [`io::Write::flush`].
+/// # Type parameter
+///
+/// - `W`: any [`Write`] sink. Use a terminal output handle for live
+///   rendering, a [`std::io::BufWriter`] for buffered terminal output,
+///   or `Vec<u8>` in tests.
+///
+/// # I/O model
+///
+/// `Canvas` implements [`io::Write`], but `write` appends bytes to the
+/// canvas staging buffer rather than writing through immediately. This
+/// lets raw escape bytes, mode toggles, and rendered frame bytes flush
+/// in a single ordered batch.
+///
+/// # Panics
+///
+/// Public infallible methods write only into `Vec<u8>` and do not panic
+/// for I/O errors. Fallible I/O is reported by [`std::io::Write::flush`]
+/// and [`Canvas::present`].
 ///
 /// # Managed area
 ///
@@ -88,8 +156,9 @@ pub use crate::renderer::Optimizations;
 pub struct Canvas<W: Write> {
     /// The underlying byte sink.
     writer: W,
-    /// Touch-tracked cell grid. Holds both the intended frame state and
-    /// per-row dirty spans that drive minimal byte emission.
+    /// Canvas-owned desired cell grid. Touched spans record where the
+    /// application wrote since the last sync; the renderer filters them
+    /// again against its staging buffer before diffing the terminal.
     front_buf: RenderBuffer,
     /// The diff renderer.
     renderer: Renderer,
@@ -112,13 +181,26 @@ pub struct Canvas<W: Write> {
 }
 
 impl<W: Write> Canvas<W> {
-    /// Create a new terminal screen with the given writer and initial
-    /// `(width, height)` in cells, using a color profile and
-    /// optimization set auto-detected from the process environment.
+    /// Create a canvas using the process environment for capability
+    /// detection.
     ///
-    /// `size` accepts anything convertible into `(u16, u16)` — a plain
-    /// `(width, height)` pair, or a [`Winsize`](crate::terminal::Winsize)
-    /// straight from [`get_window_size`](crate::terminal::get_window_size).
+    /// # Parameters
+    ///
+    /// - `writer`: byte sink owned by the canvas.
+    /// - `size`: initial `(width, height)` in cells. Accepts a tuple or a
+    ///   [`Winsize`](crate::terminal::Winsize).
+    ///
+    /// # Returns
+    ///
+    /// A canvas with color profile and renderer optimizations detected
+    /// from [`Env::from_process`]. A zero size is allowed; no cells are
+    /// allocated until a later [`Canvas::resize`].
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
     ///
     /// Use [`Canvas::from_env`] to detect from a specific environment,
     /// and the consuming builders
@@ -130,14 +212,30 @@ impl<W: Write> Canvas<W> {
         Self::from_env(writer, size, &Env::from_process())
     }
 
-    /// Create a new terminal screen, auto-detecting the color profile
-    /// and optimization set from `env` instead of the process
-    /// environment.
+    /// Create a canvas using an explicit environment for capability
+    /// detection.
+    ///
+    /// # Parameters
+    ///
+    /// - `writer`: byte sink owned by the canvas.
+    /// - `size`: initial `(width, height)` in cells. Accepts a tuple or a
+    ///   [`Winsize`](crate::terminal::Winsize).
+    /// - `env`: environment used for color-profile and optimization
+    ///   detection.
+    ///
+    /// # Returns
+    ///
+    /// A canvas configured from `env`.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
     ///
     /// Useful when the relevant environment isn't this process's own —
     /// for example a remote session whose `TERM` / `COLORTERM` arrive
-    /// out of band. `size` accepts anything convertible into
-    /// `(u16, u16)`.
+    /// out of band.
     pub fn from_env(writer: W, size: impl Into<(u16, u16)>, env: &Env) -> Self {
         let color_profile = Profile::detect_from(env, true);
         let optimizations = crate::renderer::Optimizations::from_env(env);
@@ -169,57 +267,134 @@ impl<W: Write> Canvas<W> {
         screen
     }
 
-    /// Build with the East-Asian Ambiguous width policy set (see
-    /// [`TextSurface::eaw_wide`](crate::text::TextSurface::eaw_wide)). Consuming builder for use right after
-    /// construction.
+    /// Set the East-Asian Ambiguous width policy during construction.
+    ///
+    /// # Parameters
+    ///
+    /// - `eaw_wide`: when `true`, characters with East-Asian-Width
+    ///   `Ambiguous` measure as two cells; when `false`, as one cell.
+    ///
+    /// # Returns
+    ///
+    /// The same canvas with the policy updated.
+    ///
+    /// # Usage notes
+    ///
+    /// This affects string measurement through
+    /// [`TextSurface::eaw_wide`](crate::text::TextSurface::eaw_wide) and
+    /// should be chosen before drawing text whose width depends on that
+    /// policy.
     pub fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
         self.eaw_wide = eaw_wide;
         self
     }
 
-    /// Build with an explicit color [`Profile`], overriding the
-    /// auto-detected one. Consuming builder; see
-    /// [`Canvas::use_color_profile`] to change it at runtime.
+    /// Set an explicit color [`Profile`] during construction.
+    ///
+    /// # Parameters
+    ///
+    /// - `profile`: color output profile to use for subsequent style
+    ///   emission.
+    ///
+    /// # Returns
+    ///
+    /// The same canvas with the renderer profile updated.
+    ///
+    /// # Usage notes
+    ///
+    /// This overrides auto-detection. Use [`Canvas::use_color_profile`]
+    /// to change the profile after construction.
     pub fn with_color_profile(mut self, profile: Profile) -> Self {
         self.use_color_profile(profile);
         self
     }
 
-    /// Build with an explicit [`Optimizations`] set, overriding the
-    /// auto-detected one. Consuming builder; see
-    /// [`Canvas::use_optimizations`] to change it at runtime.
+    /// Set an explicit [`Optimizations`] set during construction.
+    ///
+    /// # Parameters
+    ///
+    /// - `optimizations`: capability flags the renderer may rely on.
+    ///
+    /// # Returns
+    ///
+    /// The same canvas with renderer optimizations updated.
+    ///
+    /// # Usage notes
+    ///
+    /// This overrides auto-detection. Use [`Canvas::use_optimizations`]
+    /// to change the set after construction.
     pub fn with_optimizations(mut self, optimizations: Optimizations) -> Self {
         self.use_optimizations(optimizations);
         self
     }
 
-    /// Switch to a different color [`Profile`] at runtime — for example
-    /// to upgrade the profile after confirming richer terminal support.
-    /// Affects subsequent frames; call [`Canvas::invalidate`] to
-    /// repaint already-rendered content with the new profile.
+    /// Switch to a different color [`Profile`] at runtime.
+    ///
+    /// # Parameters
+    ///
+    /// - `profile`: color output profile used by subsequent style diffs.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Affects future emission only. If already-rendered cells should be
+    /// repainted under the new profile, call [`Canvas::invalidate`]
+    /// before the next [`Canvas::render`].
     pub fn use_color_profile(&mut self, profile: Profile) {
         self.renderer.set_color_profile(profile);
     }
 
-    /// Switch to a different [`Optimizations`] set at runtime — for
-    /// example to enable capabilities confirmed by querying the
-    /// terminal. Affects subsequent frames.
+    /// Switch to a different [`Optimizations`] set at runtime.
+    ///
+    /// # Parameters
+    ///
+    /// - `optimizations`: capability flags allowed for subsequent frame
+    ///   diffs and cursor movement.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Existing cell contents are unchanged; only the byte sequences
+    /// chosen for later renders are affected.
     pub fn use_optimizations(&mut self, optimizations: Optimizations) {
         self.renderer.set_optimizations(optimizations);
     }
 
-    /// The active [`Profile`] used when emitting cell styles.
+    /// Return the active [`Profile`] used when emitting cell styles.
+    ///
+    /// # Returns
+    ///
+    /// The renderer's current color profile.
     pub fn color_profile(&self) -> Profile {
         self.renderer.color_profile()
     }
 
     // --- Kitty keyboard --------------------------------------------------
 
-    /// Set the active Kitty keyboard enhancement flags. Emits
-    /// `CSI = <flags> ; 1 u` (set-and-replace) targeting the
-    /// currently-active screen buffer's top stack frame, and remembers
-    /// the desired flag set so it can be re-emitted onto whichever
-    /// buffer becomes active afterwards.
+    /// Set the active Kitty keyboard enhancement flags.
+    ///
+    /// # Parameters
+    ///
+    /// - `flags`: replacement flag set for the terminal's top keyboard
+    ///   enhancement stack frame. Pass
+    ///   [`crate::ansi::KittyKeyboardFlags::NONE`] to clear all tracked
+    ///   enhancements.
+    ///
+    /// # Behavior
+    ///
+    /// Stages `CSI = <flags> ; 1 u` for the currently-active screen
+    /// buffer and remembers the desired set so it can be re-emitted onto
+    /// whichever buffer becomes active afterwards.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     ///
     /// The kitty keyboard stack is per-screen-buffer in the terminal.
     /// Rather than expose that detail, the screen treats its tracked
@@ -240,52 +415,124 @@ impl<W: Write> Canvas<W> {
     }
 
     /// Return the canvas width in cells.
+    ///
+    /// # Returns
+    ///
+    /// The width most recently passed to [`Canvas::new`],
+    /// [`Canvas::from_env`], or [`Canvas::resize`].
     pub fn width(&self) -> u16 {
         self.width
     }
 
     /// Return the canvas height in cells.
+    ///
+    /// # Returns
+    ///
+    /// The height most recently passed to [`Canvas::new`],
+    /// [`Canvas::from_env`], or [`Canvas::resize`].
     pub fn height(&self) -> u16 {
         self.height
     }
 
-    /// Whether the alternate screen is currently active.
+    /// Return whether the alternate screen is currently active.
+    ///
+    /// # Returns
+    ///
+    /// `true` after [`Canvas::set_alt_screen(true)`](Canvas::set_alt_screen)
+    /// and `false` after disabling it.
     pub fn alt_screen(&self) -> bool {
         self.state.alt_screen
     }
 
-    /// Borrow the underlying writer immutably. Useful for inspecting
-    /// buffered output in tests / benches when the writer is a
-    /// `Vec<u8>` or similar in-memory sink.
+    /// Borrow the underlying writer immutably.
+    ///
+    /// # Returns
+    ///
+    /// Shared access to the owned writer. Pending bytes staged in the
+    /// canvas byte buffer are not reflected here until
+    /// [`std::io::Write::flush`] succeeds.
+    ///
+    /// # Usage notes
+    ///
+    /// Useful for inspecting output when `W` is an in-memory sink such
+    /// as `Vec<u8>`.
     pub fn writer(&self) -> &W {
         &self.writer
     }
 
-    /// Borrow the underlying writer mutably. Lets callers drain or
-    /// clear an in-memory sink between frames without dropping the
-    /// screen.
+    /// Borrow the underlying writer mutably.
+    ///
+    /// # Returns
+    ///
+    /// Mutable access to the owned writer. Pending bytes staged in the
+    /// canvas byte buffer remain pending until
+    /// [`std::io::Write::flush`] succeeds.
+    ///
+    /// # Usage notes
+    ///
+    /// Lets callers drain or clear an in-memory sink between frames
+    /// without dropping the canvas.
     pub fn writer_mut(&mut self) -> &mut W {
         &mut self.writer
     }
 
     /// Return the current cell-diff optimization set.
+    ///
+    /// # Returns
+    ///
+    /// The renderer capability flags currently used for cursor planning,
+    /// clears, repeats, insert/delete operations, scrolls, and tab
+    /// handling.
     pub fn optimizations(&self) -> crate::renderer::Optimizations {
         self.renderer.optimizations()
     }
 
-    /// Set a cell directly.
+    /// Set one cell in the desired frame.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: zero-based canvas coordinate.
+    /// - `cell`: cell value to clone into the grid.
+    ///
+    /// # Behavior
+    ///
+    /// The write is ignored when `pos` is out of bounds. In-bounds writes
+    /// update wide-cell continuation columns through the underlying
+    /// buffer and mark the affected columns as touched only when the cell
+    /// value changes.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This stages cell state only; call [`Canvas::render`] or
+    /// [`Canvas::present`] to emit terminal bytes.
     pub fn set_cell(&mut self, pos: impl Into<crate::layout::Position>, cell: &Cell) {
         let pos = pos.into();
         self.front_buf.set_cell(pos, cell);
     }
 
-    /// Mutable handle to the cell at `pos`, marking that column as
-    /// touched. Returns `None` for out-of-bounds positions.
+    /// Borrow a cell mutably and mark its occupied columns as touched.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: zero-based canvas coordinate.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&mut Cell)` for an in-bounds cell, or `None` when `pos` is
+    /// outside the canvas.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     ///
     /// Use this when you want to mutate an existing cell in place
     /// (e.g. update its character or style) without paying the
     /// allocate-compare-clone cost of [`Self::set_cell`]. The diff
-    /// pipeline filters unchanged cells later via reference equality,
+    /// pipeline filters unchanged cells later via value equality,
     /// so writing the same value back is cheap.
     ///
     /// Callers must not change [`Cell::width`] through this handle —
@@ -295,9 +542,22 @@ impl<W: Write> Canvas<W> {
         self.front_buf.cell_mut(pos)
     }
 
-    /// Queue a cursor move to `(x, y)` (buffer-relative, origin at
-    /// top-left). The move bytes are appended to `buf` and
-    /// reach the terminal on the next [`io::Write::flush`].
+    /// Queue a cursor move to a canvas-relative position.
+    ///
+    /// # Parameters
+    ///
+    /// - `x`: zero-based target column.
+    /// - `y`: zero-based target row.
+    ///
+    /// # Behavior
+    ///
+    /// The renderer plans an optimal move from its tracked cursor state
+    /// and appends the bytes to the canvas staging buffer. They reach the
+    /// terminal on the next [`io::Write::flush`].
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     ///
     /// No-op when the renderer already reports the cursor at `(x, y)`
     /// **and** that tracked position is known to match the terminal
@@ -313,24 +573,50 @@ impl<W: Write> Canvas<W> {
             .unwrap();
     }
 
-    /// The renderer's last tracked cursor position as a [`crate::layout::Position`].
+    /// Return the renderer's last tracked cursor position.
+    ///
+    /// # Returns
+    ///
+    /// A canvas-relative [`crate::layout::Position`]. The value is the
+    /// renderer's model of terminal state; after raw writes that move the
+    /// cursor, call [`Canvas::invalidate_cursor`] or
+    /// [`Canvas::assume_cursor_at`] to keep the model accurate.
     pub fn cursor_position(&self) -> crate::layout::Position {
         self.renderer.cursor_position()
     }
 
-    /// Mark the tracked cursor position unknown, so the next
-    /// [`Self::set_cursor_position`] always emits a move rather than
-    /// short-circuiting on a matching tracked position. Use when the
-    /// terminal cursor has been moved by a means the renderer cannot see
-    /// (e.g. a raw escape written directly to the screen buffer).
+    /// Mark the tracked cursor position unknown.
+    ///
+    /// # Behavior
+    ///
+    /// The next [`Self::set_cursor_position`] or render-time move
+    /// reasserts position instead of trusting the cached coordinates.
+    ///
+    /// # Usage notes
+    ///
+    /// Use this after raw bytes written through [`io::Write::write`]
+    /// move the terminal cursor in a way the renderer cannot observe.
     pub fn invalidate_cursor(&mut self) {
         self.renderer.invalidate_cursor();
     }
 
-    /// Tell the renderer the terminal cursor is now at buffer-relative
-    /// `(x, y)`, with both axes known, *without* emitting any move. The
-    /// caller must have already placed the terminal cursor there (e.g. via
-    /// a raw escape the renderer can't see).
+    /// Assert the terminal cursor is already at a canvas-relative
+    /// position.
+    ///
+    /// # Parameters
+    ///
+    /// - `x`: zero-based current column.
+    /// - `y`: zero-based current row.
+    ///
+    /// # Behavior
+    ///
+    /// Updates renderer bookkeeping without emitting bytes. Both cursor
+    /// axes become known and any right-margin phantom state is cleared.
+    ///
+    /// # Safety of use
+    ///
+    /// The caller must already have placed the real terminal cursor at
+    /// `(x, y)`, for example with a raw escape sequence.
     ///
     /// Prefer this over [`Self::invalidate_cursor`] when the new position
     /// is known: in relative-cursor mode an invalidated cursor can only
@@ -342,15 +628,28 @@ impl<W: Write> Canvas<W> {
             .set_cursor_position(crate::layout::Position::new(x, y));
     }
 
-    /// Write the cell-diff sequences (wrapped in cursor-hide and, when
-    /// enabled, synchronized-output) for any touched cells directly into
-    /// `w`.
+    /// Stage the next frame's diff bytes.
     ///
-    /// Skips emitting any wrapper bytes when the underlying renderer
-    /// reports no work to do, so a no-op render is genuinely zero bytes.
+    /// # Behavior
     ///
-    /// Only writes — never flushes. Call [`std::io::Write::flush`] on
-    /// the writer when the frame should reach the terminal.
+    /// Copies touched desired cells into the renderer's staging buffer,
+    /// filters out values that are unchanged from the previous staged
+    /// state, and when work remains appends the renderer's diff bytes to
+    /// the canvas byte buffer. The diff may be wrapped in cursor-hide and
+    /// synchronized-output mode sequences depending on canvas state.
+    ///
+    /// No bytes are appended when there is no real cell change and no
+    /// forced clear pending.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; this method writes only to an in-memory buffer.
+    ///
+    /// # Usage notes
+    ///
+    /// This does not flush. Call [`std::io::Write::flush`] to deliver
+    /// staged bytes, or use [`Canvas::present`] to render and flush in
+    /// one call.
     pub fn render(&mut self) {
         if !self.renderer.sync_front(&mut self.front_buf) {
             return;
@@ -358,12 +657,23 @@ impl<W: Write> Canvas<W> {
         self.write_frame();
     }
 
-    /// Render the next frame and flush it to the writer in one call.
+    /// Render the next frame and flush staged bytes to the writer.
+    ///
+    /// # Returns
+    ///
+    /// The result of [`std::io::Write::flush`] after [`Canvas::render`]
+    /// stages any pending frame bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error reported while writing staged bytes to the
+    /// underlying writer or flushing that writer.
+    ///
+    /// # Usage notes
     ///
     /// Convenience for [`Canvas::render`] followed by
-    /// [`std::io::Write::flush`]: composes the pending frame's diff and
-    /// commits it to the terminal. Like [`Canvas::render`], a no-op
-    /// frame emits zero bytes.
+    /// [`std::io::Write::flush`]. A no-op frame still calls the
+    /// underlying writer's `flush`, but stages no new render bytes.
     pub fn present(&mut self) -> io::Result<()> {
         self.render();
         self.flush()
@@ -402,7 +712,29 @@ impl<W: Write> Canvas<W> {
         }
     }
 
-    /// Resize the screen.
+    /// Resize the managed canvas area.
+    ///
+    /// # Parameters
+    ///
+    /// - `width`: new width in cells.
+    /// - `height`: new height in cells.
+    ///
+    /// # Behavior
+    ///
+    /// Resizes the desired cell grid, marks the new grid touched through
+    /// the buffer resize, and requests a clear/redraw on the next render
+    /// so the renderer's tracked terminal state is reconciled with the
+    /// new dimensions.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// In alternate-screen mode pass the terminal viewport size. In
+    /// inline mode pass the terminal width and the application surface
+    /// height.
     pub fn resize(&mut self, width: u16, height: u16) {
         self.width = width;
         self.height = height;
@@ -410,7 +742,17 @@ impl<W: Write> Canvas<W> {
         self.renderer.request_clear();
     }
 
-    /// Force a full redraw on next render.
+    /// Force a full redraw on the next render.
+    ///
+    /// # Behavior
+    ///
+    /// Requests a clear/update path even if no cells are currently
+    /// touched. The next [`Canvas::render`] stages the appropriate clear
+    /// for the current layout and repaints the desired cell grid.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     pub fn invalidate(&mut self) {
         self.renderer.request_clear();
     }
@@ -418,7 +760,7 @@ impl<W: Write> Canvas<W> {
 
 #[cfg(unix)]
 impl<O: Write + Copy + std::os::fd::AsFd> Canvas<O> {
-    /// Build a screen over `terminal`'s output half, sized to the
+    /// Build a canvas over `terminal`'s output half, sized to the
     /// terminal's current window size and configured from the terminal's
     /// captured [`Env`].
     ///
@@ -428,7 +770,21 @@ impl<O: Write + Copy + std::os::fd::AsFd> Canvas<O> {
     /// [`EventSource`](crate::event::EventSource). Equivalent to
     /// `Canvas::from_env(terminal.output(), terminal.get_window_size()?, terminal.env())`.
     ///
-    /// Fails only if the window size query fails.
+    /// # Parameters
+    ///
+    /// - `terminal`: terminal whose output handle, window size, and
+    ///   captured environment are used.
+    ///
+    /// # Returns
+    ///
+    /// A canvas configured as if by
+    /// `Canvas::from_env(terminal.output(), terminal.get_window_size()?, terminal.env())`.
+    ///
+    /// # Errors
+    ///
+    /// Fails only if querying the terminal window size fails.
+    ///
+    /// # Usage notes
     ///
     /// ```no_run
     /// use std::io::Write;
@@ -459,7 +815,7 @@ impl<O: Write + Copy + std::os::fd::AsFd> Canvas<O> {
 
 #[cfg(windows)]
 impl<O: Write + Copy + std::os::windows::io::AsHandle> Canvas<O> {
-    /// Build a screen over `terminal`'s output half, sized to the
+    /// Build a canvas over `terminal`'s output half, sized to the
     /// terminal's current window size and configured from the terminal's
     /// captured [`Env`].
     ///
@@ -469,7 +825,21 @@ impl<O: Write + Copy + std::os::windows::io::AsHandle> Canvas<O> {
     /// [`EventSource`](crate::event::EventSource). Equivalent to
     /// `Canvas::from_env(terminal.output(), terminal.get_window_size()?, terminal.env())`.
     ///
-    /// Fails only if the window size query fails.
+    /// # Parameters
+    ///
+    /// - `terminal`: terminal whose output handle, window size, and
+    ///   captured environment are used.
+    ///
+    /// # Returns
+    ///
+    /// A canvas configured as if by
+    /// `Canvas::from_env(terminal.output(), terminal.get_window_size()?, terminal.env())`.
+    ///
+    /// # Errors
+    ///
+    /// Fails only if querying the terminal window size fails.
+    ///
+    /// # Usage notes
     ///
     /// ```no_run
     /// use std::io::Write;
@@ -551,14 +921,20 @@ impl<W: Write> SurfaceMut for Canvas<W> {
 }
 
 impl<W: Write> Write for Canvas<W> {
-    /// Append raw bytes into `buf`. The bytes do not reach
-    /// the underlying writer until [`Write::flush`] is called.
+    /// Append raw bytes to the canvas staging buffer.
+    ///
+    /// The bytes are ordered with any mode or render bytes already
+    /// staged and do not reach the underlying writer until
+    /// [`Write::flush`] is called.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.buf.extend_from_slice(buf);
         Ok(buf.len())
     }
 
-    /// Drain `buf` into the owned writer and flush it.
+    /// Drain staged bytes into the owned writer and flush it.
+    ///
+    /// If the staging buffer is empty, this still calls
+    /// [`Write::flush`] on the owned writer.
     fn flush(&mut self) -> io::Result<()> {
         if !self.buf.is_empty() {
             #[cfg(debug_assertions)]

@@ -1,38 +1,105 @@
-//! A [`ratatui`] `Backend` that renders through the high-level
-//! [`uncurses::screen::Screen`] facade. Write your UI with ratatui widgets
-//! and let uncurses diff frames and ship the minimal byte changes.
+//! Backend integration between the widget library and
+//! [`uncurses::screen::Screen`].
 //!
-//! [`UncursesBackend`] wraps a [`Screen`](uncurses::screen::Screen), which
-//! bundles the whole terminal stack: the
-//! [`Terminal`](uncurses::terminal::Terminal) handle, the
-//! [`Canvas`](uncurses::canvas::Canvas), and the event source. A single
-//! value drives rendering, input, and the raw-mode lifecycle, and you still
-//! run your own event loop through the same backend.
+//! ## What this backend is
 //!
-//! # Quick start
+//! [`UncursesBackend`] implements [`ratatui::backend::Backend`] by wrapping a
+//! single high-level [`Screen`](uncurses::screen::Screen). The screen owns the
+//! terminal handle, the [`Canvas`](uncurses::canvas::Canvas) used for staged
+//! rendering and diffing, and the input source. The backend's job is to adapt
+//! frame drawing, cursor operations, clearing, size queries, and event access
+//! to that one screen.
 //!
-//! The [`init`] / [`restore`] helpers mirror ratatui's own setup
-//! functions: they enter raw mode, hide the cursor, pick the viewport, and
-//! hand back a ready-to-go ratatui terminal.
+//! ## Rendering path
 //!
-//! ```no_run
-//! use ratatui::widgets::Paragraph;
+//! A frame is rendered into the widget library's buffer first. During
+//! [`Backend::draw`](ratatui::backend::Backend::draw), every visible buffer
+//! cell is converted into an uncurses cell and written into the screen's
+//! canvas. [`Backend::flush`](ratatui::backend::Backend::flush) then flushes
+//! the escape bytes staged by the canvas renderer.
 //!
-//! # fn main() -> std::io::Result<()> {
-//! let mut terminal = uncurses_ratatui::try_init()?;
-//! terminal.draw(|frame| {
-//!     frame.render_widget(Paragraph::new("from ratatui, via uncurses"), frame.area());
-//! })?;
-//! // The backend owns the event source; read input through it, then:
-//! uncurses_ratatui::restore(&mut terminal);
-//! # Ok(())
-//! # }
+//! ```text
+//! ┌──────────────────────┐
+//! │ widgets render Frame │
+//! └──────────┬───────────┘
+//!            │ ratatui::buffer::Cell values
+//!            ▼
+//! ┌──────────────────────┐
+//! │   UncursesBackend    │
+//! │ draw: Cell → Cell    │
+//! └──────────┬───────────┘
+//!            │ set_cell + render
+//!            ▼
+//! ┌──────────────────────┐
+//! │        Screen        │
+//! │   Canvas diff bytes  │
+//! └──────────┬───────────┘
+//!            │ flush
+//!            ▼
+//!        terminal
 //! ```
 //!
-//! See the crate README and the `ratatui_*` examples for input handling,
-//! inline viewports, and (with the `async` feature) an event stream.
+//! ## Setup and restore helpers
 //!
-//! [`ratatui`]: https://docs.rs/ratatui/latest/ratatui/
+//! Use [`try_init`] / [`init`] for the standard fullscreen session over
+//! process stdio. Use [`try_init_with_options`] / [`init_with_options`] when
+//! you need explicit [`ratatui::TerminalOptions`] or [`ScreenOptions`]. Pair
+//! those helpers with [`try_restore`] or [`restore`] on exit.
+//!
+//! The helpers enter raw mode, apply screen options, hide the cursor, and set
+//! up the requested viewport. They enter the alternate screen for fullscreen
+//! and fixed viewports; inline viewports stay on the main screen so scrollback
+//! around the application is preserved.
+//!
+//! ```rust,ignore
+//! use ratatui::widgets::Paragraph;
+//!
+//! fn main() -> std::io::Result<()> {
+//!     let mut terminal = uncurses_ratatui::try_init()?;
+//!     terminal.draw(|frame| {
+//!         frame.render_widget(Paragraph::new("drawn through uncurses"), frame.area());
+//!     })?;
+//!     uncurses_ratatui::try_restore(&mut terminal)
+//! }
+//! ```
+//!
+//! ## Viewports
+//!
+//! [`ratatui::Viewport::Fullscreen`] and [`ratatui::Viewport::Fixed`] are
+//! rendered on the alternate screen by the setup helpers. For
+//! [`ratatui::Viewport::Inline`], the backend keeps an inline origin in the
+//! main screen, resizes the screen buffer to the inline height, and translates
+//! absolute frame rows into that buffer before staging cells.
+//!
+//! ## Reading input through the backend
+//!
+//! The backend owns the same input source as the wrapped screen. Synchronous
+//! event loops can call [`UncursesBackend::poll_event`],
+//! [`UncursesBackend::try_read_event`], or [`UncursesBackend::read_event`] on
+//! `terminal.backend_mut()`. These methods also let the screen observe
+//! capability replies that arrive on the input stream.
+//!
+//! With the `async` feature, use [`UncursesBackend::screen_mut`] and the
+//! screen's `events()` stream when an asynchronous loop is more convenient.
+//!
+//! ## Manual setup
+//!
+//! The constructors are inert: they do not enter raw mode, choose a viewport,
+//! enter the alternate screen, or hide the cursor. Use them when you need a
+//! prebuilt [`Screen`](uncurses::screen::Screen), a controlling terminal
+//! instead of stdio, or custom setup ordering.
+//!
+//! ```rust,ignore
+//! use uncurses_ratatui::{ScreenOptions, UncursesBackend};
+//!
+//! fn main() -> std::io::Result<()> {
+//!     let mut backend = UncursesBackend::stdio()?;
+//!     backend.init_with(ScreenOptions::default())?;
+//!     // Build ratatui::Terminal with `backend`, then restore the backend
+//!     // when the session ends.
+//!     Ok(())
+//! }
+//! ```
 
 mod backend;
 mod convert;

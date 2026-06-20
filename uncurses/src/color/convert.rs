@@ -63,7 +63,7 @@ fn nearest_cube_index(v: u8, cube: &[u8; 6]) -> u8 {
 fn nearest_gray(v: u8) -> u8 {
     // Grayscale ramp: indices 232-255, values 8, 18, 28, ..., 238
     if v < 4 {
-        // Closer to black (index 16 = 0,0,0 in cube, but use 232)
+        // Lowest grayscale-ramp entry; cube black is considered separately.
         return 232;
     }
     if v > 243 {

@@ -1,41 +1,72 @@
-//! Text shaping: width measurement, segmentation, wrapping policy,
-//! and the [`Painter`] for writing strings into any
-//! [`crate::buffer::SurfaceMut`].
+//! Text measurement and string painting for terminal-cell surfaces.
 //!
-//! ## Width measurement
+//! This module is the text layer for [`SurfaceMut`](crate::buffer::SurfaceMut):
+//! it segments UTF-8 strings into grapheme clusters, measures their terminal
+//! display width, interprets inline styling escapes, and writes cells into any
+//! mutable surface implementation.
 //!
-//! * [`grapheme_width`] — cluster-aware width for one extended
-//!   grapheme cluster (honours VS15/VS16, Regional Indicators, ZWJ,
-//!   Extended_Pictographic default presentation).
-//! * [`char_width`] — width of a single code point (wcwidth-style,
-//!   cluster-blind).
+//! ## Width measurement and grapheme handling
 //!
-//! Strings are measured via [`WidthMode`] which decides whether each
-//! cluster's width comes from the first code point alone
-//! ([`WidthMode::Wc`]) or from the full cluster
-//! ([`WidthMode::Grapheme`]). The East-Asian Ambiguous policy — whether
-//! code points whose East-Asian-Width property is `Ambiguous` are
-//! measured as 2 cells or 1 — is orthogonal to segmentation and is
-//! passed alongside as a separate `eaw_wide: bool` (see
-//! [`char_width`]).
+//! Terminal layout is expressed in cells, not bytes or scalar values. The
+//! width API therefore separates **segmentation** from **measurement**:
 //!
-//! ## Wrapping
+//! * [`grapheme_cells`] always walks a string as extended grapheme clusters.
+//! * [`WidthMode::Wc`] measures each cluster by its first code point.
+//! * [`WidthMode::Grapheme`] measures the whole cluster with
+//!   [`grapheme_width`], including variation selectors, regional indicators,
+//!   zero-width joiners, and pictographic presentation.
+//! * [`char_width`] measures a single code point and is useful for code that
+//!   already has its own segmentation.
 //!
-//! [`WrapMode`] selects what happens when a cluster would cross the
-//! right edge of the destination's bounds.
+//! ```text
+//! bytes/scalars             grapheme cluster              terminal cells
+//! ┌───────────────┐         ┌───────────────┐             ┌────┬────┐
+//! │ "e" + U+0301  │ ──────▶ │ "e\u{0301}"   │ ─ width 1 ▶ │ é  │    │
+//! └───────────────┘         └───────────────┘             └────┴────┘
 //!
-//! ## Painter
+//! ┌───────────────┐         ┌───────────────┐             ┌────┬────┐
+//! │ "中"          │ ──────▶ │ "中"          │ ─ width 2 ▶ │ 中 │ ▶  │
+//! └───────────────┘         └───────────────┘             └────┴────┘
+//! ```
 //!
-//! [`Painter`] binds a target [`crate::buffer::SurfaceMut`] together with a
-//! [`WidthMode`] and an `eaw_wide` policy, then paints styled strings —
-//! optionally interpreting inline SGR (`CSI … m`) and OSC 8 hyperlinks
-//! in the input.
+//! A width of `0` is not written as a standalone cell. While painting, a
+//! zero-width cluster is appended to the previous pending cluster so combining
+//! marks and similar suffixes stay attached to the base cell.
 //!
-//! ## Backends
+//! ## East-Asian-Width policy
 //!
-//! Default: `unicode-width`. Enable `--features icu` to use
-//! `icu_properties` instead (UAX-correct emoji/ZWJ handling, larger
-//! binary).
+//! The `eaw_wide` boolean is the East-Asian Ambiguous policy. When it is
+//! `true`, code points whose East-Asian-Width property is `Ambiguous` are
+//! measured as two cells; when it is `false`, they are measured as one. This is
+//! intentionally independent from [`WidthMode`] so callers can choose the
+//! terminal's ambiguous-width policy without changing grapheme segmentation.
+//!
+//! ## Painting and wrapping
+//!
+//! [`Painter`] binds a target [`SurfaceMut`](crate::buffer::SurfaceMut), a
+//! [`WidthMode`], and an `eaw_wide` policy. It paints styled strings into the
+//! target, honoring inline SGR (`CSI … m`) attributes and OSC 8 hyperlinks.
+//! [`WrapMode`] controls only what happens when a non-zero-width cluster would
+//! cross the right edge of the clipping rectangle: truncate or continue at the
+//! next row.
+//!
+//! ## The `TextSurface` trait
+//!
+//! [`TextSurface`] is the ergonomic extension trait for drawing text onto any
+//! surface. A surface supplies its [`WidthMode`] and East-Asian-Width policy;
+//! the trait then provides [`TextSurface::set_str`],
+//! [`TextSurface::set_str_wrap`], [`TextSurface::set_str_rect`],
+//! [`TextSurface::set_str_rect_wrap`], [`TextSurface::str_width`], and
+//! [`TextSurface::painter`]. This keeps higher-level widgets generic over
+//! `&mut impl TextSurface` instead of depending on a concrete buffer type.
+//!
+//! ## Feature backends
+//!
+//! The default `unicode-rs` feature uses compact built-in tables for code-point
+//! width plus a conservative pictographic/default-ignorable subset. Enabling
+//! the `icu` feature uses property data with broader Unicode coverage. The
+//! public API is identical for both backends; select the backend that matches
+//! your binary-size and Unicode-coverage needs.
 
 mod mode;
 mod painter;

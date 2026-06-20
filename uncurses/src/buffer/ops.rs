@@ -37,9 +37,33 @@ fn fill_range(buf: &mut Buffer, y: u16, lo: u16, hi: u16, fill: &Cell) {
 }
 
 impl Buffer {
-    /// Insert `n` lines at `y`, pushing existing lines down.
-    /// Lines pushed past the bottom of `bounds_bottom` are lost. `y` is
-    /// the 0-based row. Freed rows are filled with `fill`.
+    /// Insert rows within a bounded vertical region.
+    ///
+    /// Existing rows in `[y, bounds_bottom)` are pushed downward by `n`.
+    /// Rows pushed past `bounds_bottom` are discarded, and the newly opened
+    /// rows starting at `y` are filled with `fill`.
+    ///
+    /// # Parameters
+    ///
+    /// - `y`: zero-based row where insertion begins.
+    /// - `n`: number of rows to insert.
+    /// - `bounds_bottom`: exclusive lower row bound for the affected region;
+    ///   clamped to the buffer height.
+    /// - `fill`: cell used to fill inserted rows.
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Calls with `y >= bounds_bottom` are no-ops. Whole rows are swapped in
+    /// row-major storage, so wide-cell pairs inside moved rows remain
+    /// structurally unchanged.
     pub fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         let bottom = bounds_bottom.min(self.height) as usize;
         let y_usize = y as usize;
@@ -68,9 +92,33 @@ impl Buffer {
         }
     }
 
-    /// Delete `n` lines at `y`, pulling existing lines up.
-    /// New blank lines appear at the bottom of the area. `y` is the
-    /// 0-based row. Freed rows are filled with `fill`.
+    /// Delete rows within a bounded vertical region.
+    ///
+    /// Existing rows below the deleted range are pulled upward within
+    /// `[y, bounds_bottom)`. The freed rows at the bottom of the region are
+    /// filled with `fill`.
+    ///
+    /// # Parameters
+    ///
+    /// - `y`: zero-based first row to delete.
+    /// - `n`: number of rows to delete.
+    /// - `bounds_bottom`: exclusive lower row bound for the affected region;
+    ///   clamped to the buffer height.
+    /// - `fill`: cell used to fill freed bottom rows.
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Calls with `y >= bounds_bottom` are no-ops. Deleting more rows than
+    /// remain in the region is equivalent to deleting through
+    /// `bounds_bottom`.
     pub fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
         let bottom = bounds_bottom.min(self.height) as usize;
         let y_usize = y as usize;
@@ -93,8 +141,34 @@ impl Buffer {
         }
     }
 
-    /// Insert `n` cells at `pos`, pushing cells right. Cells pushed
-    /// past `bounds_right` are lost. Freed cells are filled with `fill`.
+    /// Insert cells within one row.
+    ///
+    /// Cells in `[pos.x, bounds_right)` on `pos.y` are pushed right by `n`.
+    /// Cells pushed past `bounds_right` are discarded, and the newly opened
+    /// slots starting at `pos.x` are filled with `fill`.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: row and starting column for insertion.
+    /// - `n`: number of cells to insert.
+    /// - `bounds_right`: exclusive right column bound for the affected row
+    ///   region; clamped to the buffer width.
+    /// - `fill`: cell used to fill newly opened slots.
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Calls with `n == 0`, an out-of-bounds row, or `pos.x >= bounds_right`
+    /// are no-ops. Width-1 fills are written directly into the freed span.
+    /// Wide fills are routed through [`Buffer::set`] so primary and
+    /// continuation columns are placed consistently.
     pub fn insert_cells(
         &mut self,
         pos: impl Into<Position>,
@@ -147,8 +221,34 @@ impl Buffer {
         }
     }
 
-    /// Delete `n` cells at `pos`, pulling cells left. Freed cells at
-    /// the right edge are filled with `fill`.
+    /// Delete cells within one row.
+    ///
+    /// Cells in `[pos.x + n, bounds_right)` on `pos.y` are pulled left by
+    /// `n`. The freed slots at the right edge of the affected region are
+    /// filled with `fill`.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: row and starting column for deletion.
+    /// - `n`: number of cells to delete.
+    /// - `bounds_right`: exclusive right column bound for the affected row
+    ///   region; clamped to the buffer width.
+    /// - `fill`: cell used to fill freed right-edge slots.
+    ///
+    /// # Returns
+    ///
+    /// Nothing.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Calls with `n == 0`, an out-of-bounds row, or `pos.x >= bounds_right`
+    /// are no-ops. Width-1 fills are written directly into the freed span.
+    /// Wide fills are routed through [`Buffer::set`] so primary and
+    /// continuation columns are placed consistently.
     pub fn delete_cells(
         &mut self,
         pos: impl Into<Position>,
@@ -171,23 +271,22 @@ impl Buffer {
         let needs_wide_fill = fill.is_wide();
         {
             // Shift the row's `[x, right)` window left by `n` via an
-            // in-place rotate (memmove-shaped). The wide-cell pair
-            // straddling the shift travels together; any wide cell
-            // whose primary fell into the deletion region `[x, x+n)`
-            // becomes orphaned just as it did under the previous
-            // per-cell shift.
+            // in-place rotate (memmove-shaped). Cleanup happens below
+            // when the freed right-edge slots are filled: width-1 fills
+            // overwrite parked continuations directly, and wide fills
+            // blank before routing through fill_range.
             let line = self.line_mut(pos.y).expect("row in range");
             line[x..right].rotate_left(n);
 
             if !needs_wide_fill {
                 // Width-1 fill: single sweep over the freed right-edge
-                // region. Any stray continuation marker parked by the
-                // rotate is overwritten in this same pass.
+                // region. Any stray continuation marker parked there by
+                // the rotate is overwritten in this same pass.
                 line[right - n..right].fill(fill.clone());
             } else {
-                // Wide fill: raw-blank parked continuations before
-                // routing through fill_range, so its `set()` calls
-                // don't walk back into the still-live shifted data.
+                // Wide fill: raw-blank the freed slots before routing
+                // through fill_range, so its `set()` calls don't walk
+                // back into still-live shifted data.
                 for cell in &mut line[right - n..right] {
                     *cell = Cell::BLANK;
                 }

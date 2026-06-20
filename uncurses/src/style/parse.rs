@@ -22,8 +22,9 @@ use crate::color::{BasicColor, Color};
 
 /// Read SGR parameters into a mutable style.
 ///
-/// Modifies `style` in-place. A `0` parameter (or an empty parameter
-/// list) resets the style to [`Style::default()`].
+/// Modifies `style` in place. A `0` parameter, an omitted parameter that
+/// decodes as `0`, or an empty parameter list resets the style to
+/// [`Style::default()`]. Unknown parameters are ignored.
 pub fn read_style(params: Params<'_>, style: &mut Style) {
     if params.is_empty() {
         *style = Style::default();
@@ -92,9 +93,12 @@ pub fn read_style(params: Params<'_>, style: &mut Style) {
     }
 }
 
-/// Parse just an extended color (`38`, `48`, or `58`) starting at the
-/// group at index `idx`. Returns `(parsed color, number of top-level
-/// groups consumed)`.
+/// Parse one extended color parameter group.
+///
+/// `idx` must point at a `38`, `48`, or `58` group inside `params`. Returns the
+/// parsed color and the number of top-level groups consumed. Both colon and
+/// semicolon forms are accepted; invalid or unsupported color kinds return
+/// `None` while still reporting the consumed groups.
 pub fn read_style_color(params: Params<'_>, idx: usize) -> (Option<Color>, usize) {
     let Some(g) = params.group(idx) else {
         return (None, 1);
@@ -135,7 +139,7 @@ fn underline_from_value(v: u32) -> UnderlineStyle {
 /// Handles both forms:
 /// * Colon form: a single group like `[38, 5, n]` or
 ///   `[38, 2, 0, r, g, b]` (with the empty colorspace slot).
-/// * Semicolon form: subsequent groups are separate entries —
+/// * Semicolon form: subsequent groups are separate entries,
 ///   `38;5;n` or `38;2;r;g;b`.
 fn read_extended_color<'a, I>(g: Group<'a>, rest: &mut I) -> Option<Color>
 where

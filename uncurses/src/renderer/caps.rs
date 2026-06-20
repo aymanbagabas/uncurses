@@ -1,44 +1,83 @@
-//! Terminal capability flags and detection from a `TERM` value.
+//! Terminal capability flags used by the renderer.
+//!
+//! ## Purpose
+//!
+//! [`Optimizations`] is not a feature wishlist; it is the renderer's
+//! contract for which byte sequences are safe to emit for the current
+//! terminal and line discipline. Each flag unlocks a family of shorter
+//! sequences. When a flag is absent, the renderer falls back to more
+//! conservative cursor movement or explicit cell writes.
+//!
+//! ## Detection
+//!
+//! The built-in detector maps `$TERM` families to conservative baseline
+//! sets. Unknown, empty, and `dumb` terminals use [`Optimizations::none`].
+//! A missing `$TERM` uses [`Optimizations::default`] so in-memory tests
+//! and sinks without environment information keep a useful baseline.
+//!
+//! ## Line-discipline flags
+//!
+//! [`Optimizations::TABS`], [`Optimizations::BS`], and
+//! [`Optimizations::ONLCR`] describe behavior that often depends on
+//! terminal mode as much as terminal type. Override them when raw/cooked
+//! mode or output processing differs from the detector's assumptions.
 
 use bitflags::bitflags;
 
 use crate::terminal::Env;
 
 bitflags! {
-    /// Terminal optimizations the renderer can use. Flag names follow
-    /// the short capability names used by `infocmp` where they exist;
-    /// `BS` (backspace character) and `ONLCR` (termios output flag)
-    /// are not terminfo caps but are named after the well-known
-    /// control character / termios flag they gate respectively.
+    /// Terminal capabilities the renderer may use for shorter output.
+    ///
+    /// # Usage
+    ///
+    /// Start from a detector result such as [`Optimizations::from_env`]
+    /// or a baseline such as [`Optimizations::xterm`], then use the
+    /// `with_*` methods to toggle assumptions confirmed by probing or
+    /// terminal-mode setup.
+    ///
+    /// Flag names follow the short capability names used by `infocmp`
+    /// where they exist. `BS` and `ONLCR` are not terminfo caps; they
+    /// describe control-character and output-processing behavior.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct Optimizations: u32 {
-        /// Terminal supports ECH (Erase Characters).
+        /// Terminal supports ECH (Erase Characters, `CSI Ps X`) for
+        /// clearing a run on the current row.
         const ECH    = 1 <<  0;
-        /// Terminal supports REP (Repeat Character).
+        /// Terminal supports REP (Repeat preceding character,
+        /// `CSI Ps b`) for compact repeated ASCII glyphs.
         const REP    = 1 <<  1;
-        /// Terminal supports ICH (Insert Characters).
+        /// Terminal supports ICH (Insert Characters, `CSI Ps @`) for
+        /// opening cells within a row.
         const ICH    = 1 <<  2;
-        /// Terminal supports DCH (Delete Characters).
+        /// Terminal supports DCH (Delete Characters, `CSI Ps P`) for
+        /// removing cells within a row.
         const DCH    = 1 <<  3;
         /// Terminal supports scroll regions (DECSTBM; terminfo `csr`).
         const CSR    = 1 <<  4;
-        /// Terminal supports SU/SD (Scroll Up/Down).
+        /// Terminal supports SU/SD (Scroll Up/Down, `CSI Ps S` /
+        /// `CSI Ps T`) for moving full scroll regions.
         const SU_SD  = 1 <<  5;
-        /// Terminal supports IL/DL (Insert/Delete Line).
+        /// Terminal supports IL/DL (Insert/Delete Line, `CSI Ps L` /
+        /// `CSI Ps M`) for line-level scroll fallbacks.
         const IL_DL  = 1 <<  6;
-        /// Terminal supports BCE (Background Color Erase).
+        /// Terminal supports BCE (Background Color Erase): erase
+        /// operations paint with the active background color.
         const BCE    = 1 <<  7;
-        /// Terminal supports CHA (Cursor Horizontal Absolute).
+        /// Terminal supports CHA (Cursor Horizontal Absolute,
+        /// `CSI Ps G`) for absolute column moves.
         const CHA    = 1 <<  8;
-        /// Terminal supports HPA (Horizontal Position Absolute).
+        /// Terminal supports HPA (Horizontal Position Absolute,
+        /// `CSI Ps \``) for absolute column moves.
         const HPA    = 1 <<  9;
-        /// Terminal supports VPA (Vertical Position Absolute).
+        /// Terminal supports VPA (Vertical Position Absolute,
+        /// `CSI Ps d`) for absolute row moves.
         const VPA    = 1 << 10;
-        /// Tab stops are set every 8 columns.
+        /// Literal tab bytes move to configured hardware tab stops.
         const TABS   = 1 << 11;
-        /// Terminal supports CBT (Cursor Backward Tab).
+        /// Terminal supports CBT (Cursor Backward Tab, `CSI Ps Z`).
         const CBT    = 1 << 12;
-        /// Terminal supports CHT (Cursor Horizontal Tab).
+        /// Terminal supports CHT (Cursor Horizontal Tab, `CSI Ps I`).
         const CHT    = 1 << 13;
         /// Terminal supports BS (the backspace control character,
         /// `\x08`) for cursor-left-by-one.
@@ -60,16 +99,20 @@ impl Default for Optimizations {
 }
 
 impl Optimizations {
-    /// Every escape-sequence cap turned off; only the termios-gated
-    /// caps (`TABS`, `BS`) stay on. Use this as a conservative
-    /// baseline for an unknown or genuinely capability-less terminal.
+    /// Return the most conservative useful capability set.
+    ///
+    /// Every escape-sequence optimization is disabled; only literal
+    /// hardware tabs and backspace remain enabled. Use this for unknown
+    /// or genuinely capability-limited terminals when direct cell output
+    /// is safer than specialized control sequences.
     pub const fn none() -> Self {
         Self::TABS.union(Self::BS)
     }
 
-    /// Every cap enabled (except ONLCR — raw mode is the default
-    /// assumption). The modern reference baseline matched by the
-    /// contemporary xterm-compatible terminal emulators.
+    /// Return the modern full-feature baseline.
+    ///
+    /// Enables every renderer optimization except [`Self::ONLCR`], since
+    /// raw mode is the default assumption for terminal applications.
     pub const fn modern() -> Self {
         Self::ECH
             .union(Self::REP)
@@ -88,7 +131,9 @@ impl Optimizations {
             .union(Self::BS)
     }
 
-    /// The xterm baseline. Compared to [`Self::modern`], `HPA`,
+    /// Return the xterm-compatible conservative baseline.
+    ///
+    /// Compared to [`Self::modern`], `HPA`,
     /// `CHT`, and `REP` are off:
     /// - `HPA`: konsole and several xterm-compatible terminals lack
     ///   HPA; xterm-256color terminfo defines HPA via the same
@@ -101,7 +146,9 @@ impl Optimizations {
         Self::modern().difference(Self::HPA.union(Self::CHT).union(Self::REP))
     }
 
-    /// The VT100/VT102 baseline. Predates the xterm extensions for
+    /// Return the VT100/VT102 baseline.
+    ///
+    /// Predates the xterm extensions for
     /// absolute positioning (CHA/HPA/VPA), ECH, REP, BCE, SU/SD, and
     /// CBT, but supports DECSTBM, hardware tabs, BS, and on the
     /// VT102 the ICH/DCH/IL/DL editing pairs.
@@ -114,7 +161,9 @@ impl Optimizations {
             .union(Self::BS)
     }
 
-    /// The Linux console baseline. The kernel's terminal driver
+    /// Return the Linux console baseline.
+    ///
+    /// The kernel's terminal driver
     /// implements a narrow subset of ECMA-48 — only absolute
     /// positioning (CHA/HPA/VPA), ECH, and ICH on top of the
     /// hardware tab stops and BS handled by termios.
@@ -129,7 +178,7 @@ impl Optimizations {
             .union(Self::BS)
     }
 
-    /// The GNU screen baseline, derived from
+    /// Return the GNU screen baseline, derived from
     /// `infocmp -x1 screen-256color`. screen multiplexes onto the
     /// host terminal and only re-advertises a conservative subset:
     /// no `BCE`, `ECH`, `REP`, `CHA`, or `CHT`.
@@ -146,7 +195,9 @@ impl Optimizations {
             .union(Self::BS)
     }
 
-    /// Toggle hardware tab support (`TABS`). Disable when the
+    /// Return `self` with hardware tab support (`TABS`) toggled.
+    ///
+    /// Disable when the
     /// receiving terminal is in cooked mode without `TAB0` set on
     /// `c_oflag` and `\t` would otherwise be expanded to spaces.
     #[must_use]
@@ -154,7 +205,9 @@ impl Optimizations {
         self.with_flag(Self::TABS, enabled)
     }
 
-    /// Toggle backspace-character support (`BS`). Disable when the
+    /// Return `self` with backspace-character support (`BS`) toggled.
+    ///
+    /// Disable when the
     /// receiving terminal does not interpret `\x08` as cursor-left
     /// by one cell.
     #[must_use]
@@ -162,87 +215,89 @@ impl Optimizations {
         self.with_flag(Self::BS, enabled)
     }
 
-    /// Toggle the assumption that `\n` is mapped to `\r\n` (`ONLCR`).
-    /// Enable when the terminal is in cooked mode with `ONLCR` set
-    /// so a newline both advances a row and resets the column.
+    /// Return `self` with the `\n` → `\r\n` assumption (`ONLCR`)
+    /// toggled.
+    ///
+    /// Enable when the terminal is in cooked mode with `ONLCR` set so a
+    /// newline both advances a row and resets the column.
     #[must_use]
     pub const fn with_onlcr(self, enabled: bool) -> Self {
         self.with_flag(Self::ONLCR, enabled)
     }
 
-    /// Toggle erase-character (`ECH`).
+    /// Return `self` with erase-character (`ECH`) support toggled.
     #[must_use]
     pub const fn with_ech(self, enabled: bool) -> Self {
         self.with_flag(Self::ECH, enabled)
     }
 
-    /// Toggle repeat-character (`REP`).
+    /// Return `self` with repeat-character (`REP`) support toggled.
     #[must_use]
     pub const fn with_rep(self, enabled: bool) -> Self {
         self.with_flag(Self::REP, enabled)
     }
 
-    /// Toggle insert-character (`ICH`).
+    /// Return `self` with insert-character (`ICH`) support toggled.
     #[must_use]
     pub const fn with_ich(self, enabled: bool) -> Self {
         self.with_flag(Self::ICH, enabled)
     }
 
-    /// Toggle delete-character (`DCH`).
+    /// Return `self` with delete-character (`DCH`) support toggled.
     #[must_use]
     pub const fn with_dch(self, enabled: bool) -> Self {
         self.with_flag(Self::DCH, enabled)
     }
 
-    /// Toggle DECSTBM scroll-region support (`CSR`).
+    /// Return `self` with DECSTBM scroll-region (`CSR`) support toggled.
     #[must_use]
     pub const fn with_csr(self, enabled: bool) -> Self {
         self.with_flag(Self::CSR, enabled)
     }
 
-    /// Toggle scroll-up/scroll-down (`SU_SD`).
+    /// Return `self` with scroll-up/scroll-down (`SU_SD`) support toggled.
     #[must_use]
     pub const fn with_su_sd(self, enabled: bool) -> Self {
         self.with_flag(Self::SU_SD, enabled)
     }
 
-    /// Toggle insert/delete-line (`IL_DL`).
+    /// Return `self` with insert/delete-line (`IL_DL`) support toggled.
     #[must_use]
     pub const fn with_il_dl(self, enabled: bool) -> Self {
         self.with_flag(Self::IL_DL, enabled)
     }
 
-    /// Toggle back-color-erase (`BCE`).
+    /// Return `self` with background-color-erase (`BCE`) support toggled.
     #[must_use]
     pub const fn with_bce(self, enabled: bool) -> Self {
         self.with_flag(Self::BCE, enabled)
     }
 
-    /// Toggle cursor-horizontal-absolute (`CHA`).
+    /// Return `self` with cursor-horizontal-absolute (`CHA`) support toggled.
     #[must_use]
     pub const fn with_cha(self, enabled: bool) -> Self {
         self.with_flag(Self::CHA, enabled)
     }
 
-    /// Toggle horizontal-position-absolute (`HPA`).
+    /// Return `self` with horizontal-position-absolute (`HPA`) support toggled.
     #[must_use]
     pub const fn with_hpa(self, enabled: bool) -> Self {
         self.with_flag(Self::HPA, enabled)
     }
 
-    /// Toggle vertical-position-absolute (`VPA`).
+    /// Return `self` with vertical-position-absolute (`VPA`) support toggled.
     #[must_use]
     pub const fn with_vpa(self, enabled: bool) -> Self {
         self.with_flag(Self::VPA, enabled)
     }
 
-    /// Toggle cursor-backward-tab (`CBT`).
+    /// Return `self` with cursor-backward-tab (`CBT`) support toggled.
     #[must_use]
     pub const fn with_cbt(self, enabled: bool) -> Self {
         self.with_flag(Self::CBT, enabled)
     }
 
-    /// Toggle cursor-horizontal-tab (`CHT`).
+    /// Return `self` with cursor-horizontal-tab (`CHT`) support toggled.
     #[must_use]
     pub const fn with_cht(self, enabled: bool) -> Self {
         self.with_flag(Self::CHT, enabled)
@@ -257,8 +312,16 @@ impl Optimizations {
         }
     }
 
-    /// Derive an optimization set from a `TERM` value. Falls back to
-    /// [`Self::none`] for unknown, empty, or `dumb` terminals.
+    /// Derive an optimization set from a `TERM` value.
+    ///
+    /// # Parameters
+    ///
+    /// - `term`: terminal name, usually from `$TERM`.
+    ///
+    /// # Returns
+    ///
+    /// A baseline capability set for the terminal family. Unknown,
+    /// empty, and `dumb` values return [`Self::none`].
     pub fn from_term(term: &str) -> Self {
         let head = term.split('-').next().unwrap_or("");
         // xterm-<vendor> reassignment when the vendor is a known modern
@@ -274,8 +337,9 @@ impl Optimizations {
         match head {
             "" | "dumb" => Self::none(),
             // Modern terminals that advertise the full xterm-era cap
-            // set. Alacritty falls into this bucket too: upstream
-            // disables CHT (forward tab) only, which we do not track.
+            // set. Alacritty falls into this bucket too; the detector
+            // uses the shared modern baseline rather than maintaining a
+            // vendor-specific single-flag variant here.
             "alacritty" | "contour" | "foot" | "ghostty" | "kitty" | "rio" | "st" | "tmux"
             | "wezterm" => Self::modern(),
             "xterm" => Self::xterm(),
@@ -285,12 +349,13 @@ impl Optimizations {
         }
     }
 
-    /// Derive an optimization set from an [`Env`]. Routes `$TERM`
-    /// through [`Self::from_term`] when it is set, and falls back to
-    /// [`Self::default`] (the xterm baseline) when `$TERM` is unset
-    /// entirely — callers with no environment information (CI
-    /// harnesses, embedded sinks) keep the previous default rather
-    /// than collapsing to [`Self::none`].
+    /// Derive an optimization set from an [`Env`].
+    ///
+    /// Routes `$TERM` through [`Self::from_term`] when it is set, and
+    /// falls back to [`Self::default`] when `$TERM` is unset entirely.
+    /// This keeps callers with no environment information (CI harnesses,
+    /// embedded sinks, tests) on the xterm baseline rather than
+    /// collapsing to [`Self::none`].
     pub fn from_env(env: &Env) -> Self {
         match env.get("TERM") {
             Some(term) => Self::from_term(&term),

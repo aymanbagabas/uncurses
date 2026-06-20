@@ -1,10 +1,31 @@
-//! Unix-specific construction and event-pump for [`EventSource`].
+//! Unix-specific construction and readiness servicing for [`EventSource`].
 //!
-//! Holds the platform read path: a self-pipe waker, a SIGWINCH self-pipe
-//! that surfaces [`Event::Resize`], and the byte-oriented `Read` +
-//! [`Decoder`] decode loop. The cross-platform surface (the struct, the
-//! shared methods) lives in [`super::source`].
-
+//! ## Purpose
+//!
+//! This module supplies the Unix [`EventSource::new`] implementation and the
+//! platform hooks used by the shared source pump: drain the wake self-pipe, read
+//! ready bytes, and surface `SIGWINCH` as [`Event::Resize`].
+//!
+//! ```text
+//! [input fd] ─┐
+//! [wake pipe] ├─▶ Poller ──▶ EventSource::fill
+//! [winch pipe]┘        ├─ wake: Interrupted
+//!                      ├─ input: read + decode
+//!                      └─ winch: query Winsize + Resize
+//! ```
+//!
+//! ## Key types
+//!
+//! `UnixWakerInner` owns the write end of a non-blocking self-pipe. The
+//! shared [`Waker`] wraps it so other threads can interrupt
+//! blocking reads without touching decoder state.
+//!
+//! ## Gotchas
+//!
+//! The input fd is also used for `TIOCGWINSZ`, so it should refer to the same
+//! terminal whose size the caller wants. When in-band resize reports are
+//! enabled, [`EventSource::set_handle_resize`] should disable the SIGWINCH path
+//! to avoid duplicate resize events.
 #![cfg(unix)]
 
 use std::collections::VecDeque;
@@ -56,14 +77,21 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Build a new event source for `input`. The handle is also used as
-    /// the `TIOCGWINSZ` target whenever SIGWINCH fires, so it must refer
-    /// to the terminal whose size the caller cares about (typically the
-    /// controlling tty — any fd that names it works).
+    /// Build a new Unix event source for `input`.
     ///
-    /// Timeouts start at their documented defaults; override them with
+    /// The handle is used both for byte reads and as the `TIOCGWINSZ` target
+    /// when `SIGWINCH` fires, so it should refer to the terminal whose size the
+    /// caller cares about. Construction creates two non-blocking self-pipes,
+    /// subscribes to the shared SIGWINCH fan-out, and registers the input, wake,
+    /// and resize fds with the selected poll backend.
+    ///
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and
+    /// [`DEFAULT_PASTE_IDLE_TIMEOUT`]; override them with
     /// [`EventSource::with_esc_timeout`] and
     /// [`EventSource::with_paste_idle_timeout`].
+    ///
+    /// Returns any OS error from pipe creation, fd configuration, SIGWINCH
+    /// subscription, or poller construction. It does not read from `input`.
     pub fn new(input: I) -> io::Result<Self> {
         let (pipe_rx, pipe_tx) = make_self_pipe()?;
         let (winch_rx, winch_tx) = make_self_pipe()?;
@@ -99,14 +127,21 @@ where
         })
     }
 
-    /// Drain the wake pipe after a [`Waker`] fired. Platform hook for
-    /// [`EventSource::fill`].
+    /// Drain pending wake bytes after a [`Waker`] fired.
+    ///
+    /// Platform hook for [`EventSource::fill`]. Multiple wake bytes may have
+    /// coalesced; draining them all lets a subsequent poll block again.
     pub(super) fn drain_wake(&mut self) {
         drain_pipe(self.pipe_rx.as_raw_fd());
     }
 
-    /// Read whatever input bytes are ready and run them through the
-    /// decoder. Platform hook for [`EventSource::fill`].
+    /// Read ready input bytes and run them through the decoder.
+    ///
+    /// Platform hook for [`EventSource::fill`]. `Interrupted` and `WouldBlock`
+    /// reads are treated as a transient absence of bytes. A zero-length read is
+    /// surfaced as [`io::ErrorKind::UnexpectedEof`]. If the pending buffer is
+    /// already full, it is cleared because its capacity is the hard cap on one
+    /// undecoded sequence.
     pub(super) fn drain_input(&mut self) -> io::Result<()> {
         // If the buffer is full and the parser still couldn't extract
         // an event, the contract says the buffer size is the hard cap
