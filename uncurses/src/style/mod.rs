@@ -2,6 +2,26 @@
 //!
 //! This module defines [`Style`], attribute flags, underline variants, and optional hyperlink targets for cells.
 //! Reach for it when building styled text or when parsing, diffing, or emitting style changes.
+//!
+//! A [`Style`] is built fluently, then written to any writer. SGR
+//! attributes ([`bold`](Style::bold), [`underline`](Style::underline),
+//! colors) and an OSC 8 [`link`](Style::link) compose on the same value:
+//!
+//! ```
+//! use uncurses::color::BasicColor;
+//! use uncurses::style::Style;
+//!
+//! // Bold, green text written to any writer (here a byte buffer).
+//! let heading = Style::default().bold().fg(BasicColor::Green.into());
+//! let mut out = Vec::new();
+//! heading.write_styled(&mut out, "Hello").unwrap();
+//!
+//! // An underlined hyperlink (OSC 8). Pass empty params for no id.
+//! let link = Style::default()
+//!     .underline()
+//!     .link("https://example.com", "");
+//! println!("{}", link.styled("docs")); // Display adapter for format!/write!
+//! ```
 
 pub mod diff;
 pub mod parse;

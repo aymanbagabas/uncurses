@@ -4,6 +4,43 @@
 //! [`Decoder`] that parses raw terminal bytes into events, the
 //! platform-specific [`EventSource`] that drives the decoder from a
 //! tty, and the key/mouse types that events carry.
+//!
+//! Build an [`EventSource`] over a terminal's input half and read typed
+//! events in a loop. Keys parse from strings and compare by canonical
+//! chord, so matching a shortcut is plain equality.
+//!
+//! ```no_run
+//! use uncurses::event::{Event, EventSource, Key};
+//! use uncurses::terminal::Terminal;
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let mut term = Terminal::stdio();
+//! term.make_raw()?;
+//! let mut events = EventSource::new(term.input())?;
+//!
+//! let quit: Key = "ctrl+c".parse().unwrap();
+//! loop {
+//!     match events.read()? {
+//!         Event::KeyPress(ref k) if *k == quit => break,
+//!         Event::KeyPress(k) => { let _ = k.code; }
+//!         Event::Resize(ws) => { let _ = (ws.col, ws.row); }
+//!         _ => {}
+//!     }
+//! }
+//! term.restore()
+//! # }
+//! ```
+//!
+//! To ask the terminal a question (its background color, cell size,
+//! device attributes, and so on), write the request bytes from the
+//! [`ansi`](crate::ansi) module to the output and read the matching reply
+//! event back through the same source. The high-level
+//! [`Screen`](crate::screen::Screen) wraps this in `request_*` methods
+//! whose replies surface as ordinary events, never swallowing the user's
+//! keystrokes in between. With the `async` feature, `EventStream` reads
+//! the same events through a [`futures_core::Stream`].
+//!
+//! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 
 pub mod decode;
 #[cfg(test)]
