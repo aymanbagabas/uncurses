@@ -2,6 +2,23 @@
 //!
 //! This module defines [`Color`], the standard [`BasicColor`] palette, and [`Profile`] for choosing how colors should be encoded.
 //! Reach for it when styling text, converting palette entries to RGB, or adapting output to a terminal's color support.
+//!
+//! A [`Color`] is RGB, an indexed palette entry, or a named [`BasicColor`].
+//! A [`Profile`] downsamples a color to what a terminal can render, so the
+//! same UI code works on a true-color terminal and a 16-color one:
+//!
+//! ```
+//! use uncurses::color::{BasicColor, Color, Profile};
+//!
+//! let orange = Color::Rgb(255, 128, 0);
+//! let green: Color = BasicColor::Green.into();
+//!
+//! // TrueColor keeps the exact value; lesser profiles quantize it; the
+//! // colorless profiles drop it entirely (`None`).
+//! assert_eq!(Profile::TrueColor.convert(orange), Some(orange));
+//! assert!(Profile::Ansi256.convert(orange).is_some());
+//! assert_eq!(Profile::Disabled.convert(green), None);
+//! ```
 
 mod convert;
 mod profile;
