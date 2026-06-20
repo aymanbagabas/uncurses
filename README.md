@@ -26,7 +26,10 @@ use uncurses::style::Style;
 fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
     let title = Style::default().bold().fg(BasicColor::Green);
-    let link = Style::default().underline().fg(Color::Rgb(120, 170, 255));
+    let link = Style::default()
+        .underline()
+        .fg(Color::hex("#78aaff").unwrap())
+        .link("https://github.com/aymanbagabas/uncurses", "");
 
     writeln!(out, "{}", title.styled("uncurses"))?;
     writeln!(out, "a terminal library that {}", link.styled("gets out of the way"))?;
@@ -42,6 +45,7 @@ with the **cursor visible**; the alternate screen and a hidden cursor are
 opt-in:
 
 ```rust,no_run
+use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -50,6 +54,8 @@ use uncurses::text::TextSurface;
 fn main() -> std::io::Result<()> {
     let mut screen = Screen::stdio()?;
     screen.init()?; // raw mode + capability detection; starts inline, cursor visible
+    let w = screen.width();
+    screen.resize((w, 1)); // inline: one row tall
 
     screen.set_str((0, 0), "Hello! Press q to quit.", Style::default());
     screen.present()?;
@@ -67,13 +73,13 @@ one in a dozen lines, or run `cargo run --example counter`.
 
 ## Pick your layer
 
-| You want to... | Reach for |
-| --- | --- |
-| Ship an interactive app fast | `Screen` — owns the terminal, renderer, and input; handles raw mode, capability detection, defaults, and teardown |
-| Render cells to anything that's `Write` (a `Vec`, a socket, a snapshot test) | `Canvas` — the cell grid and diffing renderer, no input or lifecycle opinion |
-| Turn raw bytes into typed events | `EventSource` — keys, mouse, paste, focus, resize, query replies |
-| Enter raw mode, ask the window size | `Terminal` |
-| Emit a specific escape sequence | the `ansi` module |
+| You want to...                                                               | Reach for                                                                                                         |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Ship an interactive app fast                                                 | `Screen` — owns the terminal, renderer, and input; handles raw mode, capability detection, defaults, and teardown |
+| Render cells to anything that's `Write` (a `Vec`, a socket, a snapshot test) | `Canvas` — the cell grid and diffing renderer, no input or lifecycle opinion                                      |
+| Turn raw bytes into typed events                                             | `EventSource` — keys, mouse, paste, focus, resize, query replies                                                  |
+| Enter raw mode, ask the window size                                          | `Terminal`                                                                                                        |
+| Emit a specific escape sequence                                              | the `ansi` module                                                                                                 |
 
 `Screen` is `Canvas` + `EventSource` + `Terminal` with the lifecycle
 wired up. When you outgrow the defaults, drop a layer; nothing is hidden
@@ -140,10 +146,10 @@ quadrants), Sixel, iTerm2, and the
 
 ## Crates
 
-| Crate | What it is |
-| --- | --- |
-| [`uncurses`](uncurses/README.md) | The core library: screen, renderer, input, ANSI, terminal. |
-| [`uncurses-ratatui`](uncurses-ratatui/README.md) | A ratatui `Backend` built on the `Screen` facade. |
+| Crate                                            | What it is                                                 |
+| ------------------------------------------------ | ---------------------------------------------------------- |
+| [`uncurses`](uncurses/README.md)                 | The core library: screen, renderer, input, ANSI, terminal. |
+| [`uncurses-ratatui`](uncurses-ratatui/README.md) | A ratatui `Backend` built on the `Screen` facade.          |
 
 ## Examples
 
@@ -175,7 +181,7 @@ uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 
 ### Features
 
-- `unicode-rs` *(default)*: pure-Rust width and segmentation tables. Small
+- `unicode-rs` _(default)_: pure-Rust width and segmentation tables. Small
   and fast.
 - `icu`: ICU4X-backed segmentation and properties. Larger build, more
   correct on emoji and grapheme edge cases. Takes precedence when both are
