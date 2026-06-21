@@ -159,7 +159,12 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    pub fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
+    pub fn set_str(
+        &mut self,
+        pos: impl Into<Position>,
+        s: &str,
+        style: impl Into<Style>,
+    ) -> Position {
         self.style = style.into();
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, WrapMode::default())
@@ -218,7 +223,12 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    pub fn set_str_rect(&mut self, rect: impl Into<Rect>, s: &str, style: impl Into<Style>) -> Position {
+    pub fn set_str_rect(
+        &mut self,
+        rect: impl Into<Rect>,
+        s: &str,
+        style: impl Into<Style>,
+    ) -> Position {
         self.style = style.into();
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
@@ -841,8 +851,12 @@ mod tests {
     #[test]
     fn truncate_tail_not_shown_when_text_fits() {
         let mut b = buf(5, 1);
-        let end = Painter::new(&mut b, WidthMode::default(), false)
-            .set_str_truncate((0, 0), "abc", "…", Style::default());
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str_truncate(
+            (0, 0),
+            "abc",
+            "…",
+            Style::default(),
+        );
         // "abc" fits in 5 columns, so no tail is stamped.
         assert_eq!(row(&b, 0), "abc  ");
         assert_eq!(end, Position::new(3, 0));
@@ -851,8 +865,12 @@ mod tests {
     #[test]
     fn truncate_single_cell_tail_on_overflow() {
         let mut b = buf(5, 1);
-        let end = Painter::new(&mut b, WidthMode::default(), false)
-            .set_str_truncate((0, 0), "abcdefgh", "…", Style::default());
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str_truncate(
+            (0, 0),
+            "abcdefgh",
+            "…",
+            Style::default(),
+        );
         // 5 columns: 4 text columns + the 1-wide tail at the right edge.
         assert_eq!(row(&b, 0), "abcd…");
         assert_eq!(end, Position::new(5, 0));
