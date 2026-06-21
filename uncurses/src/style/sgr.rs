@@ -1,9 +1,15 @@
 //! SGR (Select Graphic Rendition) sequence generation for styles.
 //!
-//! A style is rendered as a *single* CSI ... m sequence with all
-//! parameters joined by `;`. Color parameters (`38;5;n`, `48;2;r;g;b`,
-//! etc.) become multi-part tokens inside that single sequence; the only
-//! `:` separator we emit is for underline sub-styles (`4:2`, `4:3`, ...).
+//! A style is rendered as a single `CSI … m` sequence with all parameters
+//! joined by `;`. Foreground and background extended colors use the common
+//! semicolon forms (`38;5;n`, `48;2;r;g;b`). Underline style and underline
+//! color use colon subparameters (`4:2`, `58:2::r:g:b`) where required.
+//!
+//! ```text
+//! ESC [ attr ; underline ; fg ; bg ; underline-color   m
+//! └─┬─┘ └──────────────── parameters ───────────────┘ └┬┘
+//!  CSI                                                 final
+//! ```
 
 use std::io::{self, Write};
 
@@ -11,6 +17,8 @@ use super::{AttrFlags, Style, UnderlineStyle};
 use crate::color::Color;
 
 /// SGR reset sequence (`ESC [ m`).
+///
+/// This clears SGR attributes and colors. It does not close OSC 8 hyperlinks.
 pub const RESET: &[u8] = b"\x1b[m";
 
 /// Fixed-capacity stack byte collector for short escape sequences.
@@ -75,8 +83,15 @@ pub(super) fn push_sep<const N: usize>(buf: &mut SmallSeq<N>, body_start: usize)
     }
 }
 
-/// Write a style as a *single* CSI ... m sequence with all attrs, underline,
-/// fg, bg and underline-color joined by `;`.
+/// Write a style as one SGR `CSI … m` sequence.
+///
+/// All present attributes, underline shape, foreground color, background color,
+/// and underline color are joined into a single parameter list. If the style
+/// has no SGR-relevant state, this writes [`RESET`]. Hyperlinks are not emitted
+/// here; [`Style::write_styled`](super::Style::write_styled) handles OSC 8
+/// wrapping.
+///
+/// Returns any I/O error from `w` and does not panic.
 pub fn write_style<W: Write>(w: &mut W, style: &Style) -> io::Result<()> {
     if style.is_sgr_empty() {
         return w.write_all(RESET);

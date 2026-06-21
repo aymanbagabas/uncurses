@@ -4,6 +4,68 @@
 //! [`Decoder`] that parses raw terminal bytes into events, the
 //! platform-specific [`EventSource`] that drives the decoder from a
 //! tty, and the key/mouse types that events carry.
+//!
+//! ## The decode pipeline
+//!
+//! Input arrives as a raw byte stream. The source reads bytes (waking on a
+//! self-pipe so another thread can interrupt a blocking read), feeds them to
+//! the decoder, and hands back fully-formed [`Event`] values. Escape
+//! sequences may straddle reads, so the decoder buffers partial input and a
+//! short timeout disambiguates a lone `Esc` key from the start of a CSI/SS3
+//! sequence.
+//!
+//! ```text
+//!   tty input        EventSource              Decoder            caller
+//!   ─────────        ───────────              ───────            ──────
+//!   bytes  ───────▶  read + buffer  ───────▶  scan sequences ─▶  Event
+//!     │                   ▲                        │
+//!     │                   └── Esc-timeout ◀────────┘ (Esc key vs CSI/SS3?)
+//!     └── self-pipe wake ─┘  (interrupt a blocking read from another thread)
+//! ```
+//!
+//! Build an [`EventSource`] over a terminal's input half and read typed
+//! events in a loop. Keys parse from strings and compare by canonical
+//! chord, so matching a shortcut is plain equality.
+//!
+//! ```no_run
+//! use uncurses::event::{Event, EventSource, Key};
+//! use uncurses::terminal::Terminal;
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let mut term = Terminal::stdio();
+//! term.make_raw()?;
+//! let mut events = EventSource::new(term.input())?;
+//!
+//! let quit: Key = "ctrl+c".parse().unwrap();
+//! loop {
+//!     match events.read()? {
+//!         Event::KeyPress(ref k) if *k == quit => break,
+//!         Event::KeyPress(k) => { let _ = k.code; }
+//!         Event::Resize(ws) => { let _ = (ws.col, ws.row); }
+//!         _ => {}
+//!     }
+//! }
+//! term.restore()
+//! # }
+//! ```
+//!
+//! ## Queries
+//!
+//! To ask the terminal a question (its background color, cell size,
+//! device attributes, and so on), write the request bytes from the
+//! [`ansi`](crate::ansi) module to the output and read the matching reply
+//! event back through the same source. The high-level
+//! [`Screen`](crate::screen::Screen) wraps this in `request_*` methods
+//! whose replies surface as ordinary events, never swallowing the user's
+//! keystrokes in between.
+//!
+//! ## Async
+//!
+//! With the `async` feature, [`EventStream`] reads the same events through a
+//! [`futures_core::Stream`], so the loop becomes `while let Some(ev) =
+//! stream.next().await`.
+//!
+//! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 
 pub mod decode;
 #[cfg(test)]
@@ -12,20 +74,20 @@ mod key;
 mod mouse;
 mod pending;
 pub mod poll;
-pub mod query;
 mod sigwinch;
 pub mod source;
 #[cfg(unix)]
 pub mod source_unix;
 #[cfg(windows)]
 pub mod source_windows;
+#[cfg(feature = "async")]
 pub mod stream;
 
 pub use decode::*;
 pub use key::*;
 pub use mouse::*;
-pub use query::{Query, QueryReply, Single};
 pub use source::*;
+#[cfg(feature = "async")]
 pub use stream::EventStream;
 
 use crate::ansi::mode::{Mode, ModeSetting};
@@ -55,6 +117,7 @@ pub enum ModifyOtherKeysMode {
 }
 
 impl ModifyOtherKeysMode {
+    /// Convert a report value into a modifyOtherKeys mode.
     pub fn from_value(v: u8) -> Self {
         match v {
             1 => Self::Mode1,
@@ -111,11 +174,26 @@ pub enum Event {
     /// `CellPixelSize` instead.
     Resize(Winsize),
     /// Reply to a `CSI 18 t` query — window size in cells.
-    WindowCellSize { width: u16, height: u16 },
+    WindowCellSize {
+        /// Width in terminal cells.
+        width: u16,
+        /// Height in terminal cells.
+        height: u16,
+    },
     /// Reply to a `CSI 14 t` query — window size in pixels.
-    WindowPixelSize { width: u16, height: u16 },
+    WindowPixelSize {
+        /// Width in pixels.
+        width: u16,
+        /// Height in pixels.
+        height: u16,
+    },
     /// Reply to a `CSI 16 t` query — single-cell size in pixels.
-    CellPixelSize { width: u16, height: u16 },
+    CellPixelSize {
+        /// Cell width in pixels.
+        width: u16,
+        /// Cell height in pixels.
+        height: u16,
+    },
 
     // -- Focus / paste -------------------------------------------------------
     /// Focus gained.
@@ -143,12 +221,26 @@ pub enum Event {
     SecondaryDeviceAttributes(Vec<Option<u32>>),
     /// Tertiary device attributes (DA3) — terminal ID string.
     TertiaryDeviceAttributes(String),
-    /// Terminal version reply (XTVERSION / OSC).
-    TerminalVersion(String),
+    /// Terminal name reply (XTVERSION). Carries the raw identifier string,
+    /// which typically combines a name and version (e.g. `"XTerm(380)"`).
+    TerminalName(String),
 
     // -- Mode / capability reports ------------------------------------------
     /// DECRPM / RM mode report.
-    ModeReport { mode: Mode, setting: ModeSetting },
+    ///
+    /// The `setting` distinguishes all five DECRPM states. A terminal can
+    /// report a mode as permanently set or permanently reset, meaning it
+    /// recognizes the mode but will not let the host toggle it. When deciding
+    /// whether a feature is usable, prefer
+    /// [`ModeSetting::is_available`](crate::ansi::ModeSetting::is_available)
+    /// over [`is_recognized`](crate::ansi::ModeSetting::is_recognized): a
+    /// permanently reset mode is recognized yet can never be enabled.
+    ModeReport {
+        /// Reported mode.
+        mode: Mode,
+        /// Current mode setting.
+        setting: ModeSetting,
+    },
     /// modifyOtherKeys report.
     ModifyOtherKeys(ModifyOtherKeysMode),
     /// Kitty keyboard protocol active-enhancements report
@@ -156,9 +248,23 @@ pub enum Event {
     /// [`crate::ansi::KittyKeyboardFlags`] bitset.
     KittyKeyboardEnhancements(crate::ansi::KittyKeyboardFlags),
     /// XTWINOPS reply (window operation).
-    WindowOp { op: u32, args: Vec<Option<u32>> },
-    /// XTGETTCAP / termcap capability reply.
-    Termcap(String),
+    WindowOp {
+        /// Window operation number.
+        op: u32,
+        /// Window operation arguments.
+        args: Vec<Option<u32>>,
+    },
+    /// XTGETTCAP / termcap capability reply. `recognized` is `true` for a
+    /// successful reply (`DCS 1 + r`) and `false` for a failure
+    /// (`DCS 0 + r`); `payload` is the decoded `;`-joined `cap[=value]`
+    /// string, decoded the same way in both cases (a failure echoes the
+    /// requested, now known-unsupported, capability names).
+    Termcap {
+        /// Whether the requested capability was recognized.
+        recognized: bool,
+        /// Decoded capability payload.
+        payload: String,
+    },
 
     // -- Colors --------------------------------------------------------------
     /// OSC 10 default foreground color reply.
@@ -167,20 +273,34 @@ pub enum Event {
     BackgroundColor(Color),
     /// OSC 12 cursor color reply.
     CursorColor(Color),
-    /// Color scheme is dark (DEC 2031 report).
-    DarkColorScheme,
-    /// Color scheme is light (DEC 2031 report).
-    LightColorScheme,
+    /// OSC 4 indexed palette color reply (`OSC 4 ; index ; color`).
+    PaletteColor {
+        /// Palette color index.
+        index: u8,
+        /// Reported palette color.
+        color: Color,
+    },
+    /// Color theme report (DEC 2031): `dark` is `true` for a dark theme,
+    /// `false` for a light theme. Indicates only the dark/light preference,
+    /// not the actual colors.
+    ColorTheme {
+        /// Whether the reported theme is dark.
+        dark: bool,
+    },
 
     // -- Clipboard / graphics ------------------------------------------------
     /// OSC 52 clipboard content reply.
     Clipboard {
+        /// Clipboard selection that was reported.
         selection: ClipboardSelection,
+        /// Clipboard content.
         content: String,
     },
     /// Kitty graphics response (APC `G ...` payload).
     KittyGraphics {
+        /// Response options.
         options: Vec<(String, String)>,
+        /// Response payload bytes.
         payload: Vec<u8>,
     },
 
@@ -230,137 +350,13 @@ impl Event {
     }
 }
 
-/// Reassemble streaming [`Event::PasteChunk`] payloads back into a
-/// single owned buffer.
-///
-/// Bracketed pastes are emitted as a sequence of `PasteChunk(Vec<u8>)`
-/// events bracketed by [`Event::PasteStart`] and [`Event::PasteEnd`].
-/// Callers that want the whole paste as one value push every chunk's
-/// bytes into a `PasteBuffer` and call [`PasteBuffer::into_string`] (or
-/// [`PasteBuffer::into_bytes`]) once `PasteEnd` arrives.
-#[derive(Debug, Default, Clone)]
-pub struct PasteBuffer {
-    buf: Vec<u8>,
-}
-
-impl PasteBuffer {
-    /// Create an empty buffer.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Append the bytes of one `PasteChunk` payload.
-    pub fn push(&mut self, chunk: &[u8]) {
-        self.buf.extend_from_slice(chunk);
-    }
-
-    /// Total bytes accumulated so far.
-    pub fn len(&self) -> usize {
-        self.buf.len()
-    }
-
-    /// Whether no bytes have been pushed yet.
-    pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
-    }
-
-    /// Borrow the accumulated bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.buf
-    }
-
-    /// Consume the accumulator and return the raw bytes.
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.buf
-    }
-
-    /// Consume the accumulator and decode as UTF-8, replacing invalid
-    /// sequences with `U+FFFD`. Use this when paste content is expected
-    /// to be text and lossy recovery is acceptable.
-    pub fn into_string_lossy(self) -> String {
-        match String::from_utf8(self.buf) {
-            Ok(s) => s,
-            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
-        }
-    }
-
-    /// Consume the accumulator and decode as UTF-8, returning the raw
-    /// bytes back if the content is not valid UTF-8.
-    pub fn into_string(self) -> Result<String, Vec<u8>> {
-        String::from_utf8(self.buf).map_err(|e| e.into_bytes())
-    }
-}
-
-/// One-shot convenience: concatenate every `PasteChunk` payload from an
-/// iterator and decode as UTF-8 (lossy).
-///
-/// Equivalent to feeding each chunk to a [`PasteBuffer`] and calling
-/// [`PasteBuffer::into_string_lossy`].
-pub fn decode_paste_chunks<'a, I>(chunks: I) -> String
-where
-    I: IntoIterator<Item = &'a [u8]>,
-{
-    let mut buf = PasteBuffer::new();
-    for c in chunks {
-        buf.push(c);
-    }
-    buf.into_string_lossy()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn paste_buffer_concatenates_chunks() {
-        let mut b = PasteBuffer::new();
-        assert!(b.is_empty());
-        b.push(b"hello ");
-        b.push(b"world");
-        assert_eq!(b.len(), 11);
-        assert_eq!(b.as_bytes(), b"hello world");
-        assert_eq!(b.into_string().unwrap(), "hello world");
-    }
-
-    #[test]
     fn color_scheme_display() {
         assert_eq!(ColorScheme::Dark.to_string(), "dark");
         assert_eq!(ColorScheme::Light.to_string(), "light");
-    }
-
-    #[test]
-    fn paste_buffer_into_string_lossy_replaces_invalid_utf8() {
-        let mut b = PasteBuffer::new();
-        b.push(b"ok \xff bad");
-        let s = b.into_string_lossy();
-        assert!(s.contains("ok "));
-        assert!(s.contains("bad"));
-        assert!(s.contains("\u{FFFD}"));
-    }
-
-    #[test]
-    fn paste_buffer_into_string_strict_returns_bytes_on_invalid() {
-        let mut b = PasteBuffer::new();
-        b.push(b"\xff\xfe");
-        let err = b.into_string().unwrap_err();
-        assert_eq!(err, vec![0xff, 0xfe]);
-    }
-
-    #[test]
-    fn paste_buffer_reassembles_split_codepoint() {
-        // The 4-byte emoji split across two chunks must reassemble
-        // cleanly when decoded after all chunks are pushed.
-        let bytes = "📺".as_bytes();
-        let (a, b) = bytes.split_at(2);
-        let mut buf = PasteBuffer::new();
-        buf.push(a);
-        buf.push(b);
-        assert_eq!(buf.into_string().unwrap(), "📺");
-    }
-
-    #[test]
-    fn decode_paste_chunks_helper() {
-        let chunks: Vec<&[u8]> = vec![b"foo ", b"bar ", b"baz"];
-        assert_eq!(decode_paste_chunks(chunks), "foo bar baz");
     }
 }

@@ -184,7 +184,7 @@ fn resize_same_width_height_only() {
 #[test]
 fn test_write_string() {
     let mut buf = Buffer::new(20, 1);
-    let p = Painter::new(&mut buf, WidthMode::Grapheme, false).set_str_with(
+    let p = Painter::new(&mut buf, WidthMode::Grapheme, false).set_str_wrap(
         (0, 0),
         "Hello",
         WrapMode::Truncate,
@@ -212,7 +212,7 @@ fn write_string_wc_mode_attaches_combining_marks_to_base() {
     // has width 0 and must attach to the previous cell rather than
     // overwrite it.
     let mut buf = Buffer::new(10, 1);
-    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_with(
+    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_wrap(
         (0, 0),
         "e\u{0301}f",
         WrapMode::Truncate,
@@ -231,7 +231,7 @@ fn write_string_wc_mode_skips_leading_combining_mark() {
     // No base character to attach to — the combining mark is dropped
     // rather than corrupting an unrelated cell.
     let mut buf = Buffer::new(10, 1);
-    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_with(
+    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_wrap(
         (3, 0),
         "\u{0301}a",
         WrapMode::Truncate,
@@ -244,7 +244,7 @@ fn write_string_wc_mode_skips_leading_combining_mark() {
 #[test]
 fn write_string_truncates_at_right_edge() {
     let mut buf = Buffer::new(5, 1);
-    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_with(
+    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_wrap(
         (0, 0),
         "Hello, World!",
         WrapMode::Truncate,
@@ -257,7 +257,7 @@ fn write_string_truncates_at_right_edge() {
 #[test]
 fn write_string_wraps_to_next_row() {
     let mut buf = Buffer::new(5, 3);
-    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_with(
+    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_wrap(
         (0, 0),
         "abcdefghij",
         WrapMode::Wrap,
@@ -272,7 +272,7 @@ fn write_string_wraps_to_next_row() {
 #[test]
 fn write_string_wrap_stops_at_bottom() {
     let mut buf = Buffer::new(3, 2);
-    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_with(
+    let p = Painter::new(&mut buf, WidthMode::default(), false).set_str_wrap(
         (0, 0),
         "abcdefghi",
         WrapMode::Wrap,
@@ -290,7 +290,7 @@ fn write_string_wrap_inside_view() {
     let mut rb = RenderBuffer::new(20, 5);
     let p = {
         let mut v = View::new(&mut rb, (10, 1, 4, 2));
-        Painter::new(&mut v, WidthMode::default(), false).set_str_with(
+        Painter::new(&mut v, WidthMode::default(), false).set_str_wrap(
             (10, 1),
             "abcdefgh",
             WrapMode::Wrap,
@@ -307,7 +307,7 @@ fn write_string_wrap_inside_view() {
 #[test]
 fn write_string_with_link() {
     let mut buf = Buffer::new(10, 1);
-    Painter::new(&mut buf, WidthMode::default(), false).set_str_with(
+    Painter::new(&mut buf, WidthMode::default(), false).set_str_wrap(
         (0, 0),
         "hi",
         WrapMode::Truncate,

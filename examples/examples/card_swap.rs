@@ -1,16 +1,13 @@
 //! Two layered cards. Press any key to swap their stacking order;
 //! `q`, `Esc`, or `Ctrl-C` exits.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::TextSurface;
 
 const CARD_W: u16 = 20;
 const CARD_H: u16 = 10;
@@ -18,27 +15,22 @@ const CARD_H: u16 = 10;
 const VIEW_H: u16 = 15;
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     flip: bool,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Screen::new(
-            term.output(),
-            (term.window_size().unwrap_or_default().col, VIEW_H),
-        );
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.hide_cursor()?;
+        // Inline view: keep the terminal width but only as tall as the
+        // two stacked cards plus the footer.
+        let w = screen.width();
+        screen.resize((w, VIEW_H));
 
         Ok(Self {
-            term,
             screen,
-            events,
             flip: false,
         })
     }
@@ -52,7 +44,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read_event()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(Key {
@@ -70,7 +62,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, VIEW_H);
+                    self.screen.resize((ws.col, VIEW_H));
                     dirty = true;
                 }
                 _ => {}
@@ -82,10 +74,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -96,28 +86,23 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, flip: bool) {
     screen.clear();
     let w = screen.width();
     let h = screen.height();
 
-    let footer = Style::default().fg(BasicColor::BrightBlack.into());
+    let footer = Style::default().fg(BasicColor::BrightBlack);
     let footer_text = "Press any key to swap the cards, or q to quit.";
     if h >= 2 {
-        screen.set_str_with(
-            (2, h.saturating_sub(2)),
-            footer_text,
-            WrapMode::Truncate,
-            footer,
-        );
+        screen.set_str((2, h.saturating_sub(2)), footer_text, footer);
     }
 
     if w < CARD_W + 14 || h < CARD_H + 4 {
         return;
     }
 
-    let border_a = Style::default().fg(BasicColor::BrightYellow.into()).bold();
-    let border_b = Style::default().fg(BasicColor::BrightMagenta.into()).bold();
+    let border_a = Style::default().fg(BasicColor::BrightYellow).bold();
+    let border_b = Style::default().fg(BasicColor::BrightMagenta).bold();
 
     // Card A at (3, 1); Card B offset by (10, 2) from A.
     let ax = 3u16;
@@ -134,14 +119,14 @@ fn redraw<W: Write>(screen: &mut Screen<W>, flip: bool) {
     }
 }
 
-fn draw_card<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, label: &str, border: Style) {
+fn draw_card(screen: &mut Screen<Stdin, Stdout>, x: u16, y: u16, label: &str, border: Style) {
     let w = CARD_W;
     let h = CARD_H;
 
     let blank = " ".repeat(w as usize - 2);
     // Erase interior with default bg so the lower card doesn't bleed through.
     for row in 1..h - 1 {
-        screen.set_str((x + 1, y + row), &blank, WrapMode::Truncate);
+        screen.set_str((x + 1, y + row), &blank, Style::default());
     }
 
     // Rounded corners + horizontals + verticals.
@@ -153,21 +138,16 @@ fn draw_card<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, label: &str, bord
         .chain(std::iter::repeat_n('─', w as usize - 2))
         .chain(std::iter::once('╯'))
         .collect();
-    screen.set_str_with((x, y), &top, WrapMode::Truncate, border.clone());
-    screen.set_str_with((x, y + h - 1), &bot, WrapMode::Truncate, border.clone());
+    screen.set_str((x, y), &top, border.clone());
+    screen.set_str((x, y + h - 1), &bot, border.clone());
     for row in 1..h - 1 {
-        screen.set_str_with((x, y + row), "│", WrapMode::Truncate, border.clone());
-        screen.set_str_with(
-            (x + w - 1, y + row),
-            "│",
-            WrapMode::Truncate,
-            border.clone(),
-        );
+        screen.set_str((x, y + row), "│", border.clone());
+        screen.set_str((x + w - 1, y + row), "│", border.clone());
     }
 
     // Centered label.
     let lw = label.chars().count() as u16;
     let lx = x + (w.saturating_sub(lw)) / 2;
     let ly = y + h / 2;
-    screen.set_str((lx, ly), label, WrapMode::Truncate);
+    screen.set_str((lx, ly), label, Style::default());
 }

@@ -1,30 +1,39 @@
-//! Generic SGR (Select Graphic Rendition) sequence writer.
+//! Select Graphic Rendition (SGR) writer.
 //!
-//! Higher-level style/color helpers live in [`crate::style`] — this module
-//! only provides the wire-format primitive.
+//! ## Category
+//!
+//! SGR is the CSI `m` family used for rendition attributes such as reset,
+//! intensity, underline, foreground color, and background color. Higher-level
+//! style construction lives outside this module; this module writes the raw
+//! parameter grammar.
+//!
+//! ## Parameter conventions
+//!
+//! The outer slice in [`write_sgr`] becomes semicolon-separated primary
+//! parameters. Each inner slice becomes colon-separated subparameters, allowing
+//! both classic SGR and colon-form color parameters.
+//!
+//! ## Mode interaction
+//!
+//! SGR attributes are not enabled by a separate mode. They change the terminal's
+//! active rendition state until another SGR sequence resets or modifies it.
 
 use std::io::{self, Write};
 
-/// Write an SGR sequence with mixed `;`- and `:`-separated parameters.
+/// Write an SGR sequence using semicolon-separated groups and colon-separated subparameters.
 ///
-/// `params` is a slice of slices. The outer slice separates **primary
-/// parameters** with `;`; each inner slice represents **sub-parameters**
-/// for a single primary parameter, separated with `:` (per ECMA-48 / ITU
-/// T.416 sub-parameter syntax).
-///
-/// An empty outer slice writes `ESC [ m` (reset). Empty inner slices are
-/// skipped.
+/// The emitted format is `ESC [ <params> m`. The outer slice separates primary parameters with `;`; each non-empty inner slice is joined with `:`. An empty outer slice emits `ESC [ m` (SGR reset), and empty inner slices are skipped.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// // \x1b[1;31;4m  — bold, red, underline
+/// ```rust,ignore
+/// // ESC [ 1 ; 31 ; 4 m — bold, red, underline
 /// write_sgr(w, &[&[1], &[31], &[4]])?;
 ///
-/// // \x1b[38:2::10:20:30m  — truecolor fg via colon-form (ITU T.416)
+/// // ESC [ 38 : 2 : 0 : 10 : 20 : 30 m — colon-form truecolor foreground
 /// write_sgr(w, &[&[38, 2, 0, 10, 20, 30]])?;
 ///
-/// // \x1b[0;38:2:10:20:30;1m  — mixed semicolon and colon
+/// // ESC [ 0 ; 38 : 2 : 10 : 20 : 30 ; 1 m — mixed groups
 /// write_sgr(w, &[&[0], &[38, 2, 10, 20, 30], &[1]])?;
 /// ```
 pub fn write_sgr<W: Write>(w: &mut W, params: &[&[u16]]) -> io::Result<()> {

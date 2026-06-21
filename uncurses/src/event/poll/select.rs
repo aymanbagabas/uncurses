@@ -1,23 +1,22 @@
 //! `select(2)` readiness backend.
 //!
-//! Stores the registered fds and rebuilds the read set each
-//! [`Select::poll`] call. Two implementations are gated by platform:
+//! ## Purpose
 //!
-//! * Darwin ([`Select::poll_darwin`]) manages the `fd_set` bit buffer by
-//!   hand so a high fd never overflows it, and calls `select(2)` through
-//!   the `select$DARWIN_EXTSN` symbol (declared directly, the same symbol
-//!   `_DARWIN_UNLIMITED_SELECT` selects in C) so it is not bounded by
-//!   `FD_SETSIZE` (1024). The cap lives in the libsystem `select` wrapper
-//!   (and the `FD_SET`/`FD_ISSET` macros), not the kernel. This matters
-//!   because `select` is the only readiness primitive that works on
-//!   Darwin tty fds, and in a process holding many fds the tty/pipe fds
-//!   can land above 1024.
-//! * Every other unix ([`Select::poll_unix`]) uses the fixed-size
-//!   `libc::fd_set` and rejects out-of-range fds at construction. The
-//!   `Select` backend is only ever constructed on Darwin in practice
-//!   (see `super::new_poller`), so this path exists to keep the backend
-//!   compiling across unix targets.
-
+//! [`Select`] is the portable Unix fallback and the macOS tty-input backend. It
+//! stores the fixed fd list and rebuilds the read set for each wait.
+//!
+//! ## Platform paths
+//!
+//! * macOS calls the unbounded `select$DARWIN_EXTSN` symbol and manages the bit
+//!   buffer manually so fds above `FD_SETSIZE` are safe.
+//! * Other Unix targets use `libc::fd_set` and reject fds outside `FD_SETSIZE`
+//!   at construction.
+//!
+//! ## Gotchas
+//!
+//! `select` mutates its fd set and timeout arguments, so both are rebuilt for
+//! each retry after `EINTR`. The backend reports only read readiness; hangups
+//! appear as readable and are handled by the source read path.
 use std::time::{Duration, Instant};
 use std::{io, os::fd::RawFd};
 

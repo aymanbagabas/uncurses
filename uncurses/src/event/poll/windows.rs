@@ -1,5 +1,17 @@
-//! `WaitForMultipleObjects`-backed [`Poller`] implementation.
-
+//! Windows `WaitForMultipleObjects` readiness backend.
+//!
+//! ## Purpose
+//!
+//! [`Windows`] waits on the console input handle and wake event registered by
+//! [`EventSource`](crate::event::EventSource). It reports every handle that is
+//! signaled at return time by probing the remaining handles with zero-timeout
+//! waits after the first signal.
+//!
+//! ## Gotchas
+//!
+//! `WaitForMultipleObjects` supports at most 64 handles; construction rejects
+//! larger sets. The poller borrows raw handles owned by the source and must not
+//! outlive them.
 use std::io;
 use std::time::{Duration, Instant};
 

@@ -1,27 +1,24 @@
 //! Uncapped variant of the [`space`] example.
 //!
 //! Renders the animated grayscale starfield as fast as the renderer can
-//! push frames out. Input runs on a dedicated thread that forwards
-//! events through a channel so the render loop never blocks waiting on
-//! the keyboard. Useful for measuring raw renderer throughput.
+//! push frames out. Input is drained opportunistically between frames so
+//! the render loop never blocks waiting on the keyboard. Useful for
+//! measuring raw renderer throughput.
 //!
 //! Run with `cargo run --release --example space_unlimited`. Press `q`
 //! or `Ctrl-C` to quit.
 
 use std::io::{self, Write};
-use std::sync::mpsc;
-use std::thread;
 use std::time::{Duration, Instant};
 
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::Color;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::TextSurface;
 
 const GLYPH: &str = "\u{2580}";
 
@@ -143,19 +140,10 @@ impl Field {
     }
 }
 
-enum InputMsg {
-    Resize(u16, u16),
-    Quit,
-}
-
 /// Uncapped starfield app. `start` enters raw mode + alternate screen
-/// and spawns the input thread, `run` renders frames as fast as possible
-/// while draining input from the channel, and `stop` restores the
-/// terminal.
+/// and `run` renders frames as fast as possible while draining input.
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    rx: mpsc::Receiver<InputMsg>,
+    screen: Screen<Stdin, Stdout>,
     rng: Rng,
     field: Field,
     fps: Fps,
@@ -164,26 +152,13 @@ struct App {
 
 impl App {
     fn start() -> io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        screen.flush()?;
-
-        // Input runs on a dedicated thread so the render loop never
-        // blocks on the keyboard; events arrive over a channel.
-        let (tx, rx) = mpsc::channel::<InputMsg>();
-        let input = term.input();
-        thread::Builder::new()
-            .name("input".into())
-            .spawn(move || input_loop(input, tx))
-            .expect("spawn input thread");
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
         Ok(Self {
-            term,
             screen,
-            rx,
             rng: Rng::new(seed_from_clock()),
             field: Field::new(),
             fps: Fps::new(),
@@ -213,27 +188,34 @@ impl App {
     fn run(&mut self) -> io::Result<()> {
         loop {
             // Drain pending input without blocking the render loop.
-            loop {
-                match self.rx.try_recv() {
-                    Ok(InputMsg::Quit) => return Ok(()),
-                    Ok(InputMsg::Resize(cols, rows)) => {
-                        self.screen.resize(cols, rows);
+            while self.screen.poll_event(Some(Duration::ZERO))? {
+                let Some(ev) = self.screen.try_read_event() else {
+                    break;
+                };
+                match ev {
+                    Event::KeyPress(Key {
+                        code: KeyCode::Char('q'),
+                        modifiers,
+                        ..
+                    }) if modifiers.is_empty() => return Ok(()),
+                    Event::KeyPress(Key {
+                        code: KeyCode::Char('c'),
+                        modifiers,
+                        ..
+                    }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(()),
+                    Event::Resize(ws) => {
+                        self.screen.resize((ws.col, ws.row));
                         self.field = Field::new();
                     }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
+                    _ => {}
                 }
             }
             self.render()?;
         }
     }
 
-    fn stop(&mut self) -> io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        // The input thread exits on its next read once stdin returns EOF
-        // or the user releases the next key; we do not wait for it.
-        self.term.restore()
+    fn stop(self) -> io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -244,42 +226,8 @@ fn main() -> io::Result<()> {
     result
 }
 
-fn input_loop(input: Stdin, tx: mpsc::Sender<InputMsg>) {
-    let mut events = match EventSource::new(input) {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    loop {
-        match events.read() {
-            Ok(ev) => match ev {
-                Event::KeyPress(Key {
-                    code: KeyCode::Char('q'),
-                    modifiers,
-                    ..
-                }) if modifiers.is_empty() => {
-                    let _ = tx.send(InputMsg::Quit);
-                    return;
-                }
-                Event::KeyPress(Key {
-                    code: KeyCode::Char('c'),
-                    modifiers,
-                    ..
-                }) if modifiers.contains(KeyModifiers::CTRL) => {
-                    let _ = tx.send(InputMsg::Quit);
-                    return;
-                }
-                Event::Resize(ws) if tx.send(InputMsg::Resize(ws.col, ws.row)).is_err() => {
-                    return;
-                }
-                _ => {}
-            },
-            Err(_) => return,
-        }
-    }
-}
-
-fn draw<W: Write>(
-    screen: &mut Screen<W>,
+fn draw(
+    screen: &mut Screen<Stdin, Stdout>,
     field: &mut Field,
     rng: &mut Rng,
     fps: &Fps,
@@ -314,7 +262,11 @@ fn draw<W: Write>(
 
     screen.clear_rect(uncurses::layout::Rect::new(0, 0, width, 1));
     let header = "space (unlimited) — press q to quit";
-    screen.set_str((0, 0), &truncate(header, width), WrapMode::Truncate);
+    screen.set_str(
+        (0, 0),
+        &truncate(header, width),
+        uncurses::style::Style::default(),
+    );
 
     if let Some(value) = fps.value {
         let label = if let Some(s) = fps.stats {
@@ -327,7 +279,11 @@ fn draw<W: Write>(
         };
         let label_w = label.chars().count() as u16;
         if label_w < width {
-            screen.set_str((width - label_w, 0), &label, WrapMode::Truncate);
+            screen.set_str(
+                (width - label_w, 0),
+                &label,
+                uncurses::style::Style::default(),
+            );
         }
     }
 }

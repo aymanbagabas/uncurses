@@ -1,23 +1,35 @@
-//! Terminal-lifecycle operations for [`Screen`] — `reset` / `restore`
+//! Terminal-lifecycle operations for [`Canvas`] — `reset` / `restore`
 //! tear down and re-apply held modes around a shell handoff, and
 //! `insert_above` injects content into the scrollback above the screen.
 
 use std::io::Write;
 
-use crate::ansi::{self, background, cursor, kitty, mode};
+use crate::ansi::{self, cursor, kitty, mode};
+use crate::text::TextSurface;
 
-use super::Screen;
+use super::Canvas;
 
-impl<W: Write> Screen<W> {
-    /// Disable every non-default terminal state currently held in
-    /// `self.state` so the terminal is returned to a clean baseline,
-    /// suitable for handing control back to the shell (e.g. before
-    /// suspending the process or exec-ing a child). Pure write — does
-    /// not mutate `self.state`, so a subsequent [`Screen::restore`]
-    /// can re-apply the same modes verbatim.
+impl<W: Write> Canvas<W> {
+    /// Stage terminal-state teardown for a shell handoff.
+    ///
+    /// # Behavior
+    ///
+    /// Disables every non-default terminal mode tracked in canvas state:
+    /// cursor visibility, alternate screen, Kitty keyboard enhancements,
+    /// and Unicode core mode. Before tearing modes down, moves to the
+    /// bottom of the last rendered surface so inline shell output resumes
+    /// below the application area.
+    ///
+    /// This is a pure write to the canvas staging buffer: it does not
+    /// mutate `self.state`, so a later [`Canvas::restore`] can re-apply
+    /// the same tracked modes verbatim.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; bytes are staged into memory.
     ///
     /// Only stages into the buffer, so it is infallible; the bytes reach
-    /// the terminal on the next [`Screen::flush`].
+    /// the terminal on the next [`std::io::Write::flush`].
     pub fn reset(&mut self) {
         // Walk to the bottom of the *last rendered* surface before any
         // mode teardown. Use the renderer's last-render height rather
@@ -40,23 +52,6 @@ impl<W: Write> Screen<W> {
         }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.set(&mut self.buf).unwrap();
-        }
-        if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.buf, cursor::CursorStyle::Default).unwrap();
-        }
-        if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.reset(&mut self.buf).unwrap();
-        }
-        if self.state.focus_events {
-            mode::Mode::FOCUS.reset(&mut self.buf).unwrap();
-        }
-        if self.state.mouse_mode != mode::MouseMode::None {
-            mode::write_disable_mouse(
-                &mut self.buf,
-                self.state.mouse_mode,
-                self.state.mouse_encoding,
-            )
-            .unwrap();
         }
         // Clear the alt screen's kitty keyboard frame *before* leaving
         // the alt screen — the stack is per-screen-buffer, so the
@@ -87,38 +82,31 @@ impl<W: Write> Screen<W> {
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.reset(&mut self.buf).unwrap();
         }
-        if self.state.color_scheme_updates {
-            mode::Mode::LIGHT_DARK.reset(&mut self.buf).unwrap();
-        }
-        if self.state.in_band_resize {
-            mode::Mode::IN_BAND_RESIZE.reset(&mut self.buf).unwrap();
-        }
-        if self.state.foreground_color.is_some() {
-            self.buf
-                .write_all(background::RESET_FOREGROUND_COLOR)
-                .unwrap();
-        }
-        if self.state.background_color.is_some() {
-            self.buf
-                .write_all(background::RESET_BACKGROUND_COLOR)
-                .unwrap();
-        }
-        if self.state.cursor_color.is_some() {
-            self.buf.write_all(background::RESET_CURSOR_COLOR).unwrap();
-        }
-        if self.state.title.is_some() {
-            ansi::write_window_title(&mut self.buf, "").unwrap();
-        }
     }
 
-    /// Re-emit every non-default mode held in `self.state` to `w`.
-    /// Pairs with [`Screen::reset`] for any scenario where the
-    /// terminal was temporarily handed back to the shell. Pure write —
-    /// does not mutate `self.state`. Call [`Screen::invalidate`]
-    /// afterwards if the screen contents also need to be repainted.
+    /// Stage terminal-state restoration after a shell handoff.
+    ///
+    /// # Behavior
+    ///
+    /// Re-emits every non-default mode tracked in canvas state, including
+    /// Kitty keyboard flags on the appropriate screen buffer, alternate
+    /// screen, Unicode core mode, and cursor visibility. Pairs with
+    /// [`Canvas::reset`] for suspend/resume or child-process handoffs.
+    ///
+    /// This is a pure write to the canvas staging buffer and does not
+    /// mutate `self.state`.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; bytes are staged into memory.
+    ///
+    /// # Usage notes
+    ///
+    /// Call [`Canvas::invalidate`] afterwards if the screen contents may
+    /// have changed while the terminal was handed away.
     ///
     /// Only stages into the buffer, so it is infallible; the bytes reach
-    /// the terminal on the next [`Screen::flush`].
+    /// the terminal on the next [`std::io::Write::flush`].
     pub fn restore(&mut self) {
         // Re-apply the desired kitty keyboard flags on the main
         // screen *before* entering the alt screen — the stack is
@@ -151,66 +139,41 @@ impl<W: Write> Screen<W> {
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.set(&mut self.buf).unwrap();
         }
-        if self.state.color_scheme_updates {
-            mode::Mode::LIGHT_DARK.set(&mut self.buf).unwrap();
-        }
-        if self.state.in_band_resize {
-            mode::Mode::IN_BAND_RESIZE.set(&mut self.buf).unwrap();
-        }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.buf).unwrap();
         }
-        if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.buf, self.state.cursor_style).unwrap();
-        }
-        if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.set(&mut self.buf).unwrap();
-        }
-        if self.state.focus_events {
-            mode::Mode::FOCUS.set(&mut self.buf).unwrap();
-        }
-        if self.state.mouse_mode != mode::MouseMode::None {
-            mode::write_enable_mouse(
-                &mut self.buf,
-                self.state.mouse_mode,
-                self.state.mouse_encoding,
-            )
-            .unwrap();
-        }
-        if let Some(c) = self.state.foreground_color {
-            let (r, g, b) = c.to_rgb();
-            background::write_set_foreground_color(&mut self.buf, &background::xparse_rgb(r, g, b))
-                .unwrap();
-        }
-        if let Some(c) = self.state.background_color {
-            let (r, g, b) = c.to_rgb();
-            background::write_set_background_color(&mut self.buf, &background::xparse_rgb(r, g, b))
-                .unwrap();
-        }
-        if let Some(c) = self.state.cursor_color {
-            let (r, g, b) = c.to_rgb();
-            background::write_set_cursor_color(&mut self.buf, &background::xparse_rgb(r, g, b))
-                .unwrap();
-        }
-        if let Some(ref title) = self.state.title {
-            ansi::write_window_title(&mut self.buf, title).unwrap();
-        }
     }
 
-    /// Insert `content` above the screen, scrolling the screen down to
-    /// make room. Long lines that exceed the screen width are accounted
-    /// for so the screen state is preserved exactly.
+    /// Insert text above the managed surface.
+    ///
+    /// # Parameters
+    ///
+    /// - `content`: UTF-8 text to write above the canvas. An empty string
+    ///   is a no-op.
+    ///
+    /// # Behavior
+    ///
+    /// Moves to the top of the managed area, creates enough physical
+    /// lines for `content` (including wrapped long lines), inserts those
+    /// lines above the canvas, writes the content with line erases, then
+    /// requests a full redraw for the next render.
     ///
     /// In inline mode this pushes the inserted lines into the terminal's
     /// scrollback. In alt screen mode the inserted lines go into the
     /// alt screen's hidden scrollback, where they will not be visible
     /// but will also not corrupt the rendered frame.
     ///
+    /// # Panics
+    ///
+    /// Never panics; bytes are staged into memory.
+    ///
+    /// # Usage notes
+    ///
     /// Only writes — does not flush. Forces a full redraw on the next
-    /// [`Screen::render`].
+    /// [`Canvas::render`].
     ///
     /// Only stages into the buffer, so it is infallible; the bytes reach
-    /// the terminal on the next [`Screen::flush`].
+    /// the terminal on the next [`std::io::Write::flush`].
     pub fn insert_above(&mut self, content: &str) {
         if content.is_empty() {
             return;

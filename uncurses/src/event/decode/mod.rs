@@ -1,5 +1,44 @@
-//! Input byte stream parser — converts raw terminal bytes into Events.
-
+//! Byte-stream decoder for terminal events.
+//!
+//! ## Purpose
+//!
+//! [`Decoder`] translates terminal input bytes into [`Event`] values. It knows
+//! the byte grammar for C0 controls, UTF-8 characters, 7-bit and 8-bit escape
+//! sequence introducers, bracketed paste, mouse protocols, keyboard extensions,
+//! terminal query replies, and Windows input-mode packets.
+//!
+//! ```text
+//! bytes ──▶ ground byte dispatch
+//!   │        ├─ UTF-8 / C0 controls ─────▶ KeyPress
+//!   │        └─ ESC or C1 introducer ─┬──▶ CSI / SS3 / OSC / DCS / APC
+//!   │                                  └──▶ Alt-key or pending ESC
+//!   └─ paste mode ───────────────────────▶ PasteChunk … PasteEnd
+//! ```
+//!
+//! ## Key types
+//!
+//! * [`Decoder`] owns the state that must survive across feeds: an internal
+//!   buffer for [`Decoder::parse`], bracketed-paste state, queued multi-event
+//!   expansions, UTF-8 mouse mode, and Windows surrogate/modifier state.
+//! * [`DecoderFlags`] selects a few ambiguous legacy interpretations such as
+//!   Tab versus `Ctrl+i` and Backspace versus Delete.
+//! * [`Event`] carries the decoded result; unknown framed strings are preserved
+//!   as `Unknown*` variants instead of being silently dropped.
+//!
+//! ## APIs
+//!
+//! Use [`Decoder::parse`] when the decoder should retain incomplete bytes
+//! between calls. Use [`Decoder::parse_one`] when an outer owner, such as
+//! [`EventSource`](crate::event::EventSource), owns the buffer and wants a
+//! `(consumed, event)` result for exactly one event at a time.
+//!
+//! ## Gotchas
+//!
+//! Escape-timeout policy is intentionally outside the normal parse path. A lone
+//! `ESC` or incomplete C1 introducer returns incomplete until the caller decides
+//! the deadline has expired, then calls [`Decoder::drain`] or the source-internal
+//! expiry path. During bracketed paste, timeout disambiguation is suspended and
+//! bytes are streamed as raw [`Event::PasteChunk`] payloads.
 use super::key::{Key, KeyCode, KeyModifiers};
 mod apc;
 mod csi;
@@ -22,7 +61,18 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 pub(crate) use util::is_c1_introducer;
 
-/// Input parser that accumulates bytes and produces events.
+/// Stateful byte parser that produces [`Event`] values.
+///
+/// `Decoder` can either own its pending bytes through [`Decoder::parse`] or be
+/// driven by an external buffer through [`Decoder::parse_one`]. It tracks state
+/// that is meaningful across calls: bracketed paste mode, pending events from a
+/// sequence that expands to several events, UTF-8 mouse mode, and Windows input
+/// surrogate/modifier state.
+///
+/// The decoder does not perform I/O and does not implement wall-clock timeout
+/// policy by itself. Callers that need Escape-key disambiguation must call
+/// [`Decoder::drain`] or use [`EventSource`](crate::event::EventSource), which
+/// applies the timeout around [`Decoder::parse_one`].
 pub struct Decoder {
     buf: Vec<u8>,
     /// Decoder behavior flags (disambiguation toggles for legacy keys).
@@ -55,6 +105,12 @@ impl Default for Decoder {
 }
 
 impl Decoder {
+    /// Construct a decoder with the given behavior flags.
+    ///
+    /// `flags` chooses the preferred interpretation for a few ambiguous legacy
+    /// input bytes. The decoder starts outside paste mode, with UTF-8 mouse mode
+    /// disabled and no buffered input. Construction allocates the internal
+    /// `parse` buffer but performs no I/O and never panics.
     pub fn new(flags: DecoderFlags) -> Self {
         Self {
             buf: Vec::with_capacity(256),
@@ -86,9 +142,11 @@ impl Decoder {
 
     /// Force-drain any buffered partial escape sequence as best-effort events.
     ///
-    /// A leading `ESC` byte is emitted as [`KeyCode::Escape`]; the remaining
-    /// bytes are then re-parsed normally (so e.g. `ESC '['` becomes an `Esc`
-    /// keypress followed by a `Char('[')` keypress).
+    /// A leading `ESC` byte is emitted as [`KeyCode::Escape`] by this legacy
+    /// buffered drain path; the remaining bytes are then re-parsed normally (so
+    /// e.g. `ESC '['` becomes an `Esc` keypress followed by a `Char('[')`
+    /// keypress). Source-driven timeout expiry uses a separate leading-byte
+    /// helper that can honor [`DecoderFlags::CTRL_OPEN_BRACKET`].
     ///
     /// While a bracketed paste is in progress this is a no-op — paste content
     /// is allowed to span arbitrary time.
@@ -102,12 +160,18 @@ impl Decoder {
         events
     }
 
-    /// Enable UTF-8 mouse decoding (xterm mode 1005).
+    /// Enable or disable UTF-8 mouse decoding (xterm mode 1005).
+    ///
+    /// When enabled, X10-style `CSI M` mouse reports read their three values as
+    /// UTF-8 codepoints instead of raw bytes. This setting only affects future
+    /// parses and does not modify already-buffered bytes.
     pub fn set_utf8_mouse(&mut self, enabled: bool) {
         self.utf8_mouse = enabled;
     }
 
-    /// Whether UTF-8 mouse decoding (xterm mode 1005) is currently enabled.
+    /// Return whether UTF-8 mouse decoding (xterm mode 1005) is enabled.
+    ///
+    /// Reading this flag has no side effects and performs no parsing.
     pub fn utf8_mouse(&self) -> bool {
         self.utf8_mouse
     }
@@ -120,7 +184,8 @@ impl Decoder {
     /// * `(0, None)` — the buffer holds a partial sequence; the caller
     ///   should keep the bytes and retry after reading more input.
     /// * `(n, None)` with `n > 0` — `n` bytes were consumed but produced
-    ///   no user-facing event (e.g. a swallowed OSC/DCS terminator).
+    ///   no user-facing event (e.g. an invalid CSI intermediate byte or a
+    ///   malformed UTF-8 byte).
     ///
     /// The parser does **not** retain `data` between calls. Any unconsumed
     /// bytes remain the caller's responsibility. Inside a bracketed
@@ -209,7 +274,7 @@ impl Decoder {
     /// Synthesise the timeout fallback for a leading byte that the
     /// caller has decided cannot be a partial sequence anymore.
     ///
-    /// `data[0]` must be either `0x1B` (bare Escape key) or an 8-bit
+    /// `b0` must be either `0x1B` (bare Escape key) or an 8-bit
     /// C1 introducer (Ctrl+Alt fallback). Returns the synthesised
     /// event; the caller should advance its buffer by one byte.
     pub(crate) fn expire_leading(&self, b0: u8) -> Option<Event> {
@@ -234,7 +299,17 @@ impl Decoder {
         }
     }
 
-    /// Feed bytes into the parser and extract all complete events.
+    /// Feed bytes into the decoder-owned buffer and return all complete events.
+    ///
+    /// Any incomplete prefix is retained inside the decoder for the next call.
+    /// Complete sequences may produce several events, and bracketed paste bodies
+    /// may produce one or more [`Event::PasteChunk`] values depending on feed
+    /// boundaries. Passing an empty slice is valid and can drain events queued by
+    /// a previous multi-event sequence.
+    ///
+    /// This method never panics for malformed terminal input; unknown or invalid
+    /// bytes are surfaced as unknown events or skipped according to the parser's
+    /// recovery rules.
     pub fn parse(&mut self, data: &[u8]) -> Vec<Event> {
         self.buf.extend_from_slice(data);
         let mut events = Vec::new();
@@ -579,32 +654,26 @@ mod tests {
     #[test]
     fn test_parse_color_scheme_report() {
         let mut parser = Decoder::new(DecoderFlags::empty());
-        assert_eq!(parser.parse(b"\x1b[?997;1n"), vec![Event::DarkColorScheme]);
-        assert_eq!(parser.parse(b"\x1b[?997;2n"), vec![Event::LightColorScheme]);
+        assert_eq!(
+            parser.parse(b"\x1b[?997;1n"),
+            vec![Event::ColorTheme { dark: true }]
+        );
+        assert_eq!(
+            parser.parse(b"\x1b[?997;2n"),
+            vec![Event::ColorTheme { dark: false }]
+        );
         // Unknown sub-report value: branch returns None; consumer may
-        // see a fallthrough Unknown event but never DarkColorScheme/Light.
+        // see a fallthrough Unknown event but never a ColorTheme.
         let evs = parser.parse(b"\x1b[?997;9n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
-        // Wrong primary param is not a color scheme report.
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
+        // Wrong primary param is not a color theme report.
         let evs = parser.parse(b"\x1b[?996;1n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
         // Wrong number of params (1 or 3) is rejected.
         let evs = parser.parse(b"\x1b[?997n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
         let evs = parser.parse(b"\x1b[?997;1;0n");
-        assert!(
-            !evs.iter()
-                .any(|e| matches!(e, Event::DarkColorScheme | Event::LightColorScheme))
-        );
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
     }
 
     #[test]
@@ -618,6 +687,37 @@ mod tests {
                 assert_eq!(pos.x, 9);
             }
             _ => panic!("Expected CursorPosition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_band_resize_with_pixels() {
+        // CSI 48 ; rows ; cols ; ypix ; xpix t — full five-param form.
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[48;30;100;480;800t");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::Resize(ws) => {
+                assert_eq!((ws.row, ws.col), (30, 100));
+                assert_eq!((ws.ypixel, ws.xpixel), (480, 800));
+            }
+            other => panic!("expected Resize, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_band_resize_without_pixels() {
+        // CSI 48 ; rows ; cols t — pixel fields omitted. Must still decode
+        // as a resize (not a generic window-op) with zero pixel size.
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[48;30;100t");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::Resize(ws) => {
+                assert_eq!((ws.row, ws.col), (30, 100));
+                assert_eq!((ws.ypixel, ws.xpixel), (0, 0));
+            }
+            other => panic!("expected Resize, got {other:?}"),
         }
     }
 
@@ -875,7 +975,13 @@ mod tests {
         // DCS 1+r 626f3d31 ST -> bo=1 (hex-encoded)
         let events = parser.parse(b"\x1bP1+r626F=31\x1b\\");
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], Event::Termcap(_)));
+        assert!(matches!(
+            &events[0],
+            Event::Termcap {
+                recognized: true,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1051,6 +1157,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_osc_palette_color() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        // OSC 4 ; 5 ; rgb:.... reply for palette index 5.
+        let events = parser.parse(b"\x1b]4;5;rgb:abcd/0000/ffff\x1b\\");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::PaletteColor {
+                index,
+                color: Color::Rgb(r, g, b),
+            } => {
+                assert_eq!(*index, 5);
+                assert_eq!((*r, *g, *b), (0xab, 0x00, 0xff));
+            }
+            other => panic!("Expected PaletteColor, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_parse_osc_clipboard() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b]52;c;SGVsbG8=\x07");
@@ -1221,7 +1345,7 @@ mod tests {
         buf.push(0x9c);
         let evs = p.parse(&buf);
         match evs.first() {
-            Some(Event::Termcap(s)) => assert!(s.starts_with("TN=")),
+            Some(Event::Termcap { payload, .. }) => assert!(payload.starts_with("TN=")),
             other => panic!("expected Capability event, got {:?}", other),
         }
     }
@@ -1236,10 +1360,10 @@ mod tests {
         // embedded). The parser must NOT split it on BEL.
         assert_eq!(evs.len(), 1, "expected 1 event, got {:?}", evs);
         match &evs[0] {
-            Event::Termcap(s) => {
-                assert!(s.starts_with("1$r0"));
-                assert!(s.contains('\u{07}'));
-                assert!(s.ends_with("more"));
+            Event::Termcap { payload, .. } => {
+                assert!(payload.starts_with("1$r0"));
+                assert!(payload.contains('\u{07}'));
+                assert!(payload.ends_with("more"));
             }
             other => panic!("expected Capability, got {:?}", other),
         }
@@ -1453,8 +1577,8 @@ mod tests {
         let evs = p.parse(b"\x1bP>|xterm 380\x1b\\");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
-            Event::TerminalVersion(s) => assert_eq!(s, "xterm 380"),
-            other => panic!("expected TerminalVersion, got {:?}", other),
+            Event::TerminalName(s) => assert_eq!(s, "xterm 380"),
+            other => panic!("expected TerminalName, got {:?}", other),
         }
     }
 
@@ -1478,7 +1602,7 @@ mod tests {
         let evs = p.parse(b"\x1bP1+r544E=787465726D;436F=323536\x1b\\");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
-            Event::Termcap(s) => assert_eq!(s, "TN=xterm;Co=256"),
+            Event::Termcap { payload, .. } => assert_eq!(payload, "TN=xterm;Co=256"),
             other => panic!("expected Capability, got {:?}", other),
         }
     }
@@ -1491,8 +1615,59 @@ mod tests {
         assert_eq!(evs.len(), 1);
         match &evs[0] {
             // "TN=x" and "kb" survive; the bogus "ZZ=AA" entry is skipped.
-            Event::Termcap(s) => assert_eq!(s, "TN=x;kb"),
+            Event::Termcap { payload, .. } => assert_eq!(payload, "TN=x;kb"),
             other => panic!("expected Capability, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtgettcap_failure_is_reported() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // DCS 0 + r 524742 ST — a failure reply echoing the unsupported
+        // "RGB" cap. It must surface as a Termcap with recognized=false and
+        // the decoded payload, not be dropped.
+        let evs = p.parse(b"\x1bP0+r524742\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Termcap {
+                recognized,
+                payload,
+            } => {
+                assert!(!recognized);
+                assert_eq!(payload, "RGB");
+            }
+            other => panic!("expected Termcap, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtgettcap_truecolor_success() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // DCS 1 + r 524742 ST — a successful reply for the boolean "RGB"
+        // cap (name only, no value): recognized truecolor support.
+        let evs = p.parse(b"\x1bP1+r524742\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Termcap {
+                recognized,
+                payload,
+            } => {
+                assert!(recognized);
+                assert_eq!(payload, "RGB");
+            }
+            other => panic!("expected Termcap, got {:?}", other),
+        }
+        // Same for the "Tc" boolean cap (hex 5463).
+        let evs = p.parse(b"\x1bP1+r5463\x1b\\");
+        match &evs[0] {
+            Event::Termcap {
+                recognized,
+                payload,
+            } => {
+                assert!(recognized);
+                assert_eq!(payload, "Tc");
+            }
+            other => panic!("expected Termcap, got {:?}", other),
         }
     }
 
@@ -1712,7 +1887,7 @@ mod tests {
         let events = feed_byte_by_byte(&bytes);
         // PasteStart first, PasteEnd last, with any number of PasteChunk
         // events in between whose concatenation matches the original
-        // content (replacement chars allowed for partial UTF-8 splits).
+        // content exactly, regardless of UTF-8 byte boundaries.
         assert_eq!(events.first(), Some(&Event::PasteStart));
         assert_eq!(events.last(), Some(&Event::PasteEnd));
         let mut chunk_count = 0;

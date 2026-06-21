@@ -1,10 +1,23 @@
 //! DCS (Device Control String) decoder.
 //!
-//! Format: `ESC P` (or 8-bit `0x90`) followed by a payload terminated by
-//! ST (`ESC \`) or the 8-bit `0x9C`. Used for terminal capability
-//! responses (XTGETTCAP), DECRQSS replies, XTVersion, and tertiary
-//! device attributes.
-
+//! ## Purpose
+//!
+//! DCS sequences carry terminal-control reply strings. This decoder recognizes
+//! capability replies, DECRQSS-style status replies, terminal-name replies, and
+//! tertiary device attributes, while preserving unknown payloads as
+//! [`Event::UnknownDcs`].
+//!
+//! ## Wire format
+//!
+//! DCS starts with `ESC P` or the 8-bit C1 byte `0x90`, then a payload, then ST
+//! (`ESC \` or `0x9C`). BEL is intentionally not accepted as a terminator in
+//! DCS payloads.
+//!
+//! ## Gotchas
+//!
+//! XTGETTCAP success and failure replies both decode their hex payloads; the
+//! [`Event::Termcap`] `recognized` field carries the success bit. Malformed hex entries are skipped rather than
+//! making the whole reply fail.
 use super::Decoder;
 use super::result::ParseResult;
 use super::util::{decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len};
@@ -59,27 +72,34 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     let final_byte = payload[final_pos];
     let data = &payload[final_pos + 1..];
 
-    // XTGETTCAP response: DCS 1 + r Pt ST  /  DCS 0 + r ST (failure).
-    // Pt is `cap_hex=value_hex` pairs separated by `;`. Decode each
-    // hex-encoded `cap=value` pair and rebuild a `;`-joined string of
-    // the decoded form so consumers see human-readable capabilities.
-    if params_raw == b"1" && intermediates == b"+" && final_byte == b'r' {
-        return Some(Event::Termcap(decode_termcap_payload(data)));
+    // XTGETTCAP response: DCS 1 + r Pt ST (valid) / DCS 0 + r Pt ST
+    // (failure). Pt is `cap_hex=value_hex` pairs separated by `;`. The
+    // payload is decoded the same way in both cases (a failure echoes the
+    // requested, now known-unsupported, cap names); `recognized` carries
+    // the 1-vs-0 distinction so a failure is reported rather than dropped.
+    if intermediates == b"+" && final_byte == b'r' && (params_raw == b"1" || params_raw == b"0") {
+        return Some(Event::Termcap {
+            recognized: params_raw == b"1",
+            payload: decode_termcap_payload(data),
+        });
     }
 
     // DECRQSS response: DCS 1$r ... ST (valid) or DCS 0$r ... ST (invalid).
-    // We expose these as Capability as well.
+    // We expose these as a capability reply as well.
     if (params_raw == b"1" || params_raw == b"0")
         && intermediates == b"$"
         && final_byte == b'r'
         && let Ok(s) = std::str::from_utf8(payload)
     {
-        return Some(Event::Termcap(s.to_string()));
+        return Some(Event::Termcap {
+            recognized: params_raw == b"1",
+            payload: s.to_string(),
+        });
     }
 
     // XTVersion reply: DCS > | <name version> ST
     if private == Some(b'>') && final_byte == b'|' {
-        return Some(Event::TerminalVersion(
+        return Some(Event::TerminalName(
             String::from_utf8_lossy(data).into_owned(),
         ));
     }

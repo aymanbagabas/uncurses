@@ -1,16 +1,32 @@
-//! Desktop notification sequences (iTerm OSC 9 and Kitty OSC 99).
+//! Desktop notification OSC encoders.
+//!
+//! ## Category
+//!
+//! This module writes simple OSC 9 notifications and metadata-bearing OSC 99
+//! notifications. Both forms are zero-width terminal string controls.
+//!
+//! ## OSC framing
+//!
+//! Writers use the 7-bit OSC introducer and BEL terminator. OSC 99 joins
+//! metadata fields with `:` before the final body field.
+//!
+//! ## Mode interaction
+//!
+//! Notification support is not advertised through a mode here. Terminals that do
+//! not implement the OSC numbers ignore the strings.
 
 use std::io::{self, Write};
 
-/// Send a simple iTerm-compatible desktop notification (`OSC 9 ; body ST`).
+/// Send a simple notification with `ESC ] 9 ; <body> BEL`.
+///
+/// `body` is emitted verbatim as the notification text.
 pub fn write_notify<W: Write>(w: &mut W, body: &str) -> io::Result<()> {
     write!(w, "\x1b]9;{body}\x07")
 }
 
-/// Send a Kitty-compatible desktop notification (`OSC 99 ; meta ; body ST`).
+/// Send a metadata-bearing notification with `ESC ] 99 ; <metadata> ; <body> BEL`.
 ///
-/// `metadata` is a list of key-value strings joined with `:`. See:
-/// https://sw.kovidgoyal.net/kitty/desktop-notifications/
+/// `metadata` entries are joined with `:` and emitted before the body field; `body` is emitted verbatim.
 pub fn write_desktop_notification<W: Write>(
     w: &mut W,
     body: &str,

@@ -1,12 +1,25 @@
-//! Linux console palette manipulation (`OSC P` / `OSC R`).
+//! Linux-console palette sequences.
 //!
-//! These sequences are specific to the Linux text-mode console.
+//! ## Category
+//!
+//! This module encodes the compact OSC `P`/`R` palette controls used by the Linux
+//! text console: setting one of 16 palette entries and resetting all entries.
+//!
+//! ## OSC framing
+//!
+//! Palette writes use `ESC ] P n rrggbb BEL`, where `n` is a single hexadecimal
+//! palette index. Reset is the fixed byte string `ESC ] R BEL`.
+//!
+//! ## Mode interaction
+//!
+//! These sequences do not depend on ANSI or DEC modes and are specific to
+//! terminals that implement this palette protocol.
 
 use std::io::{self, Write};
 
-/// Set a palette entry (`OSC P n rrggbb BEL`).
+/// Set a 16-color palette entry with `ESC ] P <index-hex> <rrggbb> BEL`.
 ///
-/// `index` must be 0–15; the function is a no-op otherwise.
+/// `index` must be `0..=15`; values outside that range emit nothing. RGB channels are formatted as two lowercase hexadecimal digits each.
 pub fn write_set_palette<W: Write>(w: &mut W, index: u8, r: u8, g: u8, b: u8) -> io::Result<()> {
     if index > 15 {
         return Ok(());
@@ -14,7 +27,7 @@ pub fn write_set_palette<W: Write>(w: &mut W, index: u8, r: u8, g: u8, b: u8) ->
     write!(w, "\x1b]P{index:x}{r:02x}{g:02x}{b:02x}\x07")
 }
 
-/// Reset the palette to defaults (`OSC R BEL`).
+/// Reset the Linux-console palette: exact bytes `ESC ] R BEL` (`b"\x1b]R\x07"`).
 pub const RESET_PALETTE: &[u8] = b"\x1b]R\x07";
 
 #[cfg(test)]

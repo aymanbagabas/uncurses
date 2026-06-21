@@ -2,31 +2,65 @@
 //!
 //! Selecting a backend:
 //!
-//! - default (`unicode-rs` feature): small pure-Rust UAX #29
-//!   implementation.
-//! - `icu`: faster on emoji/ZWJ-heavy text at the cost of a larger
-//!   binary (segmentation tables are baked in). Wins over
-//!   `unicode-rs` when both are enabled.
+//! - default backend: small pure-Rust UAX #29 implementation.
+//! - alternate table-driven backend: faster on emoji/ZWJ-heavy text at the
+//!   cost of a larger binary. Wins when both backends are enabled.
 //!
 //! At least one of the two features must be enabled — the crate
 //! root emits a `compile_error!` otherwise.
 //!
 //! Both implementations honour Unicode extended grapheme clusters.
 
-/// Iterate over the extended grapheme clusters of `s`.
+/// Iterate over the extended grapheme clusters in a string.
+///
+/// # Parameters
+///
+/// - `s`: UTF-8 string slice to segment.
+///
+/// # Returns
+///
+/// An iterator of `&str` slices, each covering one extended grapheme
+/// cluster from `s` in order.
+///
+/// # Panics
+///
+/// Never panics.
+///
+/// # Usage notes
+///
+/// The returned slices borrow from `s`; no cell-width classification is
+/// performed here.
 #[cfg(all(not(feature = "icu"), feature = "unicode-rs"))]
 pub fn graphemes(s: &str) -> impl Iterator<Item = &str> {
     use unicode_segmentation::UnicodeSegmentation;
     s.graphemes(true)
 }
 
-/// Iterate over the extended grapheme clusters of `s`.
+/// Iterate over the extended grapheme clusters in a string.
+///
+/// # Parameters
+///
+/// - `s`: UTF-8 string slice to segment.
+///
+/// # Returns
+///
+/// An iterator of `&str` slices, each covering one extended grapheme
+/// cluster from `s` in order.
+///
+/// # Panics
+///
+/// Never panics.
+///
+/// # Usage notes
+///
+/// The returned slices borrow from `s`; no cell-width classification is
+/// performed here.
 #[cfg(feature = "icu")]
 pub fn graphemes(s: &str) -> impl Iterator<Item = &str> {
     use icu_segmenter::GraphemeClusterSegmenter;
 
-    // `new()` with the `compiled_data` feature is effectively zero-cost: data
-    // is baked into the binary and the returned segmenter is a thin handle.
+    // `new()` is effectively zero-cost with compiled-in data: the returned
+    // segmenter is a thin handle.
     let segmenter = GraphemeClusterSegmenter::new();
     let mut iter = segmenter.segment_str(s);
     let mut prev = iter.next().unwrap_or(0);

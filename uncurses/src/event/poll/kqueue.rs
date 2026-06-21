@@ -1,16 +1,16 @@
 //! BSD/macOS `kqueue` readiness backend.
 //!
-//! Registers its watched fds once at construction and keeps the kqueue
-//! for its lifetime, so [`Kqueue::poll`] only waits — it takes `&self`
-//! and holds no mutable state, which lets the poller be shared (e.g.
-//! behind `Arc`) and waited on concurrently. Events are registered with
-//! `EVFILT_READ` without `EV_CLEAR` (i.e. level-triggered) and `EV_EOF`
-//! folds into readiness so the read path surfaces the underlying error.
+//! ## Purpose
 //!
-//! Note: on macOS, `EVFILT_READ` against a tty character device returns
-//! immediately with `data == 0` in a tight loop. A caller watching a tty
-//! input fd on Darwin should use [`super::Select`] instead.
-
+//! [`Kqueue`] registers the source's fixed fd set with `EVFILT_READ` and waits
+//! for level-triggered readiness. The registration index is stored in `udata` so
+//! returned events map directly into the caller's readiness slice.
+//!
+//! ## Gotchas
+//!
+//! `EV_EOF` is treated as readiness so reads surface the underlying error. On
+//! macOS, tty input fds should use [`super::Select`] instead because kqueue can
+//! wake repeatedly with no bytes available.
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};

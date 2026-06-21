@@ -149,7 +149,19 @@ impl Default for Cursor {
     }
 }
 
-/// The terminal renderer — turns buffer diffs into minimal ANSI output.
+/// Stateful terminal renderer that turns cell-buffer diffs into bytes.
+///
+/// `Renderer` owns the tracked on-screen buffer, the staging buffer used
+/// by the canvas sync path, cursor/pen state, terminal capability flags,
+/// color-profile conversion cache, scroll-detection scratch storage, and
+/// tab-stop tables. It writes only to caller-provided byte buffers; the
+/// caller decides when those bytes are flushed to an I/O sink.
+///
+/// # Usage notes
+///
+/// Most callers should use [`crate::canvas::Canvas`]. Direct use is
+/// appropriate when another abstraction owns the output buffering but
+/// wants the same diff, cursor, style, and scroll planning.
 pub struct Renderer {
     /// The current (on-screen) buffer state.
     pub(super) cur_buf: Option<RenderBuffer>,
@@ -195,8 +207,8 @@ pub struct Renderer {
     /// Height at last render.
     pub(super) last_height: u16,
     /// Configurable horizontal tab stops for the current line width.
-    /// Used by [`super::cursor_opt`] when [`Optimizations::tabs`] is on
-    /// so the planner can land exactly on a stop via `\t` characters.
+    /// Used by the cursor planner when [`Optimizations::TABS`] is on so
+    /// the planner can land exactly on a stop via `\t` characters.
     pub(super) tabs: tabstops::TabStops,
     /// Linear-probe scratch table for scroll-detection matching.
     /// Hoisted out of [`Renderer::update_hashmap`] so the storage is
@@ -206,6 +218,17 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Create a renderer with default state and no current buffer.
+    ///
+    /// # Returns
+    ///
+    /// A renderer using the default optimization set, true-color output,
+    /// inline-relative cursor mode, scroll optimization enabled, no
+    /// tracked terminal contents, and unknown cursor coordinates.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
     pub fn new() -> Self {
         Self {
             cur_buf: None,
@@ -236,53 +259,94 @@ impl Default for Renderer {
 }
 
 impl Renderer {
+    /// Replace the terminal capability set used by future plans.
+    ///
+    /// # Parameters
+    ///
+    /// - `opts`: capability flags to use for cursor movement, clears,
+    ///   repeats, insert/delete operations, scrolls, and ONLCR handling.
     pub(crate) fn set_optimizations(&mut self, opts: Optimizations) {
         self.opts = opts;
     }
 
     /// Return the current capability set.
+    ///
+    /// # Returns
+    ///
+    /// The active [`Optimizations`] value.
     pub(crate) fn optimizations(&self) -> Optimizations {
         self.opts
     }
 
+    /// Replace the color profile used for future style emission.
+    ///
+    /// Clears cached color conversions when `profile` differs from the
+    /// current value.
     pub(crate) fn set_color_profile(&mut self, profile: Profile) {
         self.color_profile.set_profile(profile);
     }
 
-    /// The active color profile.
+    /// Return the active color profile.
+    ///
+    /// # Returns
+    ///
+    /// The [`Profile`] currently used to convert cell styles before SGR
+    /// and OSC 8 emission.
     pub(crate) fn color_profile(&self) -> Profile {
         self.color_profile.profile()
     }
 
+    /// Set whether the renderer targets a fullscreen viewport.
+    ///
+    /// Fullscreen mode allows absolute screen assumptions and protects
+    /// the lower-right cell from autowrap scrolling. Inline mode keeps
+    /// output relative to the application surface.
     pub(crate) fn set_fullscreen(&mut self, fullscreen: bool) {
         self.fullscreen = fullscreen;
     }
 
+    /// Set whether cursor moves should be planned relative to the
+    /// current tracked position.
+    ///
+    /// Inline canvases use relative movement so they do not address
+    /// rows outside the managed surface. Fullscreen canvases can disable
+    /// this and allow absolute CUP/CHA/HPA/VPA candidates.
     pub(crate) fn set_relative_cursor(&mut self, relative: bool) {
         self.relative_cursor = relative;
     }
 
     #[allow(dead_code)] // toggle reserved for future runtime override
+    /// Enable or disable hash-based scroll optimization.
+    ///
+    /// When disabled, touched rows fall through to direct row diffs even
+    /// if line hashes indicate a scroll could be cheaper.
     pub(crate) fn set_scroll_optimize(&mut self, enabled: bool) {
         self.scroll_optimize = enabled;
     }
 
     /// Current cursor position as last tracked by the renderer.
+    ///
+    /// # Returns
+    ///
+    /// Buffer-relative zero-based position. The coordinates may be stale
+    /// if [`Renderer::cursor_known`] is false.
     pub(crate) fn cursor_position(&self) -> Position {
         self.cur.pos
     }
 
-    /// Whether the renderer's tracked cursor position matches the
-    /// terminal on both axes. Returns false after
-    /// [`Renderer::invalidate_cursor`] until the next move asserts a
-    /// fresh position.
+    /// Return whether the tracked cursor position is known on both axes.
+    ///
+    /// Returns `false` initially, after [`Renderer::invalidate_cursor`],
+    /// and around operations such as scroll-region changes that may home
+    /// the physical cursor under terminal modes the renderer cannot
+    /// observe.
     pub(crate) fn cursor_known(&self) -> bool {
         !self.cur.x_unknown && !self.cur.y_unknown
     }
 
     /// Surface dimensions captured at the most recent render. Returns
     /// `(0, 0)` before the first render. Differs from the
-    /// [`Screen`](crate::Screen)'s live size when the terminal has
+    /// [`Canvas`](crate::canvas::Canvas)'s live size when the terminal has
     /// resized but no frame has been rendered yet — useful when
     /// teardown needs to address the *rendered* surface rather than
     /// rows that were never drawn.
@@ -290,9 +354,11 @@ impl Renderer {
         (self.last_width, self.last_height)
     }
 
-    /// Override the renderer's idea of where the cursor currently is. The
-    /// caller is responsible for having actually moved the terminal cursor
-    /// to that position; this only updates the bookkeeping.
+    /// Override the renderer's idea of where the cursor currently is.
+    ///
+    /// The caller is responsible for having actually moved the terminal
+    /// cursor to `pos`; this only updates bookkeeping and marks both
+    /// axes known.
     pub(crate) fn set_cursor_position(&mut self, pos: Position) {
         self.cur.pos = pos;
         self.cur.at_phantom = false;

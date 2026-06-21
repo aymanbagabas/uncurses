@@ -1,35 +1,63 @@
-//! Width-measurement policy: [`WidthMode`] + the `(cluster, width)`
-//! iterator [`grapheme_cells`].
+//! Width-measurement policy and grapheme-cell iteration.
+//!
+//! Strings are always segmented into extended grapheme clusters by
+//! [`grapheme_cells`]. [`WidthMode`] changes only how each cluster's cell width
+//! is computed: by the first code point (`Wc`) or by cluster-aware Unicode
+//! presentation rules (`Grapheme`).
 
 use crate::cell::graphemes;
 
 use super::width::{char_width, grapheme_width};
 
-/// How strings are split into cells and how each cell's width is
-/// measured.
+/// How grapheme clusters are measured for terminal-cell layout.
 ///
-/// This enum covers only the segmentation strategy. The East-Asian
-/// Ambiguous policy (see [`char_width`]) is orthogonal and is passed
-/// alongside as a separate `eaw_wide: bool`.
+/// This enum does not control segmentation: [`grapheme_cells`] always
+/// segments by extended grapheme cluster. It controls only width calculation
+/// for each cluster. The East-Asian Ambiguous policy is orthogonal and is
+/// passed as a separate `eaw_wide` boolean to [`char_width`] and
+/// [`grapheme_width`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WidthMode {
-    /// wcwidth-style: each cluster's width is the width of its first
-    /// code point alone. Cluster-blind — VS16, ZWJ joins, and emoji
-    /// presentation overrides have no effect on the result.
+    /// Measure each cluster by the width of its first code point.
+    ///
+    /// This is wcwidth-style and intentionally cluster-blind: variation
+    /// selectors, zero-width joiners, and emoji presentation overrides in the
+    /// rest of the cluster do not change the result. Use this when matching
+    /// older or simpler terminal width behavior is more important than
+    /// cluster-aware emoji presentation.
     #[default]
     Wc,
-    /// Cluster-aware: width considers the whole grapheme cluster
-    /// (variation selectors, Regional Indicators, ZWJ sequences,
-    /// Extended_Pictographic presentation).
+    /// Measure the whole grapheme cluster.
+    ///
+    /// This mode accounts for variation selectors, regional indicators,
+    /// zero-width-joiner sequences, and pictographic presentation when
+    /// deciding whether a cluster occupies zero, one, or two cells. Use it for
+    /// modern terminal rendering that treats emoji and joined clusters as a
+    /// single displayed unit.
     Grapheme,
 }
 
 impl WidthMode {
-    /// Display width of one extended grapheme cluster under this mode
-    /// and the given East-Asian Ambiguous policy (see [`char_width`]).
+    /// Measure one extended grapheme cluster under this mode.
     ///
-    /// * `Wc` — width of `g`'s first code point via [`char_width`].
-    /// * `Grapheme` — full cluster width via [`grapheme_width`].
+    /// In [`WidthMode::Wc`] mode, the width is the [`char_width`] of `g`'s
+    /// first code point, or `0` for an empty string. In
+    /// [`WidthMode::Grapheme`] mode, the width is [`grapheme_width`] for the
+    /// whole cluster.
+    ///
+    /// # Parameters
+    ///
+    /// * `g` — an extended grapheme cluster. Passing a longer string is
+    ///   accepted but only the first code point is considered in `Wc` mode.
+    /// * `eaw_wide` — East-Asian Ambiguous policy; see [`char_width`].
+    ///
+    /// # Returns
+    ///
+    /// The cluster width in terminal cells, normally `0`, `1`, or `2`.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
     pub fn grapheme_width(self, g: &str, eaw_wide: bool) -> u8 {
         match self {
             Self::Wc => g.chars().next().map_or(0, |c| char_width(c, eaw_wide)),
@@ -38,10 +66,25 @@ impl WidthMode {
     }
 }
 
-/// Iterate `s` as `(cluster, width)` pairs under `mode` and `eaw_wide`.
+/// Iterate `s` as `(grapheme_cluster, width)` pairs.
 ///
-/// Always segments by UTS-29 extended grapheme cluster; only the width
-/// computation differs between modes (see [`WidthMode::grapheme_width`]).
+/// Segmentation is always by extended grapheme cluster. Width calculation uses
+/// [`WidthMode::grapheme_width`] with the supplied East-Asian Ambiguous policy.
+/// The string slice in each yielded pair borrows from `s`.
+///
+/// # Parameters
+///
+/// * `s` — UTF-8 string to segment and measure.
+/// * `mode` — cluster-width policy.
+/// * `eaw_wide` — East-Asian Ambiguous policy.
+///
+/// # Returns
+///
+/// An iterator yielding borrowed cluster slices and their display widths.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic.
 pub fn grapheme_cells(
     s: &str,
     mode: WidthMode,

@@ -1,3 +1,65 @@
+//! Cell-grid storage and surface traits.
+//!
+//! This module provides [`Buffer`], row helpers, rectangular views, and
+//! owned [`Window`]s for working with terminal cells. Use it when code
+//! needs an off-screen grid, a clipped view of an existing grid, or a
+//! common [`Surface`] / [`SurfaceMut`] API that drawing code can target.
+//!
+//! ## Surface trait family
+//!
+//! The surface traits describe terminal-cell grids in layers:
+//!
+//! - [`Bounded`] exposes the rectangular extent of a grid.
+//! - [`Surface`] adds read-only cell access and the default
+//!   [`draw`](Surface::draw) blit operation.
+//! - [`SurfaceMut`] adds mutation, clearing, rectangular fills, and
+//!   terminal-style insert/delete operations.
+//!
+//! Code written against [`Surface`] or [`SurfaceMut`] can operate on a
+//! [`Buffer`], [`Window`], [`View`], [`Canvas`](crate::canvas::Canvas), or
+//! [`Screen`](crate::screen::Screen) without caring where the cells are
+//! stored. The shared contract is a rectangular coordinate space of
+//! [`Cell`] values addressed by
+//! [`Position`].
+//!
+//! ```rust,ignore
+//! use uncurses::buffer::{Buffer, Surface, SurfaceMut};
+//! use uncurses::cell::Cell;
+//! use uncurses::layout::Position;
+//!
+//! let mut buf = Buffer::new(4, 2);
+//! buf.set_cell(Position::new(0, 0), &Cell::narrow("x"));
+//! assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "x");
+//! ```
+//!
+//! ## Buffer storage
+//!
+//! [`Buffer`] stores a fixed-size grid in one row-major `Vec<Cell>`.
+//! Column `x` and row `y` map to `cells[y * width + x]`, so each row is a
+//! contiguous slice and cloning the buffer requires only one allocation.
+//! Resizing allocates a new row-major backing store, copies the
+//! intersection of the old and new extents, and fills new slots with
+//! [`Cell::BLANK`](crate::cell::Cell::BLANK).
+//!
+//! ```text
+//!          col:  0   1   2   3
+//!              ┌───┬───┬───────┬───┐
+//! row 0 (y=0)  │ H │ i │ 日    │ ! │
+//!              └───┴───┴───────┴───┘
+//!                         ▲
+//!                         └─ wide primary at x=2 covers columns 2 and 3
+//! ```
+//!
+//! ## Wide cells and drawing
+//!
+//! A two-column grapheme is represented by a wide primary cell followed by
+//! a continuation placeholder in the next column. [`Buffer::set`] writes
+//! that placeholder automatically, blanks stale halves when overwriting an
+//! existing wide cell, and replaces a wide cell with a blank when it would
+//! not fit at the end of a row. The default [`Surface::draw`] implementation
+//! preserves the same invariant when blitting between surfaces: orphan
+//! continuations and clipped wide primaries are emitted as blanks.
+
 pub mod ops;
 pub mod surface;
 pub mod view;
@@ -15,12 +77,22 @@ pub use window::Window;
 use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 
-/// A 2D grid of terminal cells stored in row-major order with a fixed
-/// stride of `width`. Row `y` lives at `cells[y * width..(y + 1) * width]`.
-/// The flat layout collapses what was a `Vec<Vec<Cell>>` into a single
-/// heap allocation: one indirection for the whole grid instead of one
-/// per row, contiguous cells across rows for the prefetcher, and a
-/// cheaper `Clone` impl on `Buffer`.
+/// Off-screen storage for a rectangular grid of terminal cells.
+///
+/// A `Buffer` owns `width * height` [`Cell`] values in row-major order.
+/// Row `y` lives at `cells[y * width..(y + 1) * width]`, and column `x`
+/// within that row is addressed by [`Position::new`](crate::layout::Position::new)
+/// through the [`Surface`] and [`SurfaceMut`] APIs.
+///
+/// Use a buffer when rendering into memory before presenting the result to
+/// another surface, when composing with [`Window`]s, or when tests need a
+/// deterministic cell grid. Writes outside the buffer bounds are ignored;
+/// reads outside the bounds return `None`.
+///
+/// Wide cells are stored as a primary [`Cell`] followed
+/// by one continuation cell. Prefer [`Buffer::set`] or
+/// [`SurfaceMut::set_cell`] for writes so that continuation slots are kept
+/// consistent.
 #[derive(Debug, Clone)]
 pub struct Buffer {
     cells: Vec<Cell>,
@@ -29,7 +101,29 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    /// Create a new buffer filled with blank cells.
+    /// Create a new blank buffer.
+    ///
+    /// The returned buffer has `width * height` cells, all initialized to
+    /// [`Cell::BLANK`]. `width` and `height` are measured in terminal cell
+    /// columns and rows, not bytes or grapheme clusters.
+    ///
+    /// # Parameters
+    ///
+    /// - `width`: number of columns in each row.
+    /// - `height`: number of rows.
+    ///
+    /// # Returns
+    ///
+    /// A row-major [`Buffer`] with bounds `Rect::new(0, 0, width, height)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `width * height` cannot be allocated.
+    ///
+    /// # Usage notes
+    ///
+    /// Zero-sized dimensions are valid. Accessors will then return empty
+    /// rows or `None` according to the resulting bounds.
     pub fn new(width: u16, height: u16) -> Self {
         let total = (width as usize) * (height as usize);
         let cells = vec![Cell::BLANK; total];
@@ -40,15 +134,62 @@ impl Buffer {
         }
     }
 
+    /// Return the buffer width in terminal cell columns.
+    ///
+    /// # Returns
+    ///
+    /// The number of columns in each row.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This is the inherent accessor for the stored width. The [`Bounded`]
+    /// implementation reports the same value through [`Bounded::width`].
     pub fn width(&self) -> u16 {
         self.width
     }
 
+    /// Return the buffer height in terminal cell rows.
+    ///
+    /// # Returns
+    ///
+    /// The number of rows in the buffer.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This is the inherent accessor for the stored height. The [`Bounded`]
+    /// implementation reports the same value through [`Bounded::height`].
     pub fn height(&self) -> u16 {
         self.height
     }
 
-    /// Borrow row `y` as a slice. Returns `None` for `y >= height`.
+    /// Borrow one row as a contiguous slice.
+    ///
+    /// # Parameters
+    ///
+    /// - `y`: zero-based row index in buffer coordinates.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&[Cell])` with length [`Buffer::width`] when `y` is inside the
+    /// buffer, or `None` when `y >= height`.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// The returned slice may contain continuation cells that belong to
+    /// wide primaries earlier in the same row. Do not assume every slice
+    /// element starts an independent grapheme.
     #[inline]
     pub fn line(&self, y: u16) -> Option<&[Cell]> {
         if y >= self.height {
@@ -59,7 +200,26 @@ impl Buffer {
         Some(&self.cells[start..start + w])
     }
 
-    /// Mutably borrow row `y` as a slice. Returns `None` for `y >= height`.
+    /// Mutably borrow one row as a contiguous slice.
+    ///
+    /// # Parameters
+    ///
+    /// - `y`: zero-based row index in buffer coordinates.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&mut [Cell])` with length [`Buffer::width`] when `y` is inside
+    /// the buffer, or `None` when `y >= height`.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Direct slice mutation bypasses the wide-cell accounting performed by
+    /// [`Buffer::set`]. It is appropriate for whole-row helpers that manage
+    /// continuations themselves; prefer [`Buffer::set`] for ordinary writes.
     #[inline]
     pub fn line_mut(&mut self, y: u16) -> Option<&mut [Cell]> {
         if y >= self.height {
@@ -85,7 +245,28 @@ impl Buffer {
         left[lo * w..(lo + 1) * w].swap_with_slice(&mut right[..w]);
     }
 
-    /// Mutable handle to the cell at `pos`. Returns `None` for out-of-bounds positions.
+    /// Borrow one cell mutably.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: zero-based cell coordinate in buffer coordinates.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&mut Cell)` for an in-bounds position, or `None` when `pos`
+    /// lies outside the buffer.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// Mutating a cell through this handle does not update neighboring
+    /// continuation cells. Do not change a cell from narrow to wide, wide to
+    /// narrow, or continuation to primary through this handle; use
+    /// [`Buffer::set`] or [`SurfaceMut::set_cell`] when the cell width may
+    /// change.
     pub fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
         if pos.y >= self.height || pos.x >= self.width {
             return None;
@@ -94,7 +275,33 @@ impl Buffer {
         Some(&mut self.cells[(pos.y as usize) * w + (pos.x as usize)])
     }
 
-    /// Set a cell at the given position, handling wide-character placeholders.
+    /// Set a cell at a position while preserving wide-cell invariants.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: zero-based destination coordinate. Any type convertible into
+    ///   [`Position`] is accepted.
+    /// - `cell`: cell to clone into the destination.
+    ///
+    /// # Behavior
+    ///
+    /// In-bounds narrow writes replace exactly one column, blanking any stale
+    /// wide-cell halves they overwrite. In-bounds wide writes place `cell` at
+    /// `pos` and write continuation placeholders into the columns it covers.
+    /// If a wide cell would extend past the right edge of the row, the
+    /// destination column is set to [`Cell::BLANK`] instead.
+    ///
+    /// Out-of-bounds writes are ignored.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// This is the implementation behind [`SurfaceMut::set_cell`] for
+    /// `Buffer`. Use it instead of [`Buffer::cell_mut`] whenever the write
+    /// might affect the width or role of neighboring cells.
     pub fn set(&mut self, pos: impl Into<Position>, cell: &Cell) {
         let pos = pos.into();
         let y = pos.y as usize;
@@ -165,7 +372,29 @@ impl Buffer {
         line[x] = cell.clone();
     }
 
-    /// Resize the buffer, filling new cells with blanks.
+    /// Resize the buffer, preserving the top-left intersection.
+    ///
+    /// # Parameters
+    ///
+    /// - `width`: new row width in terminal cell columns.
+    /// - `height`: new height in terminal cell rows.
+    ///
+    /// # Behavior
+    ///
+    /// Cells inside the intersection of the old and new bounds keep their
+    /// row and column. Newly exposed cells are filled with [`Cell::BLANK`],
+    /// and cells outside the new bounds are discarded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resized backing store cannot be allocated.
+    ///
+    /// # Usage notes
+    ///
+    /// Resizing copies cells structurally and does not reflow wide cells. If
+    /// the new right edge cuts through a wide grapheme, the copied
+    /// continuation or primary remains as stored until later writes or draws
+    /// normalize the affected edge.
     pub fn resize(&mut self, width: u16, height: u16) {
         if width == self.width && height == self.height {
             return;

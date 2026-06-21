@@ -190,10 +190,15 @@ impl Renderer {
 
     // -------- horizontal -----------------------------------------------
 
-    /// Cost-pass for the horizontal leg. Picks the shortest shape,
-    /// folding the tabs / backspace capability cross product
-    /// internally so the caller can plan with a single combined
-    /// horizontal cost instead of looping over capability flags.
+    /// Cost-pass for the horizontal leg.
+    ///
+    /// Picks the shortest shape, folding the tabs / backspace capability
+    /// cross product internally so the caller can plan with a single
+    /// combined horizontal cost instead of looping over capability
+    /// flags. Forward tabs are counted with
+    /// [`crate::renderer::tabstops::TabStops::next_stop`], the unclamped
+    /// terminal stop, so the planner never treats a tab that would
+    /// overshoot the target as landing on the canvas edge.
     pub(super) fn plan_horizontal_cost(
         &self,
         fx: u16,
@@ -382,15 +387,19 @@ impl Renderer {
         let ts = &self.tabs;
         let mut count: u16 = 0;
         let mut col = fx;
+        // Tab while the true next tab stop still lands at or before the
+        // target. `next_stop` is unclamped (it reports the real stop a
+        // terminal's tab reaches, which may be past the canvas edge), so a
+        // tab is never counted unless it genuinely stays within `tx`. The
+        // residual forward leg covers the rest. Mirrors ncurses' NEXTTAB
+        // loop in `relative_move`.
         loop {
-            if ts.next(col) > tx {
+            let next = ts.next_stop(col);
+            if next > tx {
                 break;
             }
+            col = next;
             count += 1;
-            if col == ts.next(col) || col + 1 >= ts.width() {
-                break;
-            }
-            col = ts.next(col);
         }
         ForwardTabRun {
             count,

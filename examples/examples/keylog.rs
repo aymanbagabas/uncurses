@@ -13,15 +13,11 @@
 //! Press `q` or Ctrl-C to exit. On Unix, Ctrl-Z suspends the process and
 //! it resumes cleanly with `fg`.
 
-use std::io::Write;
-
-use uncurses::ansi::mode::{MouseEncoding, MouseMode};
-use uncurses::buffer::SurfaceMut;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
-use uncurses::terminal::Terminal;
+use uncurses::buffer::{Bounded, SurfaceMut};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::terminal::{TtyInput, TtyOutput};
-use uncurses::text::WrapMode;
+use uncurses::text::TextSurface;
 
 fn format_modifiers(m: KeyModifiers) -> String {
     let mut parts = Vec::new();
@@ -87,17 +83,21 @@ fn format_event(ev: &Event) -> String {
     }
 }
 
-fn redraw<W: std::io::Write>(screen: &mut Screen<W>, last: &str) -> std::io::Result<()> {
+fn redraw(screen: &mut Screen<TtyInput, TtyOutput>, last: &str) -> std::io::Result<()> {
     screen.clear();
     let w = screen.width();
     let header = "keylog — press q or Ctrl-C to quit. Type, click, drag, paste, resize.";
-    {
-        screen.set_str((0, 0), &truncate(header, w), WrapMode::Truncate);
-    };
+    screen.set_str(
+        (0, 0),
+        &truncate(header, w),
+        uncurses::style::Style::default(),
+    );
     let line = format!("last: {}", last);
-    {
-        screen.set_str((0, 1), &truncate(&line, w), WrapMode::Truncate);
-    };
+    screen.set_str(
+        (0, 1),
+        &truncate(&line, w),
+        uncurses::style::Style::default(),
+    );
     Ok(())
 }
 
@@ -115,30 +115,30 @@ fn truncate(s: &str, width: u16) -> String {
 /// `run` logs every event into the scrollback, and `stop` restores the
 /// terminal. On Unix, Ctrl-Z suspends and resumes cleanly.
 struct App {
-    term: Terminal<TtyInput, TtyOutput>,
-    screen: Screen<TtyOutput>,
-    events: EventSource<TtyInput>,
+    screen: Screen<TtyInput, TtyOutput>,
     last: String,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::open()?;
-        term.make_raw()?;
+        let mut screen = Screen::open()?;
+        // Enable motion mouse tracking (for drag) and focus reporting so the
+        // log shows the full breadth of events.
+        screen.init_with(ScreenOptions {
+            mouse: Some(MousePreference {
+                motion: true,
+                pixels: false,
+            }),
+            ..ScreenOptions::default()
+        })?;
+        screen.enable_focus_events()?;
+        screen.hide_cursor()?;
         // Inline status area is two rows tall; insert_above scrolls events
         // into the scrollback above it.
-        let cols = term.window_size().unwrap_or_default().col;
-        let mut screen = Screen::new(term.output(), (cols, 2));
-        screen.set_cursor_visible(false);
-        screen.set_mouse_mode(MouseMode::Any, MouseEncoding::Sgr);
-        screen.set_focus_events(true);
-        screen.set_bracketed_paste(true);
-        screen.set_title("📺 keylog — events 🎹🖱️");
-        let events = EventSource::new(term.input())?;
+        let cols = screen.width();
+        screen.resize((cols, 2));
         Ok(Self {
-            term,
             screen,
-            events,
             last: String::from("(waiting for input)"),
         })
     }
@@ -151,7 +151,7 @@ impl App {
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
-        while let Ok(ev) = self.events.read() {
+        while let Ok(ev) = self.screen.read_event() {
             match &ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q'),
@@ -169,14 +169,14 @@ impl App {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => {
-                    self.suspend()?;
-                    self.resume()?;
+                    self.screen.suspend()?;
+                    self.screen.resume()?;
                     self.last = String::from("(resumed)");
                     self.render()?;
                     continue;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, 2);
+                    self.screen.resize((ws.col, 2));
                 }
                 _ => {}
             }
@@ -189,37 +189,8 @@ impl App {
         Ok(())
     }
 
-    /// Suspend to job control (Unix-only): tear down the screen, drop
-    /// raw mode, then send `SIGTSTP` to ourselves. The kernel pauses the
-    /// process until a `SIGCONT` (e.g. `fg`) returns control here.
-    #[cfg(unix)]
-    fn suspend(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()?;
-        // SAFETY: raise is async-signal-safe.
-        unsafe { libc::raise(libc::SIGTSTP) };
-        Ok(())
-    }
-
-    /// Resume after [`suspend`](Self::suspend): re-acquire raw mode,
-    /// refit to the current window size, and reinstate the screen modes,
-    /// then force a full repaint.
-    #[cfg(unix)]
-    fn resume(&mut self) -> std::io::Result<()> {
-        self.term.make_raw()?;
-        if let Ok(size) = self.term.window_size() {
-            self.screen.resize(size.col, 2);
-        }
-        self.screen.restore();
-        self.screen.invalidate();
-        Ok(())
-    }
-
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 

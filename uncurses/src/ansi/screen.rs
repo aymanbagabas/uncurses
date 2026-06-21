@@ -1,8 +1,29 @@
-//! Screen manipulation sequences: erase, insert/delete, scroll.
+//! Screen, line, scroll-region, and tab-stop manipulation.
+//!
+//! ## Category
+//!
+//! This module emits CSI controls for erasing, inserting/deleting characters and
+//! lines, scrolling, setting vertical and horizontal margins, and tab-stop
+//! management.
+//!
+//! ## CSI conventions
+//!
+//! Counted operations use the terminal default parameter where possible: for
+//! example `n <= 1` emits `ESC [ X` for ECH and `ESC [ L` for IL. Erase
+//! operations use parameter `0` as the omitted default.
+//!
+//! ## Mode interaction
+//!
+//! Left/right margins are interpreted as DECSLRM when
+//! [`Mode::LEFT_RIGHT_MARGIN`](crate::ansi::mode::Mode::LEFT_RIGHT_MARGIN) is
+//! enabled. Top/bottom scroll margins are set by DECSTBM and affect absolute
+//! cursor movement when origin mode is active.
 
 use std::io::{self, Write};
 
-/// Erase `n` characters at cursor (ECH).
+/// Erase `n` character cells at the cursor with ECH.
+///
+/// `n <= 1` emits `ESC [ X`; larger counts emit `ESC [ <n> X`. Erased cells are replaced with blank cells using the active rendition.
 pub fn write_ech<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[X")
@@ -11,7 +32,9 @@ pub fn write_ech<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Repeat preceding character `n` times (REP).
+/// Repeat the preceding printable character with REP.
+///
+/// `n <= 1` emits `ESC [ b`; larger counts emit `ESC [ <n> b`. Use only when the terminal supports REP and the preceding character is repeatable.
 pub fn write_rep<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[b")
@@ -20,7 +43,9 @@ pub fn write_rep<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Insert `n` blank characters at cursor (ICH).
+/// Insert `n` blank character cells at the cursor with ICH.
+///
+/// `n <= 1` emits `ESC [ @`; larger counts emit `ESC [ <n> @`. Existing cells shift right within the line.
 pub fn write_ich<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[@")
@@ -29,7 +54,9 @@ pub fn write_ich<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Delete `n` characters at cursor (DCH).
+/// Delete `n` character cells at the cursor with DCH.
+///
+/// `n <= 1` emits `ESC [ P`; larger counts emit `ESC [ <n> P`. Cells to the right shift left and blanks are inserted at the right edge.
 pub fn write_dch<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[P")
@@ -38,10 +65,9 @@ pub fn write_dch<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Erase line (EL). `n`:
-/// * 0 — from cursor to end of line.
-/// * 1 — from start of line to cursor.
-/// * 2 — entire line.
+/// Erase in line with EL, `ESC [ <n> K`.
+///
+/// `n == 0` emits `ESC [ K` (cursor through end of line), `1` erases start through cursor, and `2` erases the entire line. Other values are emitted as provided.
 pub fn write_el<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => w.write_all(b"\x1b[K"),
@@ -49,11 +75,9 @@ pub fn write_el<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Erase display (ED). `n`:
-/// * 0 — from cursor to end of screen.
-/// * 1 — from start of screen to cursor.
-/// * 2 — entire screen.
-/// * 3 — entire display including scrollback (xterm).
+/// Erase in display with ED, `ESC [ <n> J`.
+///
+/// `n == 0` emits `ESC [ J` (cursor through end of screen), `1` erases start through cursor, `2` erases the visible screen, and `3` requests scrollback/display clearing where supported.
 pub fn write_ed<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => w.write_all(b"\x1b[J"),
@@ -61,42 +85,44 @@ pub fn write_ed<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Erase from cursor to end of line (EL 0).
+/// Erase from cursor through end of line: exact bytes `ESC [ K` (`EL 0`).
 pub const ERASE_LINE_RIGHT: &[u8] = b"\x1b[K";
-/// Erase from start of line to cursor (EL 1).
+/// Erase from start of line through cursor: exact bytes `ESC [ 1 K` (`EL 1`).
 pub const ERASE_LINE_LEFT: &[u8] = b"\x1b[1K";
-/// Erase entire line (EL 2).
+/// Erase the entire current line: exact bytes `ESC [ 2 K` (`EL 2`).
 pub const ERASE_ENTIRE_LINE: &[u8] = b"\x1b[2K";
-/// Erase from cursor to end of screen (ED 0).
+/// Erase from cursor through end of screen: exact bytes `ESC [ J` (`ED 0`).
 pub const ERASE_SCREEN_BELOW: &[u8] = b"\x1b[J";
-/// Erase from start of screen to cursor (ED 1).
+/// Erase from start of screen through cursor: exact bytes `ESC [ 1 J` (`ED 1`).
 pub const ERASE_SCREEN_ABOVE: &[u8] = b"\x1b[1J";
-/// Erase entire screen (ED 2).
+/// Erase the visible screen: exact bytes `ESC [ 2 J` (`ED 2`).
 pub const ERASE_ENTIRE_SCREEN: &[u8] = b"\x1b[2J";
-/// Erase entire display including scrollback (ED 3).
+/// Erase the display including scrollback where supported: exact bytes `ESC [ 3 J` (`ED 3`).
 pub const ERASE_ENTIRE_DISPLAY: &[u8] = b"\x1b[3J";
 
-/// Erase from cursor to end of line (EL 0).
+/// Write [`ERASE_LINE_RIGHT`], `ESC [ K`, erasing from cursor through end of line.
 pub fn write_erase_to_eol<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(ERASE_LINE_RIGHT)
 }
 
-/// Erase entire line (EL 2).
+/// Write [`ERASE_ENTIRE_LINE`], `ESC [ 2 K`, erasing the entire current line.
 pub fn write_erase_line<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(ERASE_ENTIRE_LINE)
 }
 
-/// Erase from cursor to end of screen (ED 0).
+/// Write [`ERASE_SCREEN_BELOW`], `ESC [ J`, erasing from cursor through end of screen.
 pub fn write_erase_below<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(ERASE_SCREEN_BELOW)
 }
 
-/// Erase entire screen (ED 2).
+/// Write [`ERASE_ENTIRE_SCREEN`], `ESC [ 2 J`, erasing the visible screen.
 pub fn write_erase_screen<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(ERASE_ENTIRE_SCREEN)
 }
 
-/// Insert `n` lines at cursor (IL).
+/// Insert `n` blank lines with IL.
+///
+/// `n <= 1` emits `ESC [ L`; larger counts emit `ESC [ <n> L`. Lines below shift downward within the scrolling region.
 pub fn write_insert_lines<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[L")
@@ -105,7 +131,9 @@ pub fn write_insert_lines<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Delete `n` lines at cursor (DL).
+/// Delete `n` lines with DL.
+///
+/// `n <= 1` emits `ESC [ M`; larger counts emit `ESC [ <n> M`. Lines below shift upward within the scrolling region.
 pub fn write_delete_lines<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[M")
@@ -114,7 +142,9 @@ pub fn write_delete_lines<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Scroll up `n` lines (SU).
+/// Scroll up by `n` lines with SU.
+///
+/// `n <= 1` emits `ESC [ S`; larger counts emit `ESC [ <n> S`.
 pub fn write_scroll_up<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[S")
@@ -123,7 +153,9 @@ pub fn write_scroll_up<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Scroll down `n` lines (SD).
+/// Scroll down by `n` lines with SD.
+///
+/// `n <= 1` emits `ESC [ T`; larger counts emit `ESC [ <n> T`.
 pub fn write_scroll_down<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     if n <= 1 {
         w.write_all(b"\x1b[T")
@@ -132,17 +164,21 @@ pub fn write_scroll_down<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
-/// Set scroll region (DECSTBM). `top`/`bottom` are zero-based row indices.
+/// Set top and bottom margins with DECSTBM, `ESC [ <top+1> ; <bottom+1> r`.
+///
+/// `top` and `bottom` are zero-based API row indices; the terminal parameters are one-based.
 pub fn write_scroll_region<W: Write>(w: &mut W, top: u16, bottom: u16) -> io::Result<()> {
     write!(w, "\x1b[{};{}r", top + 1, bottom + 1)
 }
 
-/// Reset scroll region to full screen.
+/// Reset top/bottom margins to the full screen with exact bytes `ESC [ r`.
 pub fn write_reset_scroll_region<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b[r")
 }
 
-/// Set left/right margins (DECSLRM). 1-based, 0 means default.
+/// Set left and right margins with DECSLRM, `ESC [ <left> ; <right> s`.
+///
+/// Arguments are emitted as one-based terminal parameters where `0` means omitted/default. When both are `0`, this emits `ESC [ s`, the same byte sequence as the alternate save-cursor form outside DECSLRM context.
 pub fn write_set_left_right_margins<W: Write>(w: &mut W, left: u16, right: u16) -> io::Result<()> {
     match (left, right) {
         (0, 0) => w.write_all(b"\x1b[s"),
@@ -152,20 +188,20 @@ pub fn write_set_left_right_margins<W: Write>(w: &mut W, left: u16, right: u16) 
     }
 }
 
-/// Set tab stops every 8 columns (DECST8C, `CSI ? 5 W`).
+/// Set tab stops every eight columns: exact bytes `ESC [ ? 5 W` (DECST8C).
 pub const SET_TAB_EVERY_8_COLUMNS: &[u8] = b"\x1b[?5W";
 
-/// Horizontal Tab Set (HTS, `ESC H`) — set a tab stop at the cursor column.
+/// Set a horizontal tab stop at the current column: exact bytes `ESC H` (HTS 7-bit form).
 pub const HORIZONTAL_TAB_SET: &[u8] = b"\x1bH";
 
-/// Set a tab stop at the current cursor column (HTS).
+/// Write [`HORIZONTAL_TAB_SET`], `ESC H`, to set a tab stop at the current cursor column.
 pub fn write_hts<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(HORIZONTAL_TAB_SET)
 }
 
-/// Clear tab stops (TBC). `n`:
-/// * 0 — clear tab at current column.
-/// * 3 — clear all tab stops.
+/// Clear tab stops with TBC, `ESC [ <n> g`.
+///
+/// `n == 0` emits `ESC [ g` and clears the current-column tab stop. `n == 3` clears all tab stops; other values are emitted as provided.
 pub fn write_tbc<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     match n {
         0 => w.write_all(b"\x1b[g"),

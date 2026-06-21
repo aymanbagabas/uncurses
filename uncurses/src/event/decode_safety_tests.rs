@@ -1,17 +1,22 @@
-//! Refactor safety net for `decode.rs`.
+//! Decode refactor safety tests.
 //!
-//! Every parser path in `Decoder` is fed through three feeding
-//! strategies and the resulting event streams are asserted to be
-//! byte-for-byte identical:
+//! ## Purpose
 //!
-//! 1. **whole**       — one `parse()` call with the entire input.
-//! 2. **byte_by_byte** — one `parse()` call per input byte.
-//! 3. **every_split** — for every offset `i` in `0..=len`, feed the
-//!    head `0..i` then the tail `i..`.
+//! These tests feed representative byte sequences through several chunking
+//! strategies and assert the same normalized event stream. They protect the
+//! decoder's buffering contract while allowing paste chunk boundaries to differ
+//! by input split.
 //!
-//! Any decomposition that holds a byte differently or changes the
-//! observable event boundary will trip at least one strategy.
-
+//! ## Strategies
+//!
+//! * whole input in one [`Decoder::parse`](crate::event::Decoder::parse) call;
+//! * byte-by-byte input;
+//! * every possible two-part split.
+//!
+//! ## Gotchas
+//!
+//! Adjacent [`Event::PasteChunk`] values are merged before comparison because
+//! chunk granularity is not semantic; reassembled bytes are.
 #![cfg(test)]
 
 use super::Event;

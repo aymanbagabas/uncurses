@@ -1,5 +1,16 @@
-//! Outcome of one parse step in [`Decoder::try_parse`].
-
+//! Internal result type for a single decode attempt.
+//!
+//! ## Purpose
+//!
+//! [`ParseResult`] lets small parser functions distinguish a complete event, a
+//! valid-but-incomplete prefix, and an unrecognized prefix that should be
+//! consumed. The outer [`Decoder`](super::Decoder) uses that distinction to
+//! buffer partial sequences without dropping bytes.
+//!
+//! ## Gotchas
+//!
+//! `Incomplete` never means "invalid"; it means the caller should keep the
+//! current prefix and wait for more bytes or an explicit timeout decision.
 use crate::event::Event;
 
 /// What `try_parse` learned after looking at the current prefix of the

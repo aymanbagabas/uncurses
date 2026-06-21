@@ -1,32 +1,43 @@
-//! OSC 8 hyperlink sequences.
+//! OSC 8 hyperlink writer and parser.
+//!
+//! ## Category
+//!
+//! OSC 8 annotates following text with a URI until a closing OSC 8 with an empty
+//! URI is emitted. This module writes start/end markers and parses the body of an
+//! already-framed OSC 8 string.
+//!
+//! ## OSC framing
+//!
+//! Writers use the 7-bit OSC introducer and the `ST` terminator (`ESC \\`):
+//!
+//! ```text
+//! ESC ] 8 ; params ; uri ESC \\  text  ESC ] 8 ; ; ESC \\
+//! ──┬── ┬   ───┬──   ┬   ──┬──        ───── close ─────
+//!  OSC code  attrs target  ST
+//! ```
+//!
+//! ## Mode interaction
+//!
+//! Hyperlinks are not controlled by an ANSI/DEC mode. They are zero-width string
+//! controls and are preserved by width-aware text utilities.
 
 use std::io::{self, Write};
 
-/// Begin a hyperlink. `params` is a (possibly empty) `key=value:…` string
-/// (e.g. `"id=abc"`); `url` is the target URI.
+/// Begin an OSC 8 hyperlink with `ESC ] 8 ; <params> ; <url> ESC \`.
+///
+/// `params` and `url` are emitted verbatim. The hyperlink applies to following printable text until [`write_hyperlink_end`] is emitted.
 pub fn write_hyperlink_start<W: Write>(w: &mut W, url: &str, params: &str) -> io::Result<()> {
     write!(w, "\x1b]8;{params};{url}\x1b\\")
 }
 
-/// End the current hyperlink (`OSC 8 ; ; ST`).
+/// End the current OSC 8 hyperlink with exact bytes `ESC ] 8 ; ; ESC \`.
 pub fn write_hyperlink_end<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(b"\x1b]8;;\x1b\\")
 }
 
 /// Parse an OSC 8 body into `(params, url)`.
 ///
-/// `body` is the bytes inside the OSC, *without* the introducer (`\x1b]` or
-/// `\x9d`) and *without* the string terminator (`\x07`, `\x1b\\`, or
-/// `\x9c`). A valid OSC 8 body starts with `8;`, contains a single
-/// separator between `params` and `url`, and is otherwise:
-///
-/// ```text
-/// 8 ; params ; url
-/// ```
-///
-/// Returns `None` for malformed input (missing `8;` prefix, fewer than two
-/// `;`, or non-UTF-8 bytes in params/url). An empty `url` signals
-/// end-of-link.
+/// `body` must exclude the OSC introducer and terminator, start with `8;`, and contain the separator between params and URL. The URL may contain additional semicolons; only the first semicolon after `8;` separates params from URL. Returns `None` for malformed or non-UTF-8 bodies.
 pub fn parse_hyperlink(body: &[u8]) -> Option<(&str, &str)> {
     let rest = body.strip_prefix(b"8;")?;
     let sep = rest.iter().position(|&b| b == b';')?;

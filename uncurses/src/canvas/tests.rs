@@ -1,13 +1,13 @@
-//! Integration-style tests for [`Screen`] — full render-pipeline
+//! Integration-style tests for [`Canvas`] — full render-pipeline
 //! checks for mode toggles, string painting, reset/restore, wide
 //! glyphs, and `insert_above`.
 
 use super::*;
-use crate::text::{WidthMode, WrapMode};
+use crate::text::{TextSurface, WidthMode, WrapMode};
 
 #[test]
 fn test_new_screen() {
-    let screen = Screen::new(Vec::new(), (80, 24));
+    let screen = Canvas::new(Vec::new(), (80, 24));
     assert_eq!(screen.width(), 80);
     assert_eq!(screen.height(), 24);
 }
@@ -16,9 +16,9 @@ fn test_new_screen() {
 fn test_write_and_render() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 5));
+        let mut screen = Canvas::new(&mut buf, (20, 5));
         {
-            screen.set_str((0, 0), "Hello", WrapMode::Truncate);
+            screen.set_str((0, 0), "Hello", crate::style::Style::default());
         };
         screen.render();
         screen.flush().unwrap();
@@ -30,7 +30,7 @@ fn test_write_and_render() {
 fn test_alt_screen() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (80, 24));
+        let mut screen = Canvas::new(&mut buf, (80, 24));
         screen.set_alt_screen(true);
         assert!(screen.state.alt_screen);
         screen.set_alt_screen(false);
@@ -44,27 +44,27 @@ fn test_alt_screen() {
 
 #[test]
 fn default_width_mode_is_wc() {
-    let screen = Screen::new(Vec::new(), (20, 1));
+    let screen = Canvas::new(Vec::new(), (20, 1));
     assert_eq!(screen.width_mode(), WidthMode::Wc);
     assert!(!screen.eaw_wide());
 }
 
 #[test]
 fn with_eaw_wide_sets_eaw_wide() {
-    let screen = Screen::new(Vec::new(), (20, 1)).with_eaw_wide(true);
+    let screen = Canvas::new(Vec::new(), (20, 1)).with_eaw_wide(true);
     assert!(screen.eaw_wide());
 }
 
 #[test]
 fn str_width_follows_mode_and_eaw_and_ignores_escapes() {
-    let mut screen = Screen::new(Vec::new(), (20, 1));
+    let mut screen = Canvas::new(Vec::new(), (20, 1));
     // Plain CJK: two columns regardless of mode.
     assert_eq!(screen.str_width("中"), 2);
     // Inline SGR contributes no width.
     assert_eq!(screen.str_width("\x1b[31mhi\x1b[0m"), 2);
     // Ambiguous code point flips with eaw_wide.
     assert_eq!(screen.str_width("…"), 1);
-    let wide = Screen::new(Vec::new(), (20, 1)).with_eaw_wide(true);
+    let wide = Canvas::new(Vec::new(), (20, 1)).with_eaw_wide(true);
     assert_eq!(wide.str_width("…"), 2);
     // VS16 only matters once grapheme-cluster mode is on.
     assert_eq!(screen.str_width("\u{270b}\u{fe0e}"), 2);
@@ -74,7 +74,7 @@ fn str_width_follows_mode_and_eaw_and_ignores_escapes() {
 
 #[test]
 fn grapheme_width_and_cells_use_screen_policy() {
-    let mut screen = Screen::new(Vec::new(), (20, 1));
+    let mut screen = Canvas::new(Vec::new(), (20, 1));
     // Wc mode is cluster-blind: the VS15 tail is ignored, base '✋' is 2.
     assert_eq!(screen.grapheme_width("\u{270b}\u{fe0e}"), 2);
     screen.set_grapheme_clusters(true);
@@ -86,30 +86,10 @@ fn grapheme_width_and_cells_use_screen_policy() {
 }
 
 #[test]
-fn set_color_scheme_updates_emits_decset_2031_and_tracks_state() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::new(&mut buf, (20, 1));
-        assert!(!screen.color_scheme_updates());
-        screen.set_color_scheme_updates(true);
-        assert!(screen.color_scheme_updates());
-        // Idempotent: second enable doesn't write again.
-        screen.set_color_scheme_updates(true);
-        screen.set_color_scheme_updates(false);
-        assert!(!screen.color_scheme_updates());
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b[?2031h"));
-    assert!(out.contains("\x1b[?2031l"));
-    assert_eq!(out.matches("\x1b[?2031h").count(), 1);
-}
-
-#[test]
 fn set_grapheme_clusters_toggles_width_mode_and_emits_decset() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 1));
+        let mut screen = Canvas::new(&mut buf, (20, 1));
         screen.set_grapheme_clusters(true);
         assert!(screen.grapheme_clusters());
         // Internal width-mode tracks DEC-2027 so that our segmentation
@@ -131,9 +111,9 @@ fn write_string_widths_follow_current_mode() {
     // that attaches to the base cell; Grapheme collapses both into a
     // single grapheme cluster. In both cases the cell at (0, 0) holds
     // the composed string; only the cursor advance differs.
-    let mut screen = Screen::new(Vec::new(), (10, 1));
+    let mut screen = Canvas::new(Vec::new(), (10, 1));
     {
-        screen.set_str((0, 0), "e\u{0301}", WrapMode::Truncate);
+        screen.set_str((0, 0), "e\u{0301}", crate::style::Style::default());
     };
     assert_eq!(
         screen
@@ -154,7 +134,7 @@ fn write_string_widths_follow_current_mode() {
     screen.set_grapheme_clusters(true);
     screen.clear();
     {
-        screen.set_str((0, 0), "e\u{0301}", WrapMode::Truncate);
+        screen.set_str((0, 0), "e\u{0301}", crate::style::Style::default());
     };
     // Grapheme mode: combined into one cell.
     assert_eq!(
@@ -171,7 +151,7 @@ fn write_string_widths_follow_current_mode() {
 fn reset_and_restore_round_trip_grapheme_clusters() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 1));
+        let mut screen = Canvas::new(&mut buf, (20, 1));
         screen.set_grapheme_clusters(true);
         assert!(screen.grapheme_clusters());
 
@@ -190,50 +170,8 @@ fn reset_and_restore_round_trip_grapheme_clusters() {
 }
 
 #[test]
-fn set_in_band_resize_emits_decset_2048_and_tracks_state() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::new(&mut buf, (20, 1));
-        assert!(!screen.in_band_resize());
-        screen.set_in_band_resize(true);
-        assert!(screen.in_band_resize());
-        // Idempotent: second enable doesn't write again.
-        screen.set_in_band_resize(true);
-        screen.set_in_band_resize(false);
-        assert!(!screen.in_band_resize());
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b[?2048h"));
-    assert!(out.contains("\x1b[?2048l"));
-    assert_eq!(out.matches("\x1b[?2048h").count(), 1);
-}
-
-#[test]
-fn reset_and_restore_round_trip_in_band_resize() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::new(&mut buf, (20, 1));
-        screen.set_in_band_resize(true);
-        assert!(screen.in_band_resize());
-
-        // reset: state preserved, teardown writes RM
-        screen.reset();
-        assert!(screen.in_band_resize());
-
-        // restore: re-emits SM
-        screen.restore();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    // Enable SM, reset emits RM, restore emits SM again.
-    assert!(out.matches("\x1b[?2048h").count() >= 2);
-    assert!(out.contains("\x1b[?2048l"));
-}
-
-#[test]
 fn test_resize() {
-    let mut screen = Screen::new(Vec::new(), (80, 24));
+    let mut screen = Canvas::new(Vec::new(), (80, 24));
     screen.resize(100, 30);
     assert_eq!(screen.width(), 100);
     assert_eq!(screen.height(), 30);
@@ -248,13 +186,13 @@ fn test_screen_clears_stale_chars_after_navigating() {
     let mut frame1: Vec<u8> = Vec::new();
     let mut frame2: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut frame1, (40, 5));
+        let mut screen = Canvas::new(&mut frame1, (40, 5));
         screen.clear();
         {
             screen.set_str(
                 (0, 2),
                 "icu_segmenter = \"compiled_data\"",
-                WrapMode::Truncate,
+                crate::style::Style::default(),
             );
         };
         screen.render();
@@ -284,7 +222,7 @@ fn test_screen_clears_stale_chars_after_navigating() {
 
 // --- end-to-end renderer tests ---
 //
-// Drive the renderer through the public Screen surface. The writer
+// Drive the renderer through the public Canvas surface. The writer
 // is `&mut Vec<u8>` (or scoped so the test owns the `Vec<u8>` that
 // outlives the screen), and per-test configuration is established
 // up front with the `with_color_profile` / `with_optimizations`
@@ -308,9 +246,9 @@ fn test_screen_clears_stale_chars_after_navigating() {
 //   `inline_hello_world_emits_exact_byte_stream` and
 //   `fullscreen_diagonal_emits_exact_byte_stream`.
 //
-// Output-frame cases drive the same source text through Screen
-// (with `set_str(..., WrapMode::Wrap)`), render both frames in a
-// single Screen lifetime, and assert that the relevant content and
+// Output-frame cases drive the same source text through Canvas
+// (with `set_str_wrap(..., WrapMode::Wrap)`), render both frames in a
+// single Canvas lifetime, and assert that the relevant content and
 // clearing sequences appear in the cumulative byte stream.
 
 use crate::color::{BasicColor, Color};
@@ -321,16 +259,21 @@ fn s(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn fill(screen: &mut Screen<&mut Vec<u8>>, x: u16, y: u16, content: &str) {
+fn fill(screen: &mut Canvas<&mut Vec<u8>>, x: u16, y: u16, content: &str) {
     screen.set_cell((x, y), &Cell::narrow(content));
 }
 
-fn draw_wrapped(screen: &mut Screen<&mut Vec<u8>>, src: &str) {
+fn draw_wrapped(screen: &mut Canvas<&mut Vec<u8>>, src: &str) {
     let bounds = screen.bounds();
-    screen.set_str((bounds.x, bounds.y), src, WrapMode::Wrap);
+    screen.set_str_wrap(
+        (bounds.x, bounds.y),
+        src,
+        WrapMode::Wrap,
+        crate::style::Style::default(),
+    );
 }
 
-fn blank_screen(screen: &mut Screen<&mut Vec<u8>>) {
+fn blank_screen(screen: &mut Canvas<&mut Vec<u8>>) {
     for y in 0..screen.height() {
         for x in 0..screen.width() {
             screen.set_cell((x, y), &Cell::BLANK);
@@ -344,7 +287,7 @@ fn blank_screen(screen: &mut Screen<&mut Vec<u8>>) {
 fn fullscreen_diagonal_emits_exact_byte_stream() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (5, 3));
+        let mut screen = Canvas::new(&mut buf, (5, 3));
         screen.set_alt_screen(true);
         fill(&mut screen, 0, 0, "X");
         fill(&mut screen, 1, 1, "X");
@@ -364,8 +307,12 @@ fn fullscreen_diagonal_emits_exact_byte_stream() {
 fn inline_hello_world_emits_exact_byte_stream() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (80, 24));
-        screen.set_str((0u16, 0u16), "Hello, World!", WrapMode::Truncate);
+        let mut screen = Canvas::new(&mut buf, (80, 24));
+        screen.set_str(
+            (0u16, 0u16),
+            "Hello, World!",
+            crate::style::Style::default(),
+        );
         screen.render();
         screen.flush().unwrap();
     }
@@ -387,7 +334,7 @@ fn inline_hello_world_emits_exact_byte_stream() {
 fn truecolor_profile_emits_38_2_rgb() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (1, 1)).with_color_profile(Profile::TrueColor);
+        let mut screen = Canvas::new(&mut buf, (1, 1)).with_color_profile(Profile::TrueColor);
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -407,7 +354,7 @@ fn truecolor_profile_emits_38_2_rgb() {
 fn ansi256_profile_emits_38_5_index() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (1, 1)).with_color_profile(Profile::Ansi256);
+        let mut screen = Canvas::new(&mut buf, (1, 1)).with_color_profile(Profile::Ansi256);
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -424,7 +371,7 @@ fn ansi256_profile_emits_38_5_index() {
 fn ansi_profile_emits_basic_sgr_3x_or_9x() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (1, 1)).with_color_profile(Profile::Ansi);
+        let mut screen = Canvas::new(&mut buf, (1, 1)).with_color_profile(Profile::Ansi);
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -446,7 +393,7 @@ fn ansi_profile_emits_basic_sgr_3x_or_9x() {
 fn ascii_profile_emits_no_color_sgr() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (1, 1)).with_color_profile(Profile::Ascii);
+        let mut screen = Canvas::new(&mut buf, (1, 1)).with_color_profile(Profile::Ascii);
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
@@ -467,7 +414,7 @@ fn ascii_profile_emits_no_color_sgr() {
 
 #[test]
 fn cursor_position_round_trip() {
-    let mut screen = Screen::new(Vec::new(), (80, 24));
+    let mut screen = Canvas::new(Vec::new(), (80, 24));
     screen.set_cursor_position(5, 10);
     let p = screen.cursor_position();
     assert_eq!((p.x, p.y), (5, 10));
@@ -477,7 +424,7 @@ fn cursor_position_round_trip() {
 fn move_to_emits_relative_cursor_sequence() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (80, 24));
+        let mut screen = Canvas::new(&mut buf, (80, 24));
         screen.set_cursor_position(5, 3);
         screen.flush().unwrap();
     }
@@ -489,7 +436,7 @@ fn move_to_emits_relative_cursor_sequence() {
 fn screen_write_passes_bytes_verbatim() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 1));
+        let mut screen = Canvas::new(&mut buf, (10, 1));
         let n = screen.write(b"Hello, World!").unwrap();
         assert_eq!(n, 13);
         screen.flush().unwrap();
@@ -501,7 +448,7 @@ fn screen_write_passes_bytes_verbatim() {
 fn invalidate_forces_redraw_of_existing_content() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (3, 1));
+        let mut screen = Canvas::new(&mut buf, (3, 1));
         fill(&mut screen, 0, 0, "X");
         screen.render();
         screen.flush().unwrap();
@@ -516,7 +463,7 @@ fn invalidate_forces_redraw_of_existing_content() {
 fn resize_does_not_crash_and_renders_blank() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (40, 10));
+        let mut screen = Canvas::new(&mut buf, (40, 10));
         screen.resize(80, 24);
         screen.render();
         screen.flush().unwrap();
@@ -529,7 +476,7 @@ fn resize_does_not_crash_and_renders_blank() {
 fn insert_above_emits_il_and_content() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
         screen.insert_above("Prepended line");
         screen.render();
         screen.flush().unwrap();
@@ -546,7 +493,7 @@ fn insert_above_emits_il_and_content() {
 fn insert_above_renders_styled_line() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
         screen.insert_above("Hello");
         screen.render();
         screen.flush().unwrap();
@@ -563,7 +510,7 @@ fn insert_above_renders_styled_line() {
 fn multiple_insert_above_emit_one_il_per_call() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 10));
+        let mut screen = Canvas::new(&mut buf, (20, 10));
         screen.insert_above("First line");
         screen.insert_above("Second line");
         screen.insert_above("Third line\nFourth lin");
@@ -591,7 +538,7 @@ fn tab_optimization_on_emits_tab_character() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::TABS);
-        let mut screen = Screen::new(&mut buf, (20, 1)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 1)).with_optimizations(opts);
         fill(&mut screen, 8, 0, "X");
         fill(&mut screen, 16, 0, "X");
         screen.render();
@@ -610,7 +557,7 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::TABS);
-        let mut screen = Screen::new(&mut buf, (20, 1)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 1)).with_optimizations(opts);
         fill(&mut screen, 8, 0, "X");
         fill(&mut screen, 16, 0, "X");
         screen.render();
@@ -625,11 +572,92 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
 }
 
 #[test]
+fn tab_advance_does_not_overshoot_past_last_stop() {
+    // Width 24: real tab stops are at 0, 8, 16. A move to column 21 sits
+    // past the last interior stop. The renderer must not emit a tab that
+    // relies on landing past that stop (the canvas right edge), because on
+    // a wider display a tab from column 16 goes to 24, not 21. Replaying
+    // the bytes with standard 8-column tab stops must still land "B" at
+    // column 21.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let opts = Optimizations::default().union(Optimizations::TABS);
+        let mut screen = Canvas::new(&mut buf, (24, 1)).with_optimizations(opts);
+        fill(&mut screen, 0, 0, "A");
+        fill(&mut screen, 21, 0, "B");
+        screen.render();
+        screen.flush().unwrap();
+    }
+    let out = s(&buf);
+    assert_eq!(
+        column_of(&out, 'B'),
+        Some(21),
+        "B should land at column 21 under real 8-col tab stops: {out:?}"
+    );
+}
+
+/// Replay `out` against a terminal with standard 8-column tab stops and
+/// return the column where `target` is printed. Handles CR, tab, and the
+/// CUF/CUB/CHA cursor moves the renderer emits.
+#[cfg(test)]
+fn column_of(out: &str, target: char) -> Option<u16> {
+    let bytes = out.as_bytes();
+    let mut col: u16 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0x1b if i + 1 < bytes.len() && bytes[i + 1] == b'[' => {
+                let mut j = i + 2;
+                let mut num: u16 = 0;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    num = num * 10 + u16::from(bytes[j] - b'0');
+                    j += 1;
+                }
+                if j < bytes.len() {
+                    match bytes[j] {
+                        b'C' => col += num.max(1),
+                        b'D' => col = col.saturating_sub(num.max(1)),
+                        b'G' => col = num.saturating_sub(1),
+                        _ => {}
+                    }
+                }
+                i = j + 1;
+            }
+            b'\r' => {
+                col = 0;
+                i += 1;
+            }
+            b'\t' => {
+                col = (col / 8 + 1) * 8;
+                i += 1;
+            }
+            b'\n' => i += 1,
+            c if c < 0x80 => {
+                if c as char == target {
+                    return Some(col);
+                }
+                col += 1;
+                i += 1;
+            }
+            _ => {
+                // Skip a UTF-8 continuation run, count one display column.
+                col += 1;
+                i += 1;
+                while i < bytes.len() && bytes[i] & 0xC0 == 0x80 {
+                    i += 1;
+                }
+            }
+        }
+    }
+    None
+}
+
+#[test]
 fn backspace_optimization_on_emits_bs_for_leftward_move() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::BS);
-        let mut screen = Screen::new(&mut buf, (20, 5)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 5)).with_optimizations(opts);
         fill(&mut screen, 5, 0, "A");
         fill(&mut screen, 3, 1, "B");
         screen.render();
@@ -648,7 +676,7 @@ fn backspace_optimization_off_emits_cub() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::BS);
-        let mut screen = Screen::new(&mut buf, (20, 5)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 5)).with_optimizations(opts);
         fill(&mut screen, 5, 0, "A");
         fill(&mut screen, 3, 1, "B");
         screen.render();
@@ -664,7 +692,7 @@ fn onlcr_on_uses_bare_lf_between_rows() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::ONLCR);
-        let mut screen = Screen::new(&mut buf, (10, 3)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (10, 3)).with_optimizations(opts);
         for y in 0..3u16 {
             fill(&mut screen, 0, y, "X");
         }
@@ -683,7 +711,7 @@ fn onlcr_off_emits_crlf_between_rows() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::ONLCR);
-        let mut screen = Screen::new(&mut buf, (10, 3)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (10, 3)).with_optimizations(opts);
         for y in 0..3u16 {
             fill(&mut screen, 0, y, "X");
         }
@@ -702,7 +730,7 @@ fn rep_on_collapses_run_to_rep_sequence() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().union(Optimizations::REP);
-        let mut screen = Screen::new(&mut buf, (20, 1)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 1)).with_optimizations(opts);
         for x in 0..15u16 {
             fill(&mut screen, x, 0, "A");
         }
@@ -718,7 +746,7 @@ fn rep_off_repeats_glyph_literally() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::REP);
-        let mut screen = Screen::new(&mut buf, (20, 1)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 1)).with_optimizations(opts);
         for x in 0..15u16 {
             fill(&mut screen, x, 0, "A");
         }
@@ -748,7 +776,7 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
         let opts = Optimizations::default().difference(
             Optimizations::SU_SD | Optimizations::IL_DL | Optimizations::CSR | Optimizations::REP,
         );
-        let mut screen = Screen::new(&mut buf, (10, 5)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (10, 5)).with_optimizations(opts);
         screen.set_alt_screen(true);
         for y in 0..5u16 {
             for x in 0..10u16 {
@@ -792,7 +820,7 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
 fn wide_characters_round_trip_to_output() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 1));
+        let mut screen = Canvas::new(&mut buf, (10, 1));
         let wide = ["🌟", "中", "文", "字"];
         for (i, ch) in wide.iter().enumerate() {
             screen.set_cell((i as u16 * 2, 0u16), &Cell::wide(*ch));
@@ -810,7 +838,7 @@ fn wide_characters_round_trip_to_output() {
 fn zero_width_combining_mark_reaches_output() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (5, 1));
+        let mut screen = Canvas::new(&mut buf, (5, 1));
         screen.set_cell((0u16, 0u16), &Cell::narrow("a\u{0301}"));
         screen.render();
         screen.flush().unwrap();
@@ -822,7 +850,7 @@ fn zero_width_combining_mark_reaches_output() {
 fn styled_text_emits_specific_sgr_payloads() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (4, 1));
+        let mut screen = Canvas::new(&mut buf, (4, 1));
         screen.set_cell(
             (0u16, 0u16),
             &Cell::narrow("X").style(Style::default().bold()),
@@ -853,7 +881,7 @@ fn styled_text_emits_specific_sgr_payloads() {
 fn hyperlinks_emit_osc8_with_url() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 1));
+        let mut screen = Canvas::new(&mut buf, (10, 1));
         let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
@@ -877,7 +905,7 @@ fn hyperlinks_emit_osc8_with_url() {
 fn hyperlinks_suppressed_under_disabled_profile() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 1)).with_color_profile(Profile::Disabled);
+        let mut screen = Canvas::new(&mut buf, (10, 1)).with_color_profile(Profile::Disabled);
         let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
@@ -900,7 +928,7 @@ fn hyperlinks_suppressed_under_disabled_profile() {
 fn switch_buffer_resizes_and_repaints() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (5, 3));
+        let mut screen = Canvas::new(&mut buf, (5, 3));
         fill(&mut screen, 0, 0, "X");
         screen.render();
         screen.flush().unwrap();
@@ -918,7 +946,7 @@ fn switch_buffer_resizes_and_repaints() {
 fn scroll_optimization_default_keeps_bottom_row_glyph() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
         screen.set_alt_screen(true);
         for y in 0..5u16 {
             for x in 0..10u16 {
@@ -950,7 +978,7 @@ fn scroll_optimization_default_keeps_bottom_row_glyph() {
 #[test]
 fn empty_buffer_renders_without_panic() {
     let mut buf: Vec<u8> = Vec::new();
-    let mut screen = Screen::new(&mut buf, (0, 0));
+    let mut screen = Canvas::new(&mut buf, (0, 0));
     screen.render();
     screen.flush().unwrap();
 }
@@ -959,7 +987,7 @@ fn empty_buffer_renders_without_panic() {
 fn large_buffer_renders_bottom_right_glyph() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (1000, 1000));
+        let mut screen = Canvas::new(&mut buf, (1000, 1000));
         screen.set_cell((999u16, 999u16), &Cell::narrow("X"));
         screen.render();
         screen.flush().unwrap();
@@ -973,7 +1001,7 @@ fn large_buffer_renders_bottom_right_glyph() {
 fn underline_styles_emit_extended_sgr_params() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 1));
+        let mut screen = Canvas::new(&mut buf, (10, 1));
         let styles = [
             UnderlineStyle::Single,
             UnderlineStyle::Double,
@@ -1000,7 +1028,7 @@ fn underline_styles_emit_extended_sgr_params() {
 fn text_attribute_variants_emit_matching_sgr_params() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (5, 1));
+        let mut screen = Canvas::new(&mut buf, (5, 1));
         let styles = [
             Style::default().italic(),
             Style::default().faint(),
@@ -1046,7 +1074,7 @@ fn color_downsampling_emits_profile_specific_sgr() {
     for (profile, needle) in cases {
         let mut buf: Vec<u8> = Vec::new();
         {
-            let mut screen = Screen::new(&mut buf, (3, 1)).with_color_profile(profile);
+            let mut screen = Canvas::new(&mut buf, (3, 1)).with_color_profile(profile);
             let cell = Cell::narrow("C").style(Style::default().fg(Color::rgb(123, 234, 45)));
             screen.set_cell((0u16, 0u16), &cell);
             screen.render();
@@ -1070,7 +1098,7 @@ fn color_downsampling_emits_profile_specific_sgr() {
 fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (5, 3));
+        let mut screen = Canvas::new(&mut buf, (5, 3));
         screen.set_alt_screen(true);
         for y in 0..3u16 {
             screen.set_cell((4u16, y), &Cell::narrow("X"));
@@ -1092,7 +1120,7 @@ fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
 fn line_clearing_uses_el_when_row_shrinks() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 3));
+        let mut screen = Canvas::new(&mut buf, (10, 3));
         for x in 0..10u16 {
             fill(&mut screen, x, 0, "X");
         }
@@ -1118,7 +1146,7 @@ fn repeated_character_run_emits_literals_without_rep() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::REP);
-        let mut screen = Screen::new(&mut buf, (20, 1)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 1)).with_optimizations(opts);
         for x in 0..15u16 {
             fill(&mut screen, x, 0, "A");
         }
@@ -1142,7 +1170,7 @@ fn ech_on_mid_row_blanks_emit_erase_character() {
         let opts = Optimizations::default()
             .union(Optimizations::ECH)
             .difference(Optimizations::TABS | Optimizations::CHT);
-        let mut screen = Screen::new(&mut buf, (20, 1)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 1)).with_optimizations(opts);
         for x in 0..20u16 {
             fill(&mut screen, x, 0, "X");
         }
@@ -1171,7 +1199,7 @@ fn ech_off_mid_row_blanks_emit_literal_spaces() {
         let opts = Optimizations::default().difference(
             Optimizations::ECH | Optimizations::REP | Optimizations::TABS | Optimizations::CHT,
         );
-        let mut screen = Screen::new(&mut buf, (20, 1)).with_optimizations(opts);
+        let mut screen = Canvas::new(&mut buf, (20, 1)).with_optimizations(opts);
         for x in 0..20u16 {
             fill(&mut screen, x, 0, "X");
         }
@@ -1205,7 +1233,7 @@ fn ech_off_mid_row_blanks_emit_literal_spaces() {
 fn alt_screen_enter_exit_emits_decset_decrst_and_clear() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (3, 3));
+        let mut screen = Canvas::new(&mut buf, (3, 3));
         screen.set_cursor_position(1, 1);
         screen.set_alt_screen(true);
         screen.render();
@@ -1223,7 +1251,7 @@ fn alt_screen_enter_exit_emits_decset_decrst_and_clear() {
 fn renderer_redraws_when_style_changes() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (5, 1)).with_color_profile(Profile::Ansi);
+        let mut screen = Canvas::new(&mut buf, (5, 1)).with_color_profile(Profile::Ansi);
         fill(&mut screen, 0, 0, "A");
         screen.render();
         screen.flush().unwrap();
@@ -1244,7 +1272,7 @@ fn renderer_redraws_when_style_changes() {
 fn basic_color_fg_emits_sgr_31() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (1, 1));
+        let mut screen = Canvas::new(&mut buf, (1, 1));
         let cell = Cell::narrow("X").style(Style::default().fg(Color::Basic(BasicColor::Red)));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render();
@@ -1263,13 +1291,13 @@ fn basic_color_fg_emits_sgr_31() {
 fn scroll_to_bottom_in_inline_mode_renders_both_frames() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
 
-        screen.set_str((0u16, 0u16), "ABC", WrapMode::Truncate);
+        screen.set_str((0u16, 0u16), "ABC", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
 
-        screen.set_str((0u16, 0u16), "XXX", WrapMode::Truncate);
+        screen.set_str((0u16, 0u16), "XXX", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
     }
@@ -1283,7 +1311,7 @@ fn alt_screen_scroll_one_line_renders_new_content() {
     const LOREM: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus";
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
         screen.set_alt_screen(true);
         screen.invalidate();
 
@@ -1308,7 +1336,7 @@ fn alt_screen_scroll_two_lines_renders_tail_content() {
     const LOREM: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus";
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
         screen.set_alt_screen(true);
         screen.invalidate();
 
@@ -1331,7 +1359,7 @@ fn alt_screen_scroll_two_lines_renders_tail_content() {
 fn alt_screen_insert_line_in_middle_renders_both_frames() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
         screen.set_alt_screen(true);
         screen.invalidate();
 
@@ -1354,9 +1382,9 @@ fn alt_screen_insert_line_in_middle_renders_both_frames() {
 fn inline_erase_until_end_of_line_clears_trailing_cells() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (10, 5));
+        let mut screen = Canvas::new(&mut buf, (10, 5));
 
-        screen.set_str((0u16, 1u16), "ABCEFGHIJK", WrapMode::Truncate);
+        screen.set_str((0u16, 1u16), "ABCEFGHIJK", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
 
@@ -1390,19 +1418,19 @@ fn redraw_identical_frame_after_clear_emits_zero_bytes() {
     let mut buf: Vec<u8> = Vec::new();
     let bytes_after_frame_one;
     {
-        let mut screen = Screen::new(&mut buf, (20, 4));
-        screen.set_str((0, 0), "Hello", WrapMode::Truncate);
-        screen.set_str((0, 1), "World", WrapMode::Truncate);
-        screen.set_str((0, 2), "!!!!", WrapMode::Truncate);
+        let mut screen = Canvas::new(&mut buf, (20, 4));
+        screen.set_str((0, 0), "Hello", crate::style::Style::default());
+        screen.set_str((0, 1), "World", crate::style::Style::default());
+        screen.set_str((0, 2), "!!!!", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
         bytes_after_frame_one = screen.writer.len();
 
         // Frame 2: clear + identical redraw. Must produce no bytes.
         screen.clear();
-        screen.set_str((0, 0), "Hello", WrapMode::Truncate);
-        screen.set_str((0, 1), "World", WrapMode::Truncate);
-        screen.set_str((0, 2), "!!!!", WrapMode::Truncate);
+        screen.set_str((0, 0), "Hello", crate::style::Style::default());
+        screen.set_str((0, 1), "World", crate::style::Style::default());
+        screen.set_str((0, 2), "!!!!", crate::style::Style::default());
         screen.render();
         screen.flush().unwrap();
 
@@ -1421,8 +1449,8 @@ fn redraw_identical_frame_after_clear_emits_zero_bytes() {
 fn reset_moves_cursor_to_last_row_inline() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 5));
-        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        let mut screen = Canvas::new(&mut buf, (20, 5));
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
         screen.render();
         screen.reset();
         screen.flush().unwrap();
@@ -1441,9 +1469,9 @@ fn reset_moves_cursor_to_last_row_inline() {
 fn reset_moves_cursor_to_last_row_alt_screen() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 5));
+        let mut screen = Canvas::new(&mut buf, (20, 5));
         screen.set_alt_screen(true);
-        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
         screen.render();
         screen.reset();
         screen.flush().unwrap();
@@ -1472,9 +1500,9 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
     // pull the post-quit cursor far below where the user started.
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 5));
+        let mut screen = Canvas::new(&mut buf, (20, 5));
         screen.set_alt_screen(true);
-        screen.set_str((0, 0), "hi", WrapMode::Truncate);
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
         screen.render();
         // Grow the screen. front_buf still reflects the 5-row render.
         screen.resize(20, 50);
@@ -1491,79 +1519,6 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
     );
 }
 
-// --- foreground/background/cursor color setters ---
-
-#[test]
-fn set_foreground_color_emits_osc_10_and_is_idempotent() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::new(&mut buf, (20, 1));
-        screen.set_foreground_color(Some(crate::color::Color::Rgb(255, 128, 0)));
-        // Idempotent: same color does not re-emit.
-        screen.set_foreground_color(Some(crate::color::Color::Rgb(255, 128, 0)));
-        screen.set_foreground_color(None);
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert_eq!(out.matches("\x1b]10;").count(), 1);
-    assert!(out.contains("\x1b]110\x07"));
-}
-
-#[test]
-fn set_background_color_emits_osc_11_and_reset() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::new(&mut buf, (20, 1));
-        screen.set_background_color(Some(crate::color::Color::Rgb(0, 0, 255)));
-        screen.set_background_color(None);
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b]11;"));
-    assert!(out.contains("\x1b]111\x07"));
-}
-
-#[test]
-fn set_cursor_color_emits_osc_12_and_reset() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::new(&mut buf, (20, 1));
-        screen.set_cursor_color(Some(crate::color::Color::Rgb(0, 255, 0)));
-        screen.set_cursor_color(None);
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b]12;"));
-    assert!(out.contains("\x1b]112\x07"));
-}
-
-#[test]
-fn reset_clears_color_state_and_restore_reapplies() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::new(&mut buf, (20, 1));
-        screen.set_foreground_color(Some(crate::color::Color::Rgb(10, 20, 30)));
-        screen.set_background_color(Some(crate::color::Color::Rgb(40, 50, 60)));
-        screen.set_cursor_color(Some(crate::color::Color::Rgb(70, 80, 90)));
-        screen.reset();
-        // State preserved across reset.
-        assert!(screen.state.foreground_color.is_some());
-        assert!(screen.state.background_color.is_some());
-        assert!(screen.state.cursor_color.is_some());
-        screen.restore();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    // Reset emits the three OSC reset sequences.
-    assert!(out.contains("\x1b]110\x07"));
-    assert!(out.contains("\x1b]111\x07"));
-    assert!(out.contains("\x1b]112\x07"));
-    // Restore re-emits each set sequence (so the count is 2: initial + restore).
-    assert_eq!(out.matches("\x1b]10;").count(), 2);
-    assert_eq!(out.matches("\x1b]11;").count(), 2);
-    assert_eq!(out.matches("\x1b]12;").count(), 2);
-}
-
 // --- kitty keyboard setter ---
 
 #[test]
@@ -1571,7 +1526,7 @@ fn set_kitty_keyboard_flags_emits_set_and_is_idempotent() {
     use crate::ansi::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 1));
+        let mut screen = Canvas::new(&mut buf, (20, 1));
         screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
         // Idempotent.
         screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
@@ -1589,7 +1544,7 @@ fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
     use crate::ansi::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 1));
+        let mut screen = Canvas::new(&mut buf, (20, 1));
         screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
         screen.set_alt_screen(true);
         screen.set_alt_screen(false);
@@ -1606,7 +1561,7 @@ fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
     use crate::ansi::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut buf, (20, 1));
+        let mut screen = Canvas::new(&mut buf, (20, 1));
         screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
         screen.set_alt_screen(true);
         screen.reset();
@@ -1639,7 +1594,7 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
     let mut setup: Vec<u8> = Vec::new();
     let mut restore_buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::new(&mut setup, (20, 1));
+        let mut screen = Canvas::new(&mut setup, (20, 1));
         screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
         screen.set_alt_screen(true);
         screen.reset();

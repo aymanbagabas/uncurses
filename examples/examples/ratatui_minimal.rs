@@ -17,9 +17,9 @@ fn main() -> io::Result<()> {
 fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
     loop {
         terminal.draw(|frame| frame.render_widget("Hello World!", frame.area()))?;
-        let mut events = terminal.backend().events();
-        if events.poll(None)?
-            && let Some(Event::KeyPress(_)) = events.try_read()
+        let events = terminal.backend_mut();
+        if events.poll_event(None)?
+            && let Some(Event::KeyPress(_)) = events.try_read_event()
         {
             break;
         }

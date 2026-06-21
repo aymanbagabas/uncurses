@@ -1,15 +1,29 @@
-//! DCS passthrough wrappers for tmux and GNU screen.
+//! DCS passthrough wrappers for terminal multiplexers.
+//!
+//! ## Category
+//!
+//! Passthrough strings tunnel an inner escape sequence through an intermediate
+//! terminal layer so the outer terminal receives it.
+//!
+//! ## DCS framing
+//!
+//! Both writers emit 7-bit DCS strings terminated by `ST` (`ESC \\`). The tmux
+//! form prefixes `tmux;` and doubles literal ESC bytes inside the payload; the
+//! screen form can split long payloads into multiple adjacent DCS strings.
+//!
+//! ## Mode interaction
+//!
+//! Passthrough is not controlled by an ANSI/DEC mode. It is a framing convention
+//! around another sequence, so the inner sequence may have its own mode
+//! requirements.
 
 use std::io::{self, Write};
 
 use crate::ansi::c0::ESC;
 
-/// Wrap a sequence so the outer terminal sees it through GNU screen
-/// (`DCS <data> ST`).
+/// Wrap `seq` in one or more DCS passthrough strings for screen-style forwarding.
 ///
-/// `limit` (>0) chunks the data into `limit`-byte segments separated by
-/// `ST DCS` pairs, mirroring the 768-byte string limit imposed by screen
-/// since 2014.
+/// The basic frame is `ESC P <seq> ESC \`. When `limit > 0`, `seq` is split into chunks of at most `limit` bytes separated by `ESC \ ESC P`; `limit == 0` writes one frame.
 pub fn write_screen_passthrough<W: Write>(w: &mut W, seq: &[u8], limit: usize) -> io::Result<()> {
     w.write_all(b"\x1bP")?;
     if limit > 0 {
@@ -28,10 +42,9 @@ pub fn write_screen_passthrough<W: Write>(w: &mut W, seq: &[u8], limit: usize) -
     w.write_all(b"\x1b\\")
 }
 
-/// Wrap a sequence so the outer terminal sees it through tmux
-/// (`DCS tmux ; <escaped> ST`).
+/// Wrap `seq` in a tmux passthrough frame, `ESC P tmux ; <escaped-seq> ESC \`.
 ///
-/// All ESC bytes inside `seq` are doubled.
+/// Each literal ESC byte inside `seq` is doubled so the intermediate layer passes it through to the outer terminal.
 pub fn write_tmux_passthrough<W: Write>(w: &mut W, seq: &[u8]) -> io::Result<()> {
     w.write_all(b"\x1bPtmux;")?;
     for &b in seq {
