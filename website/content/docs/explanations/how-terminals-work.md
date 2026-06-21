@@ -1,7 +1,10 @@
-# How terminals actually work
+---
+title: "How terminals work"
+weight: 1
+---
 
 A quick mental model for the machinery uncurses sits on top of. The
-[tutorial](tutorial.md) shows you *how* to drive it; this page is the
+[tutorial]({{< relref "tutorial.md" >}}) shows you *how* to drive it; this page is the
 *why*. One idea carries the whole thing: a terminal is two streams of
 bytes, and a TUI is a program that takes both of them over.
 
@@ -120,5 +123,5 @@ uninstall.
 
 ## Keep going
 
-- The [tutorial](tutorial.md) turns all of this into a working app.
+- The [tutorial]({{< relref "tutorial.md" >}}) turns all of this into a working app.
 - The [uncurses README](../uncurses/README.md) maps the rest of the API.
