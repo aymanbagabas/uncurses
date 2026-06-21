@@ -11,21 +11,23 @@
 //! ## Open/close versus wrapped rendering
 //!
 //! [`Style::write`] and the [`std::fmt::Display`] implementation for
-//! [`Style`] emit only the SGR opener (`CSI … m`). They do not reset the
-//! terminal afterward; following output remains in that style until another
-//! style or reset is written.
+//! [`Style`] emit the opener: the SGR sequence (`CSI … m`), followed by the
+//! OSC 8 hyperlink start when the style carries a link. They do not reset the
+//! terminal or close the link afterward; following output remains in that
+//! style until another style or reset is written.
 //!
-//! [`Style::write_styled`] and [`Style::styled`] render a complete span. If a
-//! link is present, the OSC 8 opener is written before the SGR sequence and
-//! the OSC 8 terminator is written after the SGR reset:
+//! [`Style::write_styled`] and [`Style::styled`] render a complete span: the
+//! opener, the text, then the matching close. The hyperlink and SGR state are
+//! closed in reverse order of opening, so the opener and the wrapped form stay
+//! symmetric:
 //!
 //! ```text
 //! without link: ┌─────────┐ ┌──────┐ ┌───────┐
 //!               │ CSI … m │▶│ text │▶│ CSI m │
 //!               └─────────┘ └──────┘ └───────┘
-//! with link:    ┌───────┐ ┌─────────┐ ┌──────┐ ┌───────┐ ┌───────────┐
-//!               │ OSC 8 │▶│ CSI … m │▶│ text │▶│ CSI m │▶│ OSC 8 end │
-//!               └───────┘ └─────────┘ └──────┘ └───────┘ └───────────┘
+//! with link:    ┌─────────┐ ┌───────┐ ┌──────┐ ┌───────────┐ ┌───────┐
+//!               │ CSI … m │▶│ OSC 8 │▶│ text │▶│ OSC 8 end │▶│ CSI m │
+//!               └─────────┘ └───────┘ └──────┘ └───────────┘ └───────┘
 //! ```
 //!
 //! ## Attributes and underline
@@ -419,32 +421,39 @@ impl Style {
         self
     }
 
-    /// Write this style's SGR opener (`CSI … m`) to `w`.
+    /// Write this style's opener to `w`: the SGR sequence (`CSI … m`)
+    /// followed by an OSC 8 hyperlink start when this style carries a
+    /// [`link`](Self::link).
     ///
     /// An SGR-empty style writes the reset sequence (`CSI m`). The opener does
-    /// not include any OSC 8 hyperlink state and does not reset afterward, so
-    /// following output stays in this style until changed. Returns any I/O
-    /// error from `w`; it does not panic.
+    /// not reset afterward, so following output stays in this style until
+    /// changed; a caller that opens a hyperlink here is responsible for
+    /// closing it. [`write_styled`](Self::write_styled) pairs this opener with
+    /// the matching close. Returns any I/O error from `w`; it does not panic.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        sgr::write_style(w, self)
+        sgr::write_style(w, self)?;
+        if let Some(link) = &self.link {
+            crate::ansi::hyperlink::write_hyperlink_start(w, &link.url, &link.params)?;
+        }
+        Ok(())
     }
 
     /// Write `text` as a complete styled span.
     ///
-    /// The emitted order is: optional OSC 8 hyperlink start, this style's SGR
-    /// opener, `text` bytes, SGR reset (`CSI m`), and optional OSC 8 hyperlink
-    /// end. The reset prevents the SGR style from leaking into later output.
-    /// Returns any I/O error from `w`; it does not panic.
+    /// This is the opener from [`write`](Self::write) followed by `text` and
+    /// the matching close, so the two methods are symmetric. The emitted order
+    /// is: SGR opener, optional OSC 8 hyperlink start, `text` bytes, optional
+    /// OSC 8 hyperlink end, then the SGR reset (`CSI m`). The hyperlink and SGR
+    /// state are closed in reverse order of opening, and the reset prevents the
+    /// style from leaking into later output. Returns any I/O error from `w`; it
+    /// does not panic.
     pub fn write_styled<W: Write>(&self, w: &mut W, text: &str) -> io::Result<()> {
-        if let Some(link) = &self.link {
-            crate::ansi::hyperlink::write_hyperlink_start(w, &link.url, &link.params)?;
-        }
-        sgr::write_style(w, self)?;
+        self.write(w)?;
         w.write_all(text.as_bytes())?;
-        w.write_all(sgr::RESET)?;
         if self.link.is_some() {
             crate::ansi::hyperlink::write_hyperlink_end(w)?;
         }
+        w.write_all(sgr::RESET)?;
         Ok(())
     }
 
@@ -463,12 +472,12 @@ impl Style {
     }
 }
 
-/// Render this style's SGR opener (`CSI … m`).
+/// Render this style's opener: the SGR sequence (`CSI … m`) followed by an
+/// OSC 8 hyperlink start when this style carries a [`link`](Style::link).
 ///
-/// This implementation is intentionally opener-only: it does not include a
-/// trailing reset and does not emit OSC 8 hyperlink state. An SGR-empty style
-/// renders the reset sequence (`CSI m`). For a complete span, use
-/// [`Style::styled`].
+/// This is the opener only: it does not include a trailing reset and does not
+/// close the hyperlink. An SGR-empty style renders the reset sequence
+/// (`CSI m`). For a complete span, use [`Style::styled`].
 impl std::fmt::Display for Style {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // SGR sequences are pure ASCII, so the bytes are valid UTF-8.
@@ -481,11 +490,11 @@ impl std::fmt::Display for Style {
 
 /// A borrowed text span bound to an owned [`Style`].
 ///
-/// Created by [`Style::styled`]. Formatting it writes the optional OSC 8
-/// hyperlink start, the style's SGR opener, the borrowed text, an SGR reset,
-/// and the optional OSC 8 hyperlink terminator. Use it when composing styled
-/// text through formatting macros; use [`Style::write_styled`] when writing to
-/// an [`std::io::Write`] directly.
+/// Created by [`Style::styled`]. Formatting it writes the style's SGR opener,
+/// the optional OSC 8 hyperlink start, the borrowed text, the optional OSC 8
+/// hyperlink terminator, and an SGR reset. Use it when composing styled text
+/// through formatting macros; use [`Style::write_styled`] when writing to an
+/// [`std::io::Write`] directly.
 #[derive(Debug, Clone)]
 pub struct StyledText<'a> {
     style: Style,
@@ -576,10 +585,23 @@ mod tests {
             .link("https://example.com", "")
             .write_styled(&mut buf, "docs")
             .unwrap();
+        // SGR opener, hyperlink start, text, hyperlink end, SGR reset.
         assert_eq!(
             buf,
-            b"\x1b]8;;https://example.com\x1b\\\x1b[4mdocs\x1b[m\x1b]8;;\x1b\\"
+            b"\x1b[4m\x1b]8;;https://example.com\x1b\\docs\x1b]8;;\x1b\\\x1b[m"
         );
+    }
+
+    #[test]
+    fn write_opener_includes_hyperlink_after_sgr() {
+        let mut buf = Vec::new();
+        Style::EMPTY
+            .underline()
+            .link("https://example.com", "")
+            .write(&mut buf)
+            .unwrap();
+        // The opener is the SGR sequence followed by the OSC 8 hyperlink start.
+        assert_eq!(buf, b"\x1b[4m\x1b]8;;https://example.com\x1b\\");
     }
 
     #[test]
