@@ -1,12 +1,18 @@
 //! [`TextSurface`] — text drawing as an extension of any mutable surface.
 //!
 //! [`SurfaceMut`](crate::buffer::SurfaceMut) reads and writes cells; it does
-//! not decide how many cells a string occupies or how inline styling changes
-//! those cells. `TextSurface` adds that policy layer. Implementors provide a
-//! [width mode](TextSurface::width_mode) and
-//! [East-Asian Ambiguous policy](TextSurface::eaw_wide); the default methods
-//! build a [`Painter`] and expose the `set_str` family on top of the existing
-//! surface.
+//! not decide how many cells a string occupies. `TextSurface` adds that policy
+//! layer. Implementors provide a [width mode](TextSurface::width_mode) and
+//! [East-Asian Ambiguous policy](TextSurface::eaw_wide); the default `set_str`
+//! family segments the input into grapheme clusters and paints each with the
+//! given style.
+//!
+//! The default methods paint text **literally**: inline SGR (`CSI … m`) and
+//! OSC 8 hyperlink sequences are not interpreted, so they are segmented and
+//! drawn like any other text. Reach for [`Painter`](super::Painter) — itself a
+//! `TextSurface` — when a string should be parsed for inline style and
+//! hyperlink escapes. Newline and carriage return still move the paint cursor
+//! within the active clip rectangle.
 //!
 //! Use this trait when writing widgets, layout helpers, or tests that should
 //! accept any text-capable destination:
@@ -18,30 +24,30 @@
 //! ```
 
 use crate::buffer::SurfaceMut;
+use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 use crate::style::Style;
 
-use super::{Painter, WidthMode, WrapMode};
+use super::{WidthMode, WrapMode, grapheme_cells};
 
 /// A [`SurfaceMut`] with a text-measurement policy and string-painting helpers.
 ///
 /// Implement this for surface types that can accept styled text. The only
 /// required decisions are [`width_mode`](Self::width_mode), which controls how
 /// grapheme clusters are measured, and [`eaw_wide`](Self::eaw_wide), which
-/// controls East-Asian Ambiguous code points. All painting methods are default
-/// methods backed by [`Painter`].
+/// controls East-Asian Ambiguous code points.
 ///
-/// Inline SGR (`CSI … m`) and OSC 8 hyperlink sequences in the input are
-/// interpreted by the painter. Other control bytes are ignored except newline
-/// and carriage return, which move the paint cursor within the active clip
-/// rectangle.
+/// The default `set_str` family paints text literally: each grapheme cluster is
+/// drawn with the given style and inline SGR / OSC 8 escapes are not
+/// interpreted. Use [`Painter`](super::Painter), which is itself a
+/// `TextSurface`, to parse inline style and hyperlink escapes. Newline and
+/// carriage return move the paint cursor within the active clip rectangle.
 pub trait TextSurface: SurfaceMut {
     /// Return the width-measurement mode used when shaping strings.
     ///
     /// [`WidthMode::Wc`] uses the first code point of each grapheme cluster;
     /// [`WidthMode::Grapheme`] measures the whole cluster. The selected mode is
-    /// used by [`painter`](Self::painter), the `set_str` family, and
-    /// [`str_width`](Self::str_width).
+    /// used by the `set_str` family and [`str_width`](Self::str_width).
     ///
     /// This method is pure policy lookup. It should not inspect or mutate the
     /// surface contents.
@@ -54,25 +60,6 @@ pub trait TextSurface: SurfaceMut {
     /// as one. The flag is passed to [`char_width`](super::char_width) and
     /// [`grapheme_width`](super::grapheme_width) by all text operations.
     fn eaw_wide(&self) -> bool;
-
-    /// Construct a [`Painter`] over this surface.
-    ///
-    /// The painter is configured from [`width_mode`](Self::width_mode) and
-    /// [`eaw_wide`](Self::eaw_wide), starts with [`Style::default()`], and
-    /// writes directly into `self`. Use it when multiple adjacent writes should
-    /// share the same running style or hyperlink state.
-    ///
-    /// # Returns
-    ///
-    /// A painter borrowing this surface mutably for the painter's lifetime.
-    ///
-    /// # Errors and panics
-    ///
-    /// This method does not fail or panic.
-    fn painter(&mut self) -> Painter<'_, Self> {
-        let (mode, eaw) = (self.width_mode(), self.eaw_wide());
-        Painter::new(self, mode, eaw)
-    }
 
     /// Paint `s` at `pos`, clipped to the surface bounds.
     ///
@@ -106,7 +93,17 @@ pub trait TextSurface: SurfaceMut {
     /// following rows instead of truncating at the right edge.
     fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
-        Painter::new(self, mode, eaw).set_str(pos, s, style)
+        let clip = self.bounds();
+        paint_literal(
+            self,
+            pos.into(),
+            clip,
+            s,
+            WrapMode::Truncate,
+            mode,
+            eaw,
+            &style.into(),
+        )
     }
 
     /// Paint `s` at `pos` with an explicit right-edge behavior.
@@ -140,7 +137,8 @@ pub trait TextSurface: SurfaceMut {
         style: impl Into<Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
-        Painter::new(self, mode, eaw).set_str_wrap(pos, s, wrap, style)
+        let clip = self.bounds();
+        paint_literal(self, pos.into(), clip, s, wrap, mode, eaw, &style.into())
     }
 
     /// Paint `s` inside `rect`, clipped to the surface bounds.
@@ -171,7 +169,18 @@ pub trait TextSurface: SurfaceMut {
         style: impl Into<Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
-        Painter::new(self, mode, eaw).set_str_rect(rect, s, style)
+        let rect = rect.into();
+        let clip = rect.intersection(self.bounds());
+        paint_literal(
+            self,
+            rect.position(),
+            clip,
+            s,
+            WrapMode::Truncate,
+            mode,
+            eaw,
+            &style.into(),
+        )
     }
 
     /// Paint `s` inside `rect` with an explicit right-edge behavior.
@@ -203,7 +212,18 @@ pub trait TextSurface: SurfaceMut {
         style: impl Into<Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
-        Painter::new(self, mode, eaw).set_str_rect_wrap(rect, s, wrap, style)
+        let rect = rect.into();
+        let clip = rect.intersection(self.bounds());
+        paint_literal(
+            self,
+            rect.position(),
+            clip,
+            s,
+            wrap,
+            mode,
+            eaw,
+            &style.into(),
+        )
     }
 
     /// Paint `s` at `pos`, truncating with a `tail` indicator on overflow.
@@ -238,7 +258,17 @@ pub trait TextSurface: SurfaceMut {
         tail_style: impl Into<Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
-        Painter::new(self, mode, eaw).set_str_truncate(pos, s, tail, tail_style)
+        let clip = self.bounds();
+        paint_literal_truncate(
+            self,
+            pos.into(),
+            clip,
+            s,
+            tail,
+            &tail_style.into(),
+            mode,
+            eaw,
+        )
     }
 
     /// Paint `s` inside `rect`, truncating with a `tail` indicator on overflow.
@@ -270,15 +300,29 @@ pub trait TextSurface: SurfaceMut {
         tail_style: impl Into<Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
-        Painter::new(self, mode, eaw).set_str_rect_truncate(rect, s, tail, tail_style)
+        let rect = rect.into();
+        let clip = rect.intersection(self.bounds());
+        paint_literal_truncate(
+            self,
+            rect.position(),
+            clip,
+            s,
+            tail,
+            &tail_style.into(),
+            mode,
+            eaw,
+        )
     }
 
     /// Measure the display width of `s` in terminal columns.
     ///
-    /// The measurement uses this surface's [`width_mode`](Self::width_mode)
-    /// and [`eaw_wide`](Self::eaw_wide) policy. Inline ANSI escape sequences
-    /// recognized by the text tokenizer, including SGR and OSC sequences,
-    /// contribute no width.
+    /// The measurement segments `s` into grapheme clusters under this
+    /// surface's [`width_mode`](Self::width_mode) and
+    /// [`eaw_wide`](Self::eaw_wide) policy and sums their widths. Like the
+    /// default `set_str` family, this does **not** interpret inline escape
+    /// sequences: an SGR or OSC 8 sequence in `s` is measured as the width of
+    /// its visible bytes. Use [`Painter`](super::Painter), whose `str_width`
+    /// skips recognized escapes, to measure escape-bearing text.
     ///
     /// # Parameters
     ///
@@ -292,7 +336,170 @@ pub trait TextSurface: SurfaceMut {
     ///
     /// This method does not fail or intentionally panic.
     fn str_width(&self, s: &str) -> u16 {
-        crate::ansi::string_width(s.as_bytes(), self.width_mode(), self.eaw_wide())
-            .min(u16::MAX as usize) as u16
+        grapheme_cells(s, self.width_mode(), self.eaw_wide())
+            .fold(0u16, |acc, (_, w)| acc.saturating_add(u16::from(w)))
     }
+}
+
+/// A literal truncation tail: indicator text, its starting style, and its
+/// measured cell width.
+struct LiteralTail<'a> {
+    text: &'a str,
+    style: &'a Style,
+    width: u16,
+}
+
+/// Paint `s` literally, clipped to `clip`, with `wrap` behavior at the right
+/// edge. Each grapheme cluster is drawn with `style`; inline escapes are not
+/// interpreted (they are segmented and drawn like any other text). Newline and
+/// carriage return reposition within `clip`.
+#[allow(clippy::too_many_arguments)]
+fn paint_literal<S: SurfaceMut + ?Sized>(
+    target: &mut S,
+    start: Position,
+    clip: Rect,
+    s: &str,
+    wrap: WrapMode,
+    mode: WidthMode,
+    eaw_wide: bool,
+    style: &Style,
+) -> Position {
+    paint_literal_inner(target, start, clip, s, wrap, mode, eaw_wide, style, None)
+}
+
+/// Paint `s` literally with [`WrapMode::Truncate`], stamping `tail` on overflow.
+///
+/// The main text is drawn with [`Style::default()`]; the tail is drawn with
+/// `tail_style`. The tail is dropped (hard truncate) when it is empty or wider
+/// than the clip.
+#[allow(clippy::too_many_arguments)]
+fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
+    target: &mut S,
+    start: Position,
+    clip: Rect,
+    s: &str,
+    tail_text: &str,
+    tail_style: &Style,
+    mode: WidthMode,
+    eaw_wide: bool,
+) -> Position {
+    if clip.is_empty() {
+        return start;
+    }
+    let tail_w = grapheme_cells(tail_text, mode, eaw_wide)
+        .fold(0u16, |acc, (_, w)| acc.saturating_add(u16::from(w)));
+    let tail = if tail_w == 0 || tail_w > clip.width {
+        None
+    } else {
+        Some(LiteralTail {
+            text: tail_text,
+            style: tail_style,
+            width: tail_w,
+        })
+    };
+    paint_literal_inner(
+        target,
+        start,
+        clip,
+        s,
+        WrapMode::Truncate,
+        mode,
+        eaw_wide,
+        &Style::default(),
+        tail,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_literal_inner<S: SurfaceMut + ?Sized>(
+    target: &mut S,
+    start: Position,
+    clip: Rect,
+    s: &str,
+    wrap: WrapMode,
+    mode: WidthMode,
+    eaw_wide: bool,
+    style: &Style,
+    tail: Option<LiteralTail<'_>>,
+) -> Position {
+    if clip.is_empty() {
+        return start;
+    }
+    let mut x = start.x;
+    let mut y = start.y;
+
+    for (cluster, w) in grapheme_cells(s, mode, eaw_wide) {
+        if cluster == "\n" {
+            y = y.saturating_add(1);
+            x = clip.left();
+            if y >= clip.bottom() {
+                return Position::new(x, y);
+            }
+            continue;
+        }
+        if cluster == "\r" {
+            x = clip.left();
+            continue;
+        }
+        if w == 0 {
+            continue;
+        }
+        let w = w as u16;
+        if x + w > clip.right() {
+            match wrap {
+                WrapMode::Truncate => {
+                    if let Some(t) = &tail {
+                        stamp_literal_tail(target, t, clip, y, mode, eaw_wide);
+                        return Position::new(clip.right(), y);
+                    }
+                    return Position::new(x, y);
+                }
+                WrapMode::Wrap => {
+                    y = y.saturating_add(1);
+                    x = clip.left();
+                    if y >= clip.bottom() {
+                        return Position::new(x, y);
+                    }
+                    if x + w > clip.right() {
+                        return Position::new(x, y);
+                    }
+                }
+            }
+        }
+        if clip.contains(Position::new(x, y)) {
+            let cell = if w == 2 {
+                Cell::wide(cluster)
+            } else {
+                Cell::narrow(cluster)
+            };
+            target.set_cell(Position::new(x, y), &cell.style(style.clone()));
+        }
+        x += w;
+    }
+    Position::new(x, y)
+}
+
+/// Stamp `tail` over the trailing `tail.width` columns of row `y`, ending at
+/// `clip`'s right edge, painted literally with the tail's style.
+fn stamp_literal_tail<S: SurfaceMut + ?Sized>(
+    target: &mut S,
+    tail: &LiteralTail<'_>,
+    clip: Rect,
+    y: u16,
+    mode: WidthMode,
+    eaw_wide: bool,
+) {
+    let tail_x = clip.right().saturating_sub(tail.width);
+    let sub = Rect::new(tail_x, y, tail.width, 1).intersection(clip);
+    paint_literal_inner(
+        target,
+        Position::new(tail_x, y),
+        sub,
+        tail.text,
+        WrapMode::Truncate,
+        mode,
+        eaw_wide,
+        tail.style,
+        None,
+    );
 }

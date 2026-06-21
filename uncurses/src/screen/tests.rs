@@ -171,12 +171,16 @@ fn with_eaw_wide_sets_eaw_wide() {
 }
 
 #[test]
-fn str_width_follows_mode_and_eaw_and_ignores_escapes() {
+fn str_width_follows_mode_and_eaw_and_counts_escapes_literally() {
+    use crate::text::Painter;
     let mut screen = Screen::for_test(Vec::new(), (20, 1));
     // Plain CJK: two columns regardless of mode.
     assert_eq!(screen.str_width("中"), 2);
-    // Inline SGR contributes no width.
-    assert_eq!(screen.str_width("\x1b[31mhi\x1b[0m"), 2);
+    // The literal default does not interpret SGR: the escape bytes count as
+    // their visible width.
+    assert_eq!(screen.str_width("\x1b[31mhi\x1b[0m"), 9);
+    // A Painter is escape-aware, so the same string measures just "hi".
+    assert_eq!(Painter::new(&mut screen).str_width("\x1b[31mhi\x1b[0m"), 2);
     // Ambiguous code point flips with eaw_wide.
     assert_eq!(screen.str_width("…"), 1);
     let wide = Screen::for_test(Vec::new(), (20, 1)).with_eaw_wide(true);
