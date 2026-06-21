@@ -227,6 +227,14 @@ pub enum Event {
 
     // -- Mode / capability reports ------------------------------------------
     /// DECRPM / RM mode report.
+    ///
+    /// The `setting` distinguishes all five DECRPM states. A terminal can
+    /// report a mode as permanently set or permanently reset, meaning it
+    /// recognizes the mode but will not let the host toggle it. When deciding
+    /// whether a feature is usable, prefer
+    /// [`ModeSetting::is_available`](crate::ansi::ModeSetting::is_available)
+    /// over [`is_recognized`](crate::ansi::ModeSetting::is_recognized): a
+    /// permanently reset mode is recognized yet can never be enabled.
     ModeReport {
         /// Reported mode.
         mode: Mode,

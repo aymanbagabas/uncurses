@@ -189,6 +189,32 @@ impl ModeSetting {
     pub fn is_recognized(self) -> bool {
         !matches!(self, ModeSetting::NotRecognized)
     }
+
+    /// Return whether the mode is permanently fixed and cannot be toggled.
+    ///
+    /// Both [`ModeSetting::PermanentlySet`] and [`ModeSetting::PermanentlyReset`]
+    /// report a state the host cannot change.
+    pub fn is_permanent(self) -> bool {
+        matches!(
+            self,
+            ModeSetting::PermanentlySet | ModeSetting::PermanentlyReset
+        )
+    }
+
+    /// Return whether the mode can actually be used by the host.
+    ///
+    /// This is `true` for every recognized state except
+    /// [`ModeSetting::PermanentlyReset`]: a permanently reset mode is
+    /// recognized but the terminal will never allow it to be set, so the
+    /// feature it gates is effectively unavailable. Use this (rather than
+    /// [`is_recognized`](Self::is_recognized)) when deciding whether a
+    /// capability can be relied upon.
+    pub fn is_available(self) -> bool {
+        matches!(
+            self,
+            ModeSetting::Set | ModeSetting::Reset | ModeSetting::PermanentlySet
+        )
+    }
 }
 
 impl std::fmt::Display for ModeSetting {
@@ -354,6 +380,18 @@ mod tests {
         ] {
             assert!(s.is_recognized());
         }
+        // Permanent states are the two that cannot be toggled.
+        assert!(ModeSetting::PermanentlySet.is_permanent());
+        assert!(ModeSetting::PermanentlyReset.is_permanent());
+        assert!(!ModeSetting::Set.is_permanent());
+        assert!(!ModeSetting::Reset.is_permanent());
+        assert!(!ModeSetting::NotRecognized.is_permanent());
+        // A mode is usable unless it is unrecognized or permanently reset.
+        assert!(ModeSetting::Set.is_available());
+        assert!(ModeSetting::Reset.is_available());
+        assert!(ModeSetting::PermanentlySet.is_available());
+        assert!(!ModeSetting::PermanentlyReset.is_available());
+        assert!(!ModeSetting::NotRecognized.is_available());
     }
 
     #[test]
