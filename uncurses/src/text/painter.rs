@@ -159,8 +159,8 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    pub fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: Style) -> Position {
-        self.style = style;
+    pub fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
+        self.style = style.into();
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, WrapMode::default())
     }
@@ -191,9 +191,9 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         pos: impl Into<Position>,
         s: &str,
         wrap: WrapMode,
-        style: Style,
+        style: impl Into<Style>,
     ) -> Position {
-        self.style = style;
+        self.style = style.into();
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, wrap)
     }
@@ -218,8 +218,8 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    pub fn set_str_rect(&mut self, rect: impl Into<Rect>, s: &str, style: Style) -> Position {
-        self.style = style;
+    pub fn set_str_rect(&mut self, rect: impl Into<Rect>, s: &str, style: impl Into<Style>) -> Position {
+        self.style = style.into();
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
         self.paint(rect.position(), clip, s, WrapMode::default())
@@ -251,9 +251,9 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
-        style: Style,
+        style: impl Into<Style>,
     ) -> Position {
-        self.style = style;
+        self.style = style.into();
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
         self.paint(rect.position(), clip, s, wrap)

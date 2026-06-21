@@ -82,16 +82,16 @@ fn draw_box(screen: &mut Screen<Stdin, Stdout>, a: Anchor, style: &Style) {
     }
     bot.push('┘');
 
-    screen.set_str((x0, y0), &top, style.clone());
-    screen.set_str((x0, y1), &bot, style.clone());
+    screen.set_str((x0, y0), &top, style);
+    screen.set_str((x0, y1), &bot, style);
     for y in y0 + 1..y1 {
-        screen.set_str((x0, y), "│", style.clone());
-        screen.set_str((x1, y), "│", style.clone());
+        screen.set_str((x0, y), "│", style);
+        screen.set_str((x1, y), "│", style);
     }
 }
 
 fn fill_inside(screen: &mut Screen<Stdin, Stdout>, a: Anchor, style: &Style) {
-    let cell = Cell::narrow(" ").style(style.clone());
+    let cell = Cell::narrow(" ").style(style);
     for y in a.y + 1..a.y + BOX_H - 1 {
         for x in a.x + 1..a.x + BOX_W - 1 {
             screen.set_cell(Position::new(x, y), &cell);
@@ -100,7 +100,7 @@ fn fill_inside(screen: &mut Screen<Stdin, Stdout>, a: Anchor, style: &Style) {
 }
 
 fn write(screen: &mut Screen<Stdin, Stdout>, x: u16, y: u16, s: &str, style: &Style) {
-    screen.set_str((x, y), s, style.clone());
+    screen.set_str((x, y), s, style);
 }
 
 fn write_link(
@@ -295,7 +295,7 @@ fn scene_panels(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
                 let x = a.x + dx;
                 let y = a.y + dy;
                 let style = Style::default().bg(bg).fg(fg);
-                let cell = Cell::narrow(" ").style(style.clone());
+                let cell = Cell::narrow(" ").style(&style);
                 for yy in y..y + h {
                     for xx in x..x + w {
                         screen.set_cell(Position::new(xx, yy), &cell);
