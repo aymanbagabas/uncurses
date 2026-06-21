@@ -23,8 +23,8 @@ fn setup_renderer(width: u16, height: u16, opts: Optimizations) -> Renderer {
     r.tabs = TabStops::default_for(width);
     r.cur_buf = Some(RenderBuffer::new(width, height));
     r.old_hashes = vec![0u64; height as usize];
-    r.cur.x_unknown = false;
-    r.cur.y_unknown = false;
+    r.cur.x = Some(0);
+    r.cur.y = Some(0);
     r
 }
 

@@ -44,8 +44,8 @@ mod tests {
         let mut r = Renderer::new();
         // Mark both axes as already-known so a fresh planner call
         // doesn't force CUP on the very first move.
-        r.cur.x_unknown = false;
-        r.cur.y_unknown = false;
+        r.cur.x = Some(0);
+        r.cur.y = Some(0);
         // Width must be set; the planner forces CUP when the surface
         // width is unknown (== 0).
         r.last_width = 80;

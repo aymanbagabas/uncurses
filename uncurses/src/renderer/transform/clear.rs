@@ -104,14 +104,12 @@ impl Renderer {
     pub(crate) fn clear_screen(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
         ansi_cursor::write_cup(out, 0, 0)?;
         ansi::write_erase_screen(out)?;
-        self.cur.pos = Position { y: 0, x: 0 };
+        self.cur.set_pos(Position { y: 0, x: 0 });
         self.cur.at_phantom = false;
         // The CUP just emitted authoritatively places the tracked
-        // cursor at (0,0); mark both axes known so the next move_to
+        // cursor at (0,0); both axes are now known so the next move_to
         // can hit the same-position early-return instead of forcing
         // a redundant absolute CUP.
-        self.cur.x_unknown = false;
-        self.cur.y_unknown = false;
 
         let bce = self.opts.contains(Optimizations::BCE);
         let blank: Cell = self.cur.bce_blank(bce).clone();
@@ -145,8 +143,8 @@ impl Renderer {
     pub(crate) fn clear_to_bottom(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
         ansi::write_erase_below(out)?;
 
-        let row = self.cur.pos.y;
-        let col = self.cur.pos.x;
+        let row = self.cur.pos().y;
+        let col = self.cur.pos().x;
         let height = match self.cur_buf.as_ref() {
             Some(cb) => cb.height(),
             None => 0,
@@ -202,7 +200,7 @@ impl Renderer {
         width: usize,
         force: bool,
     ) -> io::Result<()> {
-        let cur_x = self.cur.pos.x as usize;
+        let cur_x = self.cur.pos().x as usize;
         let need = force
             || match old_line {
                 Some(cur) => (cur_x..width).any(|j| j >= cur.len() || cur[j] != *blank),
@@ -228,7 +226,7 @@ impl Renderer {
             if count > 1 {
                 let leading = count - 1;
                 out.resize(out.len() + leading, b' ');
-                self.cur.pos.x = self.cur.pos.x.saturating_add(leading as u16);
+                self.cur.x = Some(self.cur.pos().x.saturating_add(leading as u16));
             }
             self.put_glyph_bytes(out, b" ", 1, surface_width, surface_height)?;
         }

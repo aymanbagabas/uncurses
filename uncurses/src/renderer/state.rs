@@ -23,7 +23,23 @@ pub(super) struct Cursor {
     /// state by [`Renderer::update_pen`]. Mutate via
     /// [`Cursor::set_style`] so the pen-cache invariant holds.
     style: Style,
-    pub(super) pos: Position,
+    /// Tracked cursor column, or `None` when the column is unknown.
+    ///
+    /// `None` means the value is untrustworthy and the position must be
+    /// reasserted before a relative move can start from it: a `\r`-snap in
+    /// inline mode, or an absolute `CUP` in fullscreen.
+    pub(super) x: Option<u16>,
+    /// Tracked cursor row, or `None` when the row is unknown. See [`x`](Self::x).
+    ///
+    /// Both axes are `None`:
+    ///   * Initially: the cursor is wherever the previous program left it.
+    ///   * After a DECSTBM bracket: the terminal homes the cursor under
+    ///     origin mode (DECOM set) and leaves it put without it; we cannot
+    ///     tell which.
+    ///   * After [`Renderer::invalidate_cursor`] (e.g. a shell handoff): our
+    ///     model is voided so the next move re-anchors instead of trusting a
+    ///     stale row.
+    pub(super) y: Option<u16>,
     /// Whether the cursor is parked in the right-margin "phantom" cell.
     ///
     /// After printing a glyph at the last column most terminals leave
@@ -33,28 +49,6 @@ pub(super) struct Cursor {
     /// moves and lets us emit content correctly when we are about to
     /// write more glyphs.
     pub(super) at_phantom: bool,
-    /// Tracks whether our model of the terminal cursor is reliable on
-    /// each axis. When set, the corresponding coordinate of `pos` is
-    /// "unknown" and must be reasserted before any relative move can
-    /// use it as a starting point.
-    ///
-    /// Per-axis instead of a single flag because a `\r`-snap fixes
-    /// only the column; the row is whatever the terminal happened to
-    /// be on, so it stays unknown until a CUP or a deterministic
-    /// vertical move clears it.
-    ///
-    /// Both bits are set:
-    ///   * Initially: the cursor is wherever the previous program
-    ///     left it.
-    ///   * After a DECSTBM bracket: the terminal homes the cursor
-    ///     under origin mode (DECOM set) and leaves it put without
-    ///     it; we cannot tell which.
-    ///
-    /// Forces the next [`Renderer::move_to`] to reassert position —
-    /// absolute CUP in fullscreen, `\r`-snap + relative move in
-    /// inline.
-    pub(super) x_unknown: bool,
-    pub(super) y_unknown: bool,
     /// Cached blank cell matching the active pen.
     /// Lazily rebuilt by [`Cursor::current_blank`] when
     /// [`Cursor::blank_dirty`] is set; callers that mutate
@@ -74,6 +68,32 @@ pub(super) struct Cursor {
 }
 
 impl Cursor {
+    /// The tracked position with any unknown axis resolved to `0`.
+    ///
+    /// Only meaningful when the relevant axis is [`known`](Self::known); a
+    /// `None` axis resolves to `0`, which the relative-move planner treats as
+    /// "assume the top-left" when re-anchoring.
+    #[inline]
+    pub(super) fn pos(&self) -> Position {
+        Position {
+            x: self.x.unwrap_or(0),
+            y: self.y.unwrap_or(0),
+        }
+    }
+
+    /// Set both axes to a known position.
+    #[inline]
+    pub(super) fn set_pos(&mut self, pos: Position) {
+        self.x = Some(pos.x);
+        self.y = Some(pos.y);
+    }
+
+    /// Whether both axes of the tracked position are known.
+    #[inline]
+    pub(super) fn known(&self) -> bool {
+        self.x.is_some() && self.y.is_some()
+    }
+
     /// Active style applied to subsequent glyph output (including any
     /// open hyperlink).
     #[inline]
@@ -135,12 +155,11 @@ impl Default for Cursor {
     fn default() -> Self {
         Self {
             style: Style::default(),
-            pos: Position::default(),
+            // Until proven otherwise the cursor is wherever the previous
+            // program left it; both axes are untrusted (unknown).
+            x: None,
+            y: None,
             at_phantom: false,
-            // Until proven otherwise the cursor is wherever the
-            // previous program left it; both axes are untrusted.
-            x_unknown: true,
-            y_unknown: true,
             blank: Cell::BLANK,
             blank_dirty: false,
             bce_blank: Cell::BLANK,
@@ -331,7 +350,7 @@ impl Renderer {
     /// Buffer-relative zero-based position. The coordinates may be stale
     /// if [`Renderer::cursor_known`] is false.
     pub(crate) fn cursor_position(&self) -> Position {
-        self.cur.pos
+        self.cur.pos()
     }
 
     /// Return whether the tracked cursor position is known on both axes.
@@ -341,7 +360,7 @@ impl Renderer {
     /// the physical cursor under terminal modes the renderer cannot
     /// observe.
     pub(crate) fn cursor_known(&self) -> bool {
-        !self.cur.x_unknown && !self.cur.y_unknown
+        self.cur.known()
     }
 
     /// Surface dimensions captured at the most recent render. Returns
@@ -360,14 +379,12 @@ impl Renderer {
     /// cursor to `pos`; this only updates bookkeeping and marks both
     /// axes known.
     pub(crate) fn set_cursor_position(&mut self, pos: Position) {
-        self.cur.pos = pos;
-        self.cur.at_phantom = false;
         // The caller is asserting the terminal cursor is now at `pos`
-        // authoritatively. Both axes must become known so the next
-        // move_to can compute a relative path from here instead of
-        // falling through to a redundant absolute CUP.
-        self.cur.x_unknown = false;
-        self.cur.y_unknown = false;
+        // authoritatively. Both axes become known so the next move_to can
+        // compute a relative path from here instead of falling through to a
+        // redundant absolute CUP.
+        self.cur.set_pos(pos);
+        self.cur.at_phantom = false;
     }
 
     /// Snapshot the current cursor (position + pen + phantom and

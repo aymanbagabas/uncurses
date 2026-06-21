@@ -416,6 +416,14 @@ impl<I: Input, O: Write> Screen<I, O> {
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.reset(&mut self.out_buf)?;
         }
+
+        // The terminal is being handed back to the shell. Once it returns
+        // (e.g. after a suspend/resume, possibly with a resize that reflowed
+        // the surface), our model of where the cursor sits is void. Forget it
+        // so the next frame re-anchors at the current physical position
+        // instead of stepping up from a stale row and overwriting content
+        // above the surface.
+        self.renderer.invalidate_cursor();
         Ok(())
     }
 

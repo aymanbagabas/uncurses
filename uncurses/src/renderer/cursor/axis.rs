@@ -489,8 +489,8 @@ mod tests {
 
     fn renderer() -> Renderer {
         let mut r = Renderer::new();
-        r.cur.x_unknown = false;
-        r.cur.y_unknown = false;
+        r.cur.x = Some(0);
+        r.cur.y = Some(0);
         r.last_width = 80;
         r.last_height = 24;
         r.tabs = TabStops::default_for(80);

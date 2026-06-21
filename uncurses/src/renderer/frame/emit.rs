@@ -45,8 +45,7 @@ impl Renderer {
         // column is one past the last column. A bare `\r` resyncs.
         if self.cur.at_phantom {
             out.push(b'\r');
-            self.cur.pos.x = 0;
-            self.cur.x_unknown = false;
+            self.cur.x = Some(0);
             self.cur.at_phantom = false;
         }
 
@@ -67,8 +66,7 @@ impl Renderer {
             }
         }
 
-        if !self.cur.x_unknown && !self.cur.y_unknown && self.cur.pos.y == y && self.cur.pos.x == x
-        {
+        if self.cur.x == Some(x) && self.cur.y == Some(y) {
             return Ok(());
         }
 
@@ -94,18 +92,20 @@ impl Renderer {
         // the planner emits a vertical step. Fullscreen mode handles
         // the same condition by emitting absolute CUP from the
         // planner.
-        if !self.fullscreen && self.relative_cursor && self.cur.x_unknown && self.cur.y_unknown {
+        if !self.fullscreen && self.relative_cursor && self.cur.x.is_none() && self.cur.y.is_none()
+        {
             out.push(b'\r');
-            self.cur.pos.x = 0;
-            self.cur.x_unknown = false;
+            // Re-home the column and assume the current physical row is the
+            // top of the surface, so the relative move below only ever steps
+            // downward — it can never CUU above a reflowed/handed-off cursor.
+            self.cur.x = Some(0);
+            self.cur.y = Some(0);
         }
 
         let target = Position { x, y };
         let line = buf.line(y);
-        self.write_optimal_move(out, self.cur.pos, target, line)?;
-        self.cur.pos = target;
-        self.cur.x_unknown = false;
-        self.cur.y_unknown = false;
+        self.write_optimal_move(out, self.cur.pos(), target, line)?;
+        self.cur.set_pos(target);
         Ok(())
     }
 
@@ -113,8 +113,8 @@ impl Renderer {
     /// terminal on either axis. The next [`Renderer::move_to`]
     /// reasserts position.
     pub(crate) fn invalidate_cursor(&mut self) {
-        self.cur.x_unknown = true;
-        self.cur.y_unknown = true;
+        self.cur.x = None;
+        self.cur.y = None;
     }
 
     /// Write a single grapheme to the output buffer, handling the
@@ -141,11 +141,11 @@ impl Renderer {
         // implicit behavior — emit an explicit move to the start of the
         // next row so the result is the same on every terminal.
         if self.cur.at_phantom {
-            let next_y = self.cur.pos.y.saturating_add(1);
+            let next_y = self.cur.pos().y.saturating_add(1);
             if next_y < surface_height {
                 let target = Position { y: next_y, x: 0 };
-                self.write_optimal_move(out, self.cur.pos, target, None)?;
-                self.cur.pos = target;
+                self.write_optimal_move(out, self.cur.pos(), target, None)?;
+                self.cur.set_pos(target);
             }
             self.cur.at_phantom = false;
         }
@@ -158,8 +158,8 @@ impl Renderer {
         // doesn't trigger the bottom-right scroll quirk.
         let is_lower_right_corner = self.fullscreen
             && cell_width == 1
-            && self.cur.pos.x + 1 == surface_width
-            && self.cur.pos.y + 1 == surface_height;
+            && self.cur.pos().x + 1 == surface_width
+            && self.cur.pos().y + 1 == surface_height;
 
         if is_lower_right_corner {
             // Writing the bottom-right corner in alt-screen normally pushes
@@ -174,20 +174,20 @@ impl Renderer {
             // (Some terminals leave it at width-1, others at width; treat
             // it as width-1 since auto-wrap is now off and a subsequent
             // print would just overwrite the same cell.)
-            self.cur.pos.x = surface_width.saturating_sub(1);
+            self.cur.x = Some(surface_width.saturating_sub(1));
             self.cur.at_phantom = false;
             return Ok(());
         }
 
         out.extend_from_slice(content);
-        let new_x = self.cur.pos.x.saturating_add(cell_width);
+        let new_x = self.cur.pos().x.saturating_add(cell_width);
         if new_x >= surface_width {
             // Park at the right-margin phantom; clamp tracked column so it
             // doesn't drift past `surface_width` over successive writes.
-            self.cur.pos.x = surface_width;
+            self.cur.x = Some(surface_width);
             self.cur.at_phantom = true;
         } else {
-            self.cur.pos.x = new_x;
+            self.cur.x = Some(new_x);
         }
         Ok(())
     }
