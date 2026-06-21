@@ -20,7 +20,7 @@ Build styles fluently and pass the resulting value around:
 use uncurses::color::{BasicColor, Color};
 use uncurses::style::{Style, UnderlineStyle};
 
-let heading = Style::default()
+let heading = Style::new()
     .bold()
     .italic()
     .underline_style(UnderlineStyle::Curly)
@@ -52,8 +52,8 @@ use uncurses::style::Style;
 
 fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
-    let open = Style::default().bold().fg(BasicColor::Green);
-    let reset = Style::default();
+    let open = Style::new().bold().fg(BasicColor::Green);
+    let reset = Style::new();
 
     writeln!(out, "{open}text{reset}")?;
     writeln!(out, "{}", open.styled("wrapped text"))?;
@@ -135,7 +135,7 @@ let from_hsl = Color::hsl(210.0, 0.65, 0.45);
 assert_eq!(short.to_hex(), "#ffffff");
 let (_h, _s, _l) = from_hsl.to_hsl();
 
-let style = Style::default()
+let style = Style::new()
     .fg(full)
     .bg(BasicColor::Black)
     .underline_color(Some(alpha_ignored))
@@ -185,7 +185,7 @@ the whole span, open and close, emitted automatically.
 use uncurses::color::BasicColor;
 use uncurses::style::Style;
 
-let docs = Style::default()
+let docs = Style::new()
     .underline()
     .fg(BasicColor::BrightBlue)
     .link("https://github.com/aymanbagabas/uncurses", "");

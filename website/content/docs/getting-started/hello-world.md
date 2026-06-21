@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
     let w = screen.width();
     screen.resize((w, 1));
 
-    screen.set_str((0, 0), "Hello! Press q to quit.", Style::default());
+    screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
     screen.present()?;
 
     let q: Key = "q".parse().unwrap();
@@ -65,7 +65,7 @@ screen.resize((w, 1));
 Inline screens use the terminal width and keep a caller-chosen height. This example uses one row.
 
 ```rust
-screen.set_str((0, 0), "Hello! Press q to quit.", Style::default());
+screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
 screen.present()?;
 ```
 
@@ -99,7 +99,7 @@ fn main() -> std::io::Result<()> {
     screen.init()?;
     screen.enter_alt_screen()?;
 
-    screen.set_str((0, 0), "Hello from the alternate screen. Press q to quit.", Style::default());
+    screen.set_str((0, 0), "Hello from the alternate screen. Press q to quit.", Style::new());
     screen.present()?;
 
     let q: Key = "q".parse().unwrap();

@@ -46,7 +46,7 @@ use uncurses::text::TextSurface;
 fn main() -> std::io::Result<()> {
     let mut canvas: Canvas<Vec<u8>> = Canvas::new(Vec::new(), (20, 3));
 
-    canvas.set_str((0, 0), "hello", Style::default());
+    canvas.set_str((0, 0), "hello", Style::new());
     canvas.render();
     canvas.flush()?;
 
