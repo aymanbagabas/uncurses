@@ -245,6 +245,17 @@ impl From<&Style> for Style {
     }
 }
 
+impl From<Option<Style>> for Style {
+    /// Convert an optional style, mapping `None` to [`Style::EMPTY`].
+    ///
+    /// This lets APIs that accept `impl Into<Style>` take a bare `None` to mean
+    /// "no styling", e.g. `surface.set_str(pos, text, None)`. `Some(style)`
+    /// unwraps to the contained style.
+    fn from(style: Option<Style>) -> Self {
+        style.unwrap_or(Style::EMPTY)
+    }
+}
+
 impl Style {
     /// Create an empty style.
     ///
