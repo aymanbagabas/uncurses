@@ -17,7 +17,7 @@ use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::{Style, write_style};
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::TextSurface;
+use uncurses::text::{Painter, TextSurface};
 
 const CHOICES: &[&str] = &[
     "Plant carrots",
@@ -211,7 +211,8 @@ fn paint(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
 }
 
 /// SGR escape sequence for `style`, suitable for embedding in a string
-/// painted by the screen (which interprets inline `CSI ... m`).
+/// painted through a [`Painter`] (which interprets inline `CSI ... m`). The
+/// default [`TextSurface::set_str`] would draw the escape literally.
 fn sgr(style: &Style) -> String {
     let mut buf = Vec::with_capacity(24);
     write_style(&mut buf, style).expect("write to Vec is infallible");
@@ -226,13 +227,12 @@ fn draw_choices(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
     let checkbox = sgr(&Style::default().fg(BasicColor::Cyan).bold());
     let ticks_st = sgr(&Style::default().fg(BasicColor::Yellow).bold());
 
+    // Paint through a Painter so the inline SGR sequences in the strings
+    // below are interpreted instead of drawn literally.
+    let mut p = Painter::new(screen);
     let mut last = 0u16;
     let mut y = 1u16;
-    screen.set_str(
-        (2, y),
-        "What to do today?",
-        uncurses::style::Style::default(),
-    );
+    p.set_str((2, y), "What to do today?", None);
     last = last.max(y);
     y += 2;
 
@@ -243,18 +243,18 @@ fn draw_choices(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
         } else {
             format!("{subtle}[ ] {choice}{RESET}")
         };
-        screen.set_str((2, row), &line, uncurses::style::Style::default());
+        p.set_str((2, row), &line, None);
         last = last.max(row);
     }
 
     y += CHOICES.len() as u16 + 1;
     let line = format!("Program quits in {ticks_st}{}{RESET} seconds", s.ticks);
-    screen.set_str((2, y), &line, uncurses::style::Style::default());
+    p.set_str((2, y), &line, None);
     last = last.max(y);
 
     y += 2;
     let line = format!("{subtle}j/k or up/down: select  •  enter: choose  •  q: quit{RESET}");
-    screen.set_str((2, y), &line, uncurses::style::Style::default());
+    p.set_str((2, y), &line, None);
     last = last.max(y);
 
     last + 1
@@ -276,9 +276,10 @@ fn draw_chosen(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
         ),
     };
 
+    let mut p = Painter::new(screen);
     let mut last = 0u16;
     let mut y = 1u16;
-    screen.set_str((2, y), head, uncurses::style::Style::default());
+    p.set_str((2, y), head, None);
     last = last.max(y);
     y += 2;
 
@@ -286,12 +287,12 @@ fn draw_chosen(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
         "Need {keyword}{}{RESET} and {keyword}{}{RESET}...",
         deps[0], deps[1]
     );
-    screen.set_str((2, y), &line, uncurses::style::Style::default());
+    p.set_str((2, y), &line, None);
     last = last.max(y);
     y += 2;
 
     let label = if s.loaded { "Done." } else { "Downloading..." };
-    screen.set_str((2, y), label, uncurses::style::Style::default());
+    p.set_str((2, y), label, None);
     last = last.max(y);
     y += 1;
 
@@ -300,13 +301,13 @@ fn draw_chosen(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
     let empty_str = "░".repeat((BAR_WIDTH - filled) as usize);
     let pct = format!(" {:>3.0}%", s.progress * 100.0);
     let bar = format!("{bar_st}{filled_str}{empty_st}{empty_str}{RESET}{pct}");
-    screen.set_str((2, y), &bar, uncurses::style::Style::default());
+    p.set_str((2, y), &bar, None);
     last = last.max(y);
 
     if s.loaded {
         y += 2;
         let line = format!("Exiting in {ticks_st}{}{RESET} seconds", s.ticks);
-        screen.set_str((2, y), &line, uncurses::style::Style::default());
+        p.set_str((2, y), &line, None);
         last = last.max(y);
     }
 
