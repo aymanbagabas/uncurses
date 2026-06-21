@@ -49,7 +49,7 @@
 
 use crate::ansi::hyperlink::parse_hyperlink;
 use crate::ansi::params::Params;
-use crate::ansi::text::{Token, tokenize};
+use crate::ansi::text::{Token, string_width, tokenize};
 use crate::buffer::SurfaceMut;
 use crate::cell::Cell;
 use crate::layout::{Position, Rect};
@@ -259,7 +259,135 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         self.paint(rect.position(), clip, s, wrap)
     }
 
+    /// Paint `s` starting at `pos`, truncating with a `tail` indicator.
+    ///
+    /// Text is painted across the target bounds. When a non-zero-width cluster
+    /// would cross the right edge, painting stops and `tail` is stamped over
+    /// the trailing columns so it ends exactly at the right edge. The tail
+    /// appears only when the text actually overflows; text that fits is left
+    /// untouched.
+    ///
+    /// `tail` is painted with `tail_style` as its starting style and may carry
+    /// its own inline escape sequences, so it can be a single glyph (`"…"`), a
+    /// word (`" more"`), or a multi-style span. If the tail is wider than the
+    /// available space, it is dropped and the text is hard-truncated instead.
+    ///
+    /// # Parameters
+    ///
+    /// * `pos` — starting cell position.
+    /// * `s` — UTF-8 string to paint.
+    /// * `tail` — truncation indicator, painted when `s` overflows.
+    /// * `tail_style` — starting style for the tail.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
+    pub fn set_str_truncate(
+        &mut self,
+        pos: impl Into<Position>,
+        s: &str,
+        tail: &str,
+        tail_style: impl Into<Style>,
+    ) -> Position {
+        let clip = self.target.bounds();
+        self.paint_truncate(pos.into(), clip, s, tail, tail_style.into())
+    }
+
+    /// Paint `s` inside `rect`, truncating with a `tail` indicator.
+    ///
+    /// This is the rectangular form of
+    /// [`set_str_truncate`](Self::set_str_truncate): the clip rectangle is
+    /// `rect ∩ target.bounds()`, and the tail is stamped at `rect`'s right
+    /// edge when the text overflows it.
+    ///
+    /// # Parameters
+    ///
+    /// * `rect` — clipping rectangle and starting origin.
+    /// * `s` — UTF-8 string to paint.
+    /// * `tail` — truncation indicator, painted when `s` overflows.
+    /// * `tail_style` — starting style for the tail.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
+    pub fn set_str_rect_truncate(
+        &mut self,
+        rect: impl Into<Rect>,
+        s: &str,
+        tail: &str,
+        tail_style: impl Into<Style>,
+    ) -> Position {
+        let rect = rect.into();
+        let clip = rect.intersection(self.target.bounds());
+        self.paint_truncate(rect.position(), clip, s, tail, tail_style.into())
+    }
+
+    /// Paint `s` with [`WrapMode::Truncate`], stamping `tail` on overflow.
+    ///
+    /// Falls back to a plain hard truncate when the tail is empty or cannot
+    /// fit within `clip`.
+    fn paint_truncate(
+        &mut self,
+        start: Position,
+        clip: Rect,
+        s: &str,
+        tail_text: &str,
+        tail_style: Style,
+    ) -> Position {
+        if clip.is_empty() {
+            return start;
+        }
+        let tail_w = string_width(tail_text.as_bytes(), self.mode, self.eaw_wide) as u16;
+        let tail = if tail_w == 0 || tail_w > clip.width {
+            None
+        } else {
+            Some(Tail {
+                text: tail_text,
+                style: &tail_style,
+                width: tail_w,
+            })
+        };
+        self.paint_inner(start, clip, s, WrapMode::Truncate, tail)
+    }
+
+    /// Stamp `tail` over the trailing `tail.width` columns of row `y`, ending
+    /// at `clip`'s right edge, painted with the tail's starting style.
+    fn paint_tail(&mut self, tail: Tail<'_>, clip: Rect, y: u16) {
+        let tail_x = clip.right().saturating_sub(tail.width);
+        let sub = Rect::new(tail_x, y, tail.width, 1).intersection(clip);
+        let saved = std::mem::replace(&mut self.style, tail.style.clone());
+        self.paint_inner(
+            Position::new(tail_x, y),
+            sub,
+            tail.text,
+            WrapMode::Truncate,
+            None,
+        );
+        self.style = saved;
+    }
+
     fn paint(&mut self, start: Position, clip: Rect, s: &str, wrap: WrapMode) -> Position {
+        self.paint_inner(start, clip, s, wrap, None)
+    }
+
+    fn paint_inner(
+        &mut self,
+        start: Position,
+        clip: Rect,
+        s: &str,
+        wrap: WrapMode,
+        tail: Option<Tail<'_>>,
+    ) -> Position {
         if clip.is_empty() {
             return start;
         }
@@ -285,7 +413,13 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
 
                     if x + cw as u16 > clip.right() {
                         match wrap {
-                            WrapMode::Truncate => return Position::new(x, y),
+                            WrapMode::Truncate => {
+                                if let Some(tail) = tail {
+                                    self.paint_tail(tail, clip, y);
+                                    return Position::new(clip.right(), y);
+                                }
+                                return Position::new(x, y);
+                            }
                             WrapMode::Wrap => {
                                 y = y.saturating_add(1);
                                 x = clip.left();
@@ -332,6 +466,16 @@ impl<'s, S: SurfaceMut + ?Sized> Painter<'s, S> {
         flush_pending(self.target, &mut pending, clip, &self.style);
         Position::new(x, y)
     }
+}
+
+/// A truncation tail: borrowed indicator text, its starting style, and its
+/// measured cell width. `Copy` so the overflow branch can hand it to
+/// [`Painter::paint_tail`] without moving out of the `Option`.
+#[derive(Clone, Copy)]
+struct Tail<'a> {
+    text: &'a str,
+    style: &'a Style,
+    width: u16,
 }
 
 fn flush_pending<S: SurfaceMut + ?Sized>(
@@ -686,5 +830,106 @@ mod tests {
         );
         assert_eq!(e1, e2);
         assert_eq!(cell_at(&a, 2, 0).content(), cell_at(&b, 2, 0).content());
+    }
+
+    fn row(b: &Buffer, y: u16) -> String {
+        (0..b.width())
+            .map(|x| cell_at(b, x, y).content().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn truncate_tail_not_shown_when_text_fits() {
+        let mut b = buf(5, 1);
+        let end = Painter::new(&mut b, WidthMode::default(), false)
+            .set_str_truncate((0, 0), "abc", "…", Style::default());
+        // "abc" fits in 5 columns, so no tail is stamped.
+        assert_eq!(row(&b, 0), "abc  ");
+        assert_eq!(end, Position::new(3, 0));
+    }
+
+    #[test]
+    fn truncate_single_cell_tail_on_overflow() {
+        let mut b = buf(5, 1);
+        let end = Painter::new(&mut b, WidthMode::default(), false)
+            .set_str_truncate((0, 0), "abcdefgh", "…", Style::default());
+        // 5 columns: 4 text columns + the 1-wide tail at the right edge.
+        assert_eq!(row(&b, 0), "abcd…");
+        assert_eq!(end, Position::new(5, 0));
+    }
+
+    #[test]
+    fn truncate_multi_cell_tail_reserves_its_width() {
+        let mut b = buf(8, 1);
+        Painter::new(&mut b, WidthMode::default(), false).set_str_truncate(
+            (0, 0),
+            "abcdefghij",
+            " more",
+            Style::default(),
+        );
+        // 8 columns: 3 text columns + the 5-wide " more" tail.
+        assert_eq!(row(&b, 0), "abc more");
+    }
+
+    #[test]
+    fn truncate_tail_carries_its_style() {
+        let mut b = buf(5, 1);
+        Painter::new(&mut b, WidthMode::default(), false).set_str_truncate(
+            (0, 0),
+            "abcdefgh",
+            "…",
+            Style::default().fg(Color::Basic(BasicColor::Red)),
+        );
+        // The tail cell gets the supplied base style.
+        assert_eq!(
+            cell_at(&b, 4, 0).style.fg,
+            Some(Color::Basic(BasicColor::Red))
+        );
+    }
+
+    #[test]
+    fn truncate_tail_inline_escapes_apply() {
+        let mut b = buf(5, 1);
+        Painter::new(&mut b, WidthMode::default(), false).set_str_truncate(
+            (0, 0),
+            "abcdefgh",
+            "\x1b[1m…",
+            Style::default(),
+        );
+        // The tail's inline SGR bolds it even though the base style is empty.
+        assert!(cell_at(&b, 4, 0).style.attrs.contains(AttrFlags::BOLD));
+    }
+
+    #[test]
+    fn truncate_wide_tail_too_big_hard_truncates() {
+        let mut b = buf(3, 1);
+        let end = Painter::new(&mut b, WidthMode::default(), false).set_str_truncate(
+            (0, 0),
+            "abcdef",
+            " more",
+            Style::default(),
+        );
+        // " more" is 5 wide but the clip is only 3, so it is dropped and the
+        // text is hard-truncated with no tail.
+        assert_eq!(row(&b, 0), "abc");
+        assert_eq!(end, Position::new(3, 0));
+    }
+
+    #[test]
+    fn truncate_tail_overwrites_split_wide_cell() {
+        // A wide cluster sits where the tail's left edge lands; stamping the
+        // tail must blank the dangling wide primary.
+        let mut b = buf(5, 1);
+        Painter::new(&mut b, WidthMode::default(), false).set_str_truncate(
+            (0, 0),
+            "ab中def",
+            "…",
+            Style::default(),
+        );
+        // "ab" + wide "中" fills columns 0..4; the tail overwrites column 4,
+        // which is the continuation of "中", so the wide primary at 3 must be
+        // blanked rather than left dangling.
+        assert_eq!(cell_at(&b, 4, 0).content(), "…");
+        assert!(!cell_at(&b, 3, 0).is_wide());
     }
 }
