@@ -127,4 +127,4 @@ Do not treat each `PasteChunk` as a complete string. Chunks may split UTF-8 sequ
 - [Inline rendering]({{< relref "inline-rendering.md" >}})
 - [The Screen facade]({{< relref "../concepts/screen.md" >}}#screenoptions)
 - [Examples]({{< relref "../examples.md" >}}#the-full-mix-input-render)
-- [API reference](../api/)
+- [API reference](/api/)

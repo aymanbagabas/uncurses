@@ -9,7 +9,7 @@ in-memory desired frame, `render()` plans the terminal diff, and `flush()` is th
 only place bytes touch the `Write` sink.
 
 For the public `Canvas` API, start with [Canvas and rendering]({{< relref "../concepts/canvas-and-rendering.md" >}}).
-For the raw API surface, see the [API reference](../../../api/).
+For the raw API surface, see the [API reference](/api/).
 
 ## The whole pipeline
 

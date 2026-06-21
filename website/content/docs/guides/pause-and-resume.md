@@ -100,4 +100,4 @@ Always call `resume()` after `pause()` even when the child command fails, then r
 - [The Screen facade]({{< relref "../concepts/screen.md" >}}#lifecycle)
 - [Async events]({{< relref "async-events.md" >}})
 - [Examples]({{< relref "../examples.md" >}}#the-full-mix-input-render)
-- [API reference](../api/)
+- [API reference](/api/)

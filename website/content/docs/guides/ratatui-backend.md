@@ -137,4 +137,4 @@ Always restore through `uncurses_ratatui::restore` or `try_restore` after setup 
 - [Inline rendering]({{< relref "inline-rendering.md" >}})
 - [Async events]({{< relref "async-events.md" >}})
 - [Examples]({{< relref "../examples.md" >}}#ratatui-backend)
-- [API reference](../api/)
+- [API reference](/api/)

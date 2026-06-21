@@ -11,7 +11,7 @@ uncurses uses three small geometry types for the terminal cell grid:
 | `Size` | A `width x height` extent. |
 | `Rect` | An axis-aligned rectangle: `(x, y, width, height)`. |
 
-See the [layout API](../api/uncurses/layout/) for exact rustdoc and
+See the [layout API](/api/uncurses/layout/) for exact rustdoc and
 [Text and width]({{< relref "text-and-width.md" >}}) for how grapheme widths
 occupy this grid.
 

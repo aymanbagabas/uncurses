@@ -121,4 +121,4 @@ Do not cache `capabilities().mouse_sgr_pixel` immediately after `init_with`; det
 
 - [The Screen facade]({{< relref "../concepts/screen.md" >}}#screenoptions)
 - [Examples]({{< relref "../examples.md" >}}#mouse-and-async)
-- [API reference](../api/)
+- [API reference](/api/)

@@ -7,7 +7,7 @@ uncurses stores and renders text in terminal cells, not bytes, scalar values, or
 Rust `char`s. The text layer segments strings into extended grapheme clusters,
 measures each cluster, and writes one `Cell` per grid column.
 
-See the [text API](../api/uncurses/text/) and [cell API](../api/uncurses/cell/)
+See the [text API](/api/uncurses/text/) and [cell API](/api/uncurses/cell/)
 for exact rustdoc, and [Geometry]({{< relref "geometry.md" >}}) for how those
 cells are addressed.
 
