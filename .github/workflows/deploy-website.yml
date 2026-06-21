@@ -36,6 +36,8 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: stable
+          # Hugo Modules (Hextra) live under website/, so cache on its go.sum.
+          cache-dependency-path: website/go.sum
 
       - name: Setup Hugo (extended)
         uses: peaceiris/actions-hugo@v3
