@@ -56,9 +56,9 @@
 //! surface. A surface supplies its [`WidthMode`] and East-Asian-Width policy;
 //! the trait then provides [`TextSurface::set_str`],
 //! [`TextSurface::set_str_wrap`], [`TextSurface::set_str_rect`],
-//! [`TextSurface::set_str_rect_wrap`], [`TextSurface::str_width`], and
-//! [`TextSurface::painter`]. This keeps higher-level widgets generic over
-//! `&mut impl TextSurface` instead of depending on a concrete buffer type.
+//! [`TextSurface::set_str_rect_wrap`], and [`TextSurface::str_width`]. This
+//! keeps higher-level widgets generic over `&mut impl TextSurface` instead of
+//! depending on a concrete buffer type.
 //!
 //! ## Feature backends
 //!
