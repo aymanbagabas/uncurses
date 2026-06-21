@@ -462,7 +462,7 @@ where
     fn observe(&mut self, event: &Event) -> io::Result<()> {
         use crate::ansi::mode::Mode;
         match *event {
-            Event::ModeReport { mode, setting } if setting.is_recognized() => match mode {
+            Event::ModeReport { mode, setting } if setting.is_available() => match mode {
                 // Render-affecting: record and apply.
                 Mode::SYNCHRONIZED_OUTPUT => {
                     self.caps.synchronized_output = true;

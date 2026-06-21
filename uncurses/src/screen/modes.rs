@@ -514,6 +514,12 @@ impl<I: Input, O: Write> Screen<I, O> {
 
     /// Request a terminal mode's current setting (DECRQM). Reply:
     /// [`Event::ModeReport`](crate::event::Event::ModeReport).
+    ///
+    /// The reply's [`ModeSetting`](crate::ansi::ModeSetting) reports whether
+    /// the mode is set, reset, or permanently fixed. A permanently reset mode
+    /// is recognized but can never be enabled, so check
+    /// [`ModeSetting::is_available`](crate::ansi::ModeSetting::is_available)
+    /// before relying on it.
     pub fn request_mode(&mut self, mode: crate::ansi::mode::Mode) -> io::Result<()> {
         mode.request(&mut self.canvas)?;
         self.canvas.flush()
