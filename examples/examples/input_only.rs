@@ -1,7 +1,7 @@
 //! Read input only: decode events and print them, no rendering.
 //!
 //! The smallest possible use of the input layer. There is no `Screen` and
-//! no `Canvas` here, just a [`Terminal`] in raw mode and an
+//! no renderer here, just a [`Terminal`] in raw mode and an
 //! [`EventSource`] turning raw bytes into typed [`Event`] values. Every
 //! event is printed as it arrives, so it doubles as a "what does this key
 //! send?" probe.

@@ -10,15 +10,18 @@
 //! Two layers cover most needs. Pick the one that fits how much control
 //! you want.
 //!
-//! - **[`screen::Screen`]** is the high-level facade. It owns a terminal,
-//!   a [`canvas::Canvas`], and an [`event::EventSource`], and manages raw
-//!   mode, capability detection, sane default modes, and teardown. Reach
-//!   for it to get an interactive app running quickly. See the
-//!   [`screen`] module docs for the full lifecycle.
-//! - **[`canvas::Canvas`]** is the cell grid and diffing renderer on its
-//!   own. Drive it directly when you want to manage raw mode, input, and
-//!   terminal modes yourself. It works in both inline and fullscreen
-//!   layouts.
+//! - **[`screen::Screen`]** is the high-level facade and the home of the
+//!   diffing renderer. It owns a terminal and an [`event::EventSource`],
+//!   tracks the live terminal across frames, and emits only the cells that
+//!   changed. It also manages raw mode, capability detection, sane default
+//!   modes, and teardown. Reach for it to drive an interactive app, in
+//!   either inline or fullscreen layout. See the [`screen`] module docs for
+//!   the full lifecycle.
+//! - **[`buffer::TextBuffer`]** (and any [`buffer::Surface`]) is the
+//!   stateless route. Paint a full frame into an in-memory grid and
+//!   serialize it to escape bytes with the [`text::Encode`] trait. There is
+//!   no renderer and no terminal session, which makes it the tool for
+//!   one-shot frames, snapshot tests, transcripts, and append-style output.
 //!
 //! # Quick start (high-level)
 //!
@@ -43,34 +46,33 @@
 //!
 //! # Quick start (low-level)
 //!
-//! Build a [`canvas::Canvas`] over any writer and drive it yourself:
+//! Paint a [`buffer::TextBuffer`] and serialize it yourself, with no
+//! terminal involved:
 //!
 //! ```rust
-//! use std::io::Write;
-//! use uncurses::canvas::Canvas;
-//! use uncurses::style::Style;
+//! use uncurses::buffer::TextBuffer;
 //! use uncurses::color::{Color, BasicColor};
-//! use uncurses::terminal::stdout;
-//! use uncurses::text::TextSurface;
+//! use uncurses::style::Style;
+//! use uncurses::text::{Encode, TextSurface};
 //!
-//! let mut canvas = Canvas::new(stdout(), (80, 24));
+//! let mut frame = TextBuffer::new(80, 24);
 //! let style = Style::default()
 //!     .bold()
 //!     .fg(Color::Basic(BasicColor::Green));
-//! canvas.set_str((0, 0), "Hello, terminal!", style);
+//! frame.set_str((0, 0), "Hello, terminal!", style);
 //!
-//! canvas.render();
-//! canvas.flush().unwrap();
+//! // Serialize the painted grid to escape bytes you can write anywhere.
+//! let bytes = frame.display().to_string();
+//! assert!(bytes.contains("Hello, terminal!"));
 //! ```
 //!
 //! # The module map
 //!
 //! | Module | What lives there |
 //! | --- | --- |
-//! | [`screen`] | The self-managing [`Screen`](screen::Screen) facade. |
-//! | [`canvas`] | The [`Canvas`](canvas::Canvas) cell grid and diffing renderer. |
-//! | [`buffer`] | Cell-grid storage and the [`Surface`](buffer::Surface) / [`SurfaceMut`](buffer::SurfaceMut) traits every drawable shares. |
-//! | [`text`] | Text shaping, width measurement, and the [`TextSurface`](text::TextSurface) painting trait that adds `set_str` to any surface. |
+//! | [`screen`] | The self-managing [`Screen`](screen::Screen) facade and its diffing renderer. |
+//! | [`buffer`] | Cell-grid storage ([`Buffer`](buffer::Buffer), [`TextBuffer`](buffer::TextBuffer), [`Window`](buffer::Window)) and the [`Surface`](buffer::Surface) / [`SurfaceMut`](buffer::SurfaceMut) traits every drawable shares. |
+//! | [`text`] | Text shaping, width measurement, the [`TextSurface`](text::TextSurface) painting trait that adds `set_str` to any surface, and the [`Encode`](text::Encode) trait that serializes a surface to escapes. |
 //! | [`style`] | [`Style`](style::Style), colors, attributes, and SGR plus hyperlink (OSC 8) encoding. |
 //! | [`color`] | Color types and capability [`Profile`](color::Profile)s with automatic downsampling. |
 //! | [`event`] | The [`EventSource`](event::EventSource) decoder, typed [`Event`](event::Event) values, and (with the `async` feature) an `EventStream`. |
@@ -81,23 +83,14 @@
 //!
 //! # Output buffering and flushing
 //!
-//! Drawing is infallible. Both [`Canvas`](canvas::Canvas) and
-//! [`Screen`](screen::Screen) stage every byte they emit into an internal
-//! buffer; nothing reaches the underlying writer until a flush. The
-//! [`Canvas`](canvas::Canvas) flushes when you call
-//! [`std::io::Write::flush`] (or [`present`](canvas::Canvas::present),
-//! which renders and flushes). The one place I/O can fail is the flush, so
-//! the hot path stays simple and the error handling stays honest.
-//!
-//! ```ignore
-//! use std::io::Write;
-//! use uncurses::terminal::stdout;
-//!
-//! let mut canvas = uncurses::canvas::Canvas::new(stdout(), (80, 24));
-//! // … canvas.render(); canvas.set_alt_screen(true); …
-//! canvas.flush()?; // explicit: nothing reaches the terminal until here
-//! # Ok::<_, std::io::Error>(())
-//! ```
+//! Drawing is infallible. [`Screen`](screen::Screen) stages every byte it
+//! emits into an internal buffer; nothing reaches the underlying writer
+//! until a flush. It flushes when you call [`present`](screen::Screen::present)
+//! (which renders the diff and flushes) or [`std::io::Write::flush`]. The one
+//! place I/O can fail is the flush, so the hot path stays simple and the
+//! error handling stays honest. A stateless [`TextBuffer`](buffer::TextBuffer)
+//! has no writer of its own: [`encode`](text::Encode::encode) hands you the
+//! bytes and you decide where they go.
 
 #[cfg(not(any(feature = "icu", feature = "unicode-rs")))]
 compile_error!(
@@ -106,7 +99,6 @@ compile_error!(
 
 pub mod ansi;
 pub mod buffer;
-pub mod canvas;
 pub mod cell;
 pub mod color;
 pub mod event;

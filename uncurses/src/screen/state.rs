@@ -1,15 +1,15 @@
 //! Non-render terminal/input mode state owned by the [`Screen`] facade.
 //!
-//! These modes do not affect how the [`Canvas`] measures, renders, or
+//! These modes do not affect how the renderer measures, renders, or
 //! presents a frame — they configure the terminal device and the input
 //! reader. The facade tracks them so it can tear them down on a shell
 //! handoff and re-apply them afterwards.
 //!
 //! [`Screen`]: super::Screen
-//! [`Canvas`]: crate::canvas::Canvas
 
 use std::collections::BTreeMap;
 
+use crate::ansi::KittyKeyboardFlags;
 use crate::ansi::cursor::CursorStyle;
 use crate::color::Color;
 use crate::event::ModifyOtherKeysMode;
@@ -62,6 +62,22 @@ pub(super) struct State {
     /// using the terminal default. Drives the `OSC 22` reset on reset and
     /// re-emission on restore.
     pub pointer_shape: Option<String>,
+    // --- Render-coupled state (formerly tracked by the canvas) -----------
+    /// Whether the alternate screen is currently active.
+    pub alt_screen: bool,
+    /// Cursor visibility.
+    pub cursor_visible: bool,
+    /// Synchronized updates: when `true`, each non-empty frame is wrapped in
+    /// synchronized-output begin/end sequences.
+    pub sync_updates: bool,
+    /// Unicode core / grapheme cluster mode (DEC 2027). When `true`, width is
+    /// calculated per grapheme cluster (UTS-29 + emoji rules); when `false`,
+    /// per code point (wcwidth-style).
+    pub grapheme_clusters: bool,
+    /// Active Kitty keyboard enhancement flag set. The kitty stack is
+    /// per-screen-buffer, so the screen re-emits this onto whichever buffer
+    /// becomes active. `NONE` means no frame is set.
+    pub kitty_keyboard: KittyKeyboardFlags,
 }
 
 impl Default for State {
@@ -81,6 +97,11 @@ impl Default for State {
             palette: BTreeMap::new(),
             modify_other_keys: ModifyOtherKeysMode::Disabled,
             pointer_shape: None,
+            alt_screen: false,
+            cursor_visible: true,
+            sync_updates: false,
+            grapheme_clusters: false,
+            kitty_keyboard: KittyKeyboardFlags::NONE,
         }
     }
 }

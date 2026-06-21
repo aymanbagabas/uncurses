@@ -17,7 +17,7 @@ shape of the library.
 | Example | What it shows |
 | --- | --- |
 | `counter` | The simplest full `Screen` app: render a button, react to keys and mouse. The [tutorial](../website/content/docs/tutorial.md) builds it step by step. |
-| `low_level` | The same lifecycle by hand — a `Terminal`, a `Canvas`, and an `EventSource` wired up directly, no `Screen` facade. |
+| `low_level` | The same lifecycle by hand — a `Terminal`, a `TextBuffer`, and an `EventSource` wired up directly, no `Screen` facade. |
 
 ## Read input only
 
@@ -34,8 +34,8 @@ No event loop driving the output. Render and go.
 
 | Example | What it shows |
 | --- | --- |
-| `draw_only` | A bouncing marquee on a fixed frame budget, rendered with `Canvas` directly — no `Screen`, since it reads no input — with a countdown to exit. |
-| `offscreen` | A `Canvas<Vec<u8>>` rendering a framed card into a byte buffer with no terminal at all — the building block for snapshot tests and transcripts. |
+| `draw_only` | A bouncing marquee on a fixed frame budget, rendered with an output-only `Screen` (no capability queries, since it reads no input), with a countdown to exit. |
+| `offscreen` | A `TextBuffer` rendering a framed card into a byte buffer via the `Encode` trait, with no terminal at all — the building block for snapshot tests and transcripts. |
 | `styles` | SGR attributes, the underline variants, 16/256/true color, and an OSC 8 hyperlink, written to stdout with a `Style` as the opening sequence and an empty `Style` as the reset, dropped into plain `writeln!`. |
 
 ## The full mix (input + render)

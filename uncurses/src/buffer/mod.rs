@@ -16,7 +16,7 @@
 //!   terminal-style insert/delete operations.
 //!
 //! Code written against [`Surface`] or [`SurfaceMut`] can operate on a
-//! [`Buffer`], [`Window`], [`View`], [`Canvas`](crate::canvas::Canvas), or
+//! [`Buffer`], [`TextBuffer`], [`Window`], [`View`], or
 //! [`Screen`](crate::screen::Screen) without caring where the cells are
 //! stored. The shared contract is a rectangular coordinate space of
 //! [`Cell`] values addressed by
@@ -68,9 +68,11 @@ pub mod window;
 mod line;
 #[cfg(test)]
 mod tests;
+mod text_buffer;
 
 pub use line::{Line, blank_line, fill_line, fill_line_into};
 pub use surface::{Bounded, Surface, SurfaceMut};
+pub use text_buffer::TextBuffer;
 pub use view::View;
 pub use window::Window;
 

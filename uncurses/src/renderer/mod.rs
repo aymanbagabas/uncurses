@@ -3,7 +3,7 @@
 //! The renderer turns a desired [`RenderBuffer`] into the shortest safe
 //! sequence of terminal bytes it can produce for the configured
 //! [`Optimizations`]. Most applications use it through
-//! [`crate::canvas::Canvas`]; direct access is useful for lower-level
+//! [`crate::screen::Screen`]; direct access is useful for lower-level
 //! integrations and renderer-focused tests.
 //!
 //! ## Diff pipeline

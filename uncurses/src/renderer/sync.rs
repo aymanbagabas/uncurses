@@ -46,7 +46,7 @@ impl Renderer {
             // reset it; cell-by-cell copies below will re-touch only
             // rows that actually changed. The caller is expected to
             // have set `force_clear` (e.g. via `request_clear` from
-            // [`crate::canvas::Canvas::resize`]) to drive a full
+            // [`crate::screen::Screen::resize`]) to drive a full
             // repaint when dimensions change.
             self.back_buf.clear_touched();
         }

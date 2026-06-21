@@ -4,7 +4,7 @@
 //! program needs into one owned handle:
 //!
 //! - a [`Terminal`] for the raw-mode lifecycle,
-//! - a [`Canvas`] for cell-diffed rendering, and
+//! - a cell-diff renderer, and
 //! - an [`EventSource`] for decoded input (read synchronously).
 //!
 //! It additionally owns the non-render terminal/input modes (mouse,
@@ -92,7 +92,6 @@
 //! the duration of one poll, so the loop body is free to draw.
 //!
 //! [`Terminal`]: crate::terminal::Terminal
-//! [`Canvas`]: crate::canvas::Canvas
 //! [`EventSource`]: crate::event::EventSource
 //! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 
@@ -100,31 +99,40 @@ mod cursor;
 mod modes;
 mod mouse;
 mod state;
+#[cfg(test)]
+mod tests;
 
 pub use cursor::CursorShape;
 pub use state::Capabilities;
+
+/// Cell-diff capability flags controlling which optimized escape
+/// sequences the screen's renderer may emit. Re-exported from the
+/// renderer so applications can configure rendering with
+/// [`Screen::use_optimizations`] without depending on renderer internals.
+pub use crate::renderer::Optimizations;
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::ansi::{kitty, mode};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
-use crate::canvas::Canvas;
 use crate::cell::Cell;
+use crate::color::Profile;
 #[cfg(feature = "async")]
 use crate::event::EventStream;
 use crate::event::source::Input;
 use crate::event::{Event, EventSource};
 use crate::layout::{Position, Rect, Size};
+use crate::renderer::{RenderBuffer, Renderer};
 use crate::terminal::Terminal;
 use crate::text::{TextSurface, WidthMode};
 
 /// A self-managing terminal application facade composing a [`Terminal`],
-/// a [`Canvas`], and an [`EventSource`] with the non-render terminal and
+/// a cell-diff renderer, and an [`EventSource`] with the non-render terminal and
 /// input modes. See the [module documentation](self) for the lifecycle.
 ///
 /// [`Terminal`]: crate::terminal::Terminal
-/// [`Canvas`]: crate::canvas::Canvas
 /// [`EventSource`]: crate::event::EventSource
 pub struct Screen<I, O>
 where
@@ -132,7 +140,24 @@ where
     O: Write,
 {
     terminal: Terminal<I, O>,
-    canvas: Canvas<O>,
+    /// Caller-facing desired cell grid. Touched spans record where the
+    /// application wrote since the last sync; the renderer filters them
+    /// again against its staging buffer before diffing the terminal.
+    front_buf: RenderBuffer,
+    /// The diff renderer holding the tracked on-screen buffer, cursor model,
+    /// fullscreen/relative-cursor layout, color profile, and optimizations.
+    renderer: Renderer,
+    /// Scratch byte buffer that drawing and mode methods stage escape bytes
+    /// into before [`io::Write::flush`] drains them through the terminal.
+    out_buf: Vec<u8>,
+    /// Managed area width in cells.
+    width: u16,
+    /// Managed area height in cells.
+    height: u16,
+    /// East-Asian Ambiguous width policy used when measuring strings: when
+    /// `true`, code points whose East-Asian-Width property is `Ambiguous`
+    /// are measured as 2 cells instead of 1. See [`crate::text::char_width`].
+    eaw_wide: bool,
     /// Input source, shared so the synchronous read path ([`Self::read`]
     /// and friends) and the async [`EventStream`](Self::events) can both
     /// drive it. The lock is uncontended in the sync-only case.
@@ -199,6 +224,19 @@ pub struct ScreenOptions {
     /// encoding the terminal supports once capabilities are known. Defaults
     /// to `None` (mouse tracking off).
     pub mouse: Option<MousePreference>,
+    /// Send terminal capability queries during
+    /// [`init`](Screen::init_with).
+    ///
+    /// When `true` (the default), [`init_with`](Screen::init_with) probes the
+    /// terminal for its keyboard, color, and feature support and waits for the
+    /// replies, populating [`capabilities`](Screen::capabilities). Set it to
+    /// `false` for output-only programs that draw frames and never read input:
+    /// `init_with` still enters raw mode, sizes the canvas, and applies the
+    /// environment-detected color profile, but emits no query escapes and
+    /// waits for no replies, so the terminal is never probed and
+    /// [`capabilities`](Screen::capabilities) stays at its env-derived
+    /// defaults.
+    pub query_capabilities: bool,
 }
 
 /// Mouse tracking preference for [`ScreenOptions::mouse`].
@@ -220,6 +258,7 @@ impl Default for ScreenOptions {
             prefer_in_band_resize: true,
             request_pixel_size_on_resize: cfg!(windows),
             mouse: None,
+            query_capabilities: true,
         }
     }
 }
@@ -229,38 +268,48 @@ where
     I: Input,
     O: Write,
 {
-    // --- Canvas drawing delegates ---------------------------------------
+    // --- Drawing -------------------------------------------------------
 
-    /// Write `cell` at `pos`. See [`Canvas::set_cell`].
+    /// Write `cell` at `pos` in the desired frame.
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
-        self.canvas.set_cell(pos, cell);
+        self.front_buf.set_cell(pos.into(), cell);
     }
 
-    /// Mutable access to the cell at `pos`. See [`Canvas::cell_mut`].
+    /// Borrow the cell at `pos` mutably, marking its columns touched.
     pub fn cell_mut(&mut self, pos: impl Into<Position>) -> Option<&mut Cell> {
-        self.canvas.cell_mut(pos)
+        self.front_buf.cell_mut(pos.into())
     }
 
-    /// Diff the staged frame and stage the escape bytes. See
-    /// [`Canvas::render`].
+    /// Diff the staged frame against the tracked terminal and stage the
+    /// minimal escape bytes. Infallible; call [`flush`](Self::flush) or
+    /// [`present`](Self::present) to send them.
     pub fn render(&mut self) {
-        self.canvas.render();
+        if !self.renderer.sync_front(&mut self.front_buf) {
+            return;
+        }
+        self.write_frame();
     }
 
-    /// Render then flush a complete frame. See [`Canvas::present`].
+    /// Render the next frame and flush the staged bytes through the
+    /// terminal in one call.
     pub fn present(&mut self) -> io::Result<()> {
-        self.canvas.present()
+        self.render();
+        self.flush()
     }
 
-    /// Force a full redraw on the next render. See [`Canvas::invalidate`].
+    /// Force a full redraw on the next [`render`](Self::render).
     pub fn invalidate(&mut self) {
-        self.canvas.invalidate();
+        self.renderer.request_clear();
     }
 
-    /// Resize the canvas. See [`Canvas::resize`].
+    /// Resize the managed area. In fullscreen pass the terminal viewport
+    /// size; inline, the terminal width and the application surface height.
     pub fn resize(&mut self, size: impl Into<Size>) {
         let size = size.into();
-        self.canvas.resize(size.width, size.height);
+        self.width = size.width;
+        self.height = size.height;
+        self.front_buf.resize(size.width, size.height);
+        self.renderer.request_clear();
     }
 
     /// Cache a fresh terminal size and request the pixel size over the wire
@@ -279,93 +328,171 @@ where
         Ok(())
     }
 
-    /// Insert `content` above the screen. See [`Canvas::insert_above`].
+    /// Insert `content` into the scrollback above the managed area, then
+    /// force a full redraw on the next [`render`](Self::render). In inline
+    /// mode this pushes the lines into the terminal's scrollback; in
+    /// alternate-screen mode they go into the alt screen's hidden
+    /// scrollback. An empty string is a no-op.
     pub fn insert_above(&mut self, content: &str) {
-        self.canvas.insert_above(content);
+        if content.is_empty() {
+            return;
+        }
+
+        let width = self.width;
+        let height = self.height;
+        let y = self.renderer.cursor_position().y;
+
+        self.out_buf.write_all(b"\r").unwrap();
+        let down = height.saturating_sub(y).saturating_sub(1);
+        if down > 0 {
+            crate::ansi::cursor::write_cud(&mut self.out_buf, down).unwrap();
+        }
+
+        let lines: Vec<&str> = content.split('\n').collect();
+        let mut offset: u16 = lines.len() as u16;
+        let width_mode = TextSurface::width_mode(self);
+        for line in &lines {
+            let lw =
+                crate::ansi::text::string_width(line.as_bytes(), width_mode, self.eaw_wide) as u16;
+            if let Some(n) = lw.checked_div(width) {
+                offset = offset.saturating_add(n);
+            }
+        }
+
+        for _ in 0..offset {
+            self.out_buf.write_all(b"\n").unwrap();
+        }
+
+        let up = offset.saturating_add(height).saturating_sub(1);
+        if up > 0 {
+            crate::ansi::cursor::write_cuu(&mut self.out_buf, up).unwrap();
+        }
+        crate::ansi::screen::write_insert_lines(&mut self.out_buf, offset).unwrap();
+        for line in &lines {
+            self.out_buf.write_all(line.as_bytes()).unwrap();
+            self.out_buf
+                .write_all(crate::ansi::screen::ERASE_LINE_RIGHT)
+                .unwrap();
+            self.out_buf.write_all(b"\r\n").unwrap();
+        }
+
+        self.renderer.set_cursor_position(Position { y: 0, x: 0 });
+        self.renderer.request_clear();
     }
 
-    /// The canvas size in cells.
+    /// The managed area size in cells.
     pub fn size(&self) -> Size {
-        Size::new(self.canvas.width(), self.canvas.height())
+        Size::new(self.width, self.height)
     }
 
-    /// Move the staged cursor to `pos`. See [`Canvas::set_cursor_position`].
+    /// Stage a cursor move to a buffer-relative position. No-op when the
+    /// renderer already reports the cursor there with both axes known.
     pub fn move_cursor_to(&mut self, pos: impl Into<Position>) {
-        let pos = pos.into();
-        self.canvas.set_cursor_position(pos.x, pos.y);
+        let target = pos.into();
+        if self.renderer.cursor_known() && self.renderer.cursor_position() == target {
+            return;
+        }
+        self.renderer
+            .move_to(&mut self.out_buf, &self.front_buf, target.y, target.x)
+            .unwrap();
     }
 
     /// The renderer's tracked cursor position: the buffer-relative cell
     /// where the renderer believes the terminal cursor currently sits. This
-    /// is bookkeeping, not a live cursor-position query. See
-    /// [`Canvas::cursor_position`].
+    /// is bookkeeping, not a live cursor-position query.
     pub fn tracked_cursor_position(&self) -> Position {
-        self.canvas.cursor_position()
+        self.renderer.cursor_position()
     }
 
     /// Mark the tracked cursor position unknown, so the next staged move
     /// always emits rather than short-circuiting on a matching tracked
     /// position. Use after moving the terminal cursor by a means the
-    /// renderer cannot see (e.g. a raw escape written directly). See
-    /// [`Canvas::invalidate_cursor`].
+    /// renderer cannot see (e.g. a raw escape written directly).
     pub fn invalidate_tracked_cursor(&mut self) {
-        self.canvas.invalidate_cursor();
+        self.renderer.invalidate_cursor();
     }
 
     /// Assume the tracked cursor is at buffer-relative `pos`, with both
     /// axes known, *without* emitting any move. This only updates the
     /// renderer's belief; the caller must have already placed the terminal
     /// cursor there (e.g. with a raw escape the renderer cannot see). For an
-    /// actual cursor move use [`move_cursor_to`](Self::move_cursor_to). See
-    /// [`Canvas::assume_cursor_at`].
+    /// actual cursor move use [`move_cursor_to`](Self::move_cursor_to).
     pub fn assume_cursor_position(&mut self, pos: impl Into<Position>) {
-        let pos = pos.into();
-        self.canvas.assume_cursor_at(pos.x, pos.y);
+        self.renderer.set_cursor_position(pos.into());
     }
 
-    // --- Render-coupled mode delegates ----------------------------------
+    // --- Render-coupled mode toggles ------------------------------------
 
-    /// Enter the alternate screen and flush. See [`Canvas::set_alt_screen`].
+    /// Enter the alternate screen and flush.
     pub fn enter_alt_screen(&mut self) -> io::Result<()> {
-        self.canvas.set_alt_screen(true);
-        self.canvas.flush()
+        self.stage_set_alt_screen(true);
+        self.flush()
     }
 
-    /// Leave the alternate screen and flush. See [`Canvas::set_alt_screen`].
+    /// Leave the alternate screen and flush.
     pub fn exit_alt_screen(&mut self) -> io::Result<()> {
-        self.canvas.set_alt_screen(false);
-        self.canvas.flush()
+        self.stage_set_alt_screen(false);
+        self.flush()
     }
 
-    /// Show the cursor and flush. See [`Canvas::set_cursor_visible`].
+    /// Show the cursor and flush.
     pub fn show_cursor(&mut self) -> io::Result<()> {
-        self.canvas.set_cursor_visible(true);
-        self.canvas.flush()
+        self.stage_set_cursor_visible(true);
+        self.flush()
     }
 
-    /// Hide the cursor and flush. See [`Canvas::set_cursor_visible`].
+    /// Hide the cursor and flush.
     pub fn hide_cursor(&mut self) -> io::Result<()> {
-        self.canvas.set_cursor_visible(false);
-        self.canvas.flush()
+        self.stage_set_cursor_visible(false);
+        self.flush()
+    }
+
+    /// Enable synchronized-output frame wrapping: each non-empty
+    /// [`render`](Self::render) is wrapped in begin/end synchronized-output
+    /// sequences so terminals that support DECSET 2026 treat a frame as
+    /// atomic. Takes effect on the next frame that has render work.
+    pub fn enable_synchronized_output(&mut self) -> io::Result<()> {
+        self.state.sync_updates = true;
+        Ok(())
+    }
+
+    /// Disable synchronized-output frame wrapping.
+    pub fn disable_synchronized_output(&mut self) -> io::Result<()> {
+        self.state.sync_updates = false;
+        Ok(())
+    }
+
+    /// Enable Unicode core / grapheme-cluster mode (DECSET 2027) and flush:
+    /// [`set_str`](crate::text::TextSurface::set_str) and
+    /// [`insert_above`](Self::insert_above) measure cell widths per extended
+    /// grapheme cluster (UTS-29 plus emoji presentation rules).
+    pub fn enable_grapheme_clusters(&mut self) -> io::Result<()> {
+        self.stage_set_grapheme_clusters(true);
+        self.flush()
+    }
+
+    /// Disable grapheme-cluster mode (DECRST 2027) and flush, falling back
+    /// to per-code-point wcwidth-style measurement.
+    pub fn disable_grapheme_clusters(&mut self) -> io::Result<()> {
+        self.stage_set_grapheme_clusters(false);
+        self.flush()
     }
 
     /// Set the per-screen kitty keyboard enhancements and flush.
     /// `Some(flags)` enables the selected progressive-enhancement bits;
-    /// `None` disables every enhancement. See
-    /// [`Canvas::set_kitty_keyboard_flags`].
+    /// `None` disables every enhancement.
     pub fn set_kitty_keyboard(
         &mut self,
         flags: Option<crate::ansi::KittyKeyboardFlags>,
     ) -> io::Result<()> {
         let flags = flags.unwrap_or(crate::ansi::KittyKeyboardFlags::NONE);
-        self.canvas.set_kitty_keyboard_flags(flags);
-        self.canvas.flush()
+        self.stage_set_kitty_keyboard_flags(flags);
+        self.flush()
     }
 
-    /// Set the color profile used when emitting styled cells. See
-    /// [`Canvas::use_color_profile`].
+    /// Set the color profile used when emitting styled cells.
     pub fn use_color_profile(&mut self, profile: crate::color::Profile) {
-        self.canvas.use_color_profile(profile);
+        self.renderer.set_color_profile(profile);
     }
 
     /// Return the color profile used when emitting styled cells.
@@ -374,16 +501,146 @@ where
     /// [`use_color_profile`](Self::use_color_profile) or detected from the
     /// environment when the screen was constructed. Pass it to
     /// [`Encode::encode_with`](crate::text::Encode::encode_with) to serialize
-    /// a surface the same way this screen renders it. See
-    /// [`Canvas::color_profile`].
+    /// a surface the same way this screen renders it.
     pub fn color_profile(&self) -> crate::color::Profile {
-        self.canvas.color_profile()
+        self.renderer.color_profile()
     }
 
-    /// Set the renderer optimization flags. See
-    /// [`Canvas::use_optimizations`].
-    pub fn use_optimizations(&mut self, optimizations: crate::canvas::Optimizations) {
-        self.canvas.use_optimizations(optimizations);
+    /// Set the renderer optimization flags.
+    pub fn use_optimizations(&mut self, optimizations: Optimizations) {
+        self.renderer.set_optimizations(optimizations);
+    }
+
+    /// Return the renderer optimization flags currently in effect.
+    pub fn optimizations(&self) -> Optimizations {
+        self.renderer.optimizations()
+    }
+
+    /// Return whether Unicode core / grapheme-cluster mode (DEC 2027) is
+    /// active. When `true`, text is measured per extended grapheme cluster;
+    /// when `false`, per code point (wcwidth-style).
+    pub fn grapheme_clusters(&self) -> bool {
+        self.state.grapheme_clusters
+    }
+
+    /// Measure one extended grapheme cluster in terminal cells under the
+    /// screen's current width mode and East-Asian Ambiguous policy.
+    pub fn grapheme_width(&self, g: &str) -> u8 {
+        TextSurface::width_mode(self).grapheme_width(g, self.eaw_wide)
+    }
+
+    /// Iterate a string as `(cluster, width)` pairs under the screen's
+    /// current width mode and East-Asian Ambiguous policy.
+    pub fn grapheme_cells<'a>(
+        &self,
+        s: &'a str,
+    ) -> impl Iterator<Item = (&'a str, u8)> + use<'a, I, O> {
+        crate::text::grapheme_cells(s, TextSurface::width_mode(self), self.eaw_wide)
+    }
+
+    // --- Render staging internals ---------------------------------------
+
+    /// Stage a single rendered frame into [`out_buf`](Self::out_buf):
+    /// synchronized-output begin, cursor hide (so the cursor doesn't dance
+    /// across cells during the diff), the renderer's cell diff, cursor show,
+    /// synchronized-output end. Assumes the front buffer was synced.
+    fn write_frame(&mut self) {
+        if self.state.sync_updates {
+            mode::Mode::SYNCHRONIZED_OUTPUT
+                .set(&mut self.out_buf)
+                .unwrap();
+        }
+        if self.state.cursor_visible {
+            mode::Mode::CURSOR_VISIBLE.reset(&mut self.out_buf).unwrap();
+        }
+
+        self.renderer.render_back(&mut self.out_buf).unwrap();
+
+        if self.state.cursor_visible {
+            mode::Mode::CURSOR_VISIBLE.set(&mut self.out_buf).unwrap();
+        }
+        if self.state.sync_updates {
+            mode::Mode::SYNCHRONIZED_OUTPUT
+                .reset(&mut self.out_buf)
+                .unwrap();
+        }
+    }
+
+    /// Stage the alternate-screen toggle. Always emits DECSET/DECRST 1049;
+    /// the bookkeeping side effects (save/restore the renderer cursor model,
+    /// flip fullscreen/relative-cursor, request a clear, and re-apply the
+    /// tracked Kitty keyboard flags onto the newly active buffer) run only on
+    /// an actual transition.
+    fn stage_set_alt_screen(&mut self, alt_screen: bool) {
+        let changed = self.state.alt_screen != alt_screen;
+        if alt_screen {
+            if changed {
+                self.renderer.save_cursor();
+            }
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR
+                .set(&mut self.out_buf)
+                .unwrap();
+            if changed {
+                self.state.alt_screen = true;
+                self.renderer.set_fullscreen(true);
+                self.renderer.set_relative_cursor(false);
+                self.renderer.request_clear();
+            }
+        } else {
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR
+                .reset(&mut self.out_buf)
+                .unwrap();
+            if changed {
+                self.state.alt_screen = false;
+                self.renderer.set_fullscreen(false);
+                self.renderer.set_relative_cursor(true);
+                self.renderer.restore_cursor();
+            }
+        }
+        // The kitty keyboard stack is per-screen-buffer; on an actual buffer
+        // switch, re-apply the tracked flags onto the buffer we entered.
+        if changed && !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.out_buf,
+                self.state.kitty_keyboard,
+                kitty::KittyKeyboardMode::Set,
+            )
+            .unwrap();
+        }
+    }
+
+    /// Stage a cursor-visibility change. Always emits the DECTCEM set/reset;
+    /// the tracked state is updated to match.
+    fn stage_set_cursor_visible(&mut self, visible: bool) {
+        if visible {
+            mode::Mode::CURSOR_VISIBLE.set(&mut self.out_buf).unwrap();
+        } else {
+            mode::Mode::CURSOR_VISIBLE.reset(&mut self.out_buf).unwrap();
+        }
+        self.state.cursor_visible = visible;
+    }
+
+    /// Stage a grapheme-cluster (DEC 2027) toggle. Always emits the
+    /// DECSET/DECRST; the tracked state is updated to match.
+    fn stage_set_grapheme_clusters(&mut self, enable: bool) {
+        if enable {
+            mode::Mode::UNICODE_CORE.set(&mut self.out_buf).unwrap();
+        } else {
+            mode::Mode::UNICODE_CORE.reset(&mut self.out_buf).unwrap();
+        }
+        self.state.grapheme_clusters = enable;
+    }
+
+    /// Stage a replacement Kitty keyboard enhancement flag set. Always emits
+    /// the `CSI = flags ; 1 u` set; the tracked set is updated to match.
+    fn stage_set_kitty_keyboard_flags(&mut self, flags: crate::ansi::KittyKeyboardFlags) {
+        kitty::write_set_kitty_keyboard(
+            &mut self.out_buf,
+            flags,
+            crate::ansi::KittyKeyboardMode::Set,
+        )
+        .unwrap();
+        self.state.kitty_keyboard = flags;
     }
 
     // --- Event delegates -------------------------------------------------
@@ -478,11 +735,11 @@ where
                 // Render-affecting: record and apply.
                 Mode::SYNCHRONIZED_OUTPUT => {
                     self.caps.synchronized_output = true;
-                    self.canvas.set_sync_updates(true);
+                    self.state.sync_updates = true;
                 }
                 Mode::UNICODE_CORE => {
                     self.caps.grapheme_clusters = true;
-                    self.canvas.set_grapheme_clusters(true);
+                    self.stage_set_grapheme_clusters(true);
                 }
                 // Recorded only; enabling is the app's choice.
                 Mode::IN_BAND_RESIZE => self.caps.in_band_resize = true,
@@ -535,8 +792,8 @@ where
                 ref payload,
             } if payload.contains("RGB") || payload.contains("Tc") => {
                 self.caps.true_color = true;
-                self.canvas
-                    .use_color_profile(crate::color::Profile::TrueColor);
+                self.renderer
+                    .set_color_profile(crate::color::Profile::TrueColor);
             }
             _ => {}
         }
@@ -596,6 +853,14 @@ where
     /// The mode (DECRQM), XTVERSION, and XTGETTCAP queries are skipped on
     /// Apple's `Terminal.app`, which mishandles them. A Primary DA request
     /// is sent last so its reply marks the end of the capability replies.
+    /// Detect the environment-derived color profile and apply it to the
+    /// renderer. Called by `init_with` on every path so output downsamples
+    /// correctly even when capability queries are skipped.
+    fn apply_env_color_profile(&mut self) {
+        let profile = crate::color::Profile::detect_from(self.terminal.env(), true);
+        self.renderer.set_color_profile(profile);
+    }
+
     fn stage_init_queries(&mut self) -> io::Result<()> {
         use crate::ansi::ctrl::{REQUEST_PRIMARY_DA, REQUEST_XTVERSION};
         use crate::ansi::kitty::REQUEST_KITTY_KEYBOARD;
@@ -603,13 +868,13 @@ where
         use crate::ansi::termcap::write_xtgettcap;
         use crate::color::Profile;
 
-        // Detect the env-derived profile, apply it to the renderer, and
-        // remember whether there is headroom to upgrade via XTGETTCAP.
-        let profile = Profile::detect_from(self.terminal.env(), true);
-        self.canvas.use_color_profile(profile);
+        // The env-derived profile is already applied by init_with via
+        // apply_env_color_profile; read it back to decide whether there is
+        // headroom to upgrade via XTGETTCAP.
+        let profile = self.renderer.color_profile();
 
         // Always-safe queries.
-        self.canvas.write_all(REQUEST_KITTY_KEYBOARD)?;
+        self.out_buf.write_all(REQUEST_KITTY_KEYBOARD)?;
 
         if !self.is_apple_terminal() {
             for mode in [
@@ -622,16 +887,16 @@ where
                 Mode::MOUSE_SGR,
                 Mode::MOUSE_SGR_PIXEL,
             ] {
-                mode.request(&mut self.canvas)?;
+                mode.request(&mut self.out_buf)?;
             }
-            self.canvas.write_all(REQUEST_XTVERSION)?;
-            self.canvas
+            self.out_buf.write_all(REQUEST_XTVERSION)?;
+            self.out_buf
                 .write_all(crate::ansi::xterm::QUERY_MODIFY_OTHER_KEYS)?;
             if profile < Profile::TrueColor {
                 // One key per query: some terminals only answer the first
                 // capability when several are batched in a single request.
-                write_xtgettcap(&mut self.canvas, &["RGB"])?;
-                write_xtgettcap(&mut self.canvas, &["Tc"])?;
+                write_xtgettcap(&mut self.out_buf, &["RGB"])?;
+                write_xtgettcap(&mut self.out_buf, &["Tc"])?;
             }
         } else {
             // Terminal.app mishandles the capability queries, but its
@@ -650,12 +915,12 @@ where
                 && self.apple_terminal_version().is_some_and(|v| v >= 470)
             {
                 self.caps.true_color = true;
-                self.canvas.use_color_profile(Profile::TrueColor);
+                self.renderer.set_color_profile(Profile::TrueColor);
             }
         }
 
-        self.canvas.write_all(REQUEST_PRIMARY_DA)?;
-        self.canvas.flush()
+        self.out_buf.write_all(REQUEST_PRIMARY_DA)?;
+        self.flush()
     }
 }
 
@@ -664,12 +929,22 @@ where
     I: Input,
     O: Write,
 {
+    /// Append raw bytes to the staging buffer, ordered with any staged mode
+    /// or frame bytes. They reach the terminal on the next [`flush`](Self::flush).
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.canvas.write(buf)
+        self.out_buf.extend_from_slice(buf);
+        Ok(buf.len())
     }
 
+    /// Drain the staging buffer through the terminal and flush it.
     fn flush(&mut self) -> io::Result<()> {
-        self.canvas.flush()
+        if !self.out_buf.is_empty() {
+            #[cfg(debug_assertions)]
+            crate::trace::tee_output(&self.out_buf);
+            self.terminal.write_all(&self.out_buf)?;
+            self.out_buf.clear();
+        }
+        self.terminal.flush()
     }
 }
 
@@ -679,7 +954,7 @@ where
     O: Write,
 {
     fn bounds(&self) -> Rect {
-        self.canvas.bounds()
+        self.front_buf.bounds()
     }
 }
 
@@ -689,7 +964,7 @@ where
     O: Write,
 {
     fn cell(&self, pos: Position) -> Option<&Cell> {
-        self.canvas.cell(pos)
+        self.front_buf.cell(pos)
     }
 }
 
@@ -699,27 +974,27 @@ where
     O: Write,
 {
     fn set_cell(&mut self, pos: Position, cell: &Cell) {
-        self.canvas.set_cell(pos, cell);
+        self.front_buf.set_cell(pos, cell);
     }
 
     fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.canvas.cell_mut(pos)
+        self.front_buf.cell_mut(pos)
     }
 
     fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        self.canvas.insert_lines(y, n, bounds_bottom, fill);
+        self.front_buf.insert_lines(y, n, bounds_bottom, fill);
     }
 
     fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        self.canvas.delete_lines(y, n, bounds_bottom, fill);
+        self.front_buf.delete_lines(y, n, bounds_bottom, fill);
     }
 
     fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        self.canvas.insert_cells(pos, n, bounds_right, fill);
+        self.front_buf.insert_cells(pos, n, bounds_right, fill);
     }
 
     fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        self.canvas.delete_cells(pos, n, bounds_right, fill);
+        self.front_buf.delete_cells(pos, n, bounds_right, fill);
     }
 }
 
@@ -729,11 +1004,15 @@ where
     O: Write,
 {
     fn width_mode(&self) -> WidthMode {
-        self.canvas.width_mode()
+        if self.state.grapheme_clusters {
+            WidthMode::Grapheme
+        } else {
+            WidthMode::Wc
+        }
     }
 
     fn eaw_wide(&self) -> bool {
-        self.canvas.eaw_wide()
+        self.eaw_wide
     }
 }
 
@@ -819,39 +1098,36 @@ where
     }
 }
 
-#[cfg(unix)]
 impl<I, O> Screen<I, O>
 where
-    I: Input + Copy + std::os::fd::AsFd,
-    O: Write + Copy + std::os::fd::AsFd,
+    I: Input + Copy,
+    O: Write,
 {
-    /// Construct a screen over `terminal` without touching the terminal:
-    /// size a [`Canvas`] to it and create an [`EventSource`] on its input
-    /// half. The terminal is left as-is; call [`Self::init`] to enter raw
-    /// mode and begin a session.
-    pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
-        let canvas = Canvas::from_terminal(&terminal)?;
-        Self::with_canvas(terminal, canvas)
-    }
+    /// Build the render fields and event source over `terminal`, sizing the
+    /// managed area to `size`. The color profile and renderer optimizations
+    /// are detected from the terminal's captured environment. The terminal is
+    /// left as-is.
+    fn with_render(terminal: Terminal<I, O>, size: (u16, u16)) -> io::Result<Self> {
+        let env = terminal.env();
+        let color_profile = Profile::detect_from(env, true);
+        let optimizations = Optimizations::from_env(env);
+        let mut renderer = Renderer::new();
+        renderer.set_color_profile(color_profile);
+        renderer.set_optimizations(optimizations);
+        // Defaults match inline (no alt screen): the surface is anchored
+        // wherever the cursor sits, so moves stay relative.
+        renderer.set_fullscreen(false);
+        renderer.set_relative_cursor(true);
 
-    /// Construct a screen over `terminal` with a caller-provided [`Canvas`],
-    /// without touching the terminal.
-    ///
-    /// Use this when you want to pre-configure the canvas before the session
-    /// starts, for example its color profile, optimizations, East Asian width
-    /// policy, or grapheme clustering. Build the canvas over the terminal's
-    /// output half (for example with [`Canvas::from_terminal`], or
-    /// [`Canvas::from_env`] passing `terminal.output()`) so its writer matches
-    /// the screen's terminal.
-    ///
-    /// [`new`](Self::new) is the same constructor with a default canvas sized
-    /// to the terminal. The terminal is left as-is; call [`Self::init`] to
-    /// enter raw mode and begin a session.
-    pub fn with_canvas(terminal: Terminal<I, O>, canvas: Canvas<O>) -> io::Result<Self> {
         let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
-        Ok(Self {
+        let mut screen = Self {
             terminal,
-            canvas,
+            front_buf: RenderBuffer::new(0, 0),
+            renderer,
+            out_buf: Vec::with_capacity(4096),
+            width: 0,
+            height: 0,
+            eaw_wide: false,
             source,
             #[cfg(feature = "async")]
             stream: None,
@@ -862,7 +1138,28 @@ where
             window_cells: None,
             window_pixels: None,
             terminal_name: None,
-        })
+        };
+        let (w, h) = size;
+        if w != 0 || h != 0 {
+            screen.resize((w, h));
+        }
+        Ok(screen)
+    }
+}
+
+#[cfg(unix)]
+impl<I, O> Screen<I, O>
+where
+    I: Input + Copy + std::os::fd::AsFd,
+    O: Write + Copy + std::os::fd::AsFd,
+{
+    /// Construct a screen over `terminal` without touching the terminal:
+    /// size the renderer to it and create an [`EventSource`] on its input
+    /// half. The terminal is left as-is; call [`Self::init`] to enter raw
+    /// mode and begin a session.
+    pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
+        let ws = terminal.get_window_size()?;
+        Self::with_render(terminal, (ws.col, ws.row))
     }
 
     /// Begin a session with the default [`ScreenOptions`]. See
@@ -881,10 +1178,16 @@ where
         self.options = options;
         self.terminal.make_raw()?;
         self.autoresize()?;
+        // Apply the env color profile on every path so output downsamples
+        // correctly even when capability queries are skipped.
+        self.apply_env_color_profile();
         if self.options.bracketed_paste {
             self.enable_bracketed_paste()?;
         }
-        self.stage_init_queries()
+        if self.options.query_capabilities {
+            self.stage_init_queries()?;
+        }
+        Ok(())
     }
 
     /// Query the current terminal window size (output half first, input as
@@ -910,12 +1213,12 @@ where
             return Ok(());
         };
         self.cache_window_size(ws)?;
-        let height = if self.canvas.alt_screen() {
+        let height = if self.state.alt_screen {
             ws.row
         } else {
-            self.canvas.height()
+            self.height
         };
-        self.canvas.resize(ws.col, height);
+        self.resize((ws.col, height));
         Ok(())
     }
 
@@ -957,10 +1260,9 @@ where
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
         self.autoresize()?;
-        self.canvas.restore();
-        self.restore_modes()?;
-        self.canvas.invalidate();
-        self.canvas.flush()
+        self.restore()?;
+        self.invalidate();
+        self.flush()
     }
 
     /// Suspend the process: [`pause`](Self::pause) the screen, then stop
@@ -974,9 +1276,8 @@ where
     }
 
     fn stage_teardown(&mut self) -> io::Result<()> {
-        self.reset_modes()?;
-        self.canvas.reset();
-        self.canvas.flush()
+        self.reset()?;
+        self.flush()
     }
 }
 
@@ -987,43 +1288,12 @@ where
     O: Write + Copy + std::os::windows::io::AsHandle,
 {
     /// Construct a screen over `terminal` without touching the terminal:
-    /// size a [`Canvas`] to it and create an [`EventSource`] on its input
+    /// size the renderer to it and create an [`EventSource`] on its input
     /// half. The terminal is left as-is; call [`Self::init`] to enter raw
     /// mode and begin a session.
     pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
-        let canvas = Canvas::from_terminal(&terminal)?;
-        Self::with_canvas(terminal, canvas)
-    }
-
-    /// Construct a screen over `terminal` with a caller-provided [`Canvas`],
-    /// without touching the terminal.
-    ///
-    /// Use this when you want to pre-configure the canvas before the session
-    /// starts, for example its color profile, optimizations, East Asian width
-    /// policy, or grapheme clustering. Build the canvas over the terminal's
-    /// output half (for example with [`Canvas::from_terminal`], or
-    /// [`Canvas::from_env`] passing `terminal.output()`) so its writer matches
-    /// the screen's terminal.
-    ///
-    /// [`new`](Self::new) is the same constructor with a default canvas sized
-    /// to the terminal. The terminal is left as-is; call [`Self::init`] to
-    /// enter raw mode and begin a session.
-    pub fn with_canvas(terminal: Terminal<I, O>, canvas: Canvas<O>) -> io::Result<Self> {
-        let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
-        Ok(Self {
-            terminal,
-            canvas,
-            source,
-            #[cfg(feature = "async")]
-            stream: None,
-            state: state::State::default(),
-            caps: Capabilities::default(),
-            options: ScreenOptions::default(),
-            defaults_applied: false,
-            window_cells: None,
-            window_pixels: None,
-            terminal_name: None,
-        })
+        let ws = terminal.get_window_size()?;
+        Self::with_render(terminal, (ws.col, ws.row))
     }
 
     /// Begin a session with the default [`ScreenOptions`]. See
@@ -1042,10 +1312,16 @@ where
         self.options = options;
         self.terminal.make_raw()?;
         self.autoresize()?;
+        // Apply the env color profile on every path so output downsamples
+        // correctly even when capability queries are skipped.
+        self.apply_env_color_profile();
         if self.options.bracketed_paste {
             self.enable_bracketed_paste()?;
         }
-        self.stage_init_queries()
+        if self.options.query_capabilities {
+            self.stage_init_queries()?;
+        }
+        Ok(())
     }
 
     /// Query the current terminal window size (output half first, input as
@@ -1071,12 +1347,12 @@ where
             return Ok(());
         };
         self.cache_window_size(ws)?;
-        let height = if self.canvas.alt_screen() {
+        let height = if self.state.alt_screen {
             ws.row
         } else {
-            self.canvas.height()
+            self.height
         };
-        self.canvas.resize(ws.col, height);
+        self.resize((ws.col, height));
         Ok(())
     }
 
@@ -1118,16 +1394,14 @@ where
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
         self.autoresize()?;
-        self.canvas.restore();
-        self.restore_modes()?;
-        self.canvas.invalidate();
-        self.canvas.flush()
+        self.restore()?;
+        self.invalidate();
+        self.flush()
     }
 
     fn stage_teardown(&mut self) -> io::Result<()> {
-        self.reset_modes()?;
-        self.canvas.reset();
-        self.canvas.flush()
+        self.reset()?;
+        self.flush()
     }
 }
 

@@ -1,7 +1,7 @@
 //! Cell-grid surface traits.
 //!
 //! Buffer-like types ([`Buffer`](super::Buffer), [`Window`](super::Window),
-//! [`View`](super::View), [`Canvas`](crate::canvas::Canvas), and
+//! [`View`](super::View), [`TextBuffer`](super::TextBuffer), and
 //! [`Screen`](crate::screen::Screen)) all expose a rectangular region of
 //! [`Cell`]s. This module defines the traits that let drawing code use
 //! those regions without depending on a concrete storage type.

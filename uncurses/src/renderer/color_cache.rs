@@ -6,7 +6,7 @@
 //! converted result keyed by the source RGB triple avoids re-running
 //! the search.
 //!
-//! Private to the renderer — public APIs (Canvas, Renderer) still
+//! Private to the renderer — public APIs (Screen, Renderer) still
 //! speak [`Profile`] directly.
 
 use std::borrow::Cow;
