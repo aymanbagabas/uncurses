@@ -164,7 +164,12 @@ pub trait TextSurface: SurfaceMut {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    fn set_str_rect(&mut self, rect: impl Into<Rect>, s: &str, style: impl Into<Style>) -> Position {
+    fn set_str_rect(
+        &mut self,
+        rect: impl Into<Rect>,
+        s: &str,
+        style: impl Into<Style>,
+    ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         Painter::new(self, mode, eaw).set_str_rect(rect, s, style)
     }

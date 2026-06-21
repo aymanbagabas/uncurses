@@ -233,7 +233,11 @@ mod tests {
         assert!(out.contains("hi"), "content present: {out:?}");
         assert!(out.ends_with(reset()), "row reset: {out:?}");
         assert_eq!(out.matches(reset()).count(), 1, "single reset: {out:?}");
-        assert_eq!(out.matches("\x1b[").count(), 2, "one opener + reset: {out:?}");
+        assert_eq!(
+            out.matches("\x1b[").count(),
+            2,
+            "one opener + reset: {out:?}"
+        );
     }
 
     #[test]
@@ -336,7 +340,10 @@ mod tests {
         let styled = Style::new().bold().fg(Color::Rgb(10, 20, 30));
         buf.set_cell((0, 0).into(), &Cell::narrow("x").style(&styled));
         // Bold (SGR 1) survives; the foreground color is dropped.
-        assert_eq!(buf.display_with(Profile::Ascii).to_string(), "\x1b[1mx\x1b[m");
+        assert_eq!(
+            buf.display_with(Profile::Ascii).to_string(),
+            "\x1b[1mx\x1b[m"
+        );
     }
 
     #[test]
