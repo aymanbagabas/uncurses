@@ -1,0 +1,125 @@
+name: Deploy website
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One run per ref. Cancel superseded runs so only the latest deploys.
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HUGO_VERSION: 0.162.1
+      PROJECT_NAME: uncurses-website
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # for .GitInfo / lastmod
+
+      - name: Setup Go (for Hugo Modules / Hextra)
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Setup Hugo (extended)
+        run: |
+          curl -sSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" -o hugo.tar.gz
+          tar -xzf hugo.tar.gz hugo
+          sudo mv hugo /usr/local/bin/hugo
+          hugo version
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve base URL
+        id: base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            # Production. Override with the SITE_BASE_URL variable to point at
+            # a custom domain without editing this workflow.
+            url="$SITE_BASE_URL"
+            [ -n "$url" ] || url="https://${PROJECT_NAME}.pages.dev"
+          else
+            # Preview. Cloudflare serves a non-production branch at a branch
+            # alias built by lowercasing the branch, replacing every run of
+            # non-alphanumeric characters with a hyphen, and truncating to 28
+            # characters.
+            slug=$(printf '%s' "$HEAD_REF" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+              | cut -c1-28 | sed -E 's/-+$//')
+            url="https://${slug}.${PROJECT_NAME}.pages.dev"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Base URL: $url"
+
+      - name: Build API reference (rustdoc)
+        run: cargo doc --no-deps --all-features -p uncurses -p uncurses-ratatui
+
+      - name: Build site
+        working-directory: website
+        run: |
+          hugo mod get
+          hugo --gc --minify --baseURL "${{ steps.base.outputs.url }}/"
+
+      - name: Attach rustdoc under /api
+        run: |
+          mkdir -p website/public/api
+          cp -r target/doc/* website/public/api/
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=uncurses/index.html">\n' > website/public/api/index.html
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >-
+            pages deploy website/public
+            --project-name=${{ env.PROJECT_NAME }}
+            --branch=${{ github.head_ref || github.ref_name }}
+
+      - name: Comment preview URL
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- cf-pages-preview -->';
+            const url =
+              '${{ steps.deploy.outputs.pages-deployment-alias-url }}' ||
+              '${{ steps.deploy.outputs.deployment-url }}';
+            const body = [
+              marker,
+              '## Cloudflare Pages preview',
+              '',
+              `This pull request is deployed at ${url}`,
+              '',
+              '| Path | URL |',
+              '| ---- | --- |',
+              `| Site | ${url} |`,
+              `| API reference | ${url}/api/ |`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.data.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
