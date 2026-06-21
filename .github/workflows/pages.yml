@@ -1,0 +1,77 @@
+name: Deploy docs site
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment, don't cancel in-progress ones.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      HUGO_VERSION: 0.162.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # for .GitInfo / lastmod
+
+      - name: Setup Go (for Hugo Modules / Hextra)
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Setup Hugo (extended)
+        run: |
+          curl -sSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" -o hugo.tar.gz
+          tar -xzf hugo.tar.gz hugo
+          sudo mv hugo /usr/local/bin/hugo
+          hugo version
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build API reference (rustdoc)
+        run: cargo doc --no-deps --all-features -p uncurses -p uncurses-ratatui
+
+      - name: Build site
+        working-directory: website
+        run: |
+          hugo mod get
+          hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
+
+      - name: Attach rustdoc under /api
+        run: |
+          mkdir -p website/public/api
+          cp -r target/doc/* website/public/api/
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=uncurses/index.html">\n' > website/public/api/index.html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
