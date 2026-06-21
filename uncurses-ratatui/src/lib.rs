@@ -5,8 +5,7 @@
 //!
 //! [`UncursesBackend`] implements [`ratatui::backend::Backend`] by wrapping a
 //! single high-level [`Screen`](uncurses::screen::Screen). The screen owns the
-//! terminal handle, the [`Canvas`](uncurses::canvas::Canvas) used for staged
-//! rendering and diffing, and the input source. The backend's job is to adapt
+//! terminal handle, its diffing renderer, and the input source. The backend's job is to adapt
 //! frame drawing, cursor operations, clearing, size queries, and event access
 //! to that one screen.
 //!
@@ -32,7 +31,7 @@
 //!            ▼
 //! ┌──────────────────────┐
 //! │        Screen        │
-//! │   Canvas diff bytes  │
+//! │   renderer diff bytes │
 //! └──────────┬───────────┘
 //!            │ flush
 //!            ▼

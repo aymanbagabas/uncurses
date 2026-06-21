@@ -23,18 +23,19 @@
 //!
 //! ```rust,ignore
 //! use std::io::Write;
-//! use uncurses::canvas::Canvas;
+//! use uncurses::buffer::TextBuffer;
 //! use uncurses::event::EventSource;
 //! use uncurses::terminal::Terminal;
+//! use uncurses::text::Encode;
 //!
 //! let mut term = Terminal::open()?;
 //! let _saved = term.make_raw()?;
-//! let mut screen = Canvas::new(term.output(), term.get_window_size()?);
+//! let size = term.get_window_size()?;
+//! let mut frame = TextBuffer::new(size.col, size.row);
 //! let mut source = EventSource::new(term.input())?;
 //!
-//! // Draw through `screen`, read events from `source`.
-//! screen.reset();
-//! screen.flush()?;
+//! // Paint `frame`, read events from `source`.
+//! frame.encode(&mut term.output())?;
 //! term.restore()?;
 //! # Ok::<(), std::io::Error>(())
 //! ```
@@ -60,7 +61,6 @@ use super::tty::{TtyInput, TtyOutput, open_tty};
 /// test doubles, while sharing one raw-mode and window-size API on supported
 /// platforms.
 ///
-/// [`Canvas`]: crate::canvas::Canvas
 /// [`EventSource`]: crate::event::EventSource
 pub struct Terminal<I, O> {
     input: I,
@@ -121,6 +121,36 @@ impl Terminal<TtyInput, TtyOutput> {
 }
 
 impl<I, O> Terminal<I, O> {
+    /// Build a terminal directly from its parts, without touching any fd.
+    ///
+    /// Test-only constructor used to assemble a [`Terminal`] over in-memory
+    /// or non-tty handles (for example a `Vec<u8>` output) where the
+    /// fd-bound [`new`](Self::new) cannot apply. No raw-mode state is
+    /// captured.
+    #[cfg(test)]
+    pub(crate) fn from_parts(input: I, output: O, env: Env) -> Self {
+        Self {
+            input,
+            output,
+            saved: None,
+            env,
+        }
+    }
+
+    /// Borrow the output half. Test-only accessor for inspecting bytes
+    /// written to an in-memory sink.
+    #[cfg(test)]
+    pub(crate) fn output_ref(&self) -> &O {
+        &self.output
+    }
+
+    /// Mutably borrow the output half. Test-only accessor used to swap the
+    /// in-memory sink between captured frames.
+    #[cfg(test)]
+    pub(crate) fn output_mut(&mut self) -> &mut O {
+        &mut self.output
+    }
+
     /// Return the captured environment snapshot.
     ///
     /// The snapshot is taken by the constructor and is not updated if the
@@ -197,7 +227,7 @@ impl<I, O> Terminal<I, O> {
     ///
     /// This is available only when `O: Copy`, which is true for the standard
     /// and controlling-terminal output types provided by this module. Use it to
-    /// pass output to [`Canvas::new`](crate::canvas::Canvas::new) while
+    /// pass output to a renderer such as [`TextBuffer`](crate::buffer::TextBuffer) while
     /// retaining the `Terminal` for raw-mode restoration.
     ///
     /// # Returns

@@ -3,17 +3,16 @@
 //! color-scheme update reports, in-band resize reports, window title,
 //! and the default foreground/background/cursor colors.
 //!
-//! Each setter emits its escape bytes through the owned [`Canvas`] and
+//! Each setter emits its escape bytes through the owned renderer and
 //! flushes immediately, so the mode change takes effect on the terminal
 //! right away and the call returns [`io::Result<()>`](std::io::Result). A
 //! setter whose tracked value is unchanged is a no-op and performs no I/O.
 //!
 //! [`Screen`]: super::Screen
-//! [`Canvas`]: crate::canvas::Canvas
 
 use std::io::{self, Write};
 
-use crate::ansi::{self, background, cursor, mode, xterm};
+use crate::ansi::{self, background, cursor, kitty, mode, xterm};
 use crate::color::Color;
 use crate::event::source::Input;
 
@@ -41,15 +40,15 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// * `blinking` — whether the cursor blinks.
     pub fn set_cursor_style(&mut self, shape: CursorShape, blinking: bool) -> io::Result<()> {
         let style = shape.style(blinking);
-        cursor::write_cursor_style(&mut self.canvas, style)?;
+        cursor::write_cursor_style(&mut self.out_buf, style)?;
         self.state.cursor_style = style;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Ring the terminal bell (`BEL`) and flush.
     pub fn beep(&mut self) -> io::Result<()> {
-        self.canvas.write_all(b"\x07")?;
-        self.canvas.flush()
+        self.out_buf.write_all(b"\x07")?;
+        self.flush()
     }
 
     /// Set the pointer (mouse cursor) shape (`OSC 22`) and flush.
@@ -57,17 +56,17 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// `shape` is a pointer shape name such as `"default"`, `"text"`, or
     /// `"pointer"`. The shape is recorded for save/restore.
     pub fn set_pointer_shape(&mut self, shape: &str) -> io::Result<()> {
-        cursor::write_set_pointer_shape(&mut self.canvas, shape)?;
+        cursor::write_set_pointer_shape(&mut self.out_buf, shape)?;
         self.state.pointer_shape = Some(shape.to_string());
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Reset the pointer (mouse cursor) shape to the terminal default
     /// (`OSC 22` with an empty shape name) and flush.
     pub fn reset_pointer_shape(&mut self) -> io::Result<()> {
-        cursor::write_set_pointer_shape(&mut self.canvas, "")?;
+        cursor::write_set_pointer_shape(&mut self.out_buf, "")?;
         self.state.pointer_shape = None;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Enable mouse tracking and flush, choosing the best mode and encoding
@@ -107,18 +106,18 @@ impl<I: Input, O: Write> Screen<I, O> {
             MouseMode::Normal
         };
         // Drop any prior tracking first so encodings/modes don't stack.
-        mode::write_reset_mode(&mut self.canvas, MOUSE_MODES)?;
+        mode::write_reset_mode(&mut self.out_buf, MOUSE_MODES)?;
         self.write_mouse_modes(mouse_mode, encoding, true)?;
         self.state.mouse_mode = Some(mouse_mode);
         self.state.mouse_encoding = encoding;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Disable all mouse tracking modes and encodings, and flush.
     pub fn disable_mouse(&mut self) -> io::Result<()> {
-        mode::write_reset_mode(&mut self.canvas, MOUSE_MODES)?;
+        mode::write_reset_mode(&mut self.out_buf, MOUSE_MODES)?;
         self.state.mouse_mode = None;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set or reset the tracking mode and encoding for the given mouse
@@ -134,38 +133,38 @@ impl<I: Input, O: Write> Screen<I, O> {
             modes.push(e);
         }
         if enable {
-            mode::write_set_mode(&mut self.canvas, &modes)
+            mode::write_set_mode(&mut self.out_buf, &modes)
         } else {
-            mode::write_reset_mode(&mut self.canvas, &modes)
+            mode::write_reset_mode(&mut self.out_buf, &modes)
         }
     }
 
     /// Enable bracketed paste mode (DEC private mode 2004) and flush.
     pub fn enable_bracketed_paste(&mut self) -> io::Result<()> {
-        mode::Mode::BRACKETED_PASTE.set(&mut self.canvas)?;
+        mode::Mode::BRACKETED_PASTE.set(&mut self.out_buf)?;
         self.state.bracketed_paste = true;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Disable bracketed paste mode (DEC private mode 2004) and flush.
     pub fn disable_bracketed_paste(&mut self) -> io::Result<()> {
-        mode::Mode::BRACKETED_PASTE.reset(&mut self.canvas)?;
+        mode::Mode::BRACKETED_PASTE.reset(&mut self.out_buf)?;
         self.state.bracketed_paste = false;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Enable focus in/out reporting (DEC private mode 1004) and flush.
     pub fn enable_focus_events(&mut self) -> io::Result<()> {
-        mode::Mode::FOCUS.set(&mut self.canvas)?;
+        mode::Mode::FOCUS.set(&mut self.out_buf)?;
         self.state.focus_events = true;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Disable focus in/out reporting (DEC private mode 1004) and flush.
     pub fn disable_focus_events(&mut self) -> io::Result<()> {
-        mode::Mode::FOCUS.reset(&mut self.canvas)?;
+        mode::Mode::FOCUS.reset(&mut self.out_buf)?;
         self.state.focus_events = false;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Enable color-theme update notifications (DEC private mode 2031) and
@@ -176,17 +175,17 @@ impl<I: Input, O: Write> Screen<I, O> {
     ///
     /// [`Event::ColorTheme`]: crate::event::Event::ColorTheme
     pub fn enable_color_theme_updates(&mut self) -> io::Result<()> {
-        mode::Mode::LIGHT_DARK.set(&mut self.canvas)?;
+        mode::Mode::LIGHT_DARK.set(&mut self.out_buf)?;
         self.state.color_theme_updates = true;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Disable color-theme update notifications (DEC private mode 2031) and
     /// flush.
     pub fn disable_color_theme_updates(&mut self) -> io::Result<()> {
-        mode::Mode::LIGHT_DARK.reset(&mut self.canvas)?;
+        mode::Mode::LIGHT_DARK.reset(&mut self.out_buf)?;
         self.state.color_theme_updates = false;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Enable in-band resize notifications (DEC private mode 2048) and
@@ -197,24 +196,24 @@ impl<I: Input, O: Write> Screen<I, O> {
     ///
     /// [`Event::Resize`]: crate::event::Event::Resize
     pub fn enable_in_band_resize(&mut self) -> io::Result<()> {
-        mode::Mode::IN_BAND_RESIZE.set(&mut self.canvas)?;
+        mode::Mode::IN_BAND_RESIZE.set(&mut self.out_buf)?;
         self.state.in_band_resize = true;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Disable in-band resize notifications (DEC private mode 2048) and
     /// flush.
     pub fn disable_in_band_resize(&mut self) -> io::Result<()> {
-        mode::Mode::IN_BAND_RESIZE.reset(&mut self.canvas)?;
+        mode::Mode::IN_BAND_RESIZE.reset(&mut self.out_buf)?;
         self.state.in_band_resize = false;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set the window title (`OSC 2`) and flush.
     pub fn set_title(&mut self, title: &str) -> io::Result<()> {
-        ansi::write_window_title(&mut self.canvas, title)?;
+        ansi::write_window_title(&mut self.out_buf, title)?;
         self.state.title = Some(title.to_string());
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set the xterm modifyOtherKeys mode (`CSI > 4 ; n m`) and flush.
@@ -231,13 +230,13 @@ impl<I: Input, O: Write> Screen<I, O> {
         use crate::event::ModifyOtherKeysMode;
         match mode {
             ModifyOtherKeysMode::Disabled => {
-                self.canvas.write_all(xterm::RESET_MODIFY_OTHER_KEYS)?
+                self.out_buf.write_all(xterm::RESET_MODIFY_OTHER_KEYS)?
             }
-            ModifyOtherKeysMode::Mode1 => self.canvas.write_all(xterm::SET_MODIFY_OTHER_KEYS_1)?,
-            ModifyOtherKeysMode::Mode2 => self.canvas.write_all(xterm::SET_MODIFY_OTHER_KEYS_2)?,
+            ModifyOtherKeysMode::Mode1 => self.out_buf.write_all(xterm::SET_MODIFY_OTHER_KEYS_1)?,
+            ModifyOtherKeysMode::Mode2 => self.out_buf.write_all(xterm::SET_MODIFY_OTHER_KEYS_2)?,
         }
         self.state.modify_other_keys = mode;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set the default foreground color (`OSC 10`) and flush. The color is
@@ -247,17 +246,20 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// can re-apply it.
     pub fn set_foreground_color(&mut self, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
-        background::write_set_foreground_color(&mut self.canvas, &background::xparse_rgb(r, g, b))?;
+        background::write_set_foreground_color(
+            &mut self.out_buf,
+            &background::xparse_rgb(r, g, b),
+        )?;
         self.state.foreground_color = Some(color);
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Restore the terminal's default foreground color (`OSC 110`) and
     /// flush.
     pub fn reset_foreground_color(&mut self) -> io::Result<()> {
-        self.canvas.write_all(background::RESET_FOREGROUND_COLOR)?;
+        self.out_buf.write_all(background::RESET_FOREGROUND_COLOR)?;
         self.state.foreground_color = None;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set the default background color (`OSC 11`) and flush. See
@@ -265,17 +267,20 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// state-tracking semantics.
     pub fn set_background_color(&mut self, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
-        background::write_set_background_color(&mut self.canvas, &background::xparse_rgb(r, g, b))?;
+        background::write_set_background_color(
+            &mut self.out_buf,
+            &background::xparse_rgb(r, g, b),
+        )?;
         self.state.background_color = Some(color);
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Restore the terminal's default background color (`OSC 111`) and
     /// flush.
     pub fn reset_background_color(&mut self) -> io::Result<()> {
-        self.canvas.write_all(background::RESET_BACKGROUND_COLOR)?;
+        self.out_buf.write_all(background::RESET_BACKGROUND_COLOR)?;
         self.state.background_color = None;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set the cursor color (`OSC 12`) and flush. See
@@ -283,16 +288,16 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// state-tracking semantics.
     pub fn set_cursor_color(&mut self, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
-        background::write_set_cursor_color(&mut self.canvas, &background::xparse_rgb(r, g, b))?;
+        background::write_set_cursor_color(&mut self.out_buf, &background::xparse_rgb(r, g, b))?;
         self.state.cursor_color = Some(color);
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Restore the terminal's default cursor color (`OSC 112`) and flush.
     pub fn reset_cursor_color(&mut self) -> io::Result<()> {
-        self.canvas.write_all(background::RESET_CURSOR_COLOR)?;
+        self.out_buf.write_all(background::RESET_CURSOR_COLOR)?;
         self.state.cursor_color = None;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set a terminal palette color by index (`OSC 4`) and flush. The
@@ -301,107 +306,180 @@ impl<I: Input, O: Write> Screen<I, O> {
     pub fn set_palette_color(&mut self, index: u8, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
         background::write_set_palette_color(
-            &mut self.canvas,
+            &mut self.out_buf,
             index,
             &background::xparse_rgb(r, g, b),
         )?;
         self.state.palette.insert(index, color);
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Reset a single terminal palette color to its default
     /// (`OSC 104 ; index`) and flush.
     pub fn reset_palette_color(&mut self, index: u8) -> io::Result<()> {
-        background::write_reset_palette_color(&mut self.canvas, index)?;
+        background::write_reset_palette_color(&mut self.out_buf, index)?;
         self.state.palette.remove(&index);
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Reset the entire terminal palette to its defaults (`OSC 104`) and
     /// flush, clearing every tracked palette override.
     pub fn reset_palette_colors(&mut self) -> io::Result<()> {
-        self.canvas.write_all(background::RESET_PALETTE_COLORS)?;
+        self.out_buf.write_all(background::RESET_PALETTE_COLORS)?;
         self.state.palette.clear();
-        self.canvas.flush()
+        self.flush()
     }
 
-    /// Stage the teardown of every non-render mode currently held, so the
-    /// terminal is returned to a clean baseline before handing control
-    /// back to the shell. Pure write — does not mutate the tracked state,
-    /// so a later [`restore_modes`](Self::restore_modes) re-applies the
-    /// same modes verbatim. Pairs around [`Canvas::reset`]. The caller
-    /// flushes.
-    pub(super) fn reset_modes(&mut self) -> io::Result<()> {
+    /// Stage the teardown of every mode currently held — non-render modes
+    /// (cursor style, mouse, paste, focus, colors, title, …) followed by the
+    /// render-coupled modes (cursor visibility, alternate screen, Kitty
+    /// keyboard, Unicode core) — returning the terminal to a clean baseline
+    /// before handing control back to the shell. Pure write — does not mutate
+    /// the tracked state, so a later [`restore`](Self::restore) re-applies the
+    /// same modes verbatim. The caller flushes.
+    pub(super) fn reset(&mut self) -> io::Result<()> {
+        // --- Non-render modes ---
         if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.canvas, cursor::CursorStyle::Default)?;
+            cursor::write_cursor_style(&mut self.out_buf, cursor::CursorStyle::Default)?;
         }
         if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.reset(&mut self.canvas)?;
+            mode::Mode::BRACKETED_PASTE.reset(&mut self.out_buf)?;
         }
         if self.state.focus_events {
-            mode::Mode::FOCUS.reset(&mut self.canvas)?;
+            mode::Mode::FOCUS.reset(&mut self.out_buf)?;
         }
         if let Some(m) = self.state.mouse_mode {
             self.write_mouse_modes(m, self.state.mouse_encoding, false)?;
         }
         if self.state.color_theme_updates {
-            mode::Mode::LIGHT_DARK.reset(&mut self.canvas)?;
+            mode::Mode::LIGHT_DARK.reset(&mut self.out_buf)?;
         }
         if self.state.in_band_resize {
-            mode::Mode::IN_BAND_RESIZE.reset(&mut self.canvas)?;
+            mode::Mode::IN_BAND_RESIZE.reset(&mut self.out_buf)?;
         }
         if self.state.modify_other_keys != crate::event::ModifyOtherKeysMode::Disabled {
-            self.canvas.write_all(xterm::RESET_MODIFY_OTHER_KEYS)?;
+            self.out_buf.write_all(xterm::RESET_MODIFY_OTHER_KEYS)?;
         }
         if self.state.foreground_color.is_some() {
-            self.canvas.write_all(background::RESET_FOREGROUND_COLOR)?;
+            self.out_buf.write_all(background::RESET_FOREGROUND_COLOR)?;
         }
         if self.state.background_color.is_some() {
-            self.canvas.write_all(background::RESET_BACKGROUND_COLOR)?;
+            self.out_buf.write_all(background::RESET_BACKGROUND_COLOR)?;
         }
         if self.state.cursor_color.is_some() {
-            self.canvas.write_all(background::RESET_CURSOR_COLOR)?;
+            self.out_buf.write_all(background::RESET_CURSOR_COLOR)?;
         }
         if !self.state.palette.is_empty() {
-            self.canvas.write_all(background::RESET_PALETTE_COLORS)?;
+            self.out_buf.write_all(background::RESET_PALETTE_COLORS)?;
         }
         if self.state.title.is_some() {
-            ansi::write_window_title(&mut self.canvas, "")?;
+            ansi::write_window_title(&mut self.out_buf, "")?;
         }
         if self.state.pointer_shape.is_some() {
-            cursor::write_set_pointer_shape(&mut self.canvas, "")?;
+            cursor::write_set_pointer_shape(&mut self.out_buf, "")?;
+        }
+
+        // --- Render-coupled modes ---
+        // Walk to the bottom of the *last rendered* surface before any mode
+        // teardown, using the renderer's last-render height rather than the
+        // live height so a terminal that grew between the last render and quit
+        // does not push the post-quit cursor below where the user started.
+        let (_, last_height) = self.renderer.last_size();
+        if last_height > 0 {
+            self.renderer
+                .move_to(&mut self.out_buf, &self.front_buf, last_height - 1, 0)?;
+        }
+        if !self.state.cursor_visible {
+            mode::Mode::CURSOR_VISIBLE.set(&mut self.out_buf)?;
+        }
+        // Clear the alt screen's kitty keyboard frame *before* leaving the alt
+        // screen — the stack is per-screen-buffer.
+        if self.state.alt_screen && !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.out_buf,
+                kitty::KittyKeyboardFlags::NONE,
+                kitty::KittyKeyboardMode::Set,
+            )?;
+        }
+        if self.state.alt_screen {
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR.reset(&mut self.out_buf)?;
+            self.renderer.restore_cursor();
+        }
+        // Now on the main screen — clear its frame too.
+        if !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.out_buf,
+                kitty::KittyKeyboardFlags::NONE,
+                kitty::KittyKeyboardMode::Set,
+            )?;
+        }
+        if self.state.grapheme_clusters {
+            mode::Mode::UNICODE_CORE.reset(&mut self.out_buf)?;
         }
         Ok(())
     }
 
-    /// Re-emit every non-render mode held in the tracked state. Pairs
-    /// with [`reset_modes`](Self::reset_modes) for any scenario where the
-    /// terminal was temporarily handed back to the shell. Pure write —
-    /// does not mutate the tracked state. The caller flushes.
-    pub(super) fn restore_modes(&mut self) -> io::Result<()> {
+    /// Re-emit every mode held in the tracked state — the render-coupled
+    /// modes (Kitty keyboard, alternate screen, Unicode core, cursor
+    /// visibility) first, then the non-render modes — for any scenario where
+    /// the terminal was temporarily handed back to the shell. Pairs with
+    /// [`reset`](Self::reset). Pure write — does not mutate the tracked state.
+    /// The caller flushes.
+    pub(super) fn restore(&mut self) -> io::Result<()> {
+        // --- Render-coupled modes ---
+        // Re-apply the desired kitty keyboard flags on the main screen
+        // *before* entering the alt screen — the stack is per-buffer.
+        if !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.out_buf,
+                self.state.kitty_keyboard,
+                kitty::KittyKeyboardMode::Set,
+            )?;
+        }
+        if self.state.alt_screen {
+            self.renderer.save_cursor();
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR.set(&mut self.out_buf)?;
+        }
+        // Now on the alt screen (if alt was active) — re-apply on the alt
+        // buffer too, since its stack is independent.
+        if self.state.alt_screen && !self.state.kitty_keyboard.is_empty() {
+            kitty::write_set_kitty_keyboard(
+                &mut self.out_buf,
+                self.state.kitty_keyboard,
+                kitty::KittyKeyboardMode::Set,
+            )?;
+        }
+        if self.state.grapheme_clusters {
+            mode::Mode::UNICODE_CORE.set(&mut self.out_buf)?;
+        }
+        if !self.state.cursor_visible {
+            mode::Mode::CURSOR_VISIBLE.reset(&mut self.out_buf)?;
+        }
+
+        // --- Non-render modes ---
         if self.state.cursor_style != cursor::CursorStyle::Default {
-            cursor::write_cursor_style(&mut self.canvas, self.state.cursor_style)?;
+            cursor::write_cursor_style(&mut self.out_buf, self.state.cursor_style)?;
         }
         if self.state.color_theme_updates {
-            mode::Mode::LIGHT_DARK.set(&mut self.canvas)?;
+            mode::Mode::LIGHT_DARK.set(&mut self.out_buf)?;
         }
         if self.state.in_band_resize {
-            mode::Mode::IN_BAND_RESIZE.set(&mut self.canvas)?;
+            mode::Mode::IN_BAND_RESIZE.set(&mut self.out_buf)?;
         }
         match self.state.modify_other_keys {
             crate::event::ModifyOtherKeysMode::Mode1 => {
-                self.canvas.write_all(xterm::SET_MODIFY_OTHER_KEYS_1)?;
+                self.out_buf.write_all(xterm::SET_MODIFY_OTHER_KEYS_1)?;
             }
             crate::event::ModifyOtherKeysMode::Mode2 => {
-                self.canvas.write_all(xterm::SET_MODIFY_OTHER_KEYS_2)?;
+                self.out_buf.write_all(xterm::SET_MODIFY_OTHER_KEYS_2)?;
             }
             crate::event::ModifyOtherKeysMode::Disabled => {}
         }
         if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.set(&mut self.canvas)?;
+            mode::Mode::BRACKETED_PASTE.set(&mut self.out_buf)?;
         }
         if self.state.focus_events {
-            mode::Mode::FOCUS.set(&mut self.canvas)?;
+            mode::Mode::FOCUS.set(&mut self.out_buf)?;
         }
         if let Some(m) = self.state.mouse_mode {
             self.write_mouse_modes(m, self.state.mouse_encoding, true)?;
@@ -409,34 +487,37 @@ impl<I: Input, O: Write> Screen<I, O> {
         if let Some(c) = self.state.foreground_color {
             let (r, g, b) = c.to_rgb();
             background::write_set_foreground_color(
-                &mut self.canvas,
+                &mut self.out_buf,
                 &background::xparse_rgb(r, g, b),
             )?;
         }
         if let Some(c) = self.state.background_color {
             let (r, g, b) = c.to_rgb();
             background::write_set_background_color(
-                &mut self.canvas,
+                &mut self.out_buf,
                 &background::xparse_rgb(r, g, b),
             )?;
         }
         if let Some(c) = self.state.cursor_color {
             let (r, g, b) = c.to_rgb();
-            background::write_set_cursor_color(&mut self.canvas, &background::xparse_rgb(r, g, b))?;
+            background::write_set_cursor_color(
+                &mut self.out_buf,
+                &background::xparse_rgb(r, g, b),
+            )?;
         }
         for (&index, &c) in &self.state.palette {
             let (r, g, b) = c.to_rgb();
             background::write_set_palette_color(
-                &mut self.canvas,
+                &mut self.out_buf,
                 index,
                 &background::xparse_rgb(r, g, b),
             )?;
         }
         if let Some(title) = self.state.title.clone() {
-            ansi::write_window_title(&mut self.canvas, &title)?;
+            ansi::write_window_title(&mut self.out_buf, &title)?;
         }
         if let Some(shape) = self.state.pointer_shape.clone() {
-            cursor::write_set_pointer_shape(&mut self.canvas, &shape)?;
+            cursor::write_set_pointer_shape(&mut self.out_buf, &shape)?;
         }
         Ok(())
     }
@@ -452,64 +533,64 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// Request the window size in pixels (XTWINOPS `CSI 14 t`). Reply:
     /// [`Event::WindowPixelSize`](crate::event::Event::WindowPixelSize).
     pub fn request_window_pixel_size(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::winop::REQUEST_WINDOW_PIXEL_SIZE)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the character cell size in pixels (XTWINOPS `CSI 16 t`).
     /// Reply: [`Event::CellPixelSize`](crate::event::Event::CellPixelSize).
     pub fn request_cell_pixel_size(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::winop::REQUEST_CELL_PIXEL_SIZE)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the terminal's active Kitty keyboard flags (`CSI ? u`).
     /// The reply is recorded in [`capabilities`](Self::capabilities).
     pub fn request_kitty_keyboard(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::kitty::REQUEST_KITTY_KEYBOARD)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the terminal's modifyOtherKeys state (`CSI ? 4 m`). The
     /// reply is recorded in [`capabilities`](Self::capabilities).
     pub fn request_modify_other_keys(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::xterm::QUERY_MODIFY_OTHER_KEYS)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the default foreground color (`OSC 10 ; ? ST`). Reply:
     /// [`Event::ForegroundColor`](crate::event::Event::ForegroundColor).
     pub fn request_foreground_color(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::background::REQUEST_FOREGROUND_COLOR)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the default background color (`OSC 11 ; ? ST`). Reply:
     /// [`Event::BackgroundColor`](crate::event::Event::BackgroundColor).
     pub fn request_background_color(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::background::REQUEST_BACKGROUND_COLOR)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the cursor color (`OSC 12 ; ? ST`). Reply:
     /// [`Event::CursorColor`](crate::event::Event::CursorColor).
     pub fn request_cursor_color(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::background::REQUEST_CURSOR_COLOR)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request a terminal palette color by index (`OSC 4 ; index ; ? ST`).
     /// Reply: `OSC 4 ; index ; rgb:... ST`.
     pub fn request_palette_color(&mut self, index: u8) -> io::Result<()> {
-        crate::ansi::background::write_request_palette_color(&mut self.canvas, index)?;
-        self.canvas.flush()
+        crate::ansi::background::write_request_palette_color(&mut self.out_buf, index)?;
+        self.flush()
     }
 
     /// Request a terminal mode's current setting (DECRQM). Reply:
@@ -521,16 +602,16 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// [`ModeSetting::is_available`](crate::ansi::ModeSetting::is_available)
     /// before relying on it.
     pub fn request_mode(&mut self, mode: crate::ansi::mode::Mode) -> io::Result<()> {
-        mode.request(&mut self.canvas)?;
-        self.canvas.flush()
+        mode.request(&mut self.out_buf)?;
+        self.flush()
     }
 
     /// Request the cursor position (`CSI 6 n`). Reply:
     /// [`Event::CursorPosition`](crate::event::Event::CursorPosition).
     pub fn request_cursor_position(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the current color theme (`CSI ? 996 n`): whether the
@@ -538,50 +619,50 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// preference, not the actual colors. Reply:
     /// [`Event::ColorTheme`](crate::event::Event::ColorTheme).
     pub fn request_color_theme(&mut self) -> io::Result<()> {
-        self.canvas
+        self.out_buf
             .write_all(crate::ansi::status::REQUEST_LIGHT_DARK_REPORT)?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set the system clipboard contents (`OSC 52 ; c`). `data` is
     /// base64-encoded for transport.
     pub fn set_system_clipboard(&mut self, data: &[u8]) -> io::Result<()> {
         crate::ansi::clipboard::write_set_clipboard(
-            &mut self.canvas,
+            &mut self.out_buf,
             crate::ansi::clipboard::SYSTEM_CLIPBOARD,
             data,
         )?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Set the primary selection contents (`OSC 52 ; p`). `data` is
     /// base64-encoded for transport.
     pub fn set_primary_clipboard(&mut self, data: &[u8]) -> io::Result<()> {
         crate::ansi::clipboard::write_set_clipboard(
-            &mut self.canvas,
+            &mut self.out_buf,
             crate::ansi::clipboard::PRIMARY_CLIPBOARD,
             data,
         )?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the system clipboard contents (`OSC 52 ; c ; ?`). Reply:
     /// [`Event::Clipboard`](crate::event::Event::Clipboard).
     pub fn request_system_clipboard(&mut self) -> io::Result<()> {
         crate::ansi::clipboard::write_request_clipboard(
-            &mut self.canvas,
+            &mut self.out_buf,
             crate::ansi::clipboard::SYSTEM_CLIPBOARD,
         )?;
-        self.canvas.flush()
+        self.flush()
     }
 
     /// Request the primary selection contents (`OSC 52 ; p ; ?`). Reply:
     /// [`Event::Clipboard`](crate::event::Event::Clipboard).
     pub fn request_primary_clipboard(&mut self) -> io::Result<()> {
         crate::ansi::clipboard::write_request_clipboard(
-            &mut self.canvas,
+            &mut self.out_buf,
             crate::ansi::clipboard::PRIMARY_CLIPBOARD,
         )?;
-        self.canvas.flush()
+        self.flush()
     }
 }

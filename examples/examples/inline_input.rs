@@ -4,7 +4,7 @@
 //! the prompt grows vertically as you type, editing in place at the
 //! bottom of the screen. `Enter` inserts a newline at the cursor.
 //! `Ctrl-D` commits the whole multiline block above the screen via
-//! [`Canvas::insert_above`] (it scrolls into the scrollback) and
+//! [`Screen::insert_above`] (it scrolls into the scrollback) and
 //! clears the buffer for the next entry.
 //!
 //! Navigation: arrow keys move within the buffer. `Backspace` deletes

@@ -159,7 +159,7 @@ impl Default for Cursor {
 ///
 /// # Usage notes
 ///
-/// Most callers should use [`crate::canvas::Canvas`]. Direct use is
+/// Most callers should use [`crate::screen::Screen`]. Direct use is
 /// appropriate when another abstraction owns the output buffering but
 /// wants the same diff, cursor, style, and scroll planning.
 pub struct Renderer {
@@ -346,7 +346,7 @@ impl Renderer {
 
     /// Surface dimensions captured at the most recent render. Returns
     /// `(0, 0)` before the first render. Differs from the
-    /// [`Canvas`](crate::canvas::Canvas)'s live size when the terminal has
+    /// [`Screen`](crate::screen::Screen)'s live size when the terminal has
     /// resized but no frame has been rendered yet — useful when
     /// teardown needs to address the *rendered* surface rather than
     /// rows that were never drawn.

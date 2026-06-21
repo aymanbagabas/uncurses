@@ -39,7 +39,7 @@ use crate::style::diff::{convert_style, write_style_diff};
 ///
 /// This extension trait is implemented for every [`Surface`], so any cell
 /// grid (a [`Buffer`](crate::buffer::Buffer),
-/// [`Window`](crate::buffer::Window), [`Canvas`](crate::canvas::Canvas), or
+/// [`Window`](crate::buffer::Window), [`TextBuffer`](crate::buffer::TextBuffer), or
 /// [`Screen`](crate::screen::Screen)) can be rendered back to its escape-code
 /// form.
 ///

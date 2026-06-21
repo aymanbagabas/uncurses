@@ -91,7 +91,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 ///           │ Screen::set_cell / render
 ///           ▼
 /// ┌─────────────────────┐
-/// │ Screen + Canvas     │
+/// │ Screen (diff render) │
 /// │ diff against output │
 /// └─────────┬───────────┘
 ///           │ flush

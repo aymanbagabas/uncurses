@@ -4,7 +4,7 @@
 //!
 //! - reads directory entries from the filesystem (`std::fs`),
 //! - lazily loads a preview of the highlighted file (capped at 64 KiB),
-//! - draws a two-pane TUI through the cell-based `Canvas` so the
+//! - draws a two-pane TUI through the cell-based `Screen` so the
 //!   renderer can diff between frames and only emit the cells that
 //!   actually changed,
 //! - handles keyboard navigation, mouse clicks, mouse-wheel scrolling,
