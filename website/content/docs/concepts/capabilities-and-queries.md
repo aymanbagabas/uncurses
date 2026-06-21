@@ -14,7 +14,7 @@ through `capabilities()`.
 
 See [Events and input]({{< relref "events-and-input.md" >}}), the
 [`query` example]({{< relref "../examples.md" >}}#read-input-only), and the
-[screen API](../api/uncurses/screen/).
+[screen API](/api/uncurses/screen/).
 
 ## Request and reply
 

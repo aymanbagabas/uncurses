@@ -112,4 +112,4 @@ Do not call `enter_alt_screen()` for inline UI. Inline is the default after `ini
 - [The Screen facade]({{< relref "../concepts/screen.md" >}})
 - [Canvas and rendering]({{< relref "../concepts/canvas-and-rendering.md" >}})
 - [Examples]({{< relref "../examples.md" >}}#inline-rendering-no-alternate-screen)
-- [API reference](../api/)
+- [API reference](/api/)

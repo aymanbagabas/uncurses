@@ -114,4 +114,4 @@ Do not keep a live async stream while also reading synchronously from the same s
 - [The Screen facade]({{< relref "../concepts/screen.md" >}}#reading-events)
 - [Pause and resume]({{< relref "pause-and-resume.md" >}})
 - [Examples]({{< relref "../examples.md" >}}#mouse-and-async)
-- [API reference](../api/)
+- [API reference](/api/)

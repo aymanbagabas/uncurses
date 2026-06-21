@@ -91,4 +91,4 @@ Use this pattern for snapshot tests, terminal transcripts, or sending rendered f
 
 - [Canvas and rendering]({{< relref "../concepts/canvas-and-rendering.md" >}})
 - [Examples]({{< relref "../examples.md" >}}#draw-only)
-- [API reference](../api/)
+- [API reference](/api/)

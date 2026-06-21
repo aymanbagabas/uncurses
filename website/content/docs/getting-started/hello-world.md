@@ -115,4 +115,4 @@ fn main() -> std::io::Result<()> {
 
 - Learn what `Screen` wraps in [The four layers]({{< relref "the-layers.md" >}}).
 - Build a larger app in the [Tutorial]({{< relref "../tutorial.md" >}}).
-- See the `screen` module in the [API reference](../../../api/).
+- See the `screen` module in the [API reference](/api/).

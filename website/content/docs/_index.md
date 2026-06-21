@@ -21,5 +21,5 @@ reach for **Guides** when you have a specific job to do, and dip into
   {{< card link="guides" title="Guides" subtitle="How-to walkthroughs for inline, mouse, paste, async, and more." >}}
   {{< card link="explanations" title="Explanations" subtitle="How terminals work, the rendering pipeline, and design principles." >}}
   {{< card link="examples" title="Examples" subtitle="Runnable demos grouped by use case." >}}
-  {{< card link="../api/" title="API reference" subtitle="Generated rustdoc for every module and type." >}}
+  {{< card link="/api/" title="API reference" subtitle="Generated rustdoc for every module and type." >}}
 {{< /cards >}}

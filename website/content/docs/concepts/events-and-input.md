@@ -7,7 +7,7 @@ weight: 3
 bytes, buffers incomplete control sequences, and yields typed `Event` values for
 keys, mouse input, bracketed paste, focus, resize, and terminal replies.
 
-See the [event rustdoc](../api/uncurses/event/) for the full API, and
+See the [event rustdoc](/api/uncurses/event/) for the full API, and
 [the Screen facade]({{< relref "screen.md" >}}) for the higher-level wrapper
 that observes capability replies while you read events.
 
@@ -82,7 +82,7 @@ fn main() -> std::io::Result<()> {
 ## The Event enum
 
 `Event` is a plain enum. This table groups the variants most applications match
-on; use [the rustdoc](../api/uncurses/event/enum.Event.html) for the complete
+on; use [the rustdoc](/api/uncurses/event/enum.Event.html) for the complete
 list.
 
 | Category | Main variants | Notes |

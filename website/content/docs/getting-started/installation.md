@@ -74,4 +74,4 @@ uncurses supports modern VT100/xterm-style terminals on Linux, macOS, Windows, a
 
 - Write the smallest complete program in [Hello, terminal]({{< relref "hello-world.md" >}}).
 - Learn the main building blocks in [The four layers]({{< relref "the-layers.md" >}}).
-- Browse the generated [API reference](../../../api/).
+- Browse the generated [API reference](/api/).

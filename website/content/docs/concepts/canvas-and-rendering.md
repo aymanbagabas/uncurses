@@ -9,7 +9,7 @@ or a socket. `Canvas` has no input decoder and no raw-mode lifecycle opinion;
 `Screen` composes it with `Terminal` and `EventSource` when you want the full
 application facade.
 
-See the [Canvas rustdoc](../api/uncurses/canvas/struct.Canvas.html) for the full
+See the [Canvas rustdoc](/api/uncurses/canvas/struct.Canvas.html) for the full
 API, [the Screen facade]({{< relref "screen.md" >}}) for lifecycle management,
 and the [`offscreen` example]({{< relref "../examples.md" >}}#draw-only) for
 rendering without a terminal.

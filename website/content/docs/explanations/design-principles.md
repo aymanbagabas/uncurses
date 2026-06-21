@@ -10,7 +10,7 @@ the wire.
 
 See [The four layers]({{< relref "../getting-started/the-layers.md" >}}) for the
 orientation, [The Screen facade]({{< relref "../concepts/screen.md" >}}) for the
-high-level lifecycle, and the [API reference](../../../api/) for exact types.
+high-level lifecycle, and the [API reference](/api/) for exact types.
 
 ## Layered, not a framework
 

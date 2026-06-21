@@ -86,4 +86,4 @@ This split keeps the hot drawing path simple while preserving honest error handl
 
 - Add uncurses to a project in [Installation]({{< relref "installation.md" >}}).
 - Build a first program in [Hello, terminal]({{< relref "hello-world.md" >}}).
-- Read the generated [API reference](../../../api/) for exact type and method documentation.
+- Read the generated [API reference](/api/) for exact type and method documentation.

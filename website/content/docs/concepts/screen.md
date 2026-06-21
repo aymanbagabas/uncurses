@@ -16,7 +16,7 @@ paste, focus reporting, in-band resize reports, color-theme update reports,
 window title, pointer shape, xterm `modifyOtherKeys`, and default foreground,
 background, cursor, and palette colors.
 
-See the [Screen rustdoc](../api/uncurses/screen/struct.Screen.html) for the full
+See the [Screen rustdoc](/api/uncurses/screen/struct.Screen.html) for the full
 API surface, and [Canvas and rendering]({{< relref "canvas-and-rendering.md" >}})
 for the frame pipeline behind its drawing methods.
 

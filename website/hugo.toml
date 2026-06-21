@@ -29,7 +29,7 @@ pageRef = "/docs/examples"
 weight = 2
 [[menu.main]]
 name = "API"
-url = "api/"
+url = "/api/"
 weight = 3
 [[menu.main]]
 name = "Search"

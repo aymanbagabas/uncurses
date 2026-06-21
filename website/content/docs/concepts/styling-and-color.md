@@ -7,8 +7,8 @@ weight: 4
 foreground, background, underline color, underline shape, boolean SGR
 attributes, and an optional OSC 8 hyperlink.
 
-See the [style rustdoc](../api/uncurses/style/) and
-[color rustdoc](../api/uncurses/color/) for exact types, and
+See the [style rustdoc](/api/uncurses/style/) and
+[color rustdoc](/api/uncurses/color/) for exact types, and
 [Canvas and rendering]({{< relref "canvas-and-rendering.md" >}}) for how styles
 are diffed frame-to-frame.
 
