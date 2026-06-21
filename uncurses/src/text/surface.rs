@@ -201,6 +201,73 @@ pub trait TextSurface: SurfaceMut {
         Painter::new(self, mode, eaw).set_str_rect_wrap(rect, s, wrap, style)
     }
 
+    /// Paint `s` at `pos`, truncating with a `tail` indicator on overflow.
+    ///
+    /// When a cluster would cross the surface's right edge, painting stops and
+    /// `tail` is stamped over the trailing columns, ending at the right edge.
+    /// The tail appears only when `s` actually overflows. `tail` is painted
+    /// with `tail_style` and may carry inline escape sequences, so it can be a
+    /// single glyph (`"…"`), a word (`" more"`), or a multi-style span. A tail
+    /// wider than the surface is dropped in favor of a hard truncate.
+    ///
+    /// # Parameters
+    ///
+    /// * `pos` — starting cell position.
+    /// * `s` — UTF-8 string to paint.
+    /// * `tail` — truncation indicator, painted when `s` overflows.
+    /// * `tail_style` — starting style for the tail.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
+    fn set_str_truncate(
+        &mut self,
+        pos: impl Into<Position>,
+        s: &str,
+        tail: &str,
+        tail_style: impl Into<Style>,
+    ) -> Position {
+        let (mode, eaw) = (self.width_mode(), self.eaw_wide());
+        Painter::new(self, mode, eaw).set_str_truncate(pos, s, tail, tail_style)
+    }
+
+    /// Paint `s` inside `rect`, truncating with a `tail` indicator on overflow.
+    ///
+    /// This is the rectangular form of [`set_str_truncate`](Self::set_str_truncate):
+    /// the clip rectangle is `rect ∩ self.bounds()`, and the tail is stamped at
+    /// `rect`'s right edge when the text overflows it.
+    ///
+    /// # Parameters
+    ///
+    /// * `rect` — clipping rectangle and starting origin.
+    /// * `s` — UTF-8 string to paint.
+    /// * `tail` — truncation indicator, painted when `s` overflows.
+    /// * `tail_style` — starting style for the tail.
+    ///
+    /// # Returns
+    ///
+    /// The cursor position immediately after the last written cell, or where
+    /// painting stopped.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors and does not intentionally panic.
+    fn set_str_rect_truncate(
+        &mut self,
+        rect: impl Into<Rect>,
+        s: &str,
+        tail: &str,
+        tail_style: impl Into<Style>,
+    ) -> Position {
+        let (mode, eaw) = (self.width_mode(), self.eaw_wide());
+        Painter::new(self, mode, eaw).set_str_rect_truncate(rect, s, tail, tail_style)
+    }
+
     /// Measure the display width of `s` in terminal columns.
     ///
     /// The measurement uses this surface's [`width_mode`](Self::width_mode)
