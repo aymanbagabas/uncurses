@@ -21,9 +21,8 @@
 //!
 //! Each paint call takes a starting [`Style`]. Inline SGR sequences update the
 //! painter's current style, and OSC 8 sequences attach or clear a hyperlink on
-//! that same style. The resulting style is readable from [`Painter::style`]
-//! after the call. Feed it into a later call to continue a styled stream, or
-//! call [`Painter::reset`] to return to [`Style::default()`].
+//! that same style. The painter carries this running style across calls within
+//! its lifetime; call [`Painter::reset`] to return to [`Style::default()`].
 //!
 //! ## Cells, clipping, and wrapping
 //!
@@ -78,21 +77,21 @@ pub enum WrapMode {
     Wrap,
 }
 
-/// Paint styled strings into a [`SurfaceMut`].
+/// Paint styled strings into a [`TextSurface`].
 ///
-/// The painter is parameterized by a [`WidthMode`] and an `eaw_wide` policy,
-/// both fixed for the painter's lifetime. Its public [`style`](Self::style)
-/// field records the current style after parsing inline SGR and OSC 8
-/// sequences. Text is written into the borrowed target surface; dropping a
-/// painter has no side effects.
+/// The painter snapshots its target's [`WidthMode`] and `eaw_wide` policy at
+/// construction, both fixed for the painter's lifetime, and tracks the current
+/// style as it parses inline SGR and OSC 8 sequences. Text is written into the
+/// borrowed target surface; dropping a painter has no side effects.
 pub struct Painter<'s, S: TextSurface + ?Sized> {
     target: &'s mut S,
-    /// Width measurement policy.
-    pub mode: WidthMode,
-    /// Whether East Asian Ambiguous characters are treated as wide.
-    pub eaw_wide: bool,
-    /// Current painting style.
-    pub style: Style,
+    /// Width measurement policy, snapshotted from the target at construction.
+    mode: WidthMode,
+    /// Whether East Asian Ambiguous characters are treated as wide,
+    /// snapshotted from the target at construction.
+    eaw_wide: bool,
+    /// Current painting style, updated as inline SGR/OSC 8 escapes are parsed.
+    style: Style,
 }
 
 impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
@@ -125,7 +124,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
     /// Clear the current style back to [`Style::default()`].
     ///
     /// This removes any active attributes, colors, and hyperlink from
-    /// [`style`](Self::style). It does not modify the target surface.
+    /// the current style. It does not modify the target surface.
     ///
     /// # Returns
     ///
@@ -314,7 +313,7 @@ impl<'s, S: TextSurface + ?Sized> SurfaceMut for Painter<'s, S> {
 
 /// A [`Painter`] is itself a [`TextSurface`] whose `set_str` family recognizes
 /// inline SGR and OSC 8 hyperlink sequences, updating the running
-/// [`style`](Painter::style) as the input is parsed. This is the escape-aware
+/// the running style as the input is parsed. This is the escape-aware
 /// counterpart to the literal painting of the default [`TextSurface`] methods.
 impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     fn width_mode(&self) -> WidthMode {
@@ -336,7 +335,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     /// Paint `s` starting at `pos`, clipped to the target bounds.
     ///
     /// `style` replaces the painter's current [`Style`] before painting.
-    /// Inline SGR and OSC 8 sequences then update [`style`](Self::style) as
+    /// Inline SGR and OSC 8 sequences then update the running style as
     /// the input is processed. Newline advances to the next row at the bounds'
     /// left edge; carriage return returns to that left edge on the current row.
     /// Right-edge behavior is [`WrapMode::Truncate`].
