@@ -819,6 +819,23 @@ where
     /// mode and begin a session.
     pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
         let canvas = Canvas::from_terminal(&terminal)?;
+        Self::with_canvas(terminal, canvas)
+    }
+
+    /// Construct a screen over `terminal` with a caller-provided [`Canvas`],
+    /// without touching the terminal.
+    ///
+    /// Use this when you want to pre-configure the canvas before the session
+    /// starts, for example its color profile, optimizations, East Asian width
+    /// policy, or grapheme clustering. Build the canvas over the terminal's
+    /// output half (for example with [`Canvas::from_terminal`], or
+    /// [`Canvas::from_env`] passing `terminal.output()`) so its writer matches
+    /// the screen's terminal.
+    ///
+    /// [`new`](Self::new) is the same constructor with a default canvas sized
+    /// to the terminal. The terminal is left as-is; call [`Self::init`] to
+    /// enter raw mode and begin a session.
+    pub fn with_canvas(terminal: Terminal<I, O>, canvas: Canvas<O>) -> io::Result<Self> {
         let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
         Ok(Self {
             terminal,
@@ -963,6 +980,23 @@ where
     /// mode and begin a session.
     pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
         let canvas = Canvas::from_terminal(&terminal)?;
+        Self::with_canvas(terminal, canvas)
+    }
+
+    /// Construct a screen over `terminal` with a caller-provided [`Canvas`],
+    /// without touching the terminal.
+    ///
+    /// Use this when you want to pre-configure the canvas before the session
+    /// starts, for example its color profile, optimizations, East Asian width
+    /// policy, or grapheme clustering. Build the canvas over the terminal's
+    /// output half (for example with [`Canvas::from_terminal`], or
+    /// [`Canvas::from_env`] passing `terminal.output()`) so its writer matches
+    /// the screen's terminal.
+    ///
+    /// [`new`](Self::new) is the same constructor with a default canvas sized
+    /// to the terminal. The terminal is left as-is; call [`Self::init`] to
+    /// enter raw mode and begin a session.
+    pub fn with_canvas(terminal: Terminal<I, O>, canvas: Canvas<O>) -> io::Result<Self> {
         let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
         Ok(Self {
             terminal,
