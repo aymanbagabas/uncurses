@@ -22,6 +22,10 @@ jobs:
     env:
       HUGO_VERSION: 0.162.1
       PROJECT_NAME: uncurses-website
+      # Force HTTP/1.1 for cargo downloads. crates.io occasionally returns
+      # "HTTP2 framing layer" errors on the runners, which fail the rustdoc
+      # build; HTTP/1.1 avoids the flaky multiplexing path.
+      CARGO_HTTP_MULTIPLEXING: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
