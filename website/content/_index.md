@@ -4,24 +4,24 @@ layout: hextra-home
 ---
 
 {{< hextra/hero-badge >}}
-  <div class="hx-w-2 hx-h-2 hx-rounded-full hx-bg-primary-400"></div>
+  <div class="hx:w-2 hx:h-2 hx:rounded-full hx:bg-primary-400"></div>
   A terminal library for Rust
 {{< /hextra/hero-badge >}}
 
-<div class="hx-mt-6 hx-mb-6">
+<div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
-  Build terminal UIs,&nbsp;<br class="sm:hx-block hx-hidden" />without the curses
+  Build terminal UIs,&nbsp;<br class="hx:sm:block hx:hidden" />without the curses
 {{< /hextra/hero-headline >}}
 </div>
 
-<div class="hx-mb-12">
+<div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  A low-level, modern, VT100/xterm-style terminal library.&nbsp;<br class="sm:hx-block hx-hidden" />
+  A low-level, modern, VT100/xterm-style terminal library.&nbsp;<br class="hx:sm:block hx:hidden" />
   You own the event loop; it makes the bytes correct and minimal.
 {{< /hextra/hero-subtitle >}}
 </div>
 
-<div class="hx-mb-6">
+<div class="hx:mb-6">
 {{< hextra/hero-button text="Get Started" link="docs" >}}
 </div>
 
@@ -29,7 +29,7 @@ layout: hextra-home
   {{< hextra/feature-card title="Layered, not a framework"
     subtitle="Reach for Screen to ship fast, or drop to Canvas, EventSource, and Terminal. Nothing is hidden." >}}
   {{< hextra/feature-card title="Cell-diffing renderer"
-    subtitle="Render to a terminal — or any Write sink — and ship only the bytes that changed." >}}
+    subtitle="Render to a terminal, or any Write sink, and ship only the bytes that changed." >}}
   {{< hextra/feature-card title="Typed events"
     subtitle="Keys, mouse, paste, focus, resize, and query replies, decoded from the raw byte soup." >}}
   {{< hextra/feature-card title="Degrades gracefully"
