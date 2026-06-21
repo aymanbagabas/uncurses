@@ -25,8 +25,8 @@ use uncurses::style::Style;
 
 fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
-    let title = Style::default().bold().fg(BasicColor::Green);
-    let link = Style::default()
+    let title = Style::new().bold().fg(BasicColor::Green);
+    let link = Style::new()
         .underline()
         .fg(Color::hex("#78aaff").unwrap())
         .link("https://github.com/aymanbagabas/uncurses", "");
@@ -57,7 +57,7 @@ fn main() -> std::io::Result<()> {
     let w = screen.width();
     screen.resize((w, 1)); // inline: one row tall
 
-    screen.set_str((0, 0), "Hello! Press q to quit.", Style::default());
+    screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
     screen.present()?;
 
     let q: Key = "q".parse().unwrap();

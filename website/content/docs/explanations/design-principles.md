@@ -45,7 +45,7 @@ Drawing methods write to memory. The renderer stages bytes into an internal
 buffer. Nothing reaches the underlying writer until you flush.
 
 ```rust
-screen.set_str((0, 0), "Hello", Style::default());
+screen.set_str((0, 0), "Hello", Style::new());
 screen.present()?;
 ```
 

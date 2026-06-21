@@ -27,7 +27,7 @@ fn main() -> std::io::Result<()> {
     let w = screen.width();
     screen.resize((w, 1)); // inline: one row tall
 
-    screen.set_str((0, 0), "Hello! Press q to quit.", Style::default());
+    screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
     screen.present()?;
 
     let q: Key = "q".parse().unwrap();

@@ -83,6 +83,6 @@ let r: Rect = (3, 5, 10, 2).into();
 This is why drawing calls can use compact coordinates:
 
 ```rust
-screen.set_str((0, 0), "hello", uncurses::style::Style::default());
+screen.set_str((0, 0), "hello", uncurses::style::Style::new());
 screen.resize((80, 24));
 ```

@@ -71,7 +71,7 @@ Use it directly when you are building your own lifecycle instead of using `Scree
 Drawing methods write into memory and return nothing:
 
 ```rust
-screen.set_str((0, 0), "Hello", Style::default());
+screen.set_str((0, 0), "Hello", Style::new());
 ```
 
 The I/O boundary is explicit. Bytes reach the terminal only when you flush, usually through `present()`:

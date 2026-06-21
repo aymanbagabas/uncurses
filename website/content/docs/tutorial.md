@@ -97,7 +97,7 @@ impl App {
         let h = self.screen.height();
         let x = w.saturating_sub(label.len() as u16) / 2;
 
-        let style = Style::default()
+        let style = Style::new()
             .fg(BasicColor::BrightWhite)
             .bg(BasicColor::Blue)
             .bold();
