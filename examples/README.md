@@ -16,7 +16,7 @@ shape of the library.
 
 | Example | What it shows |
 | --- | --- |
-| `counter` | The simplest full `Screen` app: render a button, react to keys and mouse. The [tutorial](../docs/tutorial.md) builds it step by step. |
+| `counter` | The simplest full `Screen` app: render a button, react to keys and mouse. The [tutorial](../website/content/docs/tutorial.md) builds it step by step. |
 | `low_level` | The same lifecycle by hand — a `Terminal`, a `Canvas`, and an `EventSource` wired up directly, no `Screen` facade. |
 
 ## Read input only
