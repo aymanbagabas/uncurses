@@ -1,4 +1,7 @@
-# A short uncurses tutorial
+---
+title: "Tutorial"
+weight: 5
+---
 
 Let's build a small interactive program from scratch: a centered button
 you click (or press a key) to bump a counter. By the end you will have
@@ -26,7 +29,7 @@ back.
 `start` builds a `Screen` over the process stdio, begins a session, and
 switches on the alternate screen, a hidden cursor, and mouse reporting.
 
-```rust,ignore
+```rust
 use uncurses::event::{Event, Key, MouseButton};
 use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::terminal::{Stdin, Stdout};
@@ -80,7 +83,7 @@ The drawing methods come from two traits. `clear`, `width`, and `height`
 come from the surface traits in [`buffer`]; the string painters
 (`set_str` and friends) come from [`TextSurface`]. Bring them into scope.
 
-```rust,ignore
+```rust
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
 use uncurses::style::Style;
@@ -112,7 +115,7 @@ straight from strings, and `==` compares the canonical chord, so matching
 a shortcut is plain equality. A resize event just tells the screen its new
 size, and a mouse click bumps the counter too.
 
-```rust,ignore
+```rust
 impl App {
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
@@ -155,7 +158,7 @@ flushes, and restores the terminal's prior state. It consumes the screen,
 so `stop` takes `self` by value. Run it even when the loop returns an
 error, so a crash never leaves the terminal in a wrecked state.
 
-```rust,ignore
+```rust
 impl App {
     fn stop(self) -> std::io::Result<()> {
         self.screen.finish()
@@ -178,7 +181,7 @@ fn main() -> std::io::Result<()> {
   it into the scrollback.
 - `examples/file_explorer.rs` reads input asynchronously with the `async`
   feature and a small runtime.
-- [How terminals actually work](terminals.md) is the mental model behind
+- [How terminals actually work]({{< relref "explanations/how-terminals-work.md" >}}) is the mental model behind
   everything you just did: byte streams, raw mode, and VT modes.
 - The [uncurses README](../uncurses/README.md) maps the rest of the API,
   including the low-level `Canvas`, terminal queries, and styling.
