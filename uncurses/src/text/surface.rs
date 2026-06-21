@@ -104,7 +104,7 @@ pub trait TextSurface: SurfaceMut {
     ///
     /// Use [`set_str_wrap`](Self::set_str_wrap) when text should continue on
     /// following rows instead of truncating at the right edge.
-    fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: Style) -> Position {
+    fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         Painter::new(self, mode, eaw).set_str(pos, s, style)
     }
@@ -137,7 +137,7 @@ pub trait TextSurface: SurfaceMut {
         pos: impl Into<Position>,
         s: &str,
         wrap: WrapMode,
-        style: Style,
+        style: impl Into<Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         Painter::new(self, mode, eaw).set_str_wrap(pos, s, wrap, style)
@@ -164,7 +164,7 @@ pub trait TextSurface: SurfaceMut {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    fn set_str_rect(&mut self, rect: impl Into<Rect>, s: &str, style: Style) -> Position {
+    fn set_str_rect(&mut self, rect: impl Into<Rect>, s: &str, style: impl Into<Style>) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         Painter::new(self, mode, eaw).set_str_rect(rect, s, style)
     }
@@ -195,7 +195,7 @@ pub trait TextSurface: SurfaceMut {
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
-        style: Style,
+        style: impl Into<Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         Painter::new(self, mode, eaw).set_str_rect_wrap(rect, s, wrap, style)

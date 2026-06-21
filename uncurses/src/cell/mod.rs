@@ -402,8 +402,8 @@ impl Cell {
     /// This builder-style method preserves content and [`Kind`]. Styling a
     /// continuation is possible, but continuations do not render independent
     /// content.
-    pub fn style(mut self, style: Style) -> Self {
-        self.style = style;
+    pub fn style(mut self, style: impl Into<Style>) -> Self {
+        self.style = style.into();
         self
     }
 }

@@ -321,14 +321,12 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdin, Stdout>) {
             // pad the row so the selection bar covers the whole list column
             let padded = pad_to(&line, list_w);
             let style = match (idx == app.selected, entry.is_dir) {
-                (true, true) => selected_dir.clone(),
-                (true, false) => selected.clone(),
-                (false, true) => dir_style.clone(),
-                (false, false) => normal.clone(),
+                (true, true) => &selected_dir,
+                (true, false) => &selected,
+                (false, true) => &dir_style,
+                (false, false) => &normal,
             };
-            {
-                screen.set_str((0, y), &padded, style.clone());
-            };
+            screen.set_str((0, y), &padded, style);
         }
     }
 

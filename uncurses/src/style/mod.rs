@@ -234,7 +234,27 @@ impl std::hash::Hash for Style {
     }
 }
 
+impl From<&Style> for Style {
+    /// Clone a borrowed style into an owned one.
+    ///
+    /// This lets APIs that accept `impl Into<Style>` take a `&Style` without
+    /// the caller writing `.clone()`. Owned styles convert for free via the
+    /// blanket `From<Style> for Style`.
+    fn from(style: &Style) -> Self {
+        style.clone()
+    }
+}
+
 impl Style {
+    /// Create an empty style.
+    ///
+    /// Equivalent to [`Style::default`] and [`Style::EMPTY`]: no colors,
+    /// attributes, underline, or hyperlink. Chain the builder methods such as
+    /// [`bold`](Self::bold) or [`fg`](Self::fg) to add settings.
+    pub const fn new() -> Self {
+        Self::EMPTY
+    }
+
     /// Style with no colors, attributes, underline, or hyperlink.
     ///
     /// This is equivalent to [`Style::default()`]. Writing it as a style
