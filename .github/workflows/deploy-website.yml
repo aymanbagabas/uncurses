@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  deployments: write
 
 # One run per ref. Cancel superseded runs so only the latest deploys.
 concurrency:
@@ -89,6 +90,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
           command: >-
             pages deploy website/public
             --project-name=${{ env.PROJECT_NAME }}
