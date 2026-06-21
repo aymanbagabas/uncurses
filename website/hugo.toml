@@ -50,6 +50,7 @@ displayLogo = false
 [params.footer]
 enable = true
 displayCopyright = true
+displayPoweredBy = false
 [params.editURL]
 enable = true
 base = "https://github.com/aymanbagabas/uncurses/edit/main/website/content"
