@@ -3,7 +3,6 @@
 
 use std::io;
 
-use crate::ansi;
 use crate::cell::Cell;
 use crate::renderer::Renderer;
 use crate::style::Style;
@@ -31,17 +30,11 @@ impl Renderer {
         let to = self.color_profile.convert_style(target_style);
         let from = self.color_profile.convert_style(self.cur.style());
 
+        // `write_style_diff` emits both the SGR delta and the OSC 8 hyperlink
+        // delta. Both sides come from `convert_style`, which drops the link
+        // entirely under `Profile::Disabled`, so OSC 8 is auto-suppressed
+        // there with no special-case code here.
         write_style_diff(out, &from, &to)?;
-
-        // Hyperlink diff. Both sides come from `convert_style`, which
-        // drops the link entirely under `Profile::Disabled`, so OSC 8
-        // is auto-suppressed there with no special-case code here.
-        if to.link != from.link {
-            match to.link.as_deref() {
-                Some(l) => ansi::write_hyperlink_start(out, &l.url, &l.params)?,
-                None => ansi::write_hyperlink_end(out)?,
-            }
-        }
 
         self.cur.set_style(target_style.clone());
         Ok(())
