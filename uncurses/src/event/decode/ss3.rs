@@ -1,10 +1,21 @@
 //! SS3 (Single Shift 3) decoder.
 //!
-//! Format: `ESC O` (or 8-bit `0x8F`) followed by a single final byte.
-//! Used by terminals in cursor-key application mode and for keypad
-//! keys. Unrecognised finals fall through to legacy-key lookup, then
-//! [`Event::UnknownSs3`].
-
+//! ## Purpose
+//!
+//! SS3 decodes compact keypad, application-cursor, and function-key sequences
+//! into [`Key`](crate::event::Key) events. It also delegates to the legacy-key
+//! lookup table for older modifier encodings.
+//!
+//! ## Wire format
+//!
+//! SS3 starts with `ESC O` or the 8-bit C1 byte `0x8F`, followed by one final
+//! byte. Unknown finals are surfaced as [`Event::UnknownSs3`] with the original
+//! framed bytes.
+//!
+//! ## Gotchas
+//!
+//! SS3 itself does not carry xterm-style modifier parameters. Modified keys
+//! generally arrive through CSI forms unless a legacy table entry matches.
 use super::Decoder;
 use super::DecoderFlags;
 use super::result::ParseResult;

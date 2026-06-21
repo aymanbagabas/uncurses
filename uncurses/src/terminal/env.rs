@@ -1,26 +1,34 @@
-//! Environment variable snapshot.
+//! Environment variable snapshots for terminal configuration.
 //!
 //! [`Env`] wraps a captured set of `(key, value)` pairs so that code which
 //! depends on the process environment can be exercised with deterministic
 //! inputs in tests, and so that callers can build synthetic environments
 //! (for example, from a configuration file) without mutating the
-//! process-global state managed by [`std::env`].
+//! process-global state managed by [`std::env`](mod@std::env).
 
 /// A snapshot of environment variables.
 ///
-/// Wrapping [`std::env::var`] lets tests construct deterministic
-/// environments without touching the process-global state.
-///
-/// Stored as an ordered slice of `(key, value)` pairs. Duplicate keys are
-/// allowed; lookups return the **last** value, matching how the kernel
-/// resolves duplicates in a process's environment block.
+/// `Env` stores an ordered list of `(key, value)` pairs. Duplicate keys are
+/// allowed; lookups return the **last** matching value. This makes it useful
+/// both for capturing the process environment and for constructing
+/// deterministic terminal environments in tests.
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     vars: Vec<(String, String)>,
 }
 
 impl Env {
-    /// Build an environment populated from the current process.
+    /// Capture the current process environment.
+    ///
+    /// # Returns
+    ///
+    /// An [`Env`] containing all variables yielded by [`std::env::vars`] at the
+    /// time of the call.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors. It has the same panic behavior as
+    /// [`std::env::vars`] if the process environment contains invalid data.
     pub fn from_process() -> Self {
         Self {
             vars: std::env::vars().collect(),
@@ -28,12 +36,36 @@ impl Env {
     }
 
     /// Build an empty environment.
+    ///
+    /// # Returns
+    ///
+    /// An [`Env`] with no variables.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
     pub fn empty() -> Self {
         Self::default()
     }
 
-    /// Build an environment from `(key, value)` pairs, preserving order
-    /// and duplicates.
+    /// Build an environment from `(key, value)` pairs.
+    ///
+    /// Pair order and duplicate keys are preserved. Later duplicates shadow
+    /// earlier values for [`get`](Self::get), [`has`](Self::has), and
+    /// [`bool`](Self::bool).
+    ///
+    /// # Parameters
+    ///
+    /// * `iter` — variables to store.
+    ///
+    /// # Returns
+    ///
+    /// An [`Env`] containing the supplied variables.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors. It may panic only if allocation for
+    /// the stored strings fails.
     pub fn from_pairs<I, K, V>(iter: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -48,27 +80,83 @@ impl Env {
         }
     }
 
-    /// Append a variable. If `key` already exists, the new value shadows
-    /// earlier ones for [`Env::get`] / [`Env::bool`] / [`Env::has`] lookups.
+    /// Append a variable to the snapshot.
+    ///
+    /// If `key` already exists, the new value shadows earlier values for
+    /// [`get`](Self::get), [`bool`](Self::bool), and [`has`](Self::has)
+    /// lookups. Existing entries are not removed.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` — variable name.
+    /// * `value` — variable value.
+    ///
+    /// # Returns
+    ///
+    /// `self`, for chaining.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors. It may panic only if allocation for
+    /// the stored strings fails.
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.vars.push((key.into(), value.into()));
         self
     }
 
     /// Return whether a variable is present with a non-empty value.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` — variable name.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the last value for `key` exists and is not empty.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
     pub fn has(&self, key: &str) -> bool {
         self.lookup(key).is_some_and(|v| !v.is_empty())
     }
 
-    /// Return a variable's value (the last one set), or `None` if unset.
+    /// Return a variable's value.
+    ///
+    /// If duplicate keys are present, the last value is returned.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` — variable name.
+    ///
+    /// # Returns
+    ///
+    /// A newly allocated copy of the value, or `None` if `key` is absent.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors. It may panic only if allocation for
+    /// the returned string fails.
     pub fn get(&self, key: &str) -> Option<String> {
         self.lookup(key).map(str::to_owned)
     }
 
     /// Return whether a variable parses as a truthy boolean.
     ///
-    /// Accepts `1`, `t`, `T`, `TRUE`, `true`, `True`. Anything else
-    /// (including empty / unset) is false.
+    /// Accepts `1`, `t`, `T`, `TRUE`, `true`, and `True`. Anything else,
+    /// including an empty or absent value, is false.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` — variable name.
+    ///
+    /// # Returns
+    ///
+    /// `true` for the accepted truthy values.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
     pub fn bool(&self, key: &str) -> bool {
         matches!(
             self.lookup(key).unwrap_or_default(),

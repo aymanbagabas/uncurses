@@ -6,18 +6,15 @@
 //! surface with a scrim and sits on top. `q`, `Esc`, or `Ctrl-C`
 //! exits.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::{TextSurface, WrapMode};
 
 const SURFACE_W: u16 = 60;
 const SURFACE_H: u16 = 16;
@@ -25,27 +22,21 @@ const MODAL_W: u16 = 36;
 const MODAL_H: u16 = 7;
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     modal_open: bool,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let size = term.window_size().unwrap_or_default();
-        let w = SURFACE_W.min(size.col.max(1));
-        let h = SURFACE_H.min(size.row.max(1));
-        let mut screen = Screen::new(term.output(), (w, h));
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        let w = SURFACE_W.min(screen.width().max(1));
+        let h = SURFACE_H.min(screen.height().max(1));
+        screen.resize((w, h));
+        screen.hide_cursor()?;
 
         Ok(Self {
-            term,
             screen,
-            events,
             modal_open: false,
         })
     }
@@ -59,7 +50,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read_event()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(Key {
@@ -93,7 +84,7 @@ impl App {
                 Event::Resize(ws) => {
                     let nw = SURFACE_W.min(ws.col.max(1));
                     let nh = SURFACE_H.min(ws.row.max(1));
-                    self.screen.resize(nw, nh);
+                    self.screen.resize((nw, nh));
                     dirty = true;
                 }
                 _ => {}
@@ -105,10 +96,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -119,7 +108,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     screen.clear();
     paint_content(screen);
     if modal_open {
@@ -130,36 +119,25 @@ fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
     }
 }
 
-fn paint_content<W: Write>(screen: &mut Screen<W>) {
-    let cyan = Style::default().fg(BasicColor::BrightCyan.into());
+fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
+    let cyan = Style::default().fg(BasicColor::BrightCyan);
     let plain = Style::default();
-    let bullet_color = Style::default().fg(BasicColor::Yellow.into());
+    let bullet_color = Style::default().fg(BasicColor::Yellow);
 
-    screen.set_str_with(
-        (0, 1),
-        "Press m to toggle the modal.",
-        WrapMode::Truncate,
-        cyan,
-    );
-    screen.set_str_with(
+    screen.set_str((0, 1), "Press m to toggle the modal.", cyan);
+    screen.set_str(
         (0, 2),
         "Behind the modal there's regular flow content:",
-        WrapMode::Truncate,
         plain,
     );
     for (i, label) in ["item 1", "item 2", "item 3", "item 4"].iter().enumerate() {
         let y = 3 + i as u16;
-        screen.set_str_with(
-            (0, y),
-            "•",
-            WrapMode::Truncate,
-            Style::default().fg(BasicColor::Yellow.into()),
-        );
-        screen.set_str_with((2, y), label, WrapMode::Truncate, bullet_color.clone());
+        screen.set_str((0, y), "•", Style::default().fg(BasicColor::Yellow));
+        screen.set_str((2, y), label, bullet_color.clone());
     }
 }
 
-fn paint_scrim<W: Write>(screen: &mut Screen<W>) {
+fn paint_scrim(screen: &mut Screen<Stdin, Stdout>) {
     // Dim the surface with a uniform gray fill so the modal stands
     // out. The cells behind keep their content but the scrim's bg
     // wins because we overwrite each cell.
@@ -168,7 +146,7 @@ fn paint_scrim<W: Write>(screen: &mut Screen<W>) {
     screen.fill_rect(bounds, &Cell::narrow(" ").style(scrim));
 }
 
-fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
+fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W || h < MODAL_H {
@@ -179,35 +157,35 @@ fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
+fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue)
         .bold();
     let body = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into());
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue);
     let hint = Style::default()
-        .fg(BasicColor::BrightYellow.into())
-        .bg(BasicColor::Blue.into());
+        .fg(BasicColor::BrightYellow)
+        .bg(BasicColor::Blue);
 
     screen.fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
 
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;
     for x in (rect.x + 1)..right {
-        screen.set_str_with((x, rect.y), "─", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((x, bottom), "─", WrapMode::Truncate, frame.clone());
+        screen.set_str((x, rect.y), "─", frame.clone());
+        screen.set_str((x, bottom), "─", frame.clone());
     }
     for y in (rect.y + 1)..bottom {
-        screen.set_str_with((rect.x, y), "│", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((right, y), "│", WrapMode::Truncate, frame.clone());
+        screen.set_str((rect.x, y), "│", frame.clone());
+        screen.set_str((right, y), "│", frame.clone());
     }
     // Rounded corners.
-    screen.set_str_with((rect.x, rect.y), "╭", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, rect.y), "╮", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((rect.x, bottom), "╰", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, bottom), "╯", WrapMode::Truncate, frame.clone());
+    screen.set_str((rect.x, rect.y), "╭", frame.clone());
+    screen.set_str((right, rect.y), "╮", frame.clone());
+    screen.set_str((rect.x, bottom), "╰", frame.clone());
+    screen.set_str((right, bottom), "╯", frame.clone());
 
     let inner = Rect::new(
         rect.x + 2,
@@ -216,17 +194,16 @@ fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
         rect.height.saturating_sub(2),
     );
     let title = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue)
         .bold();
-    screen.set_str_rect_with(
+    screen.set_str_rect(
         Rect::new(inner.x, inner.y, inner.width, 1),
         "Modal Dialog",
-        WrapMode::Truncate,
         title,
     );
     let copy = "I sit on top thanks to z-index: 20.";
-    screen.set_str_rect_with(
+    screen.set_str_rect_wrap(
         Rect::new(
             inner.x,
             inner.y + 1,
@@ -237,10 +214,9 @@ fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
         WrapMode::Wrap,
         body,
     );
-    screen.set_str_rect_with(
+    screen.set_str_rect(
         Rect::new(inner.x, bottom - 1, inner.width, 1),
         "Press m or Esc to dismiss.",
-        WrapMode::Truncate,
         hint,
     );
 }

@@ -1,12 +1,19 @@
 //! Raw mode and terminal state helpers.
 //!
-//! Free functions that operate directly on a file descriptor (Unix) or
-//! a console handle (Windows). [`make_raw_mode`] returns a [`State`]
-//! capturing the previous configuration; pass it back to [`set_state`]
-//! (along with the same handles) to restore.
+//! These free functions operate on terminal descriptors on Unix and console
+//! handles on Windows. [`make_raw_mode`] saves the current configuration,
+//! applies raw-mode settings immediately, and returns the previous [`State`].
+//! Pass that state to [`set_state`] with the same handles to restore it.
 //!
-//! [`get_state`] / [`set_state`] expose the same snapshot type for
-//! arbitrary save/restore use outside of raw mode.
+//! ```text
+//! get_state() ── snapshot only ───────────────────────────────┐
+//!                                                             │
+//! make_raw_mode() ── returns previous State ── raw mode ── set_state()
+//! ```
+//!
+//! [`Terminal::make_raw`](super::Terminal::make_raw) and
+//! [`Terminal::restore`](super::Terminal::restore) wrap this same flow and keep
+//! one saved state inside the terminal handle.
 
 use std::io;
 
@@ -19,15 +26,22 @@ use windows_sys::Win32::Foundation::HANDLE;
 
 /// Snapshot of a terminal's configuration.
 ///
-/// On Unix this is the `libc::termios` for the input side. On Windows
-/// it is the input and output console-mode bits.
+/// On Unix this stores a `libc::termios` value read from the input descriptor,
+/// falling back to the output descriptor if necessary. On Windows it stores
+/// both input and output console-mode bitfields.
+///
+/// Use values returned by [`get_state`] or [`make_raw_mode`] with
+/// [`set_state`] to restore a terminal to a previous configuration.
 #[derive(Clone)]
 pub struct State {
     #[cfg(unix)]
+    /// Saved terminal attributes.
     pub termios: libc::termios,
     #[cfg(windows)]
+    /// Saved input console-mode bits.
     pub input_mode: u32,
     #[cfg(windows)]
+    /// Saved output console-mode bits.
     pub output_mode: u32,
 }
 
@@ -38,8 +52,26 @@ unsafe impl Sync for State {}
 
 /// Read the current terminal state.
 ///
-/// On Unix the input fd is tried first and the output fd is the
-/// fallback. On Windows both modes are sampled.
+/// On Unix the input descriptor is tried first and the output descriptor is
+/// the fallback. On Windows both input and output console modes are sampled.
+///
+/// # Parameters
+///
+/// * `input` — terminal input descriptor or handle.
+/// * `output` — terminal output descriptor or handle.
+///
+/// # Returns
+///
+/// A [`State`] describing the current terminal mode.
+///
+/// # Errors
+///
+/// Returns the OS error from the state query. On Unix, an error is returned
+/// only if both input and output descriptors fail.
+///
+/// # Panics
+///
+/// This function does not intentionally panic.
 #[cfg(unix)]
 pub fn get_state<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<State> {
     use std::mem::MaybeUninit;
@@ -58,10 +90,31 @@ pub fn get_state<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<State> {
     Ok(State { termios })
 }
 
-/// Apply `state` to the terminal (`TCSANOW` on Unix).
+/// Apply `state` to the terminal immediately.
 ///
-/// On Unix the input fd is tried first and the output fd is the
-/// fallback. On Windows both modes are written.
+/// On Unix this uses `TCSANOW`; the input descriptor is tried first and the
+/// output descriptor is the fallback. On Windows both modes stored in
+/// [`State`] are written.
+///
+/// # Parameters
+///
+/// * `input` — terminal input descriptor or handle.
+/// * `output` — terminal output descriptor or handle.
+/// * `state` — state previously returned by [`get_state`] or
+///   [`make_raw_mode`].
+///
+/// # Returns
+///
+/// `Ok(())` when the state was applied.
+///
+/// # Errors
+///
+/// Returns the OS error from applying the state. On Unix, an error is returned
+/// only if applying to both input and output descriptors fails.
+///
+/// # Panics
+///
+/// This function does not intentionally panic.
 #[cfg(unix)]
 pub fn set_state<I: AsFd, O: AsFd>(input: I, output: O, state: &State) -> io::Result<()> {
     let ifd = input.as_fd().as_raw_fd();
@@ -76,6 +129,26 @@ pub fn set_state<I: AsFd, O: AsFd>(input: I, output: O, state: &State) -> io::Re
 }
 
 #[cfg(windows)]
+/// Read the current console modes.
+///
+/// Both input and output handles must support `GetConsoleMode`.
+///
+/// # Parameters
+///
+/// * `input` — console input handle.
+/// * `output` — console output handle.
+///
+/// # Returns
+///
+/// A [`State`] containing both console-mode bitfields.
+///
+/// # Errors
+///
+/// Returns the OS error if either console mode cannot be read.
+///
+/// # Panics
+///
+/// This function does not intentionally panic.
 pub fn get_state<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<State> {
     use windows_sys::Win32::System::Console::GetConsoleMode;
 
@@ -97,6 +170,26 @@ pub fn get_state<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<St
 }
 
 #[cfg(windows)]
+/// Apply console modes from `state`.
+///
+/// # Parameters
+///
+/// * `input` — console input handle.
+/// * `output` — console output handle.
+/// * `state` — console modes to apply.
+///
+/// # Returns
+///
+/// `Ok(())` when both input and output modes were applied.
+///
+/// # Errors
+///
+/// Returns the OS error if either `SetConsoleMode` call fails. If the output
+/// mode fails after the input mode succeeds, the input mode is not rolled back.
+///
+/// # Panics
+///
+/// This function does not intentionally panic.
 pub fn set_state<I: AsHandle, O: AsHandle>(input: I, output: O, state: &State) -> io::Result<()> {
     use windows_sys::Win32::System::Console::SetConsoleMode;
 
@@ -112,16 +205,30 @@ pub fn set_state<I: AsHandle, O: AsHandle>(input: I, output: O, state: &State) -
     Ok(())
 }
 
-/// Place the terminal into "raw" mode.
+/// Place the terminal into raw mode.
 ///
 /// On Unix this applies a `cfmakeraw(3)`-equivalent termios
-/// (`VMIN = 1`, `VTIME = 0`). On Windows the input handle has the
-/// cooked flags cleared and `ENABLE_VIRTUAL_TERMINAL_INPUT |
-/// ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT` ORed in; the output
-/// handle has `ENABLE_VIRTUAL_TERMINAL_PROCESSING |
-/// DISABLE_NEWLINE_AUTO_RETURN` ORed in.
+/// (`VMIN = 1`, `VTIME = 0`) using [`set_state`]. On Windows the input handle
+/// has cooked input flags cleared and virtual-terminal/window-input flags set;
+/// the output handle has virtual-terminal processing and newline-auto-return
+/// disabling set.
 ///
-/// Returns the pre-call [`State`]; pass it to [`set_state`] to restore.
+/// # Parameters
+///
+/// * `input` — terminal input descriptor or handle.
+/// * `output` — terminal output descriptor or handle.
+///
+/// # Returns
+///
+/// The pre-call [`State`]. Pass it to [`set_state`] to restore.
+///
+/// # Errors
+///
+/// Returns any error from reading the current state or applying the raw state.
+///
+/// # Panics
+///
+/// This function does not intentionally panic.
 #[cfg(unix)]
 pub fn make_raw_mode<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<State> {
     let original = get_state(&input, &output)?;
@@ -146,6 +253,28 @@ pub fn make_raw_mode<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<State>
 }
 
 #[cfg(windows)]
+/// Place the console into raw mode.
+///
+/// The input handle has cooked input flags cleared and virtual-terminal/window
+/// input flags set; the output handle has virtual-terminal processing and
+/// newline-auto-return disabling set.
+///
+/// # Parameters
+///
+/// * `input` — console input handle.
+/// * `output` — console output handle.
+///
+/// # Returns
+///
+/// The pre-call [`State`]. Pass it to [`set_state`] to restore.
+///
+/// # Errors
+///
+/// Returns any error from reading the current modes or applying the raw modes.
+///
+/// # Panics
+///
+/// This function does not intentionally panic.
 pub fn make_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<State> {
     use windows_sys::Win32::System::Console::{
         DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT,
@@ -173,13 +302,38 @@ pub fn make_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Resul
     Ok(original)
 }
 
-/// Is the descriptor connected to a terminal?
+/// Return whether the descriptor is connected to a terminal.
+///
+/// # Parameters
+///
+/// * `fd` — descriptor to test.
+///
+/// # Returns
+///
+/// `true` when `fd` refers to a terminal.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic.
 #[cfg(unix)]
 pub fn is_terminal<F: AsFd>(fd: F) -> bool {
     unsafe { libc::isatty(fd.as_fd().as_raw_fd()) != 0 }
 }
 
 #[cfg(windows)]
+/// Return whether the handle is connected to a console.
+///
+/// # Parameters
+///
+/// * `h` — handle to test.
+///
+/// # Returns
+///
+/// `true` when `h` supports `GetConsoleMode`.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic.
 pub fn is_terminal<H: AsHandle>(h: H) -> bool {
     use windows_sys::Win32::System::Console::GetConsoleMode;
     let handle = h.as_handle().as_raw_handle() as HANDLE;
@@ -188,6 +342,9 @@ pub fn is_terminal<H: AsHandle>(h: H) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
+/// Return whether a handle is connected to a terminal.
+///
+/// On unsupported platforms this always returns `false`.
 pub fn is_terminal<T>(_: T) -> bool {
     false
 }

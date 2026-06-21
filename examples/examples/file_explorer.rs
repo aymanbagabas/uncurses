@@ -4,7 +4,7 @@
 //!
 //! - reads directory entries from the filesystem (`std::fs`),
 //! - lazily loads a preview of the highlighted file (capped at 64 KiB),
-//! - draws a two-pane TUI through the cell-based `Screen` so the
+//! - draws a two-pane TUI through the cell-based `Canvas` so the
 //!   renderer can diff between frames and only emit the cells that
 //!   actually changed,
 //! - handles keyboard navigation, mouse clicks, mouse-wheel scrolling,
@@ -30,18 +30,17 @@
 
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 
 use tokio_stream::StreamExt;
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, EventSource, EventStream, Key, MouseButton};
-use uncurses::screen::Screen;
+use uncurses::event::{Event, Key, MouseButton};
+use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::TextSurface;
 
 const PREVIEW_LIMIT: usize = 64 * 1024;
 
@@ -253,13 +252,17 @@ fn hex_dump(bytes: &[u8]) -> String {
 
 // -- Rendering ---------------------------------------------------------------
 
-fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
+fn draw(app: &ExplorerState, screen: &mut Screen<Stdin, Stdout>) {
     let w = screen.width();
     let h = screen.height();
     if w < 20 || h < 5 {
         screen.clear();
         {
-            screen.set_str((0, 0), "terminal too small", WrapMode::Truncate);
+            screen.set_str(
+                (0, 0),
+                "terminal too small",
+                uncurses::style::Style::default(),
+            );
         };
         return;
     }
@@ -294,7 +297,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
         );
         let pad = clip_to(&pad, w);
         {
-            screen.set_str_with((0, 0), &pad, WrapMode::Truncate, header.clone());
+            screen.set_str((0, 0), &pad, header.clone());
         };
     }
 
@@ -324,7 +327,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
                 (false, false) => normal.clone(),
             };
             {
-                screen.set_str_with((0, y), &padded, WrapMode::Truncate, style.clone());
+                screen.set_str((0, y), &padded, style.clone());
             };
         }
     }
@@ -332,7 +335,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
     // Vertical divider.
     for row in 0..body_h {
         {
-            screen.set_str_with((list_w, row + 1), "│", WrapMode::Truncate, dim.clone());
+            screen.set_str((list_w, row + 1), "│", dim.clone());
         };
     }
 
@@ -343,12 +346,7 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
         if let Some(line) = app.preview_lines.get(idx) {
             let s = clip_to(line, preview_w);
             {
-                screen.set_str_with(
-                    (preview_x, row as u16 + 1),
-                    &s,
-                    WrapMode::Truncate,
-                    normal.clone(),
-                );
+                screen.set_str((preview_x, row as u16 + 1), &s, normal.clone());
             };
         }
     }
@@ -358,10 +356,9 @@ fn draw<W: std::io::Write>(app: &ExplorerState, screen: &mut Screen<W>) {
     let help = "↑↓:move  ⏎:open  ⌫:up  PgUp/PgDn:scroll  r:refresh  q:quit";
     let status_line = format!(" {}  ·  {}", app.status, help);
     let status_line = pad_to(&clip_to(&status_line, w), w);
-    screen.set_str_with(
+    screen.set_str(
         (0, status_y),
         &status_line,
-        WrapMode::Truncate,
         Style::default()
             .bg(Color::Basic(BasicColor::BrightBlack))
             .fg(Color::Basic(BasicColor::White)),
@@ -401,9 +398,7 @@ fn unicode_char_width(ch: char) -> usize {
 // -- Main loop ---------------------------------------------------------------
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    events: EventStream<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     state: ExplorerState,
     quit_keys: [Key; 3],
     up_keys: [Key; 2],
@@ -427,23 +422,15 @@ impl App {
 
         let state = ExplorerState::new(start_dir);
 
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
-
-        // Enter the alt screen, hide the cursor, and enable SGR-encoded
-        // mouse tracking via the screen API so internal state stays in
-        // sync with the actual terminal mode flags.
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        screen.set_mouse_mode(
-            uncurses::ansi::mode::MouseMode::Normal,
-            uncurses::ansi::mode::MouseEncoding::Sgr,
-        );
-        screen.flush()?;
-
-        let events = EventSource::new(term.input())?.into_stream();
+        let mut screen = Screen::stdio()?;
+        // Begin a session with SGR-encoded mouse tracking (clicks + wheel);
+        // the screen picks the best mode and encoding the terminal supports.
+        screen.init_with(ScreenOptions {
+            mouse: Some(MousePreference::default()),
+            ..ScreenOptions::default()
+        })?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
         // Parse key bindings once. `Key` implements `FromStr`, so
         // `"ctrl+c".parse::<Key>()` produces a canonical `Key` value, and
@@ -466,9 +453,7 @@ impl App {
         let refresh_key: Key = "r".parse().unwrap();
 
         Ok(Self {
-            term,
             screen,
-            events,
             state,
             quit_keys,
             up_keys,
@@ -491,11 +476,11 @@ impl App {
     async fn run(&mut self) -> io::Result<()> {
         self.render()?;
 
-        while let Some(ev) = self.events.next().await {
-            let ev = match ev {
-                Ok(ev) => ev,
-                Err(_) => break,
-            };
+        // `events()` borrows the screen only for the duration of one
+        // `next().await`; in edition 2024 the temporary drops before the
+        // loop body, so the body is free to draw through `self.screen`.
+        while let Some(ev) = self.screen.events().next().await {
+            let ev = ev?;
             let mut dirty = true;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -558,7 +543,7 @@ impl App {
                 },
 
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, ws.row);
+                    self.screen.resize((ws.col, ws.row));
                 }
 
                 _ => dirty = false,
@@ -572,12 +557,11 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> io::Result<()> {
-        // The event stream stops and joins its reader thread on drop, so
-        // teardown is just the terminal restore.
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> io::Result<()> {
+        // `finish` tears down every staged mode (alt screen, mouse, cursor),
+        // flushes, and restores the terminal. The event stream stops and
+        // joins its reader thread when the screen drops.
+        self.screen.finish()
     }
 }
 

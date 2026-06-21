@@ -51,9 +51,28 @@ impl PrefixShape {
 }
 
 impl Renderer {
-    /// Choose the byte-cost-optimal sequence to move the cursor from
-    /// `from` to `to`. When `overwrite_line` is `Some`, re-emitting
-    /// the row's own cell bytes competes as a forward-move candidate.
+    /// Choose and emit the byte-cost-optimal cursor move.
+    ///
+    /// # Parameters
+    ///
+    /// - `out`: destination byte buffer.
+    /// - `from`: renderer-tracked starting position.
+    /// - `to`: target position.
+    /// - `overwrite_line`: optional destination row cells. When present,
+    ///   re-emitting matching cells can compete as a forward horizontal
+    ///   move.
+    ///
+    /// # Behavior
+    ///
+    /// Same-position moves are no-ops when both cursor axes are known.
+    /// In absolute mode, long-distance moves or unknown source axes force
+    /// CUP immediately. Otherwise the planner enumerates eligible
+    /// relative shapes by byte cost and emits only the winner.
+    ///
+    /// # Errors
+    ///
+    /// Propagates writes to `out`; with `Vec<u8>` output this is
+    /// effectively infallible.
     ///
     /// In absolute mode, CUP wins outright for non-local moves; for
     /// local moves CUP seeds the candidate list (so it wins ties

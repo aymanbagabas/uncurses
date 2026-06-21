@@ -1,17 +1,22 @@
 //! ANSI-aware byte-stream tokenizer for text utilities.
 //!
-//! Walks an input byte slice and classifies bytes into one of:
+//! ## Category
 //!
-//! * `Text` — a grapheme cluster of visible text + its display width
-//! * `Escape` — an ANSI escape sequence (CSI/OSC/DCS/SOS/PM/APC/ESC-only or
-//!   their 8-bit C1 equivalents), passed through verbatim
-//! * `Control` — a single C0 or C1 control byte (e.g. `\n`, `\r`, `\t`)
+//! The tokenizer classifies an input byte slice as visible grapheme clusters,
+//! complete ANSI escape/string sequences, or standalone control bytes. Width,
+//! stripping, truncation, and wrapping utilities all build on this stream.
 //!
-//! Both the 7-bit (`\x1b[…`, `\x1b]…\x07`) and the 8-bit (`\x9b…`,
-//! `\x9d…\x9c`) sequence forms are recognised, matching the byte-level
-//! semantics of the underlying parser.
+//! ## 7-bit and 8-bit controls
 //!
-//! This is the foundation for `strip_ansi`, `truncate`, and the wrap family.
+//! Both 7-bit forms (`ESC [`, `ESC ]`, `ESC P`, `ESC _`) and 8-bit C1 forms
+//! (`0x9b`, `0x9d`, `0x90`, `0x9f`) are recognized. String controls terminate on
+//! BEL, `ST` (`ESC \\`), or 8-bit ST where applicable.
+//!
+//! ## Mode interaction
+//!
+//! This module does not interpret terminal modes or sequence semantics. Escape
+//! bytes are passed through as zero-width tokens so callers can preserve or drop
+//! them according to their own policy.
 
 use crate::cell::graphemes;
 pub use crate::text::WidthMode;
@@ -20,7 +25,12 @@ pub use crate::text::WidthMode;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token<'a> {
     /// A grapheme of visible text with its display width.
-    Text { text: &'a [u8], width: u16 },
+    Text {
+        /// Grapheme bytes.
+        text: &'a [u8],
+        /// Display width in terminal cells.
+        width: u16,
+    },
     /// An ANSI escape sequence (passed through verbatim, no width).
     Escape(&'a [u8]),
     /// A single control byte (C0, DEL, or a non-introducer C1) that isn't

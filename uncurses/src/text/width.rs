@@ -1,29 +1,57 @@
-//! Code-point + cluster width tables and property helpers. Backend
-//! selected via the `icu` Cargo feature.
+//! Code-point and grapheme-cluster display width helpers.
+//!
+//! The public functions in this module return terminal-cell widths. The
+//! implementation is selected at compile time: the default feature uses compact
+//! code-point width data with conservative property helpers, while the `icu`
+//! feature uses property data with broader Unicode coverage.
 
 /// Display width, in terminal cells, of a single code point.
 ///
-/// Returns 0 for controls, combining marks, format characters, and
-/// default-ignorable code points; 2 for code points whose
-/// East-Asian-Width property is `Wide` or `Fullwidth`; 1 otherwise.
+/// This function is cluster-blind. It reports width for `c` alone: `0` for
+/// controls and zero-width formatting/mark code points, `2` for code points
+/// whose East-Asian-Width property is `Wide` or `Fullwidth`, and `1` for most
+/// other printable code points.
 ///
-/// `eaw_wide` selects the *East-Asian Ambiguous policy*: when `true`,
-/// code points whose East-Asian-Width property is `Ambiguous` (e.g.
-/// many Greek, Cyrillic, and box-drawing characters) are reported as
-/// 2 cells; when `false`, they are reported as 1. Terminals configured
-/// for CJK locales typically render Ambiguous code points double-wide
-/// and want `true`; others want `false`.
+/// `eaw_wide` selects the East-Asian Ambiguous policy: when `true`, ambiguous
+/// code points, including many Greek, Cyrillic, and box-drawing characters, are
+/// reported as two cells; when `false`, they are reported as one.
+///
+/// # Parameters
+///
+/// * `c` — Unicode scalar value to measure.
+/// * `eaw_wide` — whether East-Asian Ambiguous code points count as wide.
+///
+/// # Returns
+///
+/// The display width in terminal cells.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic.
 pub fn char_width(c: char, eaw_wide: bool) -> u8 {
     cp_width(c, eaw_wide)
 }
 
 /// Display width, in terminal cells, of one extended grapheme cluster.
 ///
-/// Cluster-aware: honours Variation Selectors (VS15/VS16), Regional
-/// Indicator pairs (flag emoji), ZWJ sequences, and
-/// Extended_Pictographic default presentation per UTS #51.
+/// This function is cluster-aware for the cases that affect terminal layout:
+/// it honors text/emoji variation selectors, regional indicators, zero-width
+/// joiner sequences, and pictographic default presentation. Non-pictographic
+/// clusters use the width of their base code point; combining marks,
+/// joiners, and variation selectors in the tail do not add cells.
 ///
-/// `eaw_wide` is the East-Asian Ambiguous policy — see [`char_width`].
+/// # Parameters
+///
+/// * `g` — one extended grapheme cluster. An empty string has width `0`.
+/// * `eaw_wide` — East-Asian Ambiguous policy; see [`char_width`].
+///
+/// # Returns
+///
+/// The cluster width in terminal cells.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic.
 pub fn grapheme_width(g: &str, eaw_wide: bool) -> u8 {
     let mut chars = g.chars();
     let Some(first) = chars.next() else {

@@ -2,9 +2,8 @@
 //!
 //! This module is intentionally thin: it holds the constants and
 //! helpers (`LONG_DIST`, [`not_local`]) used by the planner itself,
-//! which lives on the renderer as
-//! [`super::Renderer::write_optimal_move`] /
-//! [`super::Renderer::relative_cursor_move`].
+//! which lives on the renderer as `write_optimal_move`; the test-only
+//! relative wrapper is compiled only for tests.
 
 pub(super) mod axis;
 pub(super) mod overwrite;
@@ -13,15 +12,18 @@ pub(super) mod relative;
 
 use crate::layout::Position;
 
-/// Threshold (in cells) past which a move is considered "non-local"
-/// and a single absolute jump (CUP) is preferred over any
-/// decomposition.
+/// Local-move threshold in cells.
+///
+/// When the target is away from the edges and the Manhattan distance is
+/// greater than this value, absolute mode skips the relative cost search
+/// and emits CUP directly.
 pub(super) const LONG_DIST: u16 = 8 - 1;
 
-/// Whether the move is far enough that an absolute jump dominates
-/// any local decomposition. Mirrors the typical terminfo heuristic:
-/// the target must be at least `LONG_DIST` cells from both screen
-/// edges, and the Manhattan distance must exceed `LONG_DIST`.
+/// Return whether a move is non-local for CUP planning.
+///
+/// Mirrors the typical terminfo heuristic: the target must be at least
+/// [`LONG_DIST`] cells from both horizontal edges, and the Manhattan
+/// distance from `from` to `to` must exceed [`LONG_DIST`].
 pub(super) fn not_local(width: u16, from: Position, to: Position) -> bool {
     if width <= 2 * LONG_DIST + 2 {
         return false;

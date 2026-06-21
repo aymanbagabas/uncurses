@@ -1,21 +1,33 @@
 //! CSI (Control Sequence Introducer) decoder.
 //!
-//! The largest single class of escape sequences. Format:
-//! `ESC [` (or 8-bit `0x9B`) followed by optional parameter bytes
-//! (`0x30..0x3f`), optional intermediate bytes (`0x20..0x2f`), and a
-//! single final byte (`0x40..0x7e`).
+//! ## Purpose
 //!
-//! This module owns:
+//! CSI is the largest single class of terminal control sequence. This module
+//! parses the CSI grammar, dispatches inline forms that need decoder state, and
+//! recognizes keys, mouse reports, focus events, geometry reports, mode reports,
+//! colors, and capability replies.
 //!
-//! * `parse_csi`    — walks the parameter / intermediate / final-byte
-//!   skeleton and delegates to `dispatch_csi`.
-//! * `dispatch_csi` — runs the state-dependent inline paths (X10/UTF-8
-//!   mouse, Win32 input) that need access to `&Decoder` and bytes past
-//!   the sequence, then hands off to `recognize`.
-//! * `recognize` / `recognize_tilde` — pure builtin decoders that turn
-//!   a parsed CSI into the corresponding [`Event`], or `None` so a
-//!   caller can fall back to `Event::UnknownCsi`.
-
+//! ```text
+//! ESC [ / 0x9B ──▶ params + intermediates + final byte
+//!        │
+//!        ├─ key / mouse / focus reports ──▶ Event::Key* / Event::Mouse*
+//!        ├─ terminal replies ─────────────▶ Event::Resize / colors / modes
+//!        └─ unrecognized complete CSI ────▶ Event::UnknownCsi
+//! ```
+//!
+//! ## Wire format
+//!
+//! CSI starts with `ESC [` or the 8-bit C1 byte `0x9B`, followed by optional
+//! parameter bytes (`0x30..=0x3F`), optional intermediate bytes
+//! (`0x20..=0x2F`), and one final byte (`0x40..=0x7E`). URxvt legacy modifier
+//! suffixes such as `$` are handled as complete key sequences when they are not
+//! part of a private/intermediate sequence.
+//!
+//! ## Gotchas
+//!
+//! X10 and UTF-8 mouse reports (`CSI M ...`) consume bytes after the CSI final
+//! byte, so they are dispatched before the pure recognizer. Win32 input-mode
+//! packets also stay inline because they can queue repeated key events.
 use super::Decoder;
 use super::DecoderFlags;
 use super::kitty;
@@ -218,8 +230,8 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
         && params.get_or(0, 0) == 997
     {
         return match params.get_or(1, 0) {
-            1 => Some(Event::DarkColorScheme),
-            2 => Some(Event::LightColorScheme),
+            1 => Some(Event::ColorTheme { dark: true }),
+            2 => Some(Event::ColorTheme { dark: false }),
             _ => None,
         };
     }
@@ -307,11 +319,14 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
 
     // In-band resize report (mode 2048):
     // CSI 48 ; height_chars ; width_chars ; height_pix ; width_pix t.
-    // No private, no intermediate, exactly 5 params.
+    // The pixel fields are optional: terminals that omit them send just
+    // CSI 48 ; height ; width t, so accept three or more params (the `48`
+    // discriminator distinguishes this from the generic window-op `t`
+    // reports below) and default any absent pixel size to zero.
     if final_byte == b't'
         && no_private
         && no_intermediate
-        && params.len() == 5
+        && params.len() >= 3
         && params.get_or(0, 0) == 48
     {
         return Some(Event::Resize(crate::terminal::size::Winsize {

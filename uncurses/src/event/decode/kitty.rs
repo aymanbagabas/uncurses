@@ -1,11 +1,25 @@
-//! Kitty keyboard protocol support.
+//! Kitty-style CSI `u` keyboard decoder.
 //!
-//! See: <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
+//! ## Purpose
 //!
-//! Format: `CSI code:shifted:base ; mods:event_type ; text-codepoints u`
+//! This module decodes CSI `u` keyboard packets into canonical [`Key`] events,
+//! including optional event type (press/repeat/release), alternate shifted/base
+//! key codepoints, associated text, high modifier bits, and lock-state bits.
 //!
-//! Each semicolon-separated parameter may have colon-separated sub-parameters.
-
+//! ```text
+//! CSI code:shifted:base ; mods:phase ; text... u
+//!      │                    │             │
+//!      ├─ KeyCode           ├─ KeyModifiers + event variant
+//!      └─ shifted/base      └─ produced text metadata
+//! ```
+//!
+//! ## Gotchas
+//!
+//! Modifier values are one-based on the wire, so `1` means no modifiers. After
+//! protocol fields are copied into [`Key`], [`Key::normalize`] applies the same
+//! canonical identity rules used by every other decoder path. Unknown codepoints
+//! or malformed parameter groups return `None` so CSI fallback can preserve the
+//! raw sequence as unknown.
 use crate::ansi::params::{Group, Params};
 use crate::event::decode::util::{csi_kitty_phase, key_event_for_phase};
 use crate::event::{Event, Key, KeyCode, KeyModifiers};

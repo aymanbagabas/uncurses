@@ -1,9 +1,22 @@
 //! OSC (Operating System Command) decoder.
 //!
-//! Format: `ESC ]` (or 8-bit `0x9D`) followed by a payload terminated by
-//! BEL (`0x07`), 8-bit ST (`0x9C`), or 7-bit ST (`ESC \`). OSC is the
-//! only sequence class that accepts BEL as a terminator.
-
+//! ## Purpose
+//!
+//! OSC sequences carry host/terminal data such as color replies, palette
+//! entries, and clipboard replies. The decoder recognizes the reply forms used
+//! by the public event API and preserves other payloads as [`Event::UnknownOsc`].
+//!
+//! ## Wire format
+//!
+//! OSC starts with `ESC ]` or the 8-bit C1 byte `0x9D`, then a payload, then
+//! BEL (`0x07`), 7-bit ST (`ESC \`), or 8-bit ST (`0x9C`). OSC is the only
+//! string class in this decoder that accepts BEL as a terminator.
+//!
+//! ## Gotchas
+//!
+//! OSC 52 clipboard content is surfaced as the wire payload string; decoding or
+//! interpreting that content is left to callers. Color channels with 1-4 hex
+//! digits are scaled down to 8-bit RGB.
 use super::Decoder;
 use super::result::ParseResult;
 use super::util::intro_prefix_len;
@@ -44,12 +57,22 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     let cmd: u32 = std::str::from_utf8(cmd_bytes).ok()?.parse().ok()?;
 
     match cmd {
+        4 => parse_osc_palette_color(rest),
         10 => parse_osc_color(rest).map(Event::ForegroundColor),
         11 => parse_osc_color(rest).map(Event::BackgroundColor),
         12 => parse_osc_color(rest).map(Event::CursorColor),
         52 => parse_osc_clipboard(rest),
         _ => None,
     }
+}
+
+/// Parse an OSC 4 palette reply body: `<index>;<color>` where `color` is
+/// an xterm `rgb:` value. Returns `None` if unrecognized.
+fn parse_osc_palette_color(s: &[u8]) -> Option<Event> {
+    let semi = s.iter().position(|&b| b == b';')?;
+    let index: u8 = std::str::from_utf8(&s[..semi]).ok()?.parse().ok()?;
+    let color = parse_osc_color(&s[semi + 1..])?;
+    Some(Event::PaletteColor { index, color })
 }
 
 /// Parse an OSC color value like `rgb:RRRR/GGGG/BBBB` (xterm common form) or

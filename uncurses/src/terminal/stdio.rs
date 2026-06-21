@@ -1,8 +1,12 @@
-//! Direct stdio handles that mirror [`std::io::stdout`],
-//! [`std::io::stderr`], and [`std::io::stdin`] but without `std`'s
-//! `LineWriter` / `BufReader`.
+//! Direct, unbuffered handles for inherited standard streams.
 //!
-//! Behavior relative to the `std` counterparts:
+//! [`Stdout`], [`Stderr`], and [`Stdin`] mirror [`std::io::stdout`],
+//! [`std::io::stderr`], and [`std::io::stdin`] for terminal I/O, but avoid the
+//! standard library's line writer and input buffering. They are cheap `Copy`
+//! handles over process-wide stream state and are suitable for renderers that
+//! want explicit control over flushing and buffering.
+//!
+//! ## Behavior relative to `std::io`
 //!
 //! * **Process-wide singletons with a shared lock.** Every call to
 //!   [`stdout`] / [`stderr`] / [`stdin`] returns a fresh handle that
@@ -35,6 +39,12 @@
 //!   this; we accept the limitation in exchange for keeping the
 //!   surface area small.
 //!
+//! ## Usage
+//!
+//! Use the free functions when constructing [`Terminal`](super::Terminal) or
+//! when writing directly to the inherited streams. Wrap a handle in
+//! [`std::io::BufWriter`] if many small writes should be coalesced.
+//!
 //! Each [`Stdout`] / [`Stderr`] / [`Stdin`] is a borrowed view of the
 //! inherited descriptor; dropping it does not close that descriptor.
 
@@ -65,21 +75,60 @@ fn stdin_lock() -> &'static Mutex<StdinRaw> {
     STDIN.get_or_init(|| Mutex::new(StdinRaw(imp::input())))
 }
 
-/// Returns a handle to the inherited standard output stream.
+/// Return a handle to inherited standard output.
+///
+/// Every call returns a cheap `Copy` handle referencing the same process-wide
+/// stdout state. Writes through this handle are unbuffered except for the
+/// platform console transcoding described in the [module documentation](self).
+///
+/// # Returns
+///
+/// A [`Stdout`] handle.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic. I/O errors are reported
+/// by the handle's [`Write`] implementation.
 pub fn stdout() -> Stdout {
     Stdout {
         inner: stdout_lock(),
     }
 }
 
-/// Returns a handle to the inherited standard error stream.
+/// Return a handle to inherited standard error.
+///
+/// Every call returns a cheap `Copy` handle referencing the same process-wide
+/// stderr state. Writes are unbuffered and serialized through this module's
+/// stderr lock.
+///
+/// # Returns
+///
+/// A [`Stderr`] handle.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic. I/O errors are reported
+/// by the handle's [`Write`] implementation.
 pub fn stderr() -> Stderr {
     Stderr {
         inner: stderr_lock(),
     }
 }
 
-/// Returns a handle to the inherited standard input stream.
+/// Return a handle to inherited standard input.
+///
+/// Every call returns a cheap `Copy` handle referencing the same process-wide
+/// stdin state. Reads are unbuffered and serialized through this module's
+/// stdin lock.
+///
+/// # Returns
+///
+/// A [`Stdin`] handle.
+///
+/// # Errors and panics
+///
+/// This function does not fail or intentionally panic. I/O errors are reported
+/// by the handle's [`Read`] implementation.
 pub fn stdin() -> Stdin {
     Stdin {
         inner: stdin_lock(),
@@ -128,37 +177,63 @@ impl Read for StdinRaw {
 // Public handle types
 // ---------------------------------------------------------------------------
 
-/// A handle to the inherited standard output stream.
+/// Handle to the inherited standard output stream.
 ///
-/// See the [module documentation](self) for the behavior relative to
-/// [`std::io::Stdout`].
+/// `Stdout` is `Copy`; copying it creates another view of the same
+/// process-wide stream and lock. Dropping it does not close file descriptor 1
+/// or the Windows standard output handle.
+///
+/// Use [`lock`](Stdout::lock) to hold the stdout lock across multiple writes,
+/// or write directly to the handle for per-call locking. See the
+/// [module documentation](self) for buffering and Windows console behavior.
 #[derive(Clone, Copy)]
 pub struct Stdout {
     inner: &'static Mutex<StdoutRaw>,
 }
 
-/// A handle to the inherited standard error stream.
+/// Handle to the inherited standard error stream.
 ///
-/// See the [module documentation](self) for the behavior relative to
-/// [`std::io::Stderr`].
+/// `Stderr` is `Copy`; copying it creates another view of the same
+/// process-wide stream and lock. Dropping it does not close file descriptor 2
+/// or the Windows standard error handle.
+///
+/// Use [`lock`](Stderr::lock) to hold the stderr lock across multiple writes,
+/// or write directly to the handle for per-call locking.
 #[derive(Clone, Copy)]
 pub struct Stderr {
     inner: &'static Mutex<StderrRaw>,
 }
 
-/// A handle to the inherited standard input stream.
+/// Handle to the inherited standard input stream.
 ///
-/// See the [module documentation](self) for the behavior relative to
-/// [`std::io::Stdin`].
+/// `Stdin` is `Copy`; copying it creates another view of the same process-wide
+/// stream and lock. Dropping it does not close file descriptor 0 or the
+/// Windows standard input handle.
+///
+/// Use [`lock`](Stdin::lock) to hold the stdin lock across multiple reads, or
+/// read directly from the handle for per-call locking.
 #[derive(Clone, Copy)]
 pub struct Stdin {
     inner: &'static Mutex<StdinRaw>,
 }
 
 impl Stdout {
-    /// Acquire the shared write lock for the lifetime of the returned
-    /// guard. While the guard is held, no other handle to stdout —
-    /// from any thread — can write through this module.
+    /// Acquire stdout's shared write lock.
+    ///
+    /// While the returned guard is held, no other [`Stdout`] handle can write
+    /// through this module. The lock is not reentrant; attempting to write to
+    /// stdout through this module again on the same thread while holding the
+    /// guard will deadlock.
+    ///
+    /// # Returns
+    ///
+    /// A [`StdoutLock`] that implements [`Write`].
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors. If another thread panicked while
+    /// holding the mutex, the poisoned lock is recovered and the guard is still
+    /// returned.
     pub fn lock(&self) -> StdoutLock<'static> {
         StdoutLock {
             guard: self.inner.lock().unwrap_or_else(|e| e.into_inner()),
@@ -167,9 +242,20 @@ impl Stdout {
 }
 
 impl Stderr {
-    /// Acquire the shared write lock for the lifetime of the returned
-    /// guard. While the guard is held, no other handle to stderr —
-    /// from any thread — can write through this module.
+    /// Acquire stderr's shared write lock.
+    ///
+    /// While the returned guard is held, no other [`Stderr`] handle can write
+    /// through this module. The lock is not reentrant; attempting to write to
+    /// stderr through this module again on the same thread while holding the
+    /// guard will deadlock.
+    ///
+    /// # Returns
+    ///
+    /// A [`StderrLock`] that implements [`Write`].
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors. Poisoned locks are recovered.
     pub fn lock(&self) -> StderrLock<'static> {
         StderrLock {
             guard: self.inner.lock().unwrap_or_else(|e| e.into_inner()),
@@ -178,9 +264,20 @@ impl Stderr {
 }
 
 impl Stdin {
-    /// Acquire the shared read lock for the lifetime of the returned
-    /// guard. While the guard is held, no other handle to stdin —
-    /// from any thread — can read through this module.
+    /// Acquire stdin's shared read lock.
+    ///
+    /// While the returned guard is held, no other [`Stdin`] handle can read
+    /// through this module. The lock is not reentrant; attempting to read from
+    /// stdin through this module again on the same thread while holding the
+    /// guard will deadlock.
+    ///
+    /// # Returns
+    ///
+    /// A [`StdinLock`] that implements [`Read`].
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not return errors. Poisoned locks are recovered.
     pub fn lock(&self) -> StdinLock<'static> {
         StdinLock {
             guard: self.inner.lock().unwrap_or_else(|e| e.into_inner()),
@@ -192,20 +289,25 @@ impl Stdin {
 // Lock guards
 // ---------------------------------------------------------------------------
 
-/// A locked, exclusive reference to [`Stdout`]. Acquired via
-/// [`Stdout::lock`].
+/// Locked, exclusive access to [`Stdout`].
+///
+/// The guard implements [`Write`] and releases the stdout lock when dropped.
+/// Holding it across several writes prevents interleaving with other writes
+/// performed through this module.
 pub struct StdoutLock<'a> {
     guard: MutexGuard<'a, StdoutRaw>,
 }
 
-/// A locked, exclusive reference to [`Stderr`]. Acquired via
-/// [`Stderr::lock`].
+/// Locked, exclusive access to [`Stderr`].
+///
+/// The guard implements [`Write`] and releases the stderr lock when dropped.
 pub struct StderrLock<'a> {
     guard: MutexGuard<'a, StderrRaw>,
 }
 
-/// A locked, exclusive reference to [`Stdin`]. Acquired via
-/// [`Stdin::lock`].
+/// Locked, exclusive access to [`Stdin`].
+///
+/// The guard implements [`Read`] and releases the stdin lock when dropped.
 pub struct StdinLock<'a> {
     guard: MutexGuard<'a, StdinRaw>,
 }

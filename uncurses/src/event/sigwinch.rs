@@ -1,13 +1,23 @@
-//! SIGWINCH (window-resize) notification.
+//! SIGWINCH fan-out for Unix window-resize notifications.
 //!
-//! Installs a single shared SIGWINCH handler and exposes a wakeable
-//! [`subscribe`] API: each subscriber registers a file descriptor and
-//! the handler writes a single byte to it on every resize, so a
-//! `poll`/`select`/`epoll` waiting on that fd unblocks immediately.
+//! ## Purpose
 //!
-//! The signal handler only performs async-signal-safe operations
-//! (atomic updates and `write(2)` on already-open fds).
-
+//! Unix terminals report window-size changes out-of-band through `SIGWINCH`.
+//! This module installs one shared signal handler and lets each event source
+//! register a pipe fd that receives a one-byte wake whenever the signal fires.
+//!
+//! ## Key types
+//!
+//! * [`subscribe`] registers a borrowed fd and returns a [`Subscription`].
+//! * [`Subscription`] unregisters that fd on drop, before the source closes the
+//!   pipe it owns.
+//!
+//! ## Gotchas
+//!
+//! The signal handler only performs async-signal-safe work: relaxed atomic loads
+//! and `write(2)` to already-open fds. It does not query terminal size; the
+//! event source does that later on the normal thread after the pipe becomes
+//! readable.
 #[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
 

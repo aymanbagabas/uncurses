@@ -12,16 +12,15 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::{BasicColor, Color};
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Position;
 use uncurses::screen::Screen;
 use uncurses::style::{Style, UnderlineStyle};
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::TextSurface;
 
 const BOX_W: u16 = 56;
 const BOX_H: u16 = 16;
@@ -53,7 +52,7 @@ struct Anchor {
     y: u16,
 }
 
-fn anchor<W: Write>(screen: &Screen<W>) -> Anchor {
+fn anchor(screen: &Screen<Stdin, Stdout>) -> Anchor {
     let w = screen.width();
     let h = screen.height();
     Anchor {
@@ -62,11 +61,11 @@ fn anchor<W: Write>(screen: &Screen<W>) -> Anchor {
     }
 }
 
-fn paint_blank<W: Write>(screen: &mut Screen<W>) {
+fn paint_blank(screen: &mut Screen<Stdin, Stdout>) {
     screen.clear();
 }
 
-fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
+fn draw_box(screen: &mut Screen<Stdin, Stdout>, a: Anchor, style: &Style) {
     let (x0, y0) = (a.x, a.y);
     let (x1, y1) = (a.x + BOX_W - 1, a.y + BOX_H - 1);
 
@@ -83,15 +82,15 @@ fn draw_box<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
     }
     bot.push('┘');
 
-    screen.set_str_with((x0, y0), &top, WrapMode::Truncate, style.clone());
-    screen.set_str_with((x0, y1), &bot, WrapMode::Truncate, style.clone());
+    screen.set_str((x0, y0), &top, style.clone());
+    screen.set_str((x0, y1), &bot, style.clone());
     for y in y0 + 1..y1 {
-        screen.set_str_with((x0, y), "│", WrapMode::Truncate, style.clone());
-        screen.set_str_with((x1, y), "│", WrapMode::Truncate, style.clone());
+        screen.set_str((x0, y), "│", style.clone());
+        screen.set_str((x1, y), "│", style.clone());
     }
 }
 
-fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
+fn fill_inside(screen: &mut Screen<Stdin, Stdout>, a: Anchor, style: &Style) {
     let cell = Cell::narrow(" ").style(style.clone());
     for y in a.y + 1..a.y + BOX_H - 1 {
         for x in a.x + 1..a.x + BOX_W - 1 {
@@ -100,16 +99,23 @@ fn fill_inside<W: Write>(screen: &mut Screen<W>, a: Anchor, style: &Style) {
     }
 }
 
-fn write<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Style) {
-    screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone());
+fn write(screen: &mut Screen<Stdin, Stdout>, x: u16, y: u16, s: &str, style: &Style) {
+    screen.set_str((x, y), s, style.clone());
 }
 
-fn write_link<W: Write>(screen: &mut Screen<W>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
-    screen.set_str_with((x, y), s, WrapMode::Truncate, style.clone().link(url, ""));
+fn write_link(
+    screen: &mut Screen<Stdin, Stdout>,
+    x: u16,
+    y: u16,
+    s: &str,
+    style: &Style,
+    url: &str,
+) {
+    screen.set_str((x, y), s, style.clone().link(url, ""));
 }
 
-fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
-    let dim = Style::default().fg(BasicColor::BrightBlack.into());
+fn footer(screen: &mut Screen<Stdin, Stdout>, a: Anchor, hint: &str) {
+    let dim = Style::default().fg(BasicColor::BrightBlack);
     let label_w = hint.chars().count() as i32;
     let center = a.x as i32 + BOX_W as i32 / 2;
     let lx = (center - label_w / 2).max(0) as u16;
@@ -120,13 +126,12 @@ fn footer<W: Write>(screen: &mut Screen<W>, a: Anchor, hint: &str) {
 /// `dur` is `Some`). With `dur = None` the scene runs until a keypress.
 /// Returns `Ok(true)` to keep going, `Ok(false)` when the user asked
 /// to quit. Any non-quit key advances early.
-fn run_scene<W: Write>(
-    screen: &mut Screen<W>,
-    events: &mut EventSource<Stdin>,
+fn run_scene(
+    screen: &mut Screen<Stdin, Stdout>,
     dur: Option<Duration>,
-    mut tick: impl FnMut(&mut Screen<W>, Duration) -> std::io::Result<()>,
+    mut tick: impl FnMut(&mut Screen<Stdin, Stdout>, Duration) -> std::io::Result<()>,
 ) -> std::io::Result<bool> {
-    while events.try_read().is_some() {}
+    while screen.try_read_event().is_some() {}
     let start = Instant::now();
     let end = dur.map(|d| start + d);
     let mut next_frame = start + FRAME;
@@ -146,8 +151,8 @@ fn run_scene<W: Write>(
             Some(end) => frame_remaining.min(end - now),
             None => frame_remaining,
         };
-        if events.poll(Some(timeout))? {
-            while let Some(ev) = events.try_read() {
+        if screen.poll_event(Some(timeout))? {
+            while let Some(ev) = screen.try_read_event() {
                 match ev {
                     Event::KeyPress(Key {
                         code: KeyCode::Char('q' | 'Q') | KeyCode::Escape,
@@ -161,7 +166,7 @@ fn run_scene<W: Write>(
                     }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(false),
                     Event::KeyPress(_) => return Ok(true),
                     Event::Resize(ws) => {
-                        screen.resize(ws.col, ws.row);
+                        screen.resize((ws.col, ws.row));
                     }
                     _ => {}
                 }
@@ -180,55 +185,40 @@ fn run_scene<W: Write>(
     }
 }
 
-fn scene_sprinkles<W: Write>(
-    screen: &mut Screen<W>,
-    events: &mut EventSource<Stdin>,
-) -> std::io::Result<bool> {
+fn scene_sprinkles(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     let mut rng = Rng::new(0x9E37_79B9_7F4A_7C15);
     let mut frame_no = 0u32;
 
-    run_scene(
-        screen,
-        events,
-        Some(Duration::from_secs(3)),
-        move |screen, _| {
-            let a = anchor(screen);
-            if frame_no == 0 {
-                paint_blank(screen);
-                draw_box(
-                    screen,
-                    a,
-                    &Style::default().fg(BasicColor::BrightWhite.into()),
-                );
-                footer(screen, a, "scene 1 / 6 — sprinkles");
-            }
-            let inner_w = (BOX_W - 2) as u32;
-            let inner_h = (BOX_H - 2) as u32;
-            let glyph = if frame_no < 30 { "·" } else { "✦" };
-            let fg = if frame_no < 30 {
-                Color::Basic(BasicColor::BrightCyan)
-            } else {
-                Color::Basic(BasicColor::BrightYellow)
-            };
-            let style = Style::default().fg(fg);
-            let cell = Cell::narrow(glyph).style(style);
-            for _ in 0..40 {
-                let dx = rng.range(inner_w) as u16;
-                let dy = rng.range(inner_h) as u16;
-                let x = a.x + 1 + dx;
-                let y = a.y + 1 + dy;
-                screen.set_cell(Position::new(x, y), &cell);
-            }
-            frame_no += 1;
-            Ok(())
-        },
-    )
+    run_scene(screen, Some(Duration::from_secs(3)), move |screen, _| {
+        let a = anchor(screen);
+        if frame_no == 0 {
+            paint_blank(screen);
+            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
+            footer(screen, a, "scene 1 / 6 — sprinkles");
+        }
+        let inner_w = (BOX_W - 2) as u32;
+        let inner_h = (BOX_H - 2) as u32;
+        let glyph = if frame_no < 30 { "·" } else { "✦" };
+        let fg = if frame_no < 30 {
+            Color::Basic(BasicColor::BrightCyan)
+        } else {
+            Color::Basic(BasicColor::BrightYellow)
+        };
+        let style = Style::default().fg(fg);
+        let cell = Cell::narrow(glyph).style(style);
+        for _ in 0..40 {
+            let dx = rng.range(inner_w) as u16;
+            let dy = rng.range(inner_h) as u16;
+            let x = a.x + 1 + dx;
+            let y = a.y + 1 + dy;
+            screen.set_cell(Position::new(x, y), &cell);
+        }
+        frame_no += 1;
+        Ok(())
+    })
 }
 
-fn scene_panels<W: Write>(
-    screen: &mut Screen<W>,
-    events: &mut EventSource<Stdin>,
-) -> std::io::Result<bool> {
+fn scene_panels(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     let mut rng = Rng::new(0x243F_6A88_85A3_08D3);
     let mut last_tick = u64::MAX;
 
@@ -281,7 +271,6 @@ fn scene_panels<W: Write>(
 
     run_scene(
         screen,
-        events,
         Some(Duration::from_secs(6)),
         move |screen, elapsed| {
             let tick = elapsed.as_millis() as u64 / 600;
@@ -301,15 +290,11 @@ fn scene_panels<W: Write>(
 
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::default().fg(BasicColor::BrightWhite.into()),
-            );
+            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
             for &(dx, dy, w, h, bg, fg, label, attr) in &panels {
                 let x = a.x + dx;
                 let y = a.y + dy;
-                let style = Style::default().bg(bg.into()).fg(fg.into());
+                let style = Style::default().bg(bg).fg(fg);
                 let cell = Cell::narrow(" ").style(style.clone());
                 for yy in y..y + h {
                     for xx in x..x + w {
@@ -340,10 +325,7 @@ const ART: &[&str] = &[
     "  ~~~~~~~~~~~~~~~~~~~~~~~~  ",
 ];
 
-fn scene_art<W: Write>(
-    screen: &mut Screen<W>,
-    events: &mut EventSource<Stdin>,
-) -> std::io::Result<bool> {
+fn scene_art(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     let draw_ms: u64 = 2200;
     let flash_ms: u64 = 2200;
     let total_ms = draw_ms + flash_ms;
@@ -351,7 +333,6 @@ fn scene_art<W: Write>(
     let mut last_phase: Option<bool> = None;
     run_scene(
         screen,
-        events,
         Some(Duration::from_millis(total_ms)),
         move |screen, elapsed| {
             let a = anchor(screen);
@@ -366,14 +347,14 @@ fn scene_art<W: Write>(
                 }
                 if last_row == usize::MAX {
                     paint_blank(screen);
-                    fill_inside(screen, a, &Style::default().bg(BasicColor::Black.into()));
-                    draw_box(screen, a, &Style::default().fg(BasicColor::Red.into()));
+                    fill_inside(screen, a, &Style::default().bg(BasicColor::Black));
+                    draw_box(screen, a, &Style::default().fg(BasicColor::Red));
                     footer(screen, a, "scene 3 / 6 — line-by-line art");
                 }
                 last_row = row;
                 let style = Style::default()
-                    .fg(BasicColor::BrightWhite.into())
-                    .bg(BasicColor::Black.into());
+                    .fg(BasicColor::BrightWhite)
+                    .bg(BasicColor::Black);
                 for (i, line) in ART.iter().take(row).enumerate() {
                     write(screen, label_x, label_y + i as u16, line, &style);
                 }
@@ -384,8 +365,8 @@ fn scene_art<W: Write>(
                 }
                 last_phase = Some(phase);
                 let mut style = Style::default()
-                    .fg(BasicColor::BrightWhite.into())
-                    .bg(BasicColor::Black.into());
+                    .fg(BasicColor::BrightWhite)
+                    .bg(BasicColor::Black);
                 if phase {
                     style = style.faint();
                 }
@@ -398,14 +379,10 @@ fn scene_art<W: Write>(
     )
 }
 
-fn scene_banner<W: Write>(
-    screen: &mut Screen<W>,
-    events: &mut EventSource<Stdin>,
-) -> std::io::Result<bool> {
+fn scene_banner(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     let mut drawn = false;
     run_scene(
         screen,
-        events,
         Some(Duration::from_millis(6000)),
         move |screen, _| {
             if drawn {
@@ -414,13 +391,9 @@ fn scene_banner<W: Write>(
             drawn = true;
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::default().fg(BasicColor::BrightCyan.into()),
-            );
+            draw_box(screen, a, &Style::default().fg(BasicColor::BrightCyan));
 
-            let title = Style::default().fg(BasicColor::BrightWhite.into()).bold();
+            let title = Style::default().fg(BasicColor::BrightWhite).bold();
             write(screen, a.x + 4, a.y + 1, "Style sampler", &title);
 
             // Underline styles row.
@@ -428,37 +401,37 @@ fn scene_banner<W: Write>(
             let col = a.x + 4;
 
             let single = Style::default()
-                .fg(BasicColor::BrightWhite.into())
+                .fg(BasicColor::BrightWhite)
                 .underline_style(UnderlineStyle::Single);
             write(screen, col, row, "single", &single);
 
             let double = Style::default()
-                .fg(BasicColor::BrightWhite.into())
+                .fg(BasicColor::BrightWhite)
                 .underline_style(UnderlineStyle::Double)
-                .underline_color(BasicColor::Cyan.into());
+                .underline_color(BasicColor::Cyan);
             write(screen, col + 10, row, "double", &double);
 
             let curly = Style::default()
-                .fg(BasicColor::BrightWhite.into())
+                .fg(BasicColor::BrightWhite)
                 .underline_style(UnderlineStyle::Curly)
-                .underline_color(BasicColor::BrightRed.into());
+                .underline_color(BasicColor::BrightRed);
             write(screen, col + 20, row, "curly", &curly);
 
             let dotted = Style::default()
-                .fg(BasicColor::BrightWhite.into())
+                .fg(BasicColor::BrightWhite)
                 .underline_style(UnderlineStyle::Dotted)
-                .underline_color(BasicColor::BrightYellow.into());
+                .underline_color(BasicColor::BrightYellow);
             write(screen, col + 30, row, "dotted", &dotted);
 
             let dashed = Style::default()
-                .fg(BasicColor::BrightWhite.into())
+                .fg(BasicColor::BrightWhite)
                 .underline_style(UnderlineStyle::Dashed)
-                .underline_color(BasicColor::BrightGreen.into());
+                .underline_color(BasicColor::BrightGreen);
             write(screen, col + 40, row, "dashed", &dashed);
 
             // Text attributes row.
             let attr_row = a.y + 5;
-            let white = || Style::default().fg(BasicColor::BrightWhite.into());
+            let white = || Style::default().fg(BasicColor::BrightWhite);
             write(screen, col, attr_row, "bold", &white().bold());
             write(screen, col + 6, attr_row, "italic", &white().italic());
             write(screen, col + 14, attr_row, "faint", &white().faint());
@@ -477,20 +450,20 @@ fn scene_banner<W: Write>(
             write(screen, col, a.y + 7, "spell-check look:", &plain);
             let typo = white()
                 .underline_style(UnderlineStyle::Curly)
-                .underline_color(BasicColor::BrightRed.into());
+                .underline_color(BasicColor::BrightRed);
             write(screen, col + 19, a.y + 7, "teh", &typo);
             write(screen, col + 23, a.y + 7, "quick brown fox", &plain);
 
             // Mixed-style demo line: bold + italic + colored fg.
             let mixed = Style::default()
-                .fg(BasicColor::BrightMagenta.into())
+                .fg(BasicColor::BrightMagenta)
                 .bold()
                 .italic();
             write(screen, col, a.y + 9, "bold + italic + magenta", &mixed);
 
             // Hyperlink line.
             let link_label = Style::default()
-                .fg(BasicColor::BrightBlue.into())
+                .fg(BasicColor::BrightBlue)
                 .underline_style(UnderlineStyle::Single)
                 .bold();
             write(screen, col, a.y + 11, "open the project page →", &plain);
@@ -537,10 +510,7 @@ const MARQUEE: &[(&str, UnderlineStyle, BasicColor)] = &[
     ),
 ];
 
-fn scene_marquee<W: Write>(
-    screen: &mut Screen<W>,
-    events: &mut EventSource<Stdin>,
-) -> std::io::Result<bool> {
+fn scene_marquee(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     let mut drawn_box = false;
     let mut last_offset = i32::MIN;
     let joined: String = {
@@ -571,16 +541,12 @@ fn scene_marquee<W: Write>(
     let total = joined.chars().count();
     let inner_w = (BOX_W - 4) as usize;
 
-    run_scene(screen, events, None, move |screen, elapsed| {
+    run_scene(screen, None, move |screen, elapsed| {
         let a = anchor(screen);
         if !drawn_box {
             drawn_box = true;
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::default().fg(BasicColor::BrightWhite.into()),
-            );
+            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
             footer(
                 screen,
                 a,
@@ -606,10 +572,10 @@ fn scene_marquee<W: Write>(
             let ch = chars[idx];
             let mut buf = [0u8; 4];
             let s = ch.encode_utf8(&mut buf);
-            let mut style = Style::default().fg(BasicColor::BrightWhite.into());
+            let mut style = Style::default().fg(BasicColor::BrightWhite);
             for (lo, hi, us, c) in &spans {
                 if idx >= *lo && idx < *hi {
-                    style = style.underline_style(*us).underline_color((*c).into());
+                    style = style.underline_style(*us).underline_color(*c);
                     break;
                 }
             }
@@ -628,10 +594,7 @@ struct Ball {
     color: BasicColor,
 }
 
-fn scene_balls<W: Write>(
-    screen: &mut Screen<W>,
-    events: &mut EventSource<Stdin>,
-) -> std::io::Result<bool> {
+fn scene_balls(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     let mut balls = vec![
         Ball {
             x: 4.0,
@@ -660,7 +623,7 @@ fn scene_balls<W: Write>(
     ];
     let mut box_drawn = false;
 
-    run_scene(screen, events, None, move |screen, _elapsed| {
+    run_scene(screen, None, move |screen, _elapsed| {
         let a = anchor(screen);
         // Interior playfield: cols 1..BOX_W-1 (BOX_W-2 wide) and rows
         // 1..BOX_H-1 (BOX_H-2 tall) — full interior, no reserved
@@ -670,11 +633,7 @@ fn scene_balls<W: Write>(
         if !box_drawn {
             box_drawn = true;
             paint_blank(screen);
-            draw_box(
-                screen,
-                a,
-                &Style::default().fg(BasicColor::BrightWhite.into()),
-            );
+            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
             // Hint sits below the box; full interior is free for bouncing.
             footer(
                 screen,
@@ -711,7 +670,7 @@ fn scene_balls<W: Write>(
         for ball in &balls {
             let cx = a.x + 1 + ball.x as u16;
             let cy = a.y + 1 + ball.y as u16;
-            let style = Style::default().fg(ball.color.into()).bold();
+            let style = Style::default().fg(ball.color).bold();
             let cell = Cell::narrow(ball.glyph).style(style);
             screen.set_cell(Position::new(cx, cy), &cell);
         }
@@ -720,31 +679,23 @@ fn scene_balls<W: Write>(
 }
 
 /// Scene-runner app. `start` enters raw mode + the alternate screen,
-/// `run` cycles through the scenes until one returns `false` (quit), and
-/// `stop` restores the terminal. Each scene owns its own rendering.
+/// and `run` cycles through the scenes until one returns `false` (quit).
+/// Each scene owns its own rendering.
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
-        Ok(Self {
-            term,
-            screen,
-            events,
-        })
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
+        Ok(Self { screen })
     }
 
     fn run(&mut self) -> std::io::Result<()> {
-        type Scene = fn(&mut Screen<Stdout>, &mut EventSource<Stdin>) -> std::io::Result<bool>;
+        type Scene = fn(&mut Screen<Stdin, Stdout>) -> std::io::Result<bool>;
         let scenes: [Scene; 6] = [
             scene_sprinkles,
             scene_panels,
@@ -756,7 +707,7 @@ impl App {
 
         'outer: loop {
             for scene in scenes {
-                if !scene(&mut self.screen, &mut self.events)? {
+                if !scene(&mut self.screen)? {
                     break 'outer;
                 }
             }
@@ -764,10 +715,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 

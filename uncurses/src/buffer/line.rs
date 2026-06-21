@@ -4,7 +4,7 @@
 use crate::cell::Cell;
 
 /// A single line of cells, used by helpers that allocate owned rows
-/// (e.g. [`fill_line`]). Buffer accessors return slices ([`&[Cell]`]) so
+/// (e.g. [`fill_line`]). Buffer accessors return slices (`&[Cell]`) so
 /// callers don't pay an extra dereference through a per-row `Vec`.
 pub type Line = Vec<Cell>;
 

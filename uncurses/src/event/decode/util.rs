@@ -1,8 +1,25 @@
-//! Shared parsing helpers used across the per-sequence decoders.
+//! Shared helpers for per-sequence decoders.
 //!
-//! Pure functions only — no `Decoder` state. Anything that needs
-//! to look at decoder state stays in [`super`].
-
+//! ## Purpose
+//!
+//! This module contains stateless parsing utilities used by CSI, DCS, OSC, APC,
+//! SS3, and Windows-input decoders: hex decoding, string terminator search,
+//! modifier decoding, legacy-key lookup, and small key/event construction
+//! helpers.
+//!
+//! ## Key helpers
+//!
+//! * [`Params`] is re-exported for lazy CSI-style parameter access.
+//! * [`is_c1_introducer`] identifies the 8-bit C1 bytes that begin string or
+//!   control sequences.
+//! * [`lookup_legacy_key`] covers older terminal key encodings that do not fit
+//!   the modern CSI parameter grammar.
+//!
+//! ## Gotchas
+//!
+//! These helpers deliberately do not inspect [`Decoder`](super::Decoder) state.
+//! Functions that need paste mode, UTF-8 mouse mode, pending event queues, or
+//! Windows surrogate state live on the decoder impls instead.
 use crate::event::{Event, Key, KeyCode, KeyModifiers, decode::DecoderFlags};
 
 pub(super) use crate::ansi::params::Params;
@@ -64,10 +81,11 @@ pub(super) fn decode_termcap_payload(data: &[u8]) -> String {
     out
 }
 
-/// Locate a string terminator (BEL or ESC `\`) inside `data`. Returns
-/// `(byte_offset_of_terminator, terminator_length)`.
-/// Number of bytes that the introducer at `b0` occupies. Returns 2 for the
-/// 7-bit `ESC X` form and 1 for the 8-bit C1 single-byte form.
+/// Number of bytes that the introducer at `b0` occupies.
+///
+/// Returns 2 for the 7-bit `ESC X` form and 1 for the 8-bit C1 single-byte
+/// form. Callers pass the first byte of a sequence they have already classified
+/// as a 7-bit or 8-bit introducer.
 pub(super) fn intro_prefix_len(b0: u8) -> usize {
     if b0 == 0x1b { 2 } else { 1 }
 }

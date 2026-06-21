@@ -3,23 +3,21 @@
 //! A scrolling field of half-block "stars" rendered at one cell per
 //! two vertical pixels via the `▀` glyph (background = lower pixel).
 //! The frame loop runs at ~60 Hz: between frames the loop blocks on
-//! `EventSource::poll` so input is consumed without busy-waiting.
+//! `Screen::poll` so input is consumed without busy-waiting.
 //!
 //! Run with `cargo run --release --example space`. Press `q` or
 //! `Ctrl-C` to quit.
 
-use std::io::Write;
 use std::time::{Duration, Instant};
 
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::Color;
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::Terminal;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::WrapMode;
+use uncurses::text::TextSurface;
 
 const FRAME: Duration = Duration::from_micros(16_667); // ~60 FPS
 const GLYPH: &str = "\u{2580}";
@@ -116,9 +114,7 @@ impl Field {
 }
 
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     rng: Rng,
     field: Field,
     fps: Fps,
@@ -127,23 +123,17 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        screen.flush()?;
-
-        let events = EventSource::new(term.input())?;
         let rng = Rng::new(seed_from_clock());
         let field = Field::new();
         let fps = Fps::new();
 
         Ok(Self {
-            term,
             screen,
-            events,
             rng,
             field,
             fps,
@@ -171,8 +161,8 @@ impl App {
             let remaining = next_frame.saturating_duration_since(now);
             let mut quit = false;
 
-            if !remaining.is_zero() && self.events.poll(Some(remaining))? {
-                while let Some(ev) = self.events.try_read() {
+            if !remaining.is_zero() && self.screen.poll_event(Some(remaining))? {
+                while let Some(ev) = self.screen.try_read_event() {
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),
@@ -185,7 +175,7 @@ impl App {
                             ..
                         }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
                         Event::Resize(ws) => {
-                            self.screen.resize(ws.col, ws.row);
+                            self.screen.resize((ws.col, ws.row));
                             self.field = Field::new();
                             needs_redraw = true;
                         }
@@ -217,10 +207,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -231,8 +219,8 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn draw<W: Write>(
-    screen: &mut Screen<W>,
+fn draw(
+    screen: &mut Screen<Stdin, Stdout>,
     field: &mut Field,
     rng: &mut Rng,
     fps: &Fps,
@@ -267,13 +255,21 @@ fn draw<W: Write>(
 
     screen.clear_rect(uncurses::layout::Rect::new(0, 0, width, 1));
     let header = "space — press q to quit";
-    screen.set_str((0, 0), &truncate(header, width), WrapMode::Truncate);
+    screen.set_str(
+        (0, 0),
+        &truncate(header, width),
+        uncurses::style::Style::default(),
+    );
 
     if let Some(value) = fps.value {
         let label = format!("{value:.1} fps");
         let label_w = label.chars().count() as u16;
         if label_w < width {
-            screen.set_str((width - label_w, 0), &label, WrapMode::Truncate);
+            screen.set_str(
+                (width - label_w, 0),
+                &label,
+                uncurses::style::Style::default(),
+            );
         }
     }
 }

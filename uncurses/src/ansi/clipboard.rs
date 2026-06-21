@@ -1,27 +1,55 @@
-//! Clipboard manipulation via OSC 52.
+//! Clipboard and selection access through OSC 52.
+//!
+//! ## Category
+//!
+//! OSC 52 sets, requests, or clears named clipboards/selections. This module
+//! provides the common system clipboard (`c`) and primary selection (`p`) selector
+//! bytes plus writers for each operation.
+//!
+//! ## OSC framing
+//!
+//! The emitted sequences use 7-bit OSC with BEL termination:
+//!
+//! ```text
+//! ESC ] 52 ; c ; aGk= BEL
+//! ──┬── ┬─   ┬   ─┬─  ─┬─
+//!  OSC code  Pc  base64 terminator
+//! ```
+//!
+//! Clipboard data is base64-encoded by [`write_set_clipboard`]. Request and
+//! clear operations use `?` or an empty payload in the same field.
+//!
+//! ## Mode interaction
+//!
+//! OSC 52 is not gated by an ANSI/DEC mode. Terminals may still reject clipboard
+//! access by policy; this module only encodes the request bytes.
 
 use std::io::{self, Write};
 
-/// System clipboard (`c`).
+/// OSC 52 selector byte `c` for the system clipboard.
 pub const SYSTEM_CLIPBOARD: u8 = b'c';
 
-/// Primary selection (`p`).
+/// OSC 52 selector byte `p` for the primary selection.
 pub const PRIMARY_CLIPBOARD: u8 = b'p';
 
-/// Write data to the given clipboard (`OSC 52 ; Pc ; <base64> ST`).
+/// Set a clipboard or selection with `ESC ] 52 ; <pc> ; <base64-data> BEL`.
 ///
-/// `data` is base64-encoded by this function.
+/// `pc` is a selector such as [`SYSTEM_CLIPBOARD`] or [`PRIMARY_CLIPBOARD`]. `data` is base64-encoded by this function before it is emitted.
 pub fn write_set_clipboard<W: Write>(w: &mut W, pc: u8, data: &[u8]) -> io::Result<()> {
     let encoded = base64_encode(data);
     write!(w, "\x1b]52;{};{}\x07", pc as char, encoded)
 }
 
-/// Request the contents of the given clipboard (`OSC 52 ; Pc ; ? ST`).
+/// Request clipboard contents with `ESC ] 52 ; <pc> ; ? BEL`.
+///
+/// `pc` is written as a single selector character. Replies, when allowed by terminal policy, arrive asynchronously as OSC 52 data.
 pub fn write_request_clipboard<W: Write>(w: &mut W, pc: u8) -> io::Result<()> {
     write!(w, "\x1b]52;{};?\x07", pc as char)
 }
 
-/// Clear the given clipboard (`OSC 52 ; Pc ; ST`).
+/// Clear a clipboard or selection with `ESC ] 52 ; <pc> ; BEL`.
+///
+/// The payload field is intentionally empty; `pc` selects which clipboard or selection to clear.
 pub fn write_clear_clipboard<W: Write>(w: &mut W, pc: u8) -> io::Result<()> {
     write!(w, "\x1b]52;{};\x07", pc as char)
 }

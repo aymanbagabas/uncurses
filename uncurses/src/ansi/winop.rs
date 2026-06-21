@@ -1,31 +1,53 @@
-//! XTWINOPS (window operations).
+//! XTWINOPS window-operation requests and reports.
 //!
-//! `CSI Ps ; Ps ; Ps t` — a multi-purpose set of window-manipulation requests.
-//! Common operations include resizing, raising, lowering, reporting size, etc.
+//! ## Category
+//!
+//! XTWINOPS is the CSI `t` family for window and text-area operations such as
+//! resizing and querying pixel or cell dimensions.
+//!
+//! ## CSI format
+//!
+//! The generic shape is `ESC [ op [;arg...] t`. Operation numbers are decimal;
+//! additional parameters are operation-specific.
+//!
+//! ## Mode interaction
+//!
+//! XTWINOPS requests are not enabled by a mode in this module. Related in-band
+//! resize notifications are controlled separately by
+//! [`Mode::IN_BAND_RESIZE`](crate::ansi::mode::Mode::IN_BAND_RESIZE).
 
 use std::io::{self, Write};
 
-/// Common XTWINOPS operation numbers.
 pub mod op {
-    /// Resize window in pixels (`Ps;height;width t`).
+    //! Common XTWINOPS operation numbers.
+    //!
+    //! Each value is the first `Ps` parameter in an XTWINOPS `CSI ... t`
+    //! sequence. Pass one as the `p` argument to [`write_window_op`](crate::ansi::winop::write_window_op); any
+    //! extra `Ps` parameters are operation-specific. These constants only
+    //! name window operation numbers; they do not enable terminal modes.
+    /// Operation `4`: resize the window in pixels with arguments `height ; width`, yielding `ESC [ 4 ; <height> ; <width> t`.
     pub const RESIZE_WINDOW: u16 = 4;
-    /// Request size of window in pixels (`14 t` → reply `CSI 4;h;w t`).
+    /// Operation `14`: request window pixel size with `ESC [ 14 t`; replies use operation `4` with height and width.
     pub const REQUEST_WINDOW_SIZE: u16 = 14;
-    /// Request size of cells in pixels (`16 t` → reply `CSI 6;h;w t`).
+    /// Operation `16`: request character-cell pixel size with `ESC [ 16 t`; replies use operation `6` with height and width.
     pub const REQUEST_CELL_SIZE: u16 = 16;
-    /// Request size of window in cells (`18 t` → reply `CSI 8;rows;cols t`).
+    /// Operation `18`: request text-area size in cells with `ESC [ 18 t`; replies use operation `8` with rows and columns.
     pub const REQUEST_TEXT_AREA_SIZE: u16 = 18;
 }
 
-/// Request the window pixel size (`CSI 14 t`). Reply: `CSI 4;h;w t`.
+/// Request window pixel size: exact bytes `ESC [ 14 t` (`b"\x1b[14t"`).
+///
+/// A compatible terminal replies with `ESC [ 4 ; <height> ; <width> t`.
 pub const REQUEST_WINDOW_PIXEL_SIZE: &[u8] = b"\x1b[14t";
 
-/// Request the character cell pixel size (`CSI 16 t`). Reply: `CSI 6;h;w t`.
+/// Request character-cell pixel size: exact bytes `ESC [ 16 t` (`b"\x1b[16t"`).
+///
+/// A compatible terminal replies with `ESC [ 6 ; <height> ; <width> t`.
 pub const REQUEST_CELL_PIXEL_SIZE: &[u8] = b"\x1b[16t";
 
-/// Encode an XTWINOPS sequence (`CSI p[;ps...] t`).
+/// Encode a generic XTWINOPS sequence.
 ///
-/// Returns the empty result if `p == 0`.
+/// `p` is the operation number and `ps` are additional decimal parameters. `p == 0` emits nothing; otherwise the format is `ESC [ <p> [;<ps>...] t`.
 pub fn write_window_op<W: Write>(w: &mut W, p: u16, ps: &[u16]) -> io::Result<()> {
     if p == 0 {
         return Ok(());

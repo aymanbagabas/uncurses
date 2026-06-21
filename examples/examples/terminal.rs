@@ -1,61 +1,47 @@
-//! Compositional `uncurses` demo: a `Terminal` handle feeding a `Screen`
-//! and a `EventSource`, with a startup `query`.
+//! High-level `uncurses` demo: a `Screen` facade feeding rendering and events.
 //!
 //! Run with `cargo run --example terminal`. Opens the controlling
-//! terminal in raw mode + alternate screen, queries the background color
-//! once at startup, then echoes window size and an event counter until
-//! you press `q` or Ctrl-C.
-//!
-//! Nothing is hidden behind a facade: the `Terminal` owns the device and
-//! its raw-mode lifecycle, while its `Copy` halves drive `Screen`
-//! (output) and `EventSource` (input). You own the loop.
+//! terminal in raw mode + alternate screen, then echoes window size and
+//! an event counter until you press `q` or Ctrl-C.
 
 use std::io;
-use std::io::Write;
-use std::time::Duration;
 
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, query};
+use uncurses::buffer::Bounded;
+use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
-use uncurses::terminal::Terminal;
-use uncurses::text::WrapMode;
+use uncurses::terminal::{TtyInput, TtyOutput};
+use uncurses::text::TextSurface;
 
-fn main() -> io::Result<()> {
-    let mut term = Terminal::open()?;
-    term.make_raw()?;
+struct App {
+    screen: Screen<TtyInput, TtyOutput>,
+}
 
-    let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
-    let mut source = EventSource::new(term.input())?;
+impl App {
+    fn start() -> io::Result<Self> {
+        let mut screen = Screen::open()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
+        Ok(Self { screen })
+    }
 
-    screen.set_alt_screen(true);
-    screen.set_cursor_visible(false);
-
-    // One-shot capability query at startup (100ms budget): the request is
-    // written through the screen's output and the reply is plucked off
-    // the source; any user input meanwhile stays queued.
-    let bg = source.query_blocking(
-        &mut screen,
-        query::BACKGROUND_COLOR,
-        Duration::from_millis(100),
-    )?;
-
-    // Drive the loop in a closure so teardown always runs, even on error.
-    let result = (|| -> io::Result<()> {
-        let (mut w, mut h) = (screen.width(), screen.height());
+    fn run(&mut self) -> io::Result<()> {
+        let (mut w, mut h) = (self.screen.width(), self.screen.height());
         let mut events = 0u64;
         loop {
-            screen.set_str(
+            self.screen.set_str(
                 (0, 0),
                 "uncurses compositional demo — press q or Ctrl-C to quit",
-                WrapMode::Truncate,
+                uncurses::style::Style::default(),
             );
-            screen.set_str(
+            self.screen.set_str(
                 (0, 1),
-                &format!("size: {w}x{h}   background: {bg:?}   events: {events}      "),
-                WrapMode::Truncate,
+                &format!("size: {w}x{h}   events: {events}      "),
+                uncurses::style::Style::default(),
             );
-            screen.present()?;
+            self.screen.present()?;
 
-            match source.read()? {
+            match self.screen.read_event()? {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q'),
                     ..
@@ -66,18 +52,24 @@ fn main() -> io::Result<()> {
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => break,
                 Event::Resize(ws) => {
-                    screen.resize(ws.col, ws.row);
-                    (w, h) = (screen.width(), screen.height());
+                    self.screen.resize((ws.col, ws.row));
+                    (w, h) = (self.screen.width(), self.screen.height());
                 }
                 _ => {}
             }
             events += 1;
         }
         Ok(())
-    })();
+    }
 
-    screen.reset();
-    screen.flush()?;
-    term.restore()?;
+    fn stop(self) -> io::Result<()> {
+        self.screen.finish()
+    }
+}
+
+fn main() -> io::Result<()> {
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
     result
 }

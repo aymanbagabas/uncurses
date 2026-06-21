@@ -1,13 +1,24 @@
-//! `ESC ...` dispatch — routes 7-bit escape introductions to the
-//! per-class decoders, or emits an `Esc` / `Alt+<char>` key press for
-//! direct ESC keystrokes and meta-modified printable characters.
+//! ESC dispatch and Alt-key disambiguation.
 //!
-//! A leading `ESC` followed by another `ESC` recurses: the inner sequence
-//! is decoded first, and only if it resolves to a non-Alt key event does
-//! the outer `ESC` promote it to `Alt+<key>`. Otherwise the outer `ESC`
-//! is committed as a standalone `Esc` keypress and the remaining bytes
-//! are left in the buffer to be re-dispatched on the next iteration.
-
+//! ## Purpose
+//!
+//! `ESC` can be a standalone Escape key, an Alt-prefix for a key, or the 7-bit
+//! introduction to CSI, SS3, OSC, DCS, APC, SOS, or PM. This module routes the
+//! second case byte to the right parser and implements the local Alt-key
+//! fallback for printable and control bytes.
+//!
+//! ```text
+//! ESC ─┬─ [ / O / ] / P / _ / X / ^ ─▶ sequence decoder
+//!      ├─ printable byte ─────────────▶ Alt+key
+//!      ├─ control byte ───────────────▶ Alt+Ctrl+key
+//!      └─ no byte yet ────────────────▶ Incomplete until timeout
+//! ```
+//!
+//! ## Gotchas
+//!
+//! Runs of multiple `ESC` bytes recurse. If the inner sequence resolves to a
+//! non-Alt key, the outer `ESC` promotes it to Alt; otherwise the outer `ESC` is
+//! emitted as a standalone Escape key and the rest of the buffer is retried.
 use super::Decoder;
 use super::result::ParseResult;
 use crate::event::{Event, Key, KeyCode, KeyModifiers};

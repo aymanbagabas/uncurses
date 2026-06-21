@@ -1,27 +1,43 @@
-//! Platform-specific readiness wait.
+//! Platform readiness abstraction used by [`EventSource`](crate::event::EventSource).
 //!
-//! Wraps the native readiness primitive on each platform behind a small
-//! uniform interface so the event loop in [`super::reader`] does not
-//! grow per-target branches. The caller owns a `&mut [PollFd]`:
-//! [`Poller::poll`] writes back the `ready` flag on each entry and
-//! returns the number of ready fds.
+//! ## Purpose
 //!
-//! Backend selection:
+//! The source needs to wait on a small fixed set of handles: terminal input, a
+//! wake handle, and (on Unix) a resize pipe. This module wraps the native
+//! readiness primitive behind [`Poller`] so the event source can keep one shared
+//! control flow.
 //!
-//! | target                                                     | backend                              |
-//! |------------------------------------------------------------|--------------------------------------|
-//! | `linux`                                                    | `epoll`                              |
-//! | `freebsd`, `netbsd`, `openbsd`, `dragonfly`                | `kqueue`                             |
-//! | `macos`                                                    | `kqueue` (or `select` on tty fds)    |
-//! | `windows`                                                  | `WaitForMultipleObjects`             |
-//! | otherwise (`solaris`, `illumos`, generic unix)             | `poll(2)`                            |
+//! ```text
+//! target + input kind ──▶ new_poller ──▶ Poller::poll ──▶ ready[index]
+//!      │
+//!      ├─ linux: epoll
+//!      ├─ BSDs: kqueue
+//!      ├─ macOS tty: select   macOS non-tty: kqueue
+//!      └─ Windows: WaitForMultipleObjects
+//! ```
 //!
-//! All backends are level-triggered, treat `HUP`/`ERR`/`EOF` on any
-//! watched fd as that fd being ready (so the read path can surface
-//! the underlying error), and recompute the remaining timeout across
-//! `EINTR` retries from an absolute deadline so callers' timeouts are
-//! honoured exactly.
-
+//! ## Backend selection
+//!
+//! | target | backend |
+//! | --- | --- |
+//! | `linux` | `epoll` |
+//! | `freebsd`, `netbsd`, `openbsd`, `dragonfly` | `kqueue` |
+//! | `macos` | `kqueue`, or `select` for tty input fds |
+//! | `windows` | `WaitForMultipleObjects` |
+//! | other Unix | `select(2)` fallback |
+//!
+//! ## Contract
+//!
+//! All backends register a fixed handle slice at construction, report readiness
+//! into a separate boolean slice using the same index order, treat hangup/error
+//! indications as readiness, and recompute remaining time across interrupted
+//! waits from an absolute deadline.
+//!
+//! ## Gotchas
+//!
+//! The poller does not own the watched input handles; callers must keep them
+//! alive for the poller's lifetime. On macOS, tty character devices use the
+//! `select` backend because `kqueue` can spin on them.
 use std::io;
 #[cfg(unix)]
 use std::os::fd::RawFd;
@@ -122,7 +138,7 @@ fn remaining(deadline: Option<Instant>) -> Option<Duration> {
 /// There is deliberately no platform-dispatch wrapper: the concrete
 /// implementations are exposed per target and the caller picks one. On
 /// Darwin, `kqueue` spins on tty character devices, so a caller watching
-/// a tty input fd selects [`Select`] over [`Kqueue`].
+/// a tty input fd selects `Select` over `Kqueue`.
 pub trait Poller: Send + Sync {
     /// Construct a poller watching exactly `fds`, registered once for
     /// the poller's lifetime.

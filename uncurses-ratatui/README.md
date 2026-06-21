@@ -1,97 +1,62 @@
 # uncurses-ratatui
 
-A [ratatui](https://github.com/ratatui/ratatui) `Backend` built on
-[`uncurses::screen::Screen`]. Write your UI with ratatui widgets and let
-uncurses sweat the diffing and the bytes on the wire.
+A [`ratatui`](https://docs.rs/ratatui) `Backend` that renders through
+[uncurses](../uncurses/README.md). Write your UI with ratatui widgets; let
+uncurses diff frames and ship the minimal bytes. A single `UncursesBackend`
+wraps a `Screen` and drives rendering, input, and the raw-mode lifecycle.
 
-Want the bigger picture? The [workspace README](../README.md) has the
-project overview, and the [uncurses README](../uncurses/README.md) covers
-the core library.
+> **Full guides and API reference:
+> [aymanbagabas.github.io/uncurses](https://aymanbagabas.github.io/uncurses/)**
 
-## What it does
+## Quick start
 
-`UncursesBackend` owns the whole terminal stack: the `Terminal` handle,
-the `Screen`, and a shared `EventSource`. One value drives rendering,
-input, and the raw-mode lifecycle. ratatui's draw calls turn into screen
-updates, uncurses ships the minimal byte diff, and you still run your own
-event loop through the same backend.
-
-## Getting started
-
-The `init`/`restore` helpers mirror ratatui's own setup functions: they
-enter raw mode, hide the cursor, pick the screen, and hand back a
-ready-to-go ratatui `Terminal`.
-
-```rust,no_run
-use std::io;
-
-use ratatui::widgets::{Block, Borders, Paragraph};
+```rust,ignore
+use ratatui::widgets::Paragraph;
 use uncurses::event::Event;
 
-fn main() -> io::Result<()> {
+fn main() -> std::io::Result<()> {
     let mut terminal = uncurses_ratatui::try_init()?;
-    let result = run(&mut terminal);
-    uncurses_ratatui::restore(&mut terminal);
-    result
-}
 
-fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
     loop {
         terminal.draw(|frame| {
-            let block = Block::default().title(" hello ").borders(Borders::ALL);
             frame.render_widget(
-                Paragraph::new("from ratatui, via uncurses").block(block),
+                Paragraph::new("from ratatui, via uncurses - press q to quit"),
                 frame.area(),
             );
-        })?;
+        })?; // draw inside the loop so it follows resizes
 
-        // The backend owns the event source; lock it to read input.
-        let mut events = terminal.backend().events();
-        if events.poll(None)? && matches!(events.try_read(), Some(Event::KeyPress(_))) {
+        let backend = terminal.backend_mut();
+        if backend.poll_event(None)? && matches!(backend.try_read_event(), Some(Event::KeyPress(_))) {
             break;
         }
     }
+
+    uncurses_ratatui::restore(&mut terminal);
     Ok(())
 }
 ```
 
-See `examples/ratatui_hello.rs` and its `ratatui_*` siblings for complete
-programs, input handling and teardown included.
+- Read input straight off the backend (`poll_event` / `try_read_event` /
+  `read_event`) - it delegates to the screen and runs capability detection.
+- Every ratatui viewport works; pass one (and a `ScreenOptions`) through
+  `try_init_with_options`. `Inline` paints at the cursor; `Fullscreen` /
+  `Fixed` use the alternate screen.
+- With the `async` feature, drive `terminal.backend_mut().screen_mut().events()`
+  for a `futures_core::Stream` of events.
 
-## Viewports
+See `examples/ratatui_*.rs` for complete programs, and the
+[API reference](https://aymanbagabas.github.io/uncurses/api/uncurses_ratatui/)
+for `UncursesBackend`, viewports, and manual setup.
 
-Every ratatui viewport works. Pass one through `try_init_with_options`:
-
-```rust,ignore
-use ratatui::{TerminalOptions, Viewport};
-
-let mut terminal = uncurses_ratatui::try_init_with_options(TerminalOptions {
-    viewport: Viewport::Inline(3),
-})?;
-```
-
-- `Fullscreen` and `Fixed` render on the alternate screen.
-- `Inline` paints a small region anchored at the cursor on the main
-  screen, leaving the surrounding shell output and scrollback intact. See
-  `examples/ratatui_inline.rs`.
-
-## Async input
-
-With the `async` feature, `UncursesBackend::event_stream` hands you a
-runtime-agnostic `futures_core::Stream` of events:
+## Install
 
 ```toml
 [dependencies]
-uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses", features = ["async"] }
+uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses" }
+ratatui = "0.30"
 ```
 
-## Manual setup
-
-If you need full control, build the backend directly with
-`UncursesBackend::stdio`, `open`, or `new`, call `init`/`restore`
-yourself, and set up the screen and viewport before handing it to
-`ratatui::Terminal`. The `init` helpers above are exactly this wiring with
-sensible defaults.
+Features mirror the core crate: `unicode-rs` *(default)*, `icu`, and `async`.
 
 ## License
 

@@ -1,47 +1,117 @@
-//! Mouse event types and encoding/decoding.
-
+//! Mouse payloads and mouse-protocol helpers.
+//!
+//! ## Purpose
+//!
+//! Mouse events report a button, coordinates, and keyboard modifiers in a
+//! compact payload shared by click, release, wheel, and motion events. This
+//! module also contains the decoder helpers for the mouse wire formats accepted
+//! by the event decoder.
+//!
+//! ```text
+//! CSI mouse bytes ──▶ button bitfield + x/y ──▶ Mouse ──▶ Event::Mouse*
+//!                         │
+//!                         └─ SGR-pixel mode: x/y are pixel offsets
+//! ```
+//!
+//! ## Key types
+//!
+//! * [`MouseButton`] distinguishes ordinary buttons, wheels, extra buttons,
+//!   and legacy no-button release records.
+//! * [`Mouse`] carries zero-based coordinates plus [`KeyModifiers`].
+//! * [`mouse_pixel_to_cell`] converts SGR-Pixel coordinates to cell positions
+//!   when the caller knows both terminal pixel and cell dimensions.
+//!
+//! ## Supported encodings
+//!
+//! The decoder accepts SGR (1006), SGR-Pixel (1016, same wire shape), X10,
+//! UTF-8 mouse mode (1005), and URxvt decimal mouse mode (1015). Coordinates
+//! are normalized from one-based terminal wire values to zero-based payload
+//! values.
+//!
+//! ## Gotchas
+//!
+//! The parser cannot tell SGR and SGR-Pixel apart from bytes alone. If mode
+//! 1016 is enabled, treat [`Mouse::x`] and [`Mouse::y`] as pixel offsets until
+//! you convert them. Wheel events do not have matching release events.
 use super::Event;
 use super::key::KeyModifiers;
 use crate::ansi::params::Params;
 
-/// Mouse button identifier.
+/// Mouse button or wheel direction associated with a [`Mouse`] event.
+///
+/// Button names describe the decoded terminal bitfield, not a physical device
+/// guarantee. Some terminals cannot identify the released button and report
+/// [`MouseButton::None`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
+    /// Primary (left) mouse button.
     Left,
+    /// Middle mouse button, often the wheel button.
     Middle,
+    /// Secondary (right) mouse button.
     Right,
+    /// Vertical wheel scrolled up.
     WheelUp,
+    /// Vertical wheel scrolled down.
     WheelDown,
+    /// Horizontal wheel scrolled left.
     WheelLeft,
+    /// Horizontal wheel scrolled right.
     WheelRight,
+    /// Additional mouse button 4 when encoded by a terminal extension.
     Button4,
+    /// Additional mouse button 5 when encoded by a terminal extension.
     Button5,
+    /// Additional mouse button 6 when encoded by a terminal extension.
     Button6,
+    /// Additional mouse button 7 when encoded by a terminal extension.
     Button7,
+    /// Additional mouse button 8 when encoded by a terminal extension.
     Button8,
+    /// Additional mouse button 9 when encoded by a terminal extension.
     Button9,
+    /// Additional mouse button 10 when encoded by a terminal extension.
     Button10,
+    /// Additional mouse button 11 when encoded by a terminal extension.
     Button11,
+    /// No button was reported.
+    ///
+    /// This appears for legacy release records and hover-style motion where the
+    /// protocol does not attach a specific held button.
     None,
 }
 
-/// A mouse event with position and button info.
+/// Mouse-event payload with position, button, and modifier state.
 ///
 /// Coordinates are zero-based; `(0, 0)` is the upper-left corner of the
-/// terminal. When the terminal is using SGR-Pixel encoding (DEC mode 1016),
-/// `x`/`y` are in pixel coordinates; otherwise they are in cell coordinates.
-/// Use [`mouse_pixel_to_cell`] to convert pixel coordinates to cell
-/// coordinates when appropriate.
+/// terminal. In normal mouse modes, `x` and `y` are cell coordinates. When the
+/// application has enabled SGR-Pixel encoding (DEC mode 1016), the same fields
+/// contain pixel offsets instead; call [`mouse_pixel_to_cell`] if cell
+/// coordinates are needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Mouse {
+    /// Horizontal coordinate.
+    ///
+    /// Interpreted as a column in normal mouse modes and a pixel offset in
+    /// SGR-Pixel mode.
     pub x: u16,
+    /// Vertical coordinate.
+    ///
+    /// Interpreted as a row in normal mouse modes and a pixel offset in
+    /// SGR-Pixel mode.
     pub y: u16,
+    /// Button, wheel direction, or no-button marker associated with the event.
     pub button: MouseButton,
+    /// Keyboard modifiers that were active when the mouse event was reported.
     pub modifiers: KeyModifiers,
 }
 
 impl Mouse {
-    /// Construct a mouse event.
+    /// Construct a mouse payload from decoded coordinates, button, and modifiers.
+    ///
+    /// The constructor stores its arguments unchanged. Pass zero-based cell
+    /// coordinates for ordinary mouse modes, or zero-based pixel offsets for
+    /// SGR-Pixel mode. It never allocates or panics.
     pub fn new(x: u16, y: u16, button: MouseButton, modifiers: KeyModifiers) -> Self {
         Self {
             x,
@@ -52,12 +122,16 @@ impl Mouse {
     }
 }
 
-/// Convert a mouse event reported in pixel coordinates (SGR-Pixel / mode 1016)
-/// to cell coordinates, using the given terminal pixel and cell dimensions.
+/// Convert an SGR-Pixel mouse payload to cell coordinates.
 ///
-/// `pixel_width` / `pixel_height` are the terminal's pixel dimensions (e.g.
-/// from a `WindowOp(4)` query → [`crate::event::Event::WindowPixelSize`]);
-/// `cols` / `rows` are the terminal's cell dimensions.
+/// `pixel_width` and `pixel_height` are the terminal's pixel dimensions (for
+/// example from [`Event::WindowPixelSize`]); `cols` and `rows` are the terminal
+/// grid dimensions. The returned [`Mouse`] keeps the original button and
+/// modifiers with `x`/`y` scaled into cell coordinates using integer division.
+///
+/// If either pixel dimension is zero, the corresponding output coordinate is
+/// zero. The function does not clamp to `cols - 1` / `rows - 1` and never
+/// panics.
 pub fn mouse_pixel_to_cell(
     m: Mouse,
     pixel_width: u16,

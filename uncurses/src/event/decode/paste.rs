@@ -1,10 +1,23 @@
 //! Bracketed-paste body handling.
 //!
-//! Once the decoder has seen `Event::PasteStart` (CSI 200~), all incoming
-//! bytes are streamed as [`Event::PasteChunk`] until the terminator
-//! `Event::PasteEnd` (CSI 201~) is recognized — the only escape
-//! sequence honored inside a paste body.
-
+//! ## Purpose
+//!
+//! After [`Event::PasteStart`] has been emitted, normal escape decoding is
+//! suspended and this module streams paste bytes as [`Event::PasteChunk`] until
+//! the 7-bit bracketed-paste terminator is recognized.
+//!
+//! ```text
+//! PasteStart ──▶ raw bytes ──▶ PasteChunk* ──▶ ESC [ 201 ~ ──▶ PasteEnd
+//!                 │
+//!                 └─ non-terminating ESC sequences remain literal bytes
+//! ```
+//!
+//! ## Gotchas
+//!
+//! The 8-bit CSI byte `0x9B` is deliberately not treated as a paste terminator
+//! introducer inside paste content because it can be a valid UTF-8 continuation
+//! byte. Chunk boundaries reflect input availability and terminator holdback,
+//! not character or line boundaries.
 use super::Decoder;
 use super::result::ParseResult;
 use crate::event::Event;

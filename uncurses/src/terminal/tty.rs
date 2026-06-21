@@ -16,6 +16,14 @@
 //! writes through `WriteConsoleW` (UTF-16) so non-ASCII text
 //! round-trips correctly through the conpty, matching
 //! [`std::io::Stdout`].
+//!
+//! ## When to use this module
+//!
+//! Use [`open_tty`] through [`Terminal::open`](super::Terminal::open) when an
+//! application may receive data on stdin or write data to stdout but still
+//! needs to control the user's terminal. Use [`stdin`](super::stdin) and
+//! [`stdout`](super::stdout) instead when inherited stdio is the terminal
+//! interface.
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -110,8 +118,7 @@ fn open_output() -> io::Result<Mutex<File>> {
     open_input()
 }
 
-/// Open the controlling terminal and return separate input / output
-/// handles.
+/// Open the controlling terminal and return separate input/output handles.
 ///
 /// On Unix both halves refer to `/dev/tty`; on Windows the input is
 /// `CONIN$` and the output is `CONOUT$`. The underlying handles are
@@ -120,10 +127,20 @@ fn open_output() -> io::Result<Mutex<File>> {
 /// references the same cached state, so calling `open_tty` repeatedly
 /// is cheap.
 ///
-/// Returns an error if the process has no controlling terminal or if
-/// the device cannot be opened. Failures are also cached: once a
-/// platform open has failed, subsequent calls return an equivalent
-/// error without retrying.
+/// # Returns
+///
+/// `(TtyInput, TtyOutput)` handles referencing the cached controlling terminal
+/// files.
+///
+/// # Errors
+///
+/// Returns an error if the process has no controlling terminal or if the
+/// device cannot be opened. Failures are also cached: once a platform open has
+/// failed, subsequent calls return an equivalent error without retrying.
+///
+/// # Panics
+///
+/// This function does not intentionally panic.
 pub fn open_tty() -> io::Result<(TtyInput, TtyOutput)> {
     Ok((
         TtyInput {
@@ -140,6 +157,10 @@ pub fn open_tty() -> io::Result<(TtyInput, TtyOutput)> {
 /// A cheap `Copy` handle that references a process-wide cached
 /// [`File`] guarded by a [`Mutex`]; concurrent reads from multiple
 /// threads are serialised at the byte level.
+///
+/// Dropping this handle does not close the controlling terminal. Use it where
+/// an input handle implementing [`Read`] and the platform borrowing traits is
+/// needed, including [`Terminal`](super::Terminal).
 #[derive(Clone, Copy)]
 pub struct TtyInput {
     inner: &'static Mutex<File>,
@@ -155,6 +176,10 @@ pub struct TtyInput {
 /// refers to a console and transcodes UTF-8 to UTF-16 +
 /// `WriteConsoleW` so non-ASCII text renders correctly; non-console
 /// handles (files or pipes) fall through to plain `WriteFile`.
+///
+/// Dropping this handle does not close the controlling terminal. Use it where
+/// an output handle implementing [`Write`] and the platform borrowing traits is
+/// needed, including [`Terminal`](super::Terminal).
 #[derive(Clone, Copy)]
 pub struct TtyOutput {
     inner: &'static Mutex<File>,

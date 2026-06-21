@@ -5,17 +5,15 @@
 //! When the modal is hidden, the text underneath becomes visible
 //! again. `q`, `Esc`, or `Ctrl-C` exits.
 
-use std::io::Write;
-
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::BasicColor;
-use uncurses::event::{Event, EventSource, Key};
+use uncurses::event::{Event, Key};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
-use uncurses::terminal::{Stdin, Stdout, Terminal};
-use uncurses::text::WrapMode;
+use uncurses::terminal::{Stdin, Stdout};
+use uncurses::text::{TextSurface, WrapMode};
 
 const MODAL_W: u16 = 44;
 const MODAL_H: u16 = 9;
@@ -40,11 +38,9 @@ const BACKGROUND: &[&str] = &[
 ];
 
 /// Modal-toggle app. `start` enters raw mode and the alternate screen,
-/// `run` drives the event loop, and `stop` restores the terminal.
+/// and `run` drives the event loop.
 struct App {
-    term: Terminal<Stdin, Stdout>,
-    screen: Screen<Stdout>,
-    events: EventSource<Stdin>,
+    screen: Screen<Stdin, Stdout>,
     modal_open: bool,
     quit_keys: [Key; 3],
     toggle_keys: [Key; 2],
@@ -52,20 +48,16 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut term = Terminal::stdio();
-        term.make_raw()?;
-        let mut screen = Screen::new(term.output(), term.window_size().unwrap_or_default());
-        screen.set_alt_screen(true);
-        screen.set_cursor_visible(false);
-        let events = EventSource::new(term.input())?;
+        let mut screen = Screen::stdio()?;
+        screen.init()?;
+        screen.enter_alt_screen()?;
+        screen.hide_cursor()?;
 
         // Parse key bindings once. `Key: FromStr`, and `==` compares on
         // the canonical chord identity — so plain equality is the right
         // operator for keyboard-shortcut matching.
         Ok(Self {
-            term,
             screen,
-            events,
             modal_open: true,
             quit_keys: ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap()),
             toggle_keys: ["space", "m"].map(|s| s.parse().unwrap()),
@@ -81,7 +73,7 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.events.read()?;
+            let ev = self.screen.read_event()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -90,7 +82,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize(ws.col, ws.row);
+                    self.screen.resize((ws.col, ws.row));
                     dirty = true;
                 }
                 _ => {}
@@ -102,10 +94,8 @@ impl App {
         Ok(())
     }
 
-    fn stop(&mut self) -> std::io::Result<()> {
-        self.screen.reset();
-        self.screen.flush()?;
-        self.term.restore()
+    fn stop(self) -> std::io::Result<()> {
+        self.screen.finish()
     }
 }
 
@@ -116,7 +106,7 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
+fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     screen.clear();
     paint_background(screen);
     paint_status(screen, modal_open);
@@ -125,30 +115,30 @@ fn redraw<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
     }
 }
 
-fn paint_background<W: Write>(screen: &mut Screen<W>) {
+fn paint_background(screen: &mut Screen<Stdin, Stdout>) {
     let w = screen.width();
     let h = screen.height();
     if w == 0 || h == 0 {
         return;
     }
-    let body = Style::default().fg(BasicColor::BrightBlack.into());
+    let body = Style::default().fg(BasicColor::BrightBlack);
     // Reserve the bottom row for the status line.
     let body_rows = h.saturating_sub(1);
     for y in 0..body_rows {
         let line = BACKGROUND[(y as usize) % BACKGROUND.len()];
-        screen.set_str_with((0, y), line, WrapMode::Truncate, body.clone());
+        screen.set_str((0, y), line, body.clone());
     }
 }
 
-fn paint_status<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
+fn paint_status(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     let h = screen.height();
     if h == 0 {
         return;
     }
     let y = h - 1;
     let status = Style::default()
-        .fg(BasicColor::Black.into())
-        .bg(BasicColor::BrightWhite.into());
+        .fg(BasicColor::Black)
+        .bg(BasicColor::BrightWhite);
     screen.fill_rect(
         Rect::new(0, y, screen.width(), 1),
         &Cell::narrow(" ").style(status.clone()),
@@ -158,10 +148,10 @@ fn paint_status<W: Write>(screen: &mut Screen<W>, modal_open: bool) {
     } else {
         " modal: closed  space/m: toggle    q: quit "
     };
-    screen.set_str_with((0, y), label, WrapMode::Truncate, status);
+    screen.set_str((0, y), label, status);
 }
 
-fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
+fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W + 2 || h < MODAL_H + 2 {
@@ -172,17 +162,17 @@ fn modal_rect<W: Write>(screen: &Screen<W>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
+fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue)
         .bold();
     let body = Style::default()
-        .fg(BasicColor::BrightWhite.into())
-        .bg(BasicColor::Blue.into());
+        .fg(BasicColor::BrightWhite)
+        .bg(BasicColor::Blue);
     let hint = Style::default()
-        .fg(BasicColor::BrightYellow.into())
-        .bg(BasicColor::Blue.into())
+        .fg(BasicColor::BrightYellow)
+        .bg(BasicColor::Blue)
         .italic();
 
     // Solid fill so background text never bleeds through the modal.
@@ -192,22 +182,22 @@ fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
     let bottom = rect.y + rect.height - 1;
     // Borders.
     for x in (rect.x + 1)..right {
-        screen.set_str_with((x, rect.y), "─", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((x, bottom), "─", WrapMode::Truncate, frame.clone());
+        screen.set_str((x, rect.y), "─", frame.clone());
+        screen.set_str((x, bottom), "─", frame.clone());
     }
     for y in (rect.y + 1)..bottom {
-        screen.set_str_with((rect.x, y), "│", WrapMode::Truncate, frame.clone());
-        screen.set_str_with((right, y), "│", WrapMode::Truncate, frame.clone());
+        screen.set_str((rect.x, y), "│", frame.clone());
+        screen.set_str((right, y), "│", frame.clone());
     }
-    screen.set_str_with((rect.x, rect.y), "┌", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, rect.y), "┐", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((rect.x, bottom), "└", WrapMode::Truncate, frame.clone());
-    screen.set_str_with((right, bottom), "┘", WrapMode::Truncate, frame.clone());
+    screen.set_str((rect.x, rect.y), "┌", frame.clone());
+    screen.set_str((right, rect.y), "┐", frame.clone());
+    screen.set_str((rect.x, bottom), "└", frame.clone());
+    screen.set_str((right, bottom), "┘", frame.clone());
 
     // Title bar.
     let title = " Modal ";
     let title_x = rect.x + (rect.width - title.chars().count() as u16) / 2;
-    screen.set_str_with((title_x, rect.y), title, WrapMode::Truncate, frame.clone());
+    screen.set_str((title_x, rect.y), title, frame.clone());
 
     // Body wraps inside the modal's inner area.
     let inner = Rect::new(
@@ -219,10 +209,10 @@ fn paint_modal<W: Write>(screen: &mut Screen<W>, rect: Rect) {
     let body_text = "This panel covers a fixed slice of the screen. \
                      The paragraph text behind it is hidden until the \
                      modal is dismissed.";
-    screen.set_str_rect_with(inner, body_text, WrapMode::Wrap, body.clone());
+    screen.set_str_rect_wrap(inner, body_text, WrapMode::Wrap, body.clone());
 
     // Footer hint inside the modal.
     let footer = "press space / m to close";
     let fx = rect.x + (rect.width - footer.chars().count() as u16) / 2;
-    screen.set_str_with((fx, bottom - 1), footer, WrapMode::Truncate, hint);
+    screen.set_str((fx, bottom - 1), footer, hint);
 }

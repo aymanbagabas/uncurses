@@ -1,25 +1,45 @@
-//! Unix-specific construction and event-pump for [`EventSource`].
+//! Unix-specific construction and readiness servicing for [`EventSource`].
 //!
-//! Holds the platform read path: a self-pipe waker, a SIGWINCH self-pipe
-//! that surfaces [`Event::Resize`], and the byte-oriented `Read` +
-//! [`Decoder`] decode loop. The cross-platform surface (the struct, the
-//! shared methods, [`DeadlineKind`]) lives in [`super::source`].
-
+//! ## Purpose
+//!
+//! This module supplies the Unix [`EventSource::new`] implementation and the
+//! platform hooks used by the shared source pump: drain the wake self-pipe, read
+//! ready bytes, and surface `SIGWINCH` as [`Event::Resize`].
+//!
+//! ```text
+//! [input fd] ─┐
+//! [wake pipe] ├─▶ Poller ──▶ EventSource::fill
+//! [winch pipe]┘        ├─ wake: Interrupted
+//!                      ├─ input: read + decode
+//!                      └─ winch: query Winsize + Resize
+//! ```
+//!
+//! ## Key types
+//!
+//! `UnixWakerInner` owns the write end of a non-blocking self-pipe. The
+//! shared [`Waker`] wraps it so other threads can interrupt
+//! blocking reads without touching decoder state.
+//!
+//! ## Gotchas
+//!
+//! The input fd is also used for `TIOCGWINSZ`, so it should refer to the same
+//! terminal whose size the caller wants. When in-band resize reports are
+//! enabled, [`EventSource::set_handle_resize`] should disable the SIGWINCH path
+//! to avoid duplicate resize events.
 #![cfg(unix)]
 
 use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::decode::{Decoder, DecoderFlags};
 use super::pending::Pending;
 use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DeadlineKind,
-    EventSource, Input, Observers, Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
+    Waker,
 };
 use crate::event::Event;
 use crate::terminal::size::get_window_size;
@@ -57,14 +77,21 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Build a new event source for `input`. The handle is also used as
-    /// the `TIOCGWINSZ` target whenever SIGWINCH fires, so it must refer
-    /// to the terminal whose size the caller cares about (typically the
-    /// controlling tty — any fd that names it works).
+    /// Build a new Unix event source for `input`.
     ///
-    /// Timeouts start at their documented defaults; override them with
+    /// The handle is used both for byte reads and as the `TIOCGWINSZ` target
+    /// when `SIGWINCH` fires, so it should refer to the terminal whose size the
+    /// caller cares about. Construction creates two non-blocking self-pipes,
+    /// subscribes to the shared SIGWINCH fan-out, and registers the input, wake,
+    /// and resize fds with the selected poll backend.
+    ///
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and
+    /// [`DEFAULT_PASTE_IDLE_TIMEOUT`]; override them with
     /// [`EventSource::with_esc_timeout`] and
     /// [`EventSource::with_paste_idle_timeout`].
+    ///
+    /// Returns any OS error from pipe creation, fd configuration, SIGWINCH
+    /// subscription, or poller construction. It does not read from `input`.
     pub fn new(input: I) -> io::Result<Self> {
         let (pipe_rx, pipe_tx) = make_self_pipe()?;
         let (winch_rx, winch_tx) = make_self_pipe()?;
@@ -91,7 +118,6 @@ where
             queue: VecDeque::with_capacity(16),
             waker,
             handle_resize: true,
-            observers: Observers::default(),
             poller,
             pipe_rx,
             winch_rx,
@@ -101,65 +127,22 @@ where
         })
     }
 
-    /// Single read+decode cycle. Fills [`Self::queue`]. Returns
-    /// [`io::ErrorKind::Interrupted`] if a paired waker fired.
-    pub(super) fn pump(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        let (effective, kind) = self.effective_timeout(timeout);
-        let mut ready = [false; 3];
-        self.poller.poll(&mut ready, effective)?;
-        self.ingest(ready, kind)
+    /// Drain pending wake bytes after a [`Waker`] fired.
+    ///
+    /// Platform hook for [`EventSource::fill`]. Multiple wake bytes may have
+    /// coalesced; draining them all lets a subsequent poll block again.
+    pub(super) fn drain_wake(&mut self) {
+        drain_pipe(self.pipe_rx.as_raw_fd());
     }
 
-    /// Act on a readiness result `[input, wake, winch]` (the poller's
-    /// fixed index order): service a resize, surface a wake as
-    /// `Interrupted`, drain ready input, or run a deadline expiry when
-    /// nothing was ready. Performs no blocking wait of its own, so it is
-    /// safe to call under a lock after a separate lock-free
-    /// [`Poller::poll`] — the path an [`super::EventStream`] reader
-    /// thread takes.
-    pub(super) fn ingest(&mut self, ready: [bool; 3], kind: DeadlineKind) -> io::Result<()> {
-        let input_ready = ready[0];
-        let wake_ready = ready[1];
-        let winch_ready = ready[2];
-        let any = input_ready || wake_ready || winch_ready;
-
-        if winch_ready {
-            self.handle_winch();
-        }
-
-        if wake_ready {
-            drain_pipe(self.pipe_rx.as_raw_fd());
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
-        }
-
-        if input_ready {
-            self.handle_input_ready()?;
-        } else if !any {
-            match kind {
-                DeadlineKind::Esc => self.expire_partial(),
-                DeadlineKind::Paste => self.expire_paste(),
-                DeadlineKind::None => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Re-check readiness with a zero-timeout poll and ingest whatever is
-    /// ready, all under the caller's lock. A reader thread calls this
-    /// after a separate lock-free [`Poller::poll`] has already blocked for
-    /// readiness: re-polling here (instead of trusting the lock-free
-    /// result) means the input read only runs when bytes are still
-    /// present, so a blocking input fd never stalls the lock — even if a
-    /// concurrent query drained the bytes in between. Deadline expiry is
-    /// the caller's responsibility (see [`EventSource::expire`]).
-    pub(super) fn drain_after_wait(&mut self) -> io::Result<()> {
-        let mut ready = [false; 3];
-        self.poller.poll(&mut ready, Some(Duration::ZERO))?;
-        self.ingest(ready, DeadlineKind::None)
-    }
-
-    fn handle_input_ready(&mut self) -> io::Result<()> {
+    /// Read ready input bytes and run them through the decoder.
+    ///
+    /// Platform hook for [`EventSource::fill`]. `Interrupted` and `WouldBlock`
+    /// reads are treated as a transient absence of bytes. A zero-length read is
+    /// surfaced as [`io::ErrorKind::UnexpectedEof`]. If the pending buffer is
+    /// already full, it is cleared because its capacity is the hard cap on one
+    /// undecoded sequence.
+    pub(super) fn drain_input(&mut self) -> io::Result<()> {
         // If the buffer is full and the parser still couldn't extract
         // an event, the contract says the buffer size is the hard cap
         // on any single sequence — drop the buffer silently and resume.
@@ -192,7 +175,7 @@ where
         Ok(())
     }
 
-    fn handle_winch(&mut self) {
+    pub(super) fn handle_winch(&mut self) {
         drain_pipe(self.winch_rx.as_raw_fd());
         // When in-band resize reporting is enabled the host disables
         // this path; the terminal delivers resizes through the decoder
@@ -263,6 +246,7 @@ mod tests {
     use std::fs::File;
     use std::os::fd::FromRawFd;
     use std::thread;
+    use std::time::Duration;
     use std::time::Instant;
 
     fn make_pipe() -> (File, File) {
@@ -305,61 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn try_read_matching_plucks_and_preserves_order() {
-        let (rx, tx) = make_pipe();
-        let mut src = new_reader(rx);
-        write_bytes(&tx, b"ab");
-        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
-        let b = src
-            .try_read_matching(
-                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('b')),
-            )
-            .expect("b should be pluckable");
-        assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
-        // 'a' is still queued, in order; the matched 'b' is gone.
-        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('a')));
-        assert!(
-            src.try_read_matching(
-                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('b'))
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn read_matching_blocks_then_plucks_leaving_others() {
-        let (rx, tx) = make_pipe();
-        let mut src = new_reader(rx);
-        write_bytes(&tx, b"ab");
-        let b = src
-            .read_matching(
-                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('b')),
-                Some(Duration::from_secs(1)),
-            )
-            .unwrap()
-            .expect("b arrives within timeout");
-        assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
-        // 'a' remained queued for a normal read.
-        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('a')));
-    }
-
-    #[test]
-    fn read_matching_times_out_and_preserves_non_matching() {
-        let (rx, tx) = make_pipe();
-        let mut src = new_reader(rx);
-        write_bytes(&tx, b"a");
-        let got = src
-            .read_matching(
-                |ev| matches!(ev, Event::KeyPress(k) if k.code == KeyCode::Char('z')),
-                Some(Duration::from_millis(30)),
-            )
-            .unwrap();
-        assert!(got.is_none());
-        // The non-matching 'a' is preserved for a normal read.
-        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('a')));
-    }
-
-    #[test]
     fn timeout_returns_none() {
         let (rx, _tx) = make_pipe();
         let mut src = new_reader(rx);
@@ -382,6 +311,35 @@ mod tests {
         let err = src.read().expect_err("should be Interrupted");
         handle.join().unwrap();
         assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn esc_resolves_before_late_continuation_byte() {
+        // A buffered partial ESC whose deadline elapses must resolve to a
+        // bare Esc before a continuation byte that arrives afterward is
+        // read, so the two never merge into an Alt-modified key.
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx); // 50ms esc timeout
+        write_bytes(&tx, b"\x1b");
+        // Drain the lone ESC so its disambiguation deadline is armed; the
+        // queue stays empty because the sequence is still partial.
+        assert!(!src.poll(Some(Duration::from_millis(0))).unwrap());
+        // Let the deadline elapse without draining, then deliver a byte
+        // that would otherwise complete an ESC-prefixed sequence.
+        thread::sleep(Duration::from_millis(80));
+        write_bytes(&tx, b"a");
+        let first = src.read().unwrap();
+        assert!(
+            matches!(&first, Event::KeyPress(k) if k.code == KeyCode::Escape),
+            "expected bare Esc, got {:?}",
+            first
+        );
+        let second = src.read().unwrap();
+        assert!(
+            matches!(&second, Event::KeyPress(k) if k.code == KeyCode::Char('a')),
+            "expected 'a', got {:?}",
+            second
+        );
     }
 
     #[test]

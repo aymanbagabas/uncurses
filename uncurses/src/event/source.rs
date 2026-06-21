@@ -1,33 +1,46 @@
-//! Unified, wakeable [`EventSource`].
+//! Wakeable event source shared by synchronous and asynchronous readers.
 //!
-//! Owns the input handle, decodes raw bytes into [`Event`]s with the
-//! [`Decoder`], and serves them through [`EventSource::try_read`]
-//! which blocks up to a caller-supplied timeout. Each source is paired
-//! with a cheaply-clonable [`Waker`] that interrupts an in-progress
-//! `try_read` from another thread.
+//! ## Purpose
 //!
-//! Backend per target:
+//! [`EventSource`] owns the input handle, waits for platform readiness, feeds a
+//! [`Decoder`], and queues typed [`Event`] values. It is the high-level entry
+//! point for applications that want blocking, timeout-based, or wakeable event
+//! reads.
 //!
-//! * Unix uses the readiness primitive selected in [`super::poll`]
-//!   (`epoll` on Linux, `kqueue` on the BSDs, with a `select` fallback
-//!   on macOS tty input, and `poll(2)` everywhere else), driving the
-//!   input fd, a self-pipe for the [`Waker`], and a SIGWINCH self-pipe
-//!   for [`Event::Resize`].
-//! * Windows uses `WaitForMultipleObjects` over the console input
-//!   handle and a Win32 event used as the cancellation slot; resize
-//!   events arrive as `WINDOW_BUFFER_SIZE_EVENT` records on the input
+//! ```text
+//! input fd / HANDLE ─┬─▶ Poller ── ready ──▶ read bytes ──▶ Decoder
+//! wake handle ───────┤                         │              │
+//! SIGWINCH pipe ─────┘                         └──────────────┴─▶ queue
+//!      (Unix only)        deadlines: ESC timeout and paste idle timeout
+//! ```
+//!
+//! ## Key types
+//!
+//! * [`Input`] describes the platform capabilities required from an input
 //!   handle.
+//! * [`EventSource`] stores the decoder, bounded pending-byte buffer, readiness
+//!   poller, event queue, timeout deadlines, and resize state.
+//! * [`Waker`] is a cloneable handle that interrupts an in-progress wait from
+//!   another thread.
 //!
-//! The source tightens its effective wait based on the parser's ESC
-//! deadline so a buffered partial escape sequence resolves promptly
-//! even when the caller-supplied timeout is longer.
-
+//! ## Lifecycle
+//!
+//! Construct with [`EventSource::new`] on the platform-specific impl. Call
+//! [`EventSource::poll`] to wait up to a timeout, drain queued events with
+//! [`EventSource::try_read`], or call [`EventSource::read`] to block until one
+//! event arrives. [`EventSource::unread`] can put an unrelated event back while
+//! code waits for a specific terminal reply.
+//!
+//! ## Gotchas
+//!
+//! [`EventSource::try_read`] is purely non-blocking: it only pops the queue.
+//! [`EventSource::poll`] performs I/O and timeout handling. The effective poll
+//! wait is shortened when a partial `ESC` sequence or open paste has an internal
+//! deadline, so a long caller timeout does not delay disambiguation.
 use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::task::Waker as TaskWaker;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -51,17 +64,27 @@ use crate::event::Event;
 #[cfg(unix)]
 use crate::terminal::size::Winsize;
 
-/// Bound on what the source needs from an input handle.
+/// Platform-specific capabilities required from a Unix event input handle.
 ///
-/// On Unix the source must read bytes (`Read`) and watch the handle for
-/// readiness (`AsFd`). On Windows it must read bytes and expose a
-/// `HANDLE` for the console-input path (`AsHandle`). A blanket impl is
-/// provided for any type that already satisfies the platform bounds.
+/// The handle must implement [`Read`], expose an fd through [`AsFd`], and be
+/// safe to move to the helper thread used by async streams. Any type satisfying
+/// those bounds implements this trait automatically.
+///
+/// Users normally do not implement this trait manually; pass the input half
+/// returned by the terminal API to [`EventSource::new`].
 #[cfg(unix)]
 pub trait Input: Read + AsFd + Send {}
 #[cfg(unix)]
 impl<T: Read + AsFd + Send> Input for T {}
 
+/// Platform-specific capabilities required from a Windows event input handle.
+///
+/// The handle must implement [`Read`], expose a console `HANDLE` through
+/// [`AsHandle`], and be safe to move to the helper thread used by async streams.
+/// Any type satisfying those bounds implements this trait automatically.
+///
+/// Users normally do not implement this trait manually; pass the input half
+/// returned by the terminal API to [`EventSource::new`].
 #[cfg(windows)]
 pub trait Input: Read + AsHandle + Send {}
 #[cfg(windows)]
@@ -71,12 +94,34 @@ impl<T: Read + AsHandle + Send> Input for T {}
 /// sequence; the backing buffer is allocated once at construction.
 pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 4096;
 
+/// Readiness slots the platform poller reports, in fixed index order.
+/// Unix watches `[input, wake, winch]`; Windows watches `[input, wake]`
+/// (resize arrives in-band as a console record, so there is no winch fd).
+#[cfg(unix)]
+pub(super) const READY_SLOTS: usize = 3;
+#[cfg(windows)]
+pub(super) const READY_SLOTS: usize = 2;
+/// Index of the input handle in the readiness slice.
+#[cfg(any(unix, windows))]
+pub(super) const READY_INPUT: usize = 0;
+/// Index of the wake handle in the readiness slice.
+#[cfg(any(unix, windows))]
+pub(super) const READY_WAKE: usize = 1;
+/// Index of the SIGWINCH pipe in the readiness slice (Unix only).
+#[cfg(unix)]
+pub(super) const READY_WINCH: usize = 2;
+
 /// Default escape-sequence timeout.
 ///
-/// When the read buffer holds a partial `ESC`-prefixed sequence and no
-/// further bytes arrive within this window, the source resolves the
-/// buffered bytes as a best-effort event (typically a bare Escape
-/// keypress).
+/// When the pending buffer holds a partial `ESC`-prefixed sequence or 8-bit C1
+/// introducer and no continuation arrives within this window, the source asks
+/// the decoder to resolve the buffered bytes as best-effort events. This is how
+/// a physical Escape key is distinguished from an Alt-prefixed key or CSI-style
+/// control sequence.
+///
+/// Applications that prefer more responsive Escape handling can lower this
+/// value with [`EventSource::with_esc_timeout`]; applications that need to
+/// tolerate slow byte delivery can raise it.
 pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Default bracketed-paste idle timeout.
@@ -88,9 +133,13 @@ pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 /// that never arrive (truncated stream, malformed input).
 pub const DEFAULT_PASTE_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Cloneable handle that interrupts an in-progress [`EventSource::try_read`].
+/// Cloneable handle that interrupts an in-progress [`EventSource::poll`] or
+/// [`EventSource::read`].
 ///
-/// `Send + Sync`; multiple wakes coalesce.
+/// A waker is bound to one source at construction time. Calling [`Waker::wake`]
+/// makes the source's readiness wait return `Interrupted`; multiple wake calls
+/// may coalesce into one interruption. The handle is cheap to clone and can be
+/// sent to other threads.
 #[derive(Clone)]
 pub struct Waker {
     #[cfg(unix)]
@@ -113,6 +162,12 @@ impl Waker {
     }
 
     /// Interrupt the [`EventSource`] this waker is bound to.
+    ///
+    /// A blocked [`EventSource::poll`] returns `Ok(false)` and a blocked
+    /// [`EventSource::read`] returns an [`io::ErrorKind::Interrupted`] error.
+    /// The wake does not enqueue an [`Event`] and does not mutate decoder state.
+    ///
+    /// Returns any platform error produced while signalling the wake handle.
     pub fn wake(&self) -> io::Result<()> {
         #[cfg(any(unix, windows))]
         {
@@ -130,15 +185,21 @@ impl Waker {
 
 /// Wakeable event source backed by a platform readiness primitive.
 ///
-/// Single public type across platforms; per-target state and methods
-/// are cfg-gated. Construct with [`EventSource::new`] and drive with
-/// [`EventSource::try_read`].
+/// `EventSource` is the synchronous owner of terminal input. It stores pending
+/// bytes, a [`Decoder`], an event queue, deadline state for ambiguous `ESC`
+/// prefixes and open bracketed pastes, and the platform handles needed for
+/// wakeups and resize notifications.
+///
+/// Construct it with [`EventSource::new`]. Use [`EventSource::poll`] to perform
+/// I/O and wait for queued events, [`EventSource::try_read`] to pop an already
+/// queued event, or [`EventSource::read`] to block until one event is available.
+/// The type is generic over the platform [`Input`] handle.
 pub struct EventSource<I>
 where
     I: Input,
 {
-    /// Owned input handle. Used both as the byte source (`Read`) and,
-    /// on Unix, as the readiness target (its fd is registered with the
+    /// Owned input handle. Used both as the byte source (`Read`) and, on
+    /// Unix, as the readiness target (its fd is registered with the
     /// [`super::poll::Poller`]).
     #[cfg_attr(windows, allow(dead_code))]
     pub(super) input: I,
@@ -167,15 +228,6 @@ where
     /// decoder and are not duplicated. No effect on Windows, where resize
     /// is always delivered in-band through the decoder.
     pub(super) handle_resize: bool,
-
-    /// In-flight query observers. Each freshly produced event is offered
-    /// to every pending observer (see [`Self::emit`]); a match is copied
-    /// into the observer's shared slot for its [`QueryReply`] handle to
-    /// collect, and the event itself still reaches [`Self::queue`], so a
-    /// query never hides input from [`read`](Self::read).
-    ///
-    /// [`QueryReply`]: super::query::QueryReply
-    pub(super) observers: Observers,
 
     // --- Unix-only state ---
     /// Shared readiness poller watching `[input, pipe_rx, winch_rx]` (in
@@ -227,171 +279,6 @@ where
 // first, removing the SIGWINCH handler before the write end of the
 // pipe is closed.
 
-/// Which timer governs the next wait. Bookkeeping for `pump` so a
-/// `Timeout` outcome can route to the correct expiry handler.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeadlineKind {
-    /// Wait bounded by the caller's `timeout` (or no internal deadline).
-    None,
-    /// Wait bounded by `esc_deadline` — force a bare `Esc` on expiry.
-    Esc,
-    /// Wait bounded by `paste_deadline` — synthesise `PasteEnd` on expiry.
-    Paste,
-}
-
-// ---------------------------------------------------------------------------
-// Query observers (the non-destructive query registry)
-// ---------------------------------------------------------------------------
-
-/// Resolution state of one query observer, behind a [`StdMutex`] so a
-/// [`QueryReply`] handle inspects it without taking the source lock.
-///
-/// [`QueryReply`]: super::query::QueryReply
-struct SlotState {
-    /// `None` while pending; `Some(Some(ev))` once a reply matched;
-    /// `Some(None)` once the deadline elapsed without a reply.
-    result: Option<Option<Event>>,
-    /// Waiter parked on this slot (a blocking thread-unpark waker or an
-    /// async task waker), woken when the slot resolves.
-    waker: Option<TaskWaker>,
-}
-
-/// One registered query observer. Shared (`Arc`) between the source's
-/// registry and the [`QueryReply`] handle that collects its reply.
-///
-/// [`QueryReply`]: super::query::QueryReply
-pub(crate) struct Slot {
-    /// Tests whether a produced event is this query's reply.
-    predicate: Box<dyn Fn(&Event) -> bool + Send + Sync>,
-    /// When the query gives up and resolves to "no reply".
-    deadline: Instant,
-    state: StdMutex<SlotState>,
-}
-
-impl Slot {
-    /// Take this slot's resolved value, lazily expiring on its deadline.
-    ///
-    /// Returns `None` while still pending, `Some(None)` once expired
-    /// without a reply, or `Some(Some(ev))` once a reply matched. After a
-    /// resolved value is taken the slot reports pending again, so callers
-    /// must take at most once.
-    pub(crate) fn take(&self) -> Option<Option<Event>> {
-        let mut st = self.state.lock().unwrap();
-        if st.result.is_none() && Instant::now() >= self.deadline {
-            st.result = Some(None);
-        }
-        st.result.take()
-    }
-
-    /// Whether this slot has resolved (matched or expired).
-    pub(crate) fn is_ready(&self) -> bool {
-        let st = self.state.lock().unwrap();
-        st.result.is_some() || Instant::now() >= self.deadline
-    }
-
-    /// This slot's deadline while it is still pending, else `None`.
-    pub(crate) fn pending_deadline(&self) -> Option<Instant> {
-        let st = self.state.lock().unwrap();
-        if st.result.is_some() {
-            None
-        } else {
-            Some(self.deadline)
-        }
-    }
-
-    /// Park `waker` against this slot if it is still pending; it is woken
-    /// when the slot resolves.
-    pub(crate) fn arm(&self, waker: &TaskWaker) {
-        let mut st = self.state.lock().unwrap();
-        if st.result.is_none() {
-            st.waker = Some(waker.clone());
-        }
-    }
-}
-
-/// The source's registry of in-flight query observers.
-#[derive(Default)]
-pub(crate) struct Observers {
-    slots: Vec<Arc<Slot>>,
-}
-
-impl Observers {
-    /// Register a new observer and return its shared slot.
-    pub(crate) fn register(
-        &mut self,
-        predicate: Box<dyn Fn(&Event) -> bool + Send + Sync>,
-        deadline: Instant,
-    ) -> Arc<Slot> {
-        self.prune();
-        let slot = Arc::new(Slot {
-            predicate,
-            deadline,
-            state: StdMutex::new(SlotState {
-                result: None,
-                waker: None,
-            }),
-        });
-        self.slots.push(Arc::clone(&slot));
-        slot
-    }
-
-    /// Offer a freshly produced event to each pending observer. A match is
-    /// copied into the slot and its waiter woken; the event is left for
-    /// the caller to queue (matching never consumes input).
-    fn offer(&mut self, ev: &Event) {
-        for slot in &self.slots {
-            let mut st = slot.state.lock().unwrap();
-            if st.result.is_some() {
-                continue;
-            }
-            if (slot.predicate)(ev) {
-                st.result = Some(Some(ev.clone()));
-                if let Some(w) = st.waker.take() {
-                    w.wake();
-                }
-            }
-        }
-    }
-
-    /// Resolve every observer whose deadline has passed without a reply,
-    /// waking its waiter.
-    fn expire_due(&mut self, now: Instant) {
-        for slot in &self.slots {
-            if now >= slot.deadline {
-                let mut st = slot.state.lock().unwrap();
-                if st.result.is_none() {
-                    st.result = Some(None);
-                    if let Some(w) = st.waker.take() {
-                        w.wake();
-                    }
-                }
-            }
-        }
-    }
-
-    /// Earliest deadline among still-pending observers, to bound a
-    /// readiness wait so a timeout fires on time.
-    fn nearest_deadline(&self) -> Option<Instant> {
-        self.slots
-            .iter()
-            .filter(|s| s.state.lock().unwrap().result.is_none())
-            .map(|s| s.deadline)
-            .min()
-    }
-
-    /// Drop observers whose [`QueryReply`] handle has been dropped (the
-    /// registry holds the only remaining reference).
-    ///
-    /// [`QueryReply`]: super::query::QueryReply
-    fn prune(&mut self) {
-        self.slots.retain(|s| Arc::strong_count(s) > 1);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.slots.is_empty()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Shared methods (platform-agnostic)
 // ---------------------------------------------------------------------------
@@ -400,38 +287,59 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Configured escape-sequence timeout.
+    /// Return the configured escape-sequence timeout.
+    ///
+    /// This is the duration used to disambiguate a physical Escape key from an
+    /// Alt-prefixed key or a partial control sequence. Reading it has no side
+    /// effects and never performs I/O.
     pub fn esc_timeout(&self) -> Duration {
         self.esc_timeout
     }
 
-    /// Set the escape-sequence timeout — how long to wait for a
-    /// continuation byte before treating a buffered partial sequence as
-    /// a bare `Esc` keypress. Defaults to [`DEFAULT_ESC_TIMEOUT`].
+    /// Set the escape-sequence timeout.
     ///
-    /// Consuming builder; chain after [`EventSource::new`].
+    /// `timeout` is how long the source waits for a continuation byte before a
+    /// buffered partial escape sequence is force-resolved. The default is
+    /// [`DEFAULT_ESC_TIMEOUT`]. A zero duration makes ambiguous prefixes expire
+    /// on the next poll cycle.
+    ///
+    /// This is a consuming builder intended to be chained after
+    /// [`EventSource::new`]. It does not inspect or clear any already-buffered
+    /// input and never panics.
     pub fn with_esc_timeout(mut self, timeout: Duration) -> Self {
         self.esc_timeout = timeout;
         self
     }
 
-    /// Set the idle timeout for a bracketed paste with no closing
-    /// terminator. `None` disables it, so the source waits indefinitely
-    /// for a real `PasteEnd`. Defaults to `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
+    /// Set the idle timeout for an open bracketed paste.
     ///
-    /// Consuming builder; chain after [`EventSource::new`].
+    /// If no further input arrives before `timeout`, the source flushes any
+    /// held bytes as a final [`Event::PasteChunk`], synthesizes
+    /// [`Event::PasteEnd`], and leaves paste mode. Passing `None` disables this
+    /// safety net and waits indefinitely for a real terminator. The default is
+    /// `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
+    ///
+    /// This is a consuming builder intended to be chained after
+    /// [`EventSource::new`]. It never panics.
     pub fn with_paste_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.paste_idle_timeout = timeout;
         self
     }
 
-    /// Cloneable [`Waker`] bound to this source.
+    /// Return a cloneable [`Waker`] bound to this source.
+    ///
+    /// Use the returned handle from another thread to interrupt a blocking
+    /// [`EventSource::poll`] or [`EventSource::read`]. Cloning the waker does
+    /// not clone the source or its input handle.
     pub fn waker(&self) -> Waker {
         self.waker.clone()
     }
 
-    /// Whether the source delivers [`Event::Resize`] from the kernel's
-    /// out-of-band window-resize notification (`SIGWINCH` on Unix).
+    /// Return whether out-of-band resize handling is enabled.
+    ///
+    /// On Unix, `true` means a readable SIGWINCH pipe can produce
+    /// [`Event::Resize`]. On Windows, resize records are delivered in-band and
+    /// this flag has no practical effect.
     pub fn handle_resize(&self) -> bool {
         self.handle_resize
     }
@@ -441,72 +349,30 @@ where
     /// Unix). Defaults to `true`.
     ///
     /// Set this to `false` after enabling in-band resize reports (DEC
-    /// mode 2048, e.g. via [`Screen::set_in_band_resize`]): the terminal
-    /// then reports size changes in-band as `CSI 48 t`, which the decoder
-    /// surfaces as [`Event::Resize`], so leaving the `SIGWINCH` path on
-    /// would deliver each resize twice. Restore it to `true` when in-band
-    /// reporting is disabled again.
+    /// mode 2048): the terminal then reports size changes in-band as
+    /// `CSI 48 t`, which the decoder surfaces as [`Event::Resize`], so
+    /// leaving the `SIGWINCH` path on would deliver each resize twice.
+    /// Restore it to `true` when in-band reporting is disabled again.
     ///
     /// No effect on Windows, where resize is always delivered in-band
     /// through the decoder.
-    ///
-    /// [`Screen::set_in_band_resize`]: crate::screen::Screen::set_in_band_resize
     pub fn set_handle_resize(&mut self, enable: bool) {
         self.handle_resize = enable;
     }
 
-    /// Shared readiness poller for this source. Cloning the `Arc` lets a
-    /// reader thread wait on readiness without holding a lock on the
-    /// source's decode state (see [`super::EventStream`]).
-    #[cfg(any(unix, windows))]
-    pub(super) fn poller(&self) -> Arc<dyn Poller> {
-        self.poller.clone()
-    }
-
-    /// Number of fds the [`poller`](Self::poller) watches, i.e. the length
-    /// of the readiness slice [`Poller::poll`] expects.
-    #[cfg(unix)]
-    pub(super) fn poll_slot_count(&self) -> usize {
-        3
-    }
-    /// Number of handles the [`poller`](Self::poller) watches.
-    #[cfg(windows)]
-    pub(super) fn poll_slot_count(&self) -> usize {
-        2
-    }
-
-    /// Effective wait for the next readiness poll, plus which deadline (if
-    /// any) governs it, so a timeout can be routed to the right expiry.
-    #[cfg(any(unix, windows))]
-    pub(super) fn next_timeout(&self) -> (Option<Duration>, DeadlineKind) {
-        self.effective_timeout(None)
-    }
-
-    /// Run the expiry a readiness wait timed out on.
-    #[cfg(any(unix, windows))]
-    pub(super) fn expire(&mut self, kind: DeadlineKind) {
-        match kind {
-            DeadlineKind::Esc => self.expire_partial(),
-            DeadlineKind::Paste => self.expire_paste(),
-            DeadlineKind::None => {}
-        }
-    }
-
-    /// Whether at least one decoded event is queued.
-    #[cfg(any(unix, windows))]
-    pub(super) fn has_events(&self) -> bool {
-        !self.queue.is_empty()
-    }
-
-    /// Block up to `timeout` for at least one event to become available.
+    /// Wait up to `timeout` for at least one event to become available.
     ///
-    /// * `Ok(true)` — the event queue has at least one event; [`Self::try_read`]
-    ///   or [`Self::read`] will return without blocking.
-    /// * `Ok(false)` — `timeout` elapsed without an event, or a paired
-    ///   [`Waker`] interrupted the wait.
-    /// * `Err(_)` — fatal I/O error.
+    /// This method performs I/O, drains decoder output into the internal queue,
+    /// handles resize notifications, and resolves any expired ESC or paste
+    /// deadlines. `None` means block until an event or wake; `Some(Duration::ZERO)`
+    /// means perform a non-blocking readiness pass.
     ///
-    /// `None` for `timeout` means "block until an event or wake".
+    /// Returns:
+    ///
+    /// * `Ok(true)` when the queue has at least one event;
+    /// * `Ok(false)` when the timeout elapsed or a paired [`Waker`] interrupted
+    ///   the wait without producing an event;
+    /// * `Err(_)` for fatal input or platform readiness errors.
     pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
         if !self.queue.is_empty() {
             return Ok(true);
@@ -514,7 +380,7 @@ where
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
             let remaining = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-            match self.pump(remaining) {
+            match self.fill(remaining) {
                 Ok(()) => {
                     if !self.queue.is_empty() {
                         return Ok(true);
@@ -531,16 +397,59 @@ where
         }
     }
 
-    /// Return the next queued event, or `None` if the queue is empty.
-    /// Does not perform I/O.
+    /// Return the next queued event without performing I/O.
+    ///
+    /// This only pops the internal queue. Call [`EventSource::poll`] first when
+    /// the queue may be empty but input could be ready. Returns `None` when no
+    /// event is currently queued.
     pub fn try_read(&mut self) -> Option<Event> {
         self.queue.pop_front()
     }
 
+    /// One read-decode cycle: resolve any overdue decode deadline, wait up
+    /// to `timeout` for readiness, then service it. Winch surfaces a
+    /// [`Event::Resize`]; a [`Waker`] surfaces `Err(Interrupted)` without
+    /// touching decode state; ready input is drained and decoded; a wait
+    /// that returns with no input ready resolves the decode deadline it was
+    /// tightened to. Fills [`Self::queue`].
+    pub(super) fn fill(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        // Resolve an already-overdue deadline before reading, so a late
+        // continuation byte cannot merge with a sequence that has expired.
+        self.expire_elapsed();
+        if !self.queue.is_empty() {
+            return Ok(());
+        }
+
+        let effective = self.effective_timeout(timeout);
+        let mut ready = [false; READY_SLOTS];
+        self.poller.poll(&mut ready, effective)?;
+
+        #[cfg(unix)]
+        if ready[READY_WINCH] {
+            self.handle_winch();
+        }
+
+        if ready[READY_WAKE] {
+            self.drain_wake();
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
+        }
+
+        if ready[READY_INPUT] {
+            self.drain_input()?;
+        } else {
+            // The wait was tightened to a decode deadline that has elapsed.
+            self.expire_elapsed();
+        }
+        Ok(())
+    }
+
     /// Block until the next event is available, then return it.
     ///
-    /// Returns [`io::ErrorKind::Interrupted`] if a paired [`Waker`] fired
-    /// while waiting.
+    /// This repeatedly checks the queue and calls [`EventSource::poll`] with no
+    /// caller timeout. It returns the next [`Event`] on success.
+    ///
+    /// Returns [`io::ErrorKind::Interrupted`] if a paired [`Waker`] fired while
+    /// waiting, and propagates fatal input/readiness errors.
     pub fn read(&mut self) -> io::Result<Event> {
         loop {
             if let Some(ev) = self.queue.pop_front() {
@@ -552,77 +461,19 @@ where
         }
     }
 
-    /// Remove and return the first queued event satisfying `predicate`,
-    /// leaving every other event in place and in order. Returns `None`
-    /// if no queued event matches. Does not perform I/O.
-    ///
-    /// The non-blocking counterpart to [`read_matching`](Self::read_matching),
-    /// used to pluck a specific reply (e.g. a query response) out of the
-    /// stream without disturbing pending user input.
-    pub fn try_read_matching(&mut self, predicate: impl Fn(&Event) -> bool) -> Option<Event> {
-        let pos = self.queue.iter().position(predicate)?;
-        self.queue.remove(pos)
+    /// Return an event to the front of the queue, so the next
+    /// [`read`](Self::read) / [`try_read`](Self::try_read) yields it before
+    /// anything already queued. Use to put back an event read while waiting
+    /// for a specific reply (e.g. a cursor-position report), preserving it
+    /// for normal delivery. Restore a batch in original order by unreading
+    /// in reverse.
+    pub fn unread(&mut self, event: Event) {
+        self.queue.push_front(event);
     }
 
-    /// Block up to `timeout` for an event satisfying `predicate`, remove
-    /// it from the queue, and return it. Events that do not match are left
-    /// queued, in order, for a later [`read`](Self::read).
-    ///
-    /// Returns `Ok(None)` on timeout or a paired [`Waker`] wake. `None`
-    /// for `timeout` blocks until a match arrives or a wake fires.
-    pub fn read_matching(
-        &mut self,
-        predicate: impl Fn(&Event) -> bool,
-        timeout: Option<Duration>,
-    ) -> io::Result<Option<Event>> {
-        if let Some(ev) = self.try_read_matching(&predicate) {
-            return Ok(Some(ev));
-        }
-        let deadline = timeout.map(|t| Instant::now() + t);
-        loop {
-            let remaining = deadline.map(|d| d.saturating_duration_since(Instant::now()));
-            if !self.poll(remaining)? {
-                // Timeout elapsed or a waker fired; nothing new arrived.
-                return Ok(None);
-            }
-            if let Some(ev) = self.try_read_matching(&predicate) {
-                return Ok(Some(ev));
-            }
-            if let Some(left) = remaining
-                && left.is_zero()
-            {
-                return Ok(None);
-            }
-        }
-    }
-
-    /// Push a freshly produced event onto the queue, first offering it to
-    /// any registered query observers. A query whose reply this is gets a
-    /// copy in its slot; the event still reaches the queue, so a query
-    /// never hides input from [`read`](Self::read).
+    /// Push a freshly produced event onto the queue.
     pub(super) fn emit(&mut self, ev: Event) {
-        if !self.observers.is_empty() {
-            self.observers.offer(&ev);
-        }
         self.queue.push_back(ev);
-    }
-
-    /// Mutable handle to the query-observer registry, for registering a
-    /// query's reply matchers (see [`super::query`]).
-    pub(crate) fn observers_mut(&mut self) -> &mut Observers {
-        &mut self.observers
-    }
-
-    /// Earliest deadline among still-pending query observers, to bound a
-    /// thread-backed reader's readiness wait.
-    pub(crate) fn observers_nearest_deadline(&self) -> Option<Instant> {
-        self.observers.nearest_deadline()
-    }
-
-    /// Resolve every query observer whose deadline has passed without a
-    /// reply, waking its waiter.
-    pub(crate) fn expire_observers(&mut self, now: Instant) {
-        self.observers.expire_due(now);
     }
 
     /// Drive the parser as far as it will go against the bytes
@@ -719,47 +570,51 @@ where
         }
     }
 
-    /// Public escape hatch: force-exit bracketed paste mode. Useful
-    /// when the embedding application detects misuse (size cap, user
-    /// cancel, watchdog) and wants to recover the input stream.
+    /// Force-exit bracketed paste mode.
     ///
-    /// Has no effect when the decoder is not in paste.
+    /// If the decoder is currently inside a paste, this flushes any pending
+    /// bytes as a [`Event::PasteChunk`], queues [`Event::PasteEnd`], and clears
+    /// paste state so subsequent bytes parse as ordinary input. Use it when an
+    /// embedding application enforces a paste size cap, user cancellation, or a
+    /// custom watchdog. It has no effect outside paste mode and never panics.
     pub fn end_paste(&mut self) {
         self.expire_paste();
     }
 
-    /// Compute the effective wait, bounded by either the caller
-    /// timeout, the ESC deadline, or the paste-idle deadline
-    /// (whichever is shorter), and report which one won so a
-    /// timeout-return can be routed to the right expiry handler.
-    pub(super) fn effective_timeout(
-        &self,
-        timeout: Option<Duration>,
-    ) -> (Option<Duration>, DeadlineKind) {
+    /// Resolve any decode deadline that has already elapsed, before more
+    /// bytes are read. A buffered partial `ESC` past its window becomes a
+    /// bare `Esc`; an idle bracketed paste past its window is force-closed.
+    /// Run before draining input so a late continuation byte can't merge
+    /// with a sequence whose deadline already passed, and again after a
+    /// wait that returned no input. A no-op when no deadline is overdue;
+    /// the two cases are mutually exclusive (either mid-paste or holding a
+    /// partial escape, never both).
+    pub(super) fn expire_elapsed(&mut self) {
         let now = Instant::now();
-        let esc_remaining = self
-            .esc_deadline
-            .map(|d| (d.saturating_duration_since(now), DeadlineKind::Esc));
-        let paste_remaining = self
-            .paste_deadline
-            .map(|d| (d.saturating_duration_since(now), DeadlineKind::Paste));
-        let internal = match (esc_remaining, paste_remaining) {
-            (None, None) => None,
-            (Some(e), None) => Some(e),
-            (None, Some(p)) => Some(p),
-            (Some(e), Some(p)) => Some(if e.0 <= p.0 { e } else { p }),
-        };
-        match (timeout, internal) {
-            (None, None) => (None, DeadlineKind::None),
-            (Some(t), None) => (Some(t), DeadlineKind::None),
-            (None, Some((d, kind))) => (Some(d), kind),
-            (Some(t), Some((d, kind))) => {
-                if d <= t {
-                    (Some(d), kind)
-                } else {
-                    (Some(t), DeadlineKind::None)
-                }
+        if self.parser.in_paste() {
+            if self.paste_deadline.is_some_and(|d| d <= now) {
+                self.expire_paste();
             }
+        } else if self.esc_deadline.is_some_and(|d| d <= now) {
+            self.expire_partial();
+        }
+    }
+
+    /// Effective wait for the next readiness poll: the caller's `timeout`
+    /// tightened to the nearest decode deadline (ESC or paste-idle,
+    /// whichever is sooner) so a buffered partial sequence resolves
+    /// promptly even when the caller asked to block longer.
+    pub(super) fn effective_timeout(&self, timeout: Option<Duration>) -> Option<Duration> {
+        let now = Instant::now();
+        let deadline = match (self.esc_deadline, self.paste_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let internal = deadline.map(|d| d.saturating_duration_since(now));
+        match (timeout, internal) {
+            (Some(t), Some(i)) => Some(t.min(i)),
+            (None, i) => i,
+            (t, None) => t,
         }
     }
 }
