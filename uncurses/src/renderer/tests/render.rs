@@ -269,14 +269,14 @@ fn test_phantom_cleared_by_move_cursor() {
     let mut r = Renderer::new();
     r.last_width = 10;
     r.last_height = 5;
-    r.cur.pos = Position { y: 0, x: 10 };
+    r.cur.set_pos(Position { y: 0, x: 10 });
     r.cur.at_phantom = true;
     let mut sink = Vec::new();
     let rb = RenderBuffer::new(10, 5);
     r.move_to(&mut sink, &rb, 2, 3).unwrap();
     assert!(!r.cur.at_phantom);
-    assert_eq!(r.cur.pos.y, 2);
-    assert_eq!(r.cur.pos.x, 3);
+    assert_eq!(r.cur.pos().y, 2);
+    assert_eq!(r.cur.pos().x, 3);
 }
 
 #[test]
@@ -284,7 +284,7 @@ fn test_phantom_after_line_filling_write() {
     let mut r = Renderer::new();
     r.last_width = 130;
     r.last_height = 30;
-    r.cur.pos = Position { y: 5, x: 44 };
+    r.cur.set_pos(Position { y: 5, x: 44 });
     let mut sink = Vec::new();
     for i in 0..86u16 {
         let b = b'a' + (i as u8 % 26);
@@ -295,7 +295,8 @@ fn test_phantom_after_line_filling_write() {
         "phantom flag must be set after filling last column"
     );
     assert_eq!(
-        r.cur.pos.x, 130,
+        r.cur.pos().x,
+        130,
         "tracked cursor parks one past last column"
     );
 }
@@ -305,7 +306,7 @@ fn test_move_cursor_emits_cr_when_phantom() {
     let mut r = Renderer::new();
     r.last_width = 130;
     r.last_height = 30;
-    r.cur.pos = Position { y: 5, x: 130 };
+    r.cur.set_pos(Position { y: 5, x: 130 });
     r.cur.at_phantom = true;
     let mut sink = Vec::new();
     let rb = RenderBuffer::new(130, 30);
@@ -323,8 +324,8 @@ fn test_overwrite_advance_uses_cell_content() {
     let mut r = Renderer::new();
     r.last_width = 20;
     r.last_height = 5;
-    r.cur.x_unknown = false;
-    r.cur.y_unknown = false;
+    r.cur.x = Some(0);
+    r.cur.y = Some(0);
     let mut rb = RenderBuffer::new(20, 5);
     for (i, ch) in ['a', 'b', 'c', 'd', 'e', 'f'].iter().enumerate() {
         rb.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
@@ -333,12 +334,12 @@ fn test_overwrite_advance_uses_cell_content() {
     r.move_cursor(&mut sink, &rb, 0, 6).unwrap();
     // CUF cheaper here; output is not the raw text.
     assert_ne!(sink, b"abcdef");
-    assert_eq!(r.cur.pos.x, 6);
+    assert_eq!(r.cur.pos().x, 6);
 
     // Larger gap: CUF(10) = 5 bytes, overwriting 10 ASCII cells
     // = 10 bytes. CUF still wins.
     sink.clear();
-    r.cur.pos = Position { y: 0, x: 0 };
+    r.cur.set_pos(Position { y: 0, x: 0 });
     for i in 0..10u16 {
         rb.set_cell((i, 0), &Cell::narrow("x"));
     }
@@ -349,13 +350,13 @@ fn test_overwrite_advance_uses_cell_content() {
     // col 0 moving to col 3 with three ASCII cells — overwrite =
     // 3 bytes, CUF(3) = 4 bytes (\x1b[3C). Overwrite wins.
     sink.clear();
-    r.cur.pos = Position { y: 0, x: 0 };
+    r.cur.set_pos(Position { y: 0, x: 0 });
     for i in 0..3u16 {
         rb.set_cell((i, 0), &Cell::narrow("y"));
     }
     r.move_cursor(&mut sink, &rb, 0, 3).unwrap();
     assert_eq!(sink, b"yyy");
-    assert_eq!(r.cur.pos.x, 3);
+    assert_eq!(r.cur.pos().x, 3);
 }
 
 /// G-7: inline shrink at the same width emits a partial clear at
@@ -455,7 +456,7 @@ fn test_inline_resize_moves_cursor_to_bottom_left() {
     let mut rb2 = RenderBuffer::new(10, 7);
     rb2.set_cell((0, 0), &Cell::narrow("B"));
     r.render(&mut sink, &mut rb2).unwrap();
-    assert_eq!(r.cur.pos, Position { y: 6, x: 0 });
+    assert_eq!(r.cur.pos(), Position { y: 6, x: 0 });
 }
 
 /// Fullscreen resize does NOT trigger the inline bottom-left move.
@@ -473,7 +474,7 @@ fn test_fullscreen_resize_does_not_force_bottom_left() {
     rb2.set_cell((3, 2), &Cell::narrow("X"));
     r.render(&mut sink, &mut rb2).unwrap();
     // Fullscreen path must not force the cursor to the bottom-left.
-    assert_ne!(r.cur.pos, Position { y: 6, x: 0 });
+    assert_ne!(r.cur.pos(), Position { y: 6, x: 0 });
 }
 
 /// Resize without force_clear preserves cur_buf content: a row
@@ -518,24 +519,21 @@ fn test_save_restore_round_trips_phantom_and_unknown_flags() {
     let mut r = Renderer::new();
     r.last_width = 80;
     r.last_height = 24;
-    r.cur.pos = Position { y: 3, x: 80 };
+    r.cur.set_pos(Position { y: 3, x: 80 });
     r.cur.at_phantom = true;
-    r.cur.x_unknown = false;
-    r.cur.y_unknown = false;
 
     r.save_cursor();
 
     // Mutate every saved bit so a no-op restore would be detected.
-    r.cur.pos = Position { y: 0, x: 0 };
+    r.cur.x = None;
+    r.cur.y = None;
     r.cur.at_phantom = false;
-    r.cur.x_unknown = true;
-    r.cur.y_unknown = true;
 
     r.restore_cursor();
-    assert_eq!(r.cur.pos, Position { y: 3, x: 80 });
+    assert_eq!(r.cur.pos(), Position { y: 3, x: 80 });
     assert!(r.cur.at_phantom);
-    assert!(!r.cur.x_unknown);
-    assert!(!r.cur.y_unknown);
+    assert!(r.cur.x.is_some());
+    assert!(r.cur.y.is_some());
 }
 
 /// set_cursor_position must clear the per-axis "unknown" bits — the
@@ -545,11 +543,11 @@ fn test_save_restore_round_trips_phantom_and_unknown_flags() {
 #[test]
 fn test_set_cursor_position_clears_unknown_flags() {
     let mut r = Renderer::new();
-    assert!(r.cur.x_unknown && r.cur.y_unknown);
+    assert!(r.cur.x.is_none() && r.cur.y.is_none());
     r.set_cursor_position(Position { y: 5, x: 7 });
-    assert_eq!(r.cur.pos, Position { y: 5, x: 7 });
-    assert!(!r.cur.x_unknown);
-    assert!(!r.cur.y_unknown);
+    assert_eq!(r.cur.pos(), Position { y: 5, x: 7 });
+    assert!(r.cur.x.is_some());
+    assert!(r.cur.y.is_some());
 }
 
 /// Inline-mode round trip across a sequence of resizes that mixes
@@ -588,7 +586,7 @@ fn test_inline_resize_sequence_round_trip() {
     }
     // After frame 1 the inline-resize bottom-left snap parks the
     // cursor at (0, 4).
-    assert_eq!(r.cur.pos, Position { y: 4, x: 0 });
+    assert_eq!(r.cur.pos(), Position { y: 4, x: 0 });
     sink.clear();
 
     // ---- Frame 2: shrink to 20x3, force-clear. row k = X/Y/Z. ------
@@ -628,7 +626,7 @@ fn test_inline_resize_sequence_round_trip() {
         !out2.contains("EEEEEEEEEEEEEEEEEEEE"),
         "frame 2: phantom row 4 ('E' run) leaked: {out2:?}"
     );
-    assert_eq!(r.cur.pos, Position { y: 2, x: 0 });
+    assert_eq!(r.cur.pos(), Position { y: 2, x: 0 });
     sink.clear();
 
     // ---- Frame 3: grow to 20x7, row k = 'P'+k. No force-clear. -----
@@ -652,7 +650,7 @@ fn test_inline_resize_sequence_round_trip() {
             "frame 3: phantom run of 20×{ch:?} leaked: {out3:?}"
         );
     }
-    assert_eq!(r.cur.pos, Position { y: 6, x: 0 });
+    assert_eq!(r.cur.pos(), Position { y: 6, x: 0 });
     sink.clear();
 
     // ---- Frame 4: shrink to 15x4, force-clear. row k = 'Q'+k. ------
@@ -686,7 +684,7 @@ fn test_inline_resize_sequence_round_trip() {
             "frame 4: 20-wide phantom run of {ch:?} from frame 3 leaked: {out4:?}"
         );
     }
-    assert_eq!(r.cur.pos, Position { y: 3, x: 0 });
+    assert_eq!(r.cur.pos(), Position { y: 3, x: 0 });
     sink.clear();
 
     // ---- Frame 5: grow to 25x6, row k = 'R'+k. No force-clear. -----
@@ -709,7 +707,7 @@ fn test_inline_resize_sequence_round_trip() {
         !out5.contains(&"Q".repeat(15)) || out5.contains(&"Q".repeat(25)),
         "frame 5: 15-wide phantom Q run from frame 4 leaked: {out5:?}"
     );
-    assert_eq!(r.cur.pos, Position { y: 5, x: 0 });
+    assert_eq!(r.cur.pos(), Position { y: 5, x: 0 });
 }
 
 /// `clear_bottom` emits ED to wipe trailing rows on the wire when
@@ -808,4 +806,61 @@ fn test_clear_bottom_skips_ed_when_cur_buf_already_blank() {
         !out.contains("\x1b[J") && !out.contains("\x1b[0J"),
         "redundant ED-below emitted for cur_buf that was already blank: out={out:?}"
     );
+}
+
+/// Regression: in inline (relative) mode, after the cursor is invalidated
+/// (e.g. a suspend/resume shell handoff, possibly with a resize reflow), the
+/// next move must RE-ANCHOR at the current physical row — emit a bare `\r` and
+/// step only downward — instead of stepping UP from the stale tracked row and
+/// overwriting content above the surface. Mirrors how Bubble Tea / ultraviolet
+/// treat an unknown `(-1,-1)` cursor as `(0,0)`.
+#[test]
+fn inline_move_after_invalidate_reanchors_without_cursor_up() {
+    let mut r = Renderer::new(); // inline / relative by default
+    r.last_width = 20;
+    r.last_height = 5;
+    // A previous frame left the cursor parked at the bottom row.
+    r.cur.set_pos(Position { y: 4, x: 0 });
+
+    // Shell handoff voids our position model.
+    r.invalidate_cursor();
+    assert!(r.cur.x.is_none() && r.cur.y.is_none());
+
+    // The resume repaint moves to the top of the surface.
+    let buf = RenderBuffer::new(20, 5);
+    let mut out = Vec::new();
+    r.move_to(&mut out, &buf, 0, 0).unwrap();
+    let s = String::from_utf8(out).unwrap();
+
+    // It must NOT emit any cursor-up (`CUU`, `ESC [ <n> A`) — that is the
+    // overshoot that "ate" the previous line. It re-anchors with `\r` and
+    // treats the current row as the new top.
+    assert!(
+        !s.contains('A'),
+        "must not emit CUU on inline re-anchor: {s:?}"
+    );
+    assert!(s.contains('\r'), "should re-home the column with CR: {s:?}");
+    assert_eq!(r.cur.pos(), Position { y: 0, x: 0 });
+}
+
+/// Contrast: with a KNOWN cursor at the bottom, moving to the top in inline
+/// mode does step up (`CUU`/`LF`-equivalent) — confirming the re-anchor above
+/// is specifically driven by the invalidated (unknown) state.
+#[test]
+fn inline_move_with_known_cursor_steps_up() {
+    let mut r = Renderer::new();
+    r.last_width = 20;
+    r.last_height = 5;
+    r.cur.set_pos(Position { y: 4, x: 0 });
+
+    let buf = RenderBuffer::new(20, 5);
+    let mut out = Vec::new();
+    r.move_to(&mut out, &buf, 0, 0).unwrap();
+    let s = String::from_utf8(out).unwrap();
+    // A real upward move is emitted (CUU) since the cursor was known.
+    assert!(
+        s.contains('A'),
+        "expected an upward move from a known cursor: {s:?}"
+    );
+    assert_eq!(r.cur.pos(), Position { y: 0, x: 0 });
 }

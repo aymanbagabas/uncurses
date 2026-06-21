@@ -15,8 +15,8 @@ fn renderer(width: u16, height: u16, opts: Optimizations) -> Renderer {
     renderer.set_relative_cursor(false);
     renderer.last_width = width;
     renderer.last_height = height;
-    renderer.cur.x_unknown = false;
-    renderer.cur.y_unknown = false;
+    renderer.cur.x = Some(0);
+    renderer.cur.y = Some(0);
     renderer
 }
 

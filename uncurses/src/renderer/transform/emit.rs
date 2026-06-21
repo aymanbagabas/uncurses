@@ -91,7 +91,8 @@ impl Renderer {
             }
 
             let ech_b = ansi::cost::ech_cost(count);
-            let cup_b = ansi::cost::cup_cost(self.cur.pos.y, self.cur.pos.x.saturating_add(count));
+            let cup_b =
+                ansi::cost::cup_cost(self.cur.pos().y, self.cur.pos().x.saturating_add(count));
             let rep_b = ansi::cost::rep_cost(count);
 
             if has_ech
@@ -106,8 +107,8 @@ impl Renderer {
                 self.move_to(
                     out,
                     new_buf,
-                    self.cur.pos.y,
-                    self.cur.pos.x.saturating_add(count),
+                    self.cur.pos().y,
+                    self.cur.pos().x.saturating_add(count),
                 )?;
                 x = j;
             } else if has_rep
@@ -118,7 +119,7 @@ impl Renderer {
                 // right edge, REP would lose the wrapped cell to the
                 // terminal's autowrap handling, so emit one extra
                 // cell at the end and shorten the REP count by one.
-                let wrap_possible = self.cur.pos.x.saturating_add(count) >= surface_width;
+                let wrap_possible = self.cur.pos().x.saturating_add(count) >= surface_width;
                 let mut rep_count = count;
                 if wrap_possible {
                     rep_count -= 1;
@@ -136,8 +137,14 @@ impl Renderer {
 
                 if rep_count > 0 {
                     ansi::write_rep(out, rep_count)?;
-                    self.cur.pos.x = self.cur.pos.x.saturating_add(rep_count).min(surface_width);
-                    if self.cur.pos.x >= surface_width {
+                    self.cur.x = Some(
+                        self.cur
+                            .pos()
+                            .x
+                            .saturating_add(rep_count)
+                            .min(surface_width),
+                    );
+                    if self.cur.pos().x >= surface_width {
                         self.cur.at_phantom = true;
                     }
                 }

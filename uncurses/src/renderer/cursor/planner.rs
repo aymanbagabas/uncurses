@@ -86,7 +86,7 @@ impl Renderer {
         to: Position,
         overwrite_line: Option<&[Cell]>,
     ) -> io::Result<()> {
-        if from.y == to.y && from.x == to.x && !self.cur.x_unknown && !self.cur.y_unknown {
+        if from.y == to.y && from.x == to.x && self.cur.known() {
             return Ok(());
         }
 
@@ -94,8 +94,7 @@ impl Renderer {
         // tracked position dominates outright; emit it without
         // running the cost search.
         let force_cup = !self.relative_cursor
-            && (self.cur.x_unknown
-                || self.cur.y_unknown
+            && (!self.cur.known()
                 || self.last_width == 0
                 || super::not_local(self.last_width, from, to));
         if force_cup {

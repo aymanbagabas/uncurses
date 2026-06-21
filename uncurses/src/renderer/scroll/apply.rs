@@ -126,8 +126,8 @@ mod tests {
         r.last_height = height;
         r.cur_buf = Some(RenderBuffer::new(width, height));
         r.old_hashes = vec![0u64; height as usize];
-        r.cur.x_unknown = false;
-        r.cur.y_unknown = false;
+        r.cur.x = Some(0);
+        r.cur.y = Some(0);
         r
     }
 
@@ -187,7 +187,7 @@ mod tests {
         let il_at = s.find("\x1b[2L").unwrap();
         assert!(dl_at < il_at, "DL must precede IL in the paired fallback");
         // ins = bot+1-n = 5+1-2 = 4
-        assert_eq!(renderer.cur.pos, Position { y: 4, x: 0 });
+        assert_eq!(renderer.cur.pos(), Position { y: 4, x: 0 });
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
             "DL must precede IL in the paired fallback (so the bottom rows are dropped before the region shifts down)",
         );
         // ins = top = 2
-        assert_eq!(renderer.cur.pos, Position { y: 2, x: 0 });
+        assert_eq!(renderer.cur.pos(), Position { y: 2, x: 0 });
     }
 
     #[test]
@@ -417,10 +417,13 @@ mod tests {
             .union(Optimizations::CSR)
             .difference(Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 8, opts);
+        // Scroll regions are a fullscreen feature; the move to the region
+        // bottom reasserts position with an absolute CUP.
+        renderer.set_relative_cursor(false);
         // Position cursor at the bottom of the target region. After
         // DECSTBM emission cursor_unknown is set; the next move
         // emits an absolute CUP regardless of where we were.
-        renderer.cur.pos = Position { y: 5, x: 0 };
+        renderer.cur.set_pos(Position { y: 5, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 8);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -442,7 +445,7 @@ mod tests {
             .union(Optimizations::CSR)
             .difference(Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 8, opts);
-        renderer.cur.pos = Position { y: 2, x: 0 };
+        renderer.cur.set_pos(Position { y: 2, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 8);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -471,7 +474,7 @@ mod tests {
         let mut renderer = make_renderer(10, 4, opts);
         let bg_style = Style::default().bg(Color::Basic(BasicColor::Blue));
         renderer.cur.set_style(bg_style.clone());
-        renderer.cur.pos = Position { y: 3, x: 0 };
+        renderer.cur.set_pos(Position { y: 3, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 4);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -513,7 +516,7 @@ mod tests {
             .bold();
         renderer.cur.set_style(pen);
         renderer.cur.mark_pen_changed();
-        renderer.cur.pos = Position { y: 3, x: 0 };
+        renderer.cur.set_pos(Position { y: 3, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 4);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -552,7 +555,7 @@ mod tests {
             .cur
             .set_style(Style::default().bg(Color::Basic(BasicColor::Red)));
         renderer.cur.mark_pen_changed();
-        renderer.cur.pos = Position { y: 3, x: 0 };
+        renderer.cur.set_pos(Position { y: 3, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 4);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -579,7 +582,7 @@ mod tests {
         let mut renderer = make_renderer(10, 6, opts);
         // Force absolute mode so the invalidation path emits CUP.
         renderer.set_relative_cursor(false);
-        renderer.cur.pos = Position { y: 0, x: 0 };
+        renderer.cur.set_pos(Position { y: 0, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 6);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -592,7 +595,7 @@ mod tests {
         // the very next move_cursor reasserts position via CUP /
         // \r-snap.
         assert!(
-            renderer.cur.x_unknown && renderer.cur.y_unknown,
+            renderer.cur.x.is_none() && renderer.cur.y.is_none(),
             "scrolln must invalidate cursor after DECSTBM reset",
         );
     }
