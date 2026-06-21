@@ -68,11 +68,13 @@
 //! public API is identical for both backends; select the backend that matches
 //! your binary-size and Unicode-coverage needs.
 
+mod display;
 mod mode;
 mod painter;
 mod surface;
 mod width;
 
+pub use display::{Encode, SurfaceDisplay};
 pub use mode::{WidthMode, grapheme_cells};
 pub use painter::{Painter, WrapMode};
 pub use surface::TextSurface;

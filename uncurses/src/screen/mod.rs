@@ -368,6 +368,18 @@ where
         self.canvas.use_color_profile(profile);
     }
 
+    /// Return the color profile used when emitting styled cells.
+    ///
+    /// This is the profile the renderer downsamples colors to, set by
+    /// [`use_color_profile`](Self::use_color_profile) or detected from the
+    /// environment when the screen was constructed. Pass it to
+    /// [`Encode::encode_with`](crate::text::Encode::encode_with) to serialize
+    /// a surface the same way this screen renders it. See
+    /// [`Canvas::color_profile`].
+    pub fn color_profile(&self) -> crate::color::Profile {
+        self.canvas.color_profile()
+    }
+
     /// Set the renderer optimization flags. See
     /// [`Canvas::use_optimizations`].
     pub fn use_optimizations(&mut self, optimizations: crate::canvas::Optimizations) {
