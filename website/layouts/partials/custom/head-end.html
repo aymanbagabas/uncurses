@@ -106,4 +106,13 @@
     background: rgba(56, 139, 253, 0.16);
     box-shadow: inset 2px 0 0 rgba(56, 139, 253, 0.7);
   }
+  /* Center Mermaid diagrams. The theme renders each as a natural-width SVG
+     inside <pre class="mermaid">, which otherwise sits left-aligned. */
+  pre.mermaid {
+    display: flex;
+    justify-content: center;
+  }
+  pre.mermaid > svg {
+    margin: 0 auto;
+  }
 </style>
