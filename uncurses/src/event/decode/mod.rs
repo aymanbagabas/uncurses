@@ -567,6 +567,7 @@ mod tests {
     use super::*;
     use crate::color::Color;
     use crate::event::ClipboardSelection;
+    use crate::event::ColorScheme;
 
     #[test]
     fn test_parse_simple_char() {
@@ -656,24 +657,24 @@ mod tests {
         let mut parser = Decoder::new(DecoderFlags::empty());
         assert_eq!(
             parser.parse(b"\x1b[?997;1n"),
-            vec![Event::ColorTheme { dark: true }]
+            vec![Event::ColorScheme(ColorScheme::Dark)]
         );
         assert_eq!(
             parser.parse(b"\x1b[?997;2n"),
-            vec![Event::ColorTheme { dark: false }]
+            vec![Event::ColorScheme(ColorScheme::Light)]
         );
         // Unknown sub-report value: branch returns None; consumer may
-        // see a fallthrough Unknown event but never a ColorTheme.
+        // see a fallthrough Unknown event but never a ColorScheme.
         let evs = parser.parse(b"\x1b[?997;9n");
-        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
-        // Wrong primary param is not a color theme report.
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorScheme(_))));
+        // Wrong primary param is not a color scheme report.
         let evs = parser.parse(b"\x1b[?996;1n");
-        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorScheme(_))));
         // Wrong number of params (1 or 3) is rejected.
         let evs = parser.parse(b"\x1b[?997n");
-        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorScheme(_))));
         let evs = parser.parse(b"\x1b[?997;1;0n");
-        assert!(!evs.iter().any(|e| matches!(e, Event::ColorTheme { .. })));
+        assert!(!evs.iter().any(|e| matches!(e, Event::ColorScheme(_))));
     }
 
     #[test]
