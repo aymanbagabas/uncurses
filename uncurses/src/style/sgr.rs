@@ -87,16 +87,12 @@ pub(super) fn push_sep<const N: usize>(buf: &mut SmallSeq<N>, body_start: usize)
 ///
 /// All present attributes, underline shape, foreground color, background color,
 /// and underline color are joined into a single parameter list. If the style
-/// has no SGR-relevant state, this writes [`RESET`]. Hyperlinks are not emitted
-/// here; [`Style::write_styled`](super::Style::write_styled) handles OSC 8
+/// has no SGR-relevant state, this writes nothing at all. Hyperlinks are not
+/// emitted here; [`Style::write_style`](super::Style::write_style) handles OSC 8
 /// wrapping.
 ///
 /// Returns any I/O error from `w` and does not panic.
-pub fn write_style<W: Write>(w: &mut W, style: &Style) -> io::Result<()> {
-    if style.is_sgr_empty() {
-        return w.write_all(RESET);
-    }
-
+pub(crate) fn write_style<W: Write>(w: &mut W, style: &Style) -> io::Result<()> {
     let mut seq = SgrSeq::new();
     seq.extend_from_slice(b"\x1b[");
     let body_start = seq.len();
@@ -113,6 +109,9 @@ pub fn write_style<W: Write>(w: &mut W, style: &Style) -> io::Result<()> {
     if let Some(ul) = style.underline_color {
         push_sep(&mut seq, body_start);
         push_underline_color_params(&mut seq, ul);
+    }
+    if seq.len() == body_start {
+        return Ok(());
     }
     seq.push(b'm');
     seq.flush(w)
@@ -249,10 +248,10 @@ mod tests {
     use crate::color::{BasicColor, Color};
 
     #[test]
-    fn test_write_empty_style() {
+    fn test_write_empty_style_emits_nothing() {
         let mut buf = Vec::new();
         write_style(&mut buf, &Style::default()).unwrap();
-        assert_eq!(buf, b"\x1b[m");
+        assert!(buf.is_empty());
     }
 
     #[test]

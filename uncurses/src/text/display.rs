@@ -77,8 +77,7 @@ pub trait Encode: Surface {
 
     /// Write the surface to `w`, downsampling colors to `profile`.
     ///
-    /// Each cell's style is passed through
-    /// [`convert_style`](crate::style::convert_style) before it is emitted, so
+    /// Each cell's style is converted for `profile` before it is emitted, so
     /// the output matches what the renderer would produce for a terminal with
     /// that color capability: [`Profile::Ansi`] and [`Profile::Ansi256`]
     /// quantize to the nearest palette color, [`Profile::Ascii`] drops colors

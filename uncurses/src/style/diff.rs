@@ -25,14 +25,14 @@ use super::{AttrFlags, RESET, Style, UnderlineStyle};
 /// `to` are visually identical (same SGR state and same link).
 ///
 /// The function returns I/O errors from `w` and does not panic.
-pub fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<bool> {
+pub(crate) fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<bool> {
     let wrote_sgr = write_sgr_diff(w, from, to)?;
 
     let wrote_link = from.link != to.link;
     if wrote_link {
         match to.link.as_deref() {
-            Some(link) => crate::ansi::write_hyperlink_start(w, &link.url, &link.params)?,
-            None => crate::ansi::write_hyperlink_end(w)?,
+            Some(link) => crate::ansi::write_hyperlink(w, &link.url, &link.params)?,
+            None => w.write_all(crate::ansi::HYPERLINK_RESET)?,
         }
     }
 
@@ -196,7 +196,7 @@ fn write_sgr_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<b
 /// colors. Color-capable profiles downsample foreground, background, and
 /// underline colors through [`Profile::convert`](crate::color::Profile::convert)
 /// and preserve the rest of the style.
-pub fn convert_style(style: &Style, profile: crate::color::Profile) -> Style {
+pub(crate) fn convert_style(style: &Style, profile: crate::color::Profile) -> Style {
     use crate::color::Profile;
     match profile {
         Profile::Disabled => Style::default(),
