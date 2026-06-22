@@ -75,6 +75,7 @@ pub use diff::*;
 pub use parse::*;
 pub use sgr::*;
 
+use std::borrow::Borrow;
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -307,6 +308,34 @@ impl Style {
     /// style value has any terminal-visible state.
     pub(crate) fn is_link_empty(&self) -> bool {
         self.link.is_none()
+    }
+
+    /// Inherit from `base`, returning `self` with its unset fields filled in.
+    ///
+    /// `self` takes precedence, like a child overriding inherited values: its
+    /// foreground, background, underline color, underline shape, and hyperlink
+    /// win wherever `self` sets them, and `base` only supplies a fallback for
+    /// each field `self` leaves at its default. Attributes from both are
+    /// combined. Inheriting from any `base` therefore never clears a field
+    /// `self` already set, and inheriting from an empty `base` returns `self`
+    /// unchanged.
+    ///
+    /// `base` is borrowed, so either an owned [`Style`] or a `&Style` may be
+    /// passed without cloning.
+    pub fn inherit(&self, base: impl Borrow<Style>) -> Style {
+        let base = base.borrow();
+        Style {
+            fg: self.fg.or(base.fg),
+            bg: self.bg.or(base.bg),
+            underline_color: self.underline_color.or(base.underline_color),
+            underline: if self.underline == UnderlineStyle::None {
+                base.underline
+            } else {
+                self.underline
+            },
+            attrs: self.attrs | base.attrs,
+            link: self.link.clone().or_else(|| base.link.clone()),
+        }
     }
 
     /// Add bold intensity and return the updated style.
@@ -620,6 +649,41 @@ mod tests {
         let mut buf = Vec::new();
         Style::EMPTY.write_styled(&mut buf, "hi").unwrap();
         assert_eq!(buf, b"hi");
+    }
+
+    #[test]
+    fn inherit_self_wins_and_fills_unset_from_base() {
+        let style = Style::EMPTY.italic().fg(BasicColor::Blue);
+        let base = Style::EMPTY
+            .bold()
+            .fg(BasicColor::Red)
+            .bg(BasicColor::Black);
+        let merged = style.inherit(base);
+        // self's fg wins; bg is inherited from base; attributes combine.
+        assert_eq!(
+            merged.fg,
+            Some(crate::color::Color::Basic(BasicColor::Blue))
+        );
+        assert_eq!(
+            merged.bg,
+            Some(crate::color::Color::Basic(BasicColor::Black))
+        );
+        assert!(merged.attrs.contains(AttrFlags::BOLD));
+        assert!(merged.attrs.contains(AttrFlags::ITALIC));
+    }
+
+    #[test]
+    fn inherit_empty_self_returns_base() {
+        let base = Style::EMPTY.bold().fg(BasicColor::Red);
+        // An empty child inherits everything from the base.
+        assert_eq!(Style::EMPTY.inherit(&base), base);
+    }
+
+    #[test]
+    fn inherit_empty_base_keeps_self() {
+        let style = Style::EMPTY.bold().fg(BasicColor::Red);
+        let merged = style.inherit(Style::EMPTY);
+        assert_eq!(merged, style);
     }
 
     #[test]

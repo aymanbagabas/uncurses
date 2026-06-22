@@ -1,8 +1,8 @@
 //! [`Painter`] — styled string painting into a mutable surface.
 //!
-//! A painter owns no cells. It temporarily binds a
-//! [`SurfaceMut`](crate::buffer::SurfaceMut), a [`WidthMode`], an
-//! East-Asian Ambiguous policy, and a running [`Style`]. Calls to
+//! A painter owns no cells and no style. It temporarily binds a
+//! [`SurfaceMut`](crate::buffer::SurfaceMut), a [`WidthMode`], and an
+//! East-Asian Ambiguous policy. Calls to
 //! [`set_str`](Painter::set_str) or [`set_str_rect`](Painter::set_str_rect)
 //! tokenize the input into text clusters, inline escapes, and control bytes,
 //! then write terminal cells into the target.
@@ -19,10 +19,13 @@
 //!
 //! ## Style and hyperlink state
 //!
-//! Each paint call takes a starting [`Style`]. Inline SGR sequences update the
-//! painter's current style, and OSC 8 sequences attach or clear a hyperlink on
-//! that same style. The painter carries this running style across calls within
-//! its lifetime; call [`Painter::reset`] to return to [`Style::default()`].
+//! Each paint call takes a base [`Style`]. Inline SGR and OSC 8 sequences in
+//! the input build a separate pen as the string is scanned, and each cell is
+//! that pen inherited onto the base: the pen's own fields win, the base fills
+//! anything the pen leaves unset. An inline reset (`\x1b[0m`) clears the pen,
+//! so cells after it fall back to the base rather than to the terminal default.
+//! The painter keeps no style of its own between calls: every call starts with
+//! an empty pen over the base it is given, so calls are independent.
 //!
 //! ## Cells, clipping, and wrapping
 //!
@@ -80,9 +83,11 @@ pub enum WrapMode {
 /// Paint styled strings into a [`TextSurface`].
 ///
 /// The painter snapshots its target's [`WidthMode`] and `eaw_wide` policy at
-/// construction, both fixed for the painter's lifetime, and tracks the current
-/// style as it parses inline SGR and OSC 8 sequences. Text is written into the
-/// borrowed target surface; dropping a painter has no side effects.
+/// construction, both fixed for the painter's lifetime. It holds no style of
+/// its own: each paint call starts with an empty pen over the base style it is
+/// given, parses the input's inline SGR and OSC 8 sequences into that pen, and
+/// writes each cell as the pen inherited onto the base. Text is written into
+/// the borrowed target surface; dropping a painter has no side effects.
 pub struct Painter<'s, S: TextSurface + ?Sized> {
     target: &'s mut S,
     /// Width measurement policy, snapshotted from the target at construction.
@@ -90,8 +95,6 @@ pub struct Painter<'s, S: TextSurface + ?Sized> {
     /// Whether East Asian Ambiguous characters are treated as wide,
     /// snapshotted from the target at construction.
     eaw_wide: bool,
-    /// Current painting style, updated as inline SGR/OSC 8 escapes are parsed.
-    style: Style,
 }
 
 impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
@@ -100,12 +103,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
     /// # Parameters
     ///
     /// * `target` — mutable surface receiving painted cells.
-    /// * `mode` — grapheme-cluster width policy.
-    /// * `eaw_wide` — East-Asian Ambiguous width policy.
     ///
     /// # Returns
     ///
-    /// A painter with [`Style::default()`] as its current style.
+    /// A painter bound to `target`.
     ///
     /// # Errors and panics
     ///
@@ -117,26 +118,9 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
             target,
             mode,
             eaw_wide,
-            style: Style::default(),
         }
     }
 
-    /// Clear the current style back to [`Style::default()`].
-    ///
-    /// This removes any active attributes, colors, and hyperlink from
-    /// the current style. It does not modify the target surface.
-    ///
-    /// # Returns
-    ///
-    /// `self`, for method chaining.
-    ///
-    /// # Errors and panics
-    ///
-    /// This method does not fail or intentionally panic.
-    pub fn reset(&mut self) -> &mut Self {
-        self.style = Style::default();
-        self
-    }
     /// Paint `s` with [`WrapMode::Truncate`], stamping `tail` on overflow.
     ///
     /// Falls back to a plain hard truncate when the tail is empty or cannot
@@ -148,6 +132,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         s: &str,
         tail_text: &str,
         tail_style: Style,
+        style: Style,
     ) -> Position {
         if clip.is_empty() {
             return start;
@@ -162,7 +147,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 width: tail_w,
             })
         };
-        self.paint_inner(start, clip, s, WrapMode::Truncate, tail)
+        self.paint_inner(start, clip, s, WrapMode::Truncate, tail, style)
     }
 
     /// Stamp `tail` over the trailing `tail.width` columns of row `y`, ending
@@ -170,19 +155,25 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
     fn paint_tail(&mut self, tail: Tail<'_>, clip: Rect, y: u16) {
         let tail_x = clip.right().saturating_sub(tail.width);
         let sub = Rect::new(tail_x, y, tail.width, 1).intersection(clip);
-        let saved = std::mem::replace(&mut self.style, tail.style.clone());
         self.paint_inner(
             Position::new(tail_x, y),
             sub,
             tail.text,
             WrapMode::Truncate,
             None,
+            tail.style.clone(),
         );
-        self.style = saved;
     }
 
-    fn paint(&mut self, start: Position, clip: Rect, s: &str, wrap: WrapMode) -> Position {
-        self.paint_inner(start, clip, s, wrap, None)
+    fn paint(
+        &mut self,
+        start: Position,
+        clip: Rect,
+        s: &str,
+        wrap: WrapMode,
+        style: Style,
+    ) -> Position {
+        self.paint_inner(start, clip, s, wrap, None, style)
     }
 
     fn paint_inner(
@@ -192,30 +183,51 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         s: &str,
         wrap: WrapMode,
         tail: Option<Tail<'_>>,
+        base: Style,
     ) -> Position {
         if clip.is_empty() {
             return start;
         }
         let mut x = start.x;
         let mut y = start.y;
+        // `pen` accumulates the inline SGR/OSC 8 state, starting empty; an
+        // inline reset clears it, so the cells after a reset fall back to
+        // `base`. `pending` is the cell currently being built: its origin,
+        // text, and width. A trailing zero-width grapheme (a combining mark)
+        // joins it instead of starting a new cell, so the cell is held until
+        // the next non-zero-width token finalizes it.
+        let mut pen = Style::default();
         let mut pending: Option<(u16, u16, String, u8)> = None;
 
         for tok in tokenize(s.as_bytes(), self.mode, self.eaw_wide) {
+            // A zero-width grapheme appends to the pending cell without
+            // finalizing it. Everything else finalizes the pending cell first,
+            // writing it with the current style: the pen inherited onto base.
+            if !matches!(tok, Token::Text { width: 0, .. })
+                && let Some((px, py, content, w)) = pending.take()
+                && clip.contains(Position::new(px, py))
+            {
+                let cell = if w == 2 {
+                    Cell::wide(&content)
+                } else {
+                    Cell::narrow(&content)
+                };
+                self.target
+                    .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+            }
+
             match tok {
+                // SAFETY (all `from_utf8_unchecked`): the tokenizer cuts on
+                // grapheme-cluster boundaries of a valid `&str`, so each slice
+                // is valid UTF-8.
+                Token::Text { text, width: 0 } => {
+                    if let Some((_, _, ref mut content, _)) = pending {
+                        content.push_str(unsafe { std::str::from_utf8_unchecked(text) });
+                    }
+                }
                 Token::Text { text, width } => {
-                    // SAFETY: input is `&str` (valid UTF-8) and the
-                    // tokenizer cuts on grapheme-cluster boundaries, so
-                    // `text` is always a valid UTF-8 sub-slice.
                     let g = unsafe { std::str::from_utf8_unchecked(text) };
                     let cw = width as u8;
-                    if cw == 0 {
-                        if let Some((_, _, ref mut content, _)) = pending {
-                            content.push_str(g);
-                        }
-                        continue;
-                    }
-                    flush_pending(self.target, &mut pending, clip, &self.style);
-
                     if x + cw as u16 > clip.right() {
                         match wrap {
                             WrapMode::Truncate => {
@@ -244,17 +256,14 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     if seq.last() == Some(&b'm')
                         && let Some(body) = csi_body(seq)
                     {
-                        flush_pending(self.target, &mut pending, clip, &self.style);
-                        read_style(Params::from_raw(body), &mut self.style);
+                        read_style(Params::from_raw(body), &mut pen);
                     } else if let Some(body) = osc_body(seq)
                         && let Some((params, url)) = parse_hyperlink(body)
                     {
-                        flush_pending(self.target, &mut pending, clip, &self.style);
-                        self.style = self.style.clone().link(url, params);
+                        pen = pen.link(url, params);
                     }
                 }
                 Token::Control(0x0A) => {
-                    flush_pending(self.target, &mut pending, clip, &self.style);
                     y = y.saturating_add(1);
                     x = clip.left();
                     if y >= clip.bottom() {
@@ -262,13 +271,24 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     }
                 }
                 Token::Control(0x0D) => {
-                    flush_pending(self.target, &mut pending, clip, &self.style);
                     x = clip.left();
                 }
                 Token::Control(_) => {}
             }
         }
-        flush_pending(self.target, &mut pending, clip, &self.style);
+
+        // Finalize the last cell.
+        if let Some((px, py, content, w)) = pending.take()
+            && clip.contains(Position::new(px, py))
+        {
+            let cell = if w == 2 {
+                Cell::wide(&content)
+            } else {
+                Cell::narrow(&content)
+            };
+            self.target
+                .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+        }
         Position::new(x, y)
     }
 }
@@ -334,17 +354,19 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
 
     /// Paint `s` starting at `pos`, clipped to the target bounds.
     ///
-    /// `style` replaces the painter's current [`Style`] before painting.
-    /// Inline SGR and OSC 8 sequences then update the running style as
-    /// the input is processed. Newline advances to the next row at the bounds'
-    /// left edge; carriage return returns to that left edge on the current row.
-    /// Right-edge behavior is [`WrapMode::Truncate`].
+    /// The painter's running [`Style`] takes precedence and inherits any unset
+    /// fields from `style`, so the running style carries across calls and
+    /// `style` only fills in what it has not set. Inline SGR and OSC 8 sequences
+    /// then update the running style as the input is processed. Newline advances
+    /// to the next row at the bounds' left edge; carriage return returns to that
+    /// left edge on the current row. Right-edge behavior is
+    /// [`WrapMode::Truncate`].
     ///
     /// # Parameters
     ///
     /// * `pos` — starting cell position.
     /// * `s` — UTF-8 input string.
-    /// * `style` — initial style for this call.
+    /// * `style` — base style the running style inherits unset fields from.
     ///
     /// # Returns
     ///
@@ -355,9 +377,8 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     ///
     /// This method does not return errors and does not intentionally panic.
     fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
-        self.style = style.into();
         let clip = self.target.bounds();
-        self.paint(pos.into(), clip, s, WrapMode::default())
+        self.paint(pos.into(), clip, s, WrapMode::default(), style.into())
     }
 
     /// Paint `s` starting at `pos` with explicit wrapping behavior.
@@ -388,9 +409,8 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         wrap: WrapMode,
         style: impl Into<Style>,
     ) -> Position {
-        self.style = style.into();
         let clip = self.target.bounds();
-        self.paint(pos.into(), clip, s, wrap)
+        self.paint(pos.into(), clip, s, wrap, style.into())
     }
 
     /// Paint `s` into `rect`, clipped to `rect ∩ target.bounds()`.
@@ -419,10 +439,9 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         s: &str,
         style: impl Into<Style>,
     ) -> Position {
-        self.style = style.into();
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
-        self.paint(rect.position(), clip, s, WrapMode::default())
+        self.paint(rect.position(), clip, s, WrapMode::default(), style.into())
     }
 
     /// Paint `s` into `rect` with explicit wrapping behavior.
@@ -453,10 +472,9 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         wrap: WrapMode,
         style: impl Into<Style>,
     ) -> Position {
-        self.style = style.into();
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
-        self.paint(rect.position(), clip, s, wrap)
+        self.paint(rect.position(), clip, s, wrap, style.into())
     }
 
     /// Paint `s` starting at `pos`, truncating with a `tail` indicator.
@@ -495,7 +513,14 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         tail_style: impl Into<Style>,
     ) -> Position {
         let clip = self.target.bounds();
-        self.paint_truncate(pos.into(), clip, s, tail, tail_style.into())
+        self.paint_truncate(
+            pos.into(),
+            clip,
+            s,
+            tail,
+            tail_style.into(),
+            Style::default(),
+        )
     }
 
     /// Paint `s` inside `rect`, truncating with a `tail` indicator.
@@ -529,7 +554,14 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     ) -> Position {
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
-        self.paint_truncate(rect.position(), clip, s, tail, tail_style.into())
+        self.paint_truncate(
+            rect.position(),
+            clip,
+            s,
+            tail,
+            tail_style.into(),
+            Style::default(),
+        )
     }
 }
 
@@ -541,24 +573,6 @@ struct Tail<'a> {
     text: &'a str,
     style: &'a Style,
     width: u16,
-}
-
-fn flush_pending<S: SurfaceMut + ?Sized>(
-    target: &mut S,
-    pending: &mut Option<(u16, u16, String, u8)>,
-    clip: Rect,
-    style: &Style,
-) {
-    if let Some((px, py, content, w)) = pending.take()
-        && clip.contains(Position::new(px, py))
-    {
-        let cell = if w == 2 {
-            Cell::wide(&*content)
-        } else {
-            Cell::narrow(&*content)
-        };
-        target.set_cell(Position::new(px, py), &cell.style(style.clone()));
-    }
 }
 
 /// Return the body of a CSI sequence (between introducer and final byte).
@@ -826,37 +840,32 @@ mod tests {
     }
 
     #[test]
-    fn running_style_is_reusable_across_calls() {
+    fn calls_start_from_their_own_base() {
         let mut b = buf(10, 1);
         let mut p = Painter::new(&mut b);
+        // Inline SGR bolds within the first call only.
         p.set_str_wrap((0, 0), "\x1b[1ma", WrapMode::Truncate, Style::default());
-        // Inline SGR leaves the running style bold; feed it back in to
-        // continue the same style on the next call.
-        let running = p.style.clone();
-        p.set_str_wrap((1, 0), "b", WrapMode::Truncate, running);
+        // The next call starts fresh from its base: no bold carries over.
+        p.set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
         assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
-    fn reset_clears_style_and_link() {
+    fn base_applies_and_inline_reset_returns_to_base() {
         let mut b = buf(10, 1);
-        let mut p = Painter::new(&mut b);
-        p.set_str_wrap(
-            (0, 0),
-            "\x1b[1m\x1b]8;;https://x\x1b\\a",
-            WrapMode::Truncate,
-            Style::default(),
-        );
-        assert!(p.style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(link_of(&p.style), Some(("https://x", "")));
-        p.reset();
-        assert!(p.style.is_empty());
-        assert!(p.style.link.is_none());
-        // Subsequent paint reflects the reset.
-        p.set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(cell_at(&b, 1, 0).style.link.is_none());
+        let base = Style::default().fg(Color::Basic(BasicColor::Red));
+        // "a" gets the base red; the inline bold adds to "b"; the inline reset
+        // clears only the inline state, so "c" falls back to the base red
+        // rather than to a fully default style.
+        Painter::new(&mut b).set_str_wrap((0, 0), "a\x1b[1mb\x1b[0mc", WrapMode::Truncate, base);
+        let red = Some(Color::Basic(BasicColor::Red));
+        assert_eq!(cell_at(&b, 0, 0).style.fg, red);
+        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 1, 0).style.fg, red);
+        assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 2, 0).style.fg, red);
+        assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
