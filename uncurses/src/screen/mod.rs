@@ -15,7 +15,7 @@
 //!
 //! Construction is inert: [`Screen::new`] (and the [`stdio`](Screen::stdio)
 //! / [`open`](Screen::open) shortcuts) only build the screen. Begin a
-//! session with [`Screen::init`], which enters raw mode and stages the
+//! session with [`Screen::init`], which enters raw mode and sends the
 //! capability queries. Teardown is explicit: there is **no** `Drop`.
 //! Hand the terminal back to the shell with [`Screen::finish`] (consume),
 //! [`Screen::pause`] (keep, e.g. to shell out), or [`Screen::suspend`]
@@ -29,7 +29,7 @@
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut screen = Screen::open()?; // build over /dev/tty
-//! screen.init()?; // raw mode + staged queries
+//! screen.init()?; // raw mode + capability queries
 //! screen.enter_alt_screen()?;
 //! screen.set_str((0, 0), "hello", Style::default());
 //! screen.render()?;
@@ -113,7 +113,7 @@ pub use crate::renderer::Optimizations;
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::ansi::{kitty, mode};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
@@ -187,6 +187,10 @@ where
     /// The raw XTVERSION reply identifying the terminal (e.g.
     /// `"XTerm(380)"`). `None` until the reply is observed.
     terminal_name: Option<String>,
+    /// When the [`init`](Self::init) capability queries were written, used
+    /// to bound the teardown drain that consumes their replies. `None`
+    /// when no queries were sent (or once the drain has run).
+    queries_sent_at: Option<Instant>,
 }
 
 /// Desired default behaviors applied by [`Screen::init_with`].
@@ -237,6 +241,19 @@ pub struct ScreenOptions {
     /// [`capabilities`](Screen::capabilities) stays at its env-derived
     /// defaults.
     pub query_capabilities: bool,
+    /// How long teardown ([`finish`](Screen::finish) /
+    /// [`pause`](Screen::pause)) will wait for the capability-query replies
+    /// to arrive before restoring the terminal, so they cannot leak to the
+    /// shell (or a child after `pause`) as stray input.
+    ///
+    /// The wait is measured from when [`init`](Screen::init) sent the
+    /// queries and ends early as soon as the terminating Primary DA reply
+    /// lands, so a responsive terminal costs only its round-trip and a
+    /// long-running app pays nothing (the replies are consumed by the event
+    /// loop, and the budget has long since elapsed). Only the rare path that
+    /// tears down before the replies were consumed waits here. Defaults to
+    /// 300ms.
+    pub query_drain_timeout: Duration,
 }
 
 /// Mouse tracking preference for [`ScreenOptions::mouse`].
@@ -259,6 +276,7 @@ impl Default for ScreenOptions {
             request_pixel_size_on_resize: cfg!(windows),
             mouse: None,
             query_capabilities: true,
+            query_drain_timeout: Duration::from_millis(300),
         }
     }
 }
@@ -687,6 +705,48 @@ where
         self.source.lock().unwrap().unread(event);
     }
 
+    /// Consume any still-pending replies to the capability queries
+    /// [`init`](Self::init) fired, so they cannot leak to the shell (or a
+    /// child after [`pause`](Self::pause)) as stray input once the terminal
+    /// is restored to cooked mode.
+    ///
+    /// No-op unless queries were sent and their terminating Primary DA reply
+    /// has not yet been observed. Otherwise it waits at most the time left in
+    /// [`ScreenOptions::query_drain_timeout`], measured from when the queries
+    /// were sent, and returns as soon as that Primary DA reply lands. Reusing
+    /// the normal decode path means replies are consumed (not flushed), which
+    /// is race-free and identical on every platform.
+    fn drain_pending_queries(&mut self) -> io::Result<()> {
+        if self.defaults_applied {
+            return Ok(());
+        }
+        let Some(sent_at) = self.queries_sent_at.take() else {
+            return Ok(());
+        };
+        let budget = self.options.query_drain_timeout;
+        while !self.defaults_applied {
+            let Some(remaining) = budget.checked_sub(sent_at.elapsed()) else {
+                break;
+            };
+            if remaining.is_zero() {
+                break;
+            }
+            // Wait up to the remaining budget for input, then decode whatever
+            // arrived. `try_read_event` runs `observe`, which flips
+            // `defaults_applied` on the Primary DA reply that terminates the
+            // capability-reply stream.
+            if !self.poll_event(Some(remaining))? {
+                break;
+            }
+            while self.try_read_event().is_some() {
+                if self.defaults_applied {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Terminal capabilities detected so far from intercepted query
     /// replies. Populated as the relevant reports arrive through the event
     /// delegates after [`Self::init`].
@@ -866,8 +926,13 @@ where
     /// Detect the environment-derived color profile and apply it to the
     /// renderer. Called by `init_with` on every path so output downsamples
     /// correctly even when capability queries are skipped.
-    fn apply_env_color_profile(&mut self) {
-        let profile = crate::color::Profile::detect_from(self.terminal.env(), true);
+    /// Detect the environment-derived color profile and apply it to the
+    /// renderer, clamping to no color when the output half is not a terminal
+    /// (e.g. redirected to a file or pipe). `is_tty` is the output's
+    /// terminal status; the caller supplies it since the platform handle
+    /// bounds live on `init_with`.
+    fn apply_env_color_profile(&mut self, is_tty: bool) {
+        let profile = crate::color::Profile::detect_from(self.terminal.env(), is_tty);
         self.renderer.set_color_profile(profile);
     }
 
@@ -893,7 +958,7 @@ where
         self.flush()
     }
 
-    fn stage_init_queries(&mut self) -> io::Result<()> {
+    fn send_init_queries(&mut self) -> io::Result<()> {
         use crate::ansi::ctrl::{REQUEST_PRIMARY_DA, REQUEST_XTVERSION};
         use crate::ansi::kitty::REQUEST_KITTY_KEYBOARD;
         use crate::ansi::mode::Mode;
@@ -1141,6 +1206,8 @@ where
     /// left as-is.
     fn with_render(terminal: Terminal<I, O>, size: (u16, u16)) -> io::Result<Self> {
         let env = terminal.env();
+        // Provisional profile; init_with reapplies it with the real
+        // output-is-tty signal via apply_env_color_profile.
         let color_profile = Profile::detect_from(env, true);
         let optimizations = Optimizations::from_env(env);
         let mut renderer = Renderer::new();
@@ -1170,6 +1237,7 @@ where
             window_cells: None,
             window_pixels: None,
             terminal_name: None,
+            queries_sent_at: None,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
@@ -1201,7 +1269,7 @@ where
     }
 
     /// Begin a session: enter raw mode, apply the always-on defaults from
-    /// `options`, and stage the capability queries whose replies the event
+    /// `options`, and send the capability queries whose replies the event
     /// loop consumes. Discovery-driven defaults are applied later, once the
     /// terminating Primary DA reply confirms the detected capabilities (see
     /// [`Self::capabilities`]). Call once after [`Self::new`], before
@@ -1211,14 +1279,17 @@ where
         self.terminal.make_raw()?;
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
-        // correctly even when capability queries are skipped.
-        self.apply_env_color_profile();
+        // correctly even when capability queries are skipped. Disable color
+        // when the output is not a terminal (redirected to a file or pipe).
+        let is_tty = self.terminal.is_terminal().1;
+        self.apply_env_color_profile(is_tty);
         self.reset_tab_stops()?;
         if self.options.bracketed_paste {
             self.enable_bracketed_paste()?;
         }
         if self.options.query_capabilities {
-            self.stage_init_queries()?;
+            self.send_init_queries()?;
+            self.queries_sent_at = Some(Instant::now());
         }
         Ok(())
     }
@@ -1265,7 +1336,7 @@ where
         // `resume`.
         #[cfg(feature = "async")]
         drop(self.stream.take());
-        self.stage_teardown()?;
+        self.teardown()?;
         self.terminal.restore()
     }
 
@@ -1283,7 +1354,7 @@ where
         {
             self.stream = None;
         }
-        self.stage_teardown()?;
+        self.teardown()?;
         self.terminal.restore()
     }
 
@@ -1308,7 +1379,11 @@ where
         Ok(())
     }
 
-    fn stage_teardown(&mut self) -> io::Result<()> {
+    /// Hand the terminal back: consume any pending capability-query replies,
+    /// reset every staged mode and the canvas to defaults, and flush. The
+    /// caller restores the saved raw-mode state afterward.
+    fn teardown(&mut self) -> io::Result<()> {
+        self.drain_pending_queries()?;
         self.reset()?;
         self.flush()
     }
@@ -1336,7 +1411,7 @@ where
     }
 
     /// Begin a session: enter raw mode, apply the always-on defaults from
-    /// `options`, and stage the capability queries whose replies the event
+    /// `options`, and send the capability queries whose replies the event
     /// loop consumes. Discovery-driven defaults are applied later, once the
     /// terminating Primary DA reply confirms the detected capabilities (see
     /// [`Self::capabilities`]). Call once after [`Self::new`], before
@@ -1346,14 +1421,17 @@ where
         self.terminal.make_raw()?;
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
-        // correctly even when capability queries are skipped.
-        self.apply_env_color_profile();
+        // correctly even when capability queries are skipped. Disable color
+        // when the output is not a terminal (redirected to a file or pipe).
+        let is_tty = self.terminal.is_terminal().1;
+        self.apply_env_color_profile(is_tty);
         self.reset_tab_stops()?;
         if self.options.bracketed_paste {
             self.enable_bracketed_paste()?;
         }
         if self.options.query_capabilities {
-            self.stage_init_queries()?;
+            self.send_init_queries()?;
+            self.queries_sent_at = Some(Instant::now());
         }
         Ok(())
     }
@@ -1400,7 +1478,7 @@ where
         // `resume`.
         #[cfg(feature = "async")]
         drop(self.stream.take());
-        self.stage_teardown()?;
+        self.teardown()?;
         self.terminal.restore()
     }
 
@@ -1418,7 +1496,7 @@ where
         {
             self.stream = None;
         }
-        self.stage_teardown()?;
+        self.teardown()?;
         self.terminal.restore()
     }
 
@@ -1433,7 +1511,11 @@ where
         self.flush()
     }
 
-    fn stage_teardown(&mut self) -> io::Result<()> {
+    /// Hand the terminal back: consume any pending capability-query replies,
+    /// reset every staged mode and the canvas to defaults, and flush. The
+    /// caller restores the saved raw-mode state afterward.
+    fn teardown(&mut self) -> io::Result<()> {
+        self.drain_pending_queries()?;
         self.reset()?;
         self.flush()
     }
