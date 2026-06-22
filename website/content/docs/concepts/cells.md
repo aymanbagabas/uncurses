@@ -33,7 +33,7 @@ that holds the second column. The continuation has no content of its own and
 reports a width of zero, because its column belongs to the wide cell on its
 left.
 
-<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(3, 2.2rem);"><span class="lbl">col:</span><span class="lbl">0</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">row 0</span><span>世</span><span class="cont">cont</span><span>A</span></div><figcaption>One terminal row. The wide glyph <code>世</code> is a primary cell in column 0 with a zero-width continuation cell in column 1; the narrow <code>A</code> sits in column 2.</figcaption></figure>
+<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(3, 2.2rem);"><span class="lbl">col:</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">row 1</span><span>世</span><span class="cont">cont</span><span>A</span></div><figcaption>One terminal row. The wide glyph <code>世</code> is a primary cell in column 1 with a zero-width continuation cell in column 2; the narrow <code>A</code> sits in column 3.</figcaption></figure>
 
 The wide `世` is a primary cell plus a *continuation* cell, two separate cells
 the grid keeps side by side. The continuation carries no content and reports

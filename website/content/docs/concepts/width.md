@@ -15,7 +15,7 @@ few are *wide* and take two, like CJK characters. And some take *zero*: a
 combining accent stacks onto the glyph before it rather than claiming a column
 of its own.
 
-<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(4, 2.2rem);"><span class="lbl">col:</span><span class="lbl">0</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">row 0</span><span>a</span><span>世</span><span class="cont">cont</span><span>é</span></div><figcaption>One row, four columns: narrow <code>a</code> (width 1), wide <code>世</code> (width 2, with its continuation cell), and <code>é</code> (the letter <code>e</code> plus a combining accent, still one cell).</figcaption></figure>
+<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(4, 2.2rem);"><span class="lbl">col:</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">4</span><span class="lbl">row 1</span><span>a</span><span>世</span><span class="cont">cont</span><span>é</span></div><figcaption>One row, four columns: narrow <code>a</code> (width 1), wide <code>世</code> (width 2, with its continuation cell), and <code>é</code> (the letter <code>e</code> plus a combining accent, still one cell).</figcaption></figure>
 
 ## Graphemes, not bytes or code points
 
