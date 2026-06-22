@@ -389,11 +389,29 @@ where
             .unwrap();
     }
 
-    /// The renderer's tracked cursor position: the buffer-relative cell
-    /// where the renderer believes the terminal cursor currently sits. This
+    /// Stage a cursor move relative to the
+    /// [tracked cursor](Self::tracked_cursor).
+    ///
+    /// Convenience over [`move_cursor_to`](Self::move_cursor_to): the target
+    /// is the tracked cursor offset by `(dx, dy)`, saturating at the buffer
+    /// origin. Like `move_cursor_to`, it does not clamp to the right or
+    /// bottom edge. An unknown tracked cursor is treated as the origin.
+    pub fn move_cursor_by(&mut self, dx: i16, dy: i16) {
+        let cur = self.tracked_cursor().unwrap_or(Position::ORIGIN);
+        let x = cur.x.saturating_add_signed(dx);
+        let y = cur.y.saturating_add_signed(dy);
+        self.move_cursor_to((x, y));
+    }
+
+    /// The renderer's tracked cursor: the buffer-relative cell where the
+    /// renderer believes the terminal cursor currently sits, or `None` when
+    /// that position is unknown (initially, after a screen reset, or after
+    /// [`invalidate_tracked_cursor`](Self::invalidate_tracked_cursor)). This
     /// is bookkeeping, not a live cursor-position query.
-    pub fn tracked_cursor_position(&self) -> Position {
-        self.renderer.cursor_position()
+    pub fn tracked_cursor(&self) -> Option<Position> {
+        self.renderer
+            .cursor_known()
+            .then(|| self.renderer.cursor_position())
     }
 
     /// Mark the tracked cursor position unknown, so the next staged move
@@ -404,12 +422,12 @@ where
         self.renderer.invalidate_cursor();
     }
 
-    /// Assume the tracked cursor is at buffer-relative `pos`, with both
-    /// axes known, *without* emitting any move. This only updates the
-    /// renderer's belief; the caller must have already placed the terminal
-    /// cursor there (e.g. with a raw escape the renderer cannot see). For an
-    /// actual cursor move use [`move_cursor_to`](Self::move_cursor_to).
-    pub fn assume_cursor_position(&mut self, pos: impl Into<Position>) {
+    /// Set the tracked cursor to buffer-relative `pos`, with both axes
+    /// known, *without* emitting any move. This only updates the renderer's
+    /// belief; the caller must have already placed the terminal cursor there
+    /// (e.g. with a raw escape the renderer cannot see). For an actual cursor
+    /// move use [`move_cursor_to`](Self::move_cursor_to).
+    pub fn set_tracked_cursor(&mut self, pos: impl Into<Position>) {
         self.renderer.set_cursor_position(pos.into());
     }
 
