@@ -2,8 +2,9 @@
 //!
 //! This module is the text layer for [`SurfaceMut`](crate::buffer::SurfaceMut):
 //! it segments UTF-8 strings into grapheme clusters, measures their terminal
-//! display width, interprets inline styling escapes, and writes cells into any
-//! mutable surface implementation.
+//! display width, and writes cells into any mutable surface implementation.
+//! Painting is literal by default; the optional [`Painter`] interprets inline
+//! SGR and OSC 8 escapes as styling.
 //!
 //! ## Width measurement and grapheme handling
 //!

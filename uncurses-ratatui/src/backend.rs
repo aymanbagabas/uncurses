@@ -65,7 +65,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 ///
 /// ## What it wraps
 ///
-/// The wrapped screen owns the terminal handle, the canvas, and the event
+/// The wrapped screen owns the terminal handle, the cell buffer, and the event
 /// source. Keeping those pieces behind one backend means frame rendering,
 /// cursor movement, clearing, size tracking, raw-mode setup, and input reads all
 /// observe the same terminal state.
@@ -73,8 +73,8 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 /// ## Rendering
 ///
 /// [`Backend::draw`] converts each concrete buffer cell to an uncurses cell and
-/// writes it into the screen's canvas, staging the frame without any I/O.
-/// [`Backend::flush`] then calls [`Screen::render`], which diffs the canvas,
+/// writes it into the screen's buffer, staging the frame without any I/O.
+/// [`Backend::flush`] then calls [`Screen::render`], which diffs the buffer,
 /// stages the minimal escape bytes, and flushes them through the screen.
 ///
 /// ```text
@@ -103,7 +103,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 /// The default viewport is [`Viewport::Fullscreen`]. The init helpers call
 /// [`set_viewport`](Self::set_viewport) with the viewport stored in
 /// terminal options. Inline viewports keep an absolute origin in
-/// `inline_origin`; drawing subtracts that origin so the screen canvas contains
+/// `inline_origin`; drawing subtracts that origin so the screen buffer contains
 /// only the inline region.
 ///
 /// ## Events
@@ -202,7 +202,7 @@ impl UncursesBackend<TtyInput, TtyOutput> {
     /// ## Errors
     ///
     /// Returns errors from opening or initializing the controlling terminal,
-    /// sizing the canvas, or creating the input event source.
+    /// sizing the buffer, or creating the input event source.
     ///
     /// ## Panics
     ///
@@ -272,7 +272,7 @@ where
     ///
     /// The setup helpers call this with the viewport from terminal options. The
     /// backend uses it to size the screen buffer and, for inline viewports,
-    /// translate absolute frame rows into the inline canvas region. The default before this method is called is
+    /// translate absolute frame rows into the inline buffer region. The default before this method is called is
     /// [`Viewport::Fullscreen`].
     ///
     /// ## Parameters
@@ -332,8 +332,8 @@ where
     ///
     /// ## Usage note
     ///
-    /// Avoid mixing manual canvas writes with normal backend drawing unless the
-    /// ordering is deliberate; both paths affect the same canvas.
+    /// Avoid mixing manual buffer writes with normal backend drawing unless the
+    /// ordering is deliberate; both paths affect the same buffer.
     pub fn screen_mut(&mut self) -> &mut Screen<I, O> {
         &mut self.screen
     }
@@ -486,7 +486,7 @@ where
     /// Restore terminal state after a backend-managed session.
     ///
     /// This delegates to [`Screen::pause`]. The screen stops any async event
-    /// stream, tears down staged modes, resets canvas-controlled state such as
+    /// stream, tears down staged modes, resets buffer-controlled state such as
     /// alternate screen and cursor visibility, flushes pending output, and
     /// restores the terminal mode while keeping the screen available for future
     /// use.
@@ -532,11 +532,11 @@ where
 {
     type Error = io::Error;
 
-    /// Stage a frame's cells into the wrapped screen canvas.
+    /// Stage a frame's cells into the wrapped screen buffer.
     ///
     /// The iterator supplies absolute buffer coordinates and concrete cells.
     /// Each cell is converted to an uncurses cell and written to the screen.
-    /// This method only stages into the canvas; the canvas diff is computed
+    /// This method only stages into the buffer; the buffer diff is computed
     /// and written when the surrounding terminal calls [`Backend::flush`].
     ///
     /// ## Parameters
@@ -598,7 +598,7 @@ where
     /// Hide the terminal cursor immediately.
     ///
     /// Delegates to [`Screen::hide_cursor`], which stages cursor visibility on
-    /// the canvas and flushes before returning.
+    /// the buffer and flushes before returning.
     ///
     /// ## Errors
     ///
@@ -610,7 +610,7 @@ where
     /// Show the terminal cursor immediately.
     ///
     /// Delegates to [`Screen::show_cursor`], which stages cursor visibility on
-    /// the canvas and flushes before returning.
+    /// the buffer and flushes before returning.
     ///
     /// ## Errors
     ///
@@ -829,7 +829,7 @@ where
     /// Return the current terminal size in cells.
     ///
     /// This queries the live window size through the screen. If that query fails
-    /// or returns zero dimensions, it falls back to the current screen canvas
+    /// or returns zero dimensions, it falls back to the current screen buffer
     /// size. Size changes are recorded so the next draw can invalidate and
     /// repaint.
     ///
@@ -860,7 +860,7 @@ where
     /// Return the current terminal size in cells and pixels.
     ///
     /// This uses the screen's live window-size query when available. Cell
-    /// dimensions fall back to the canvas size on failure or zero reports; pixel
+    /// dimensions fall back to the buffer size on failure or zero reports; pixel
     /// dimensions fall back to zero when unavailable. Size changes are recorded
     /// so the next draw can invalidate and repaint.
     ///
@@ -893,9 +893,9 @@ where
         })
     }
 
-    /// Diff the staged canvas and write the frame to the output handle.
+    /// Diff the staged buffer and write the frame to the output handle.
     ///
-    /// [`Backend::draw`] only stages cells into the canvas; this is where the
+    /// [`Backend::draw`] only stages cells into the buffer; this is where the
     /// renderer computes the minimal diff against the tracked terminal and
     /// flushes the resulting bytes through the wrapped screen.
     ///
@@ -928,7 +928,7 @@ where
     /// Handle a request to scroll a region upward.
     ///
     /// This backend does not use terminal scrolling for region updates; drawing
-    /// and canvas diffing repaint the resulting cells instead. The method is a
+    /// and buffer diffing repaint the resulting cells instead. The method is a
     /// no-op that satisfies the backend trait.
     ///
     /// ## Parameters
@@ -946,7 +946,7 @@ where
     /// Handle a request to scroll a region downward.
     ///
     /// This backend does not use terminal scrolling for region updates; drawing
-    /// and canvas diffing repaint the resulting cells instead. The method is a
+    /// and buffer diffing repaint the resulting cells instead. The method is a
     /// no-op that satisfies the backend trait.
     ///
     /// ## Parameters

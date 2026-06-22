@@ -77,8 +77,9 @@ impl Renderer {
     /// In absolute mode, CUP wins outright for non-local moves; for
     /// local moves CUP seeds the candidate list (so it wins ties
     /// against relative shapes). In relative mode, the planner
-    /// enumerates the {no-prefix, `\r`-prefix, `\x1b[H`-prefix} × {tabs,
-    /// backspace} cross product by cost and emits only the winner.
+    /// enumerates the {no-prefix, `\r`-prefix} × {tabs, backspace} cross
+    /// product by cost and emits only the winner. (The `\x1b[H` home prefix
+    /// is an absolute-mode-only candidate.)
     pub(crate) fn write_optimal_move(
         &mut self,
         out: &mut Vec<u8>,

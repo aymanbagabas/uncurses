@@ -171,7 +171,7 @@ impl Default for Cursor {
 /// Stateful terminal renderer that turns cell-buffer diffs into bytes.
 ///
 /// `Renderer` owns the tracked on-screen buffer, the staging buffer used
-/// by the canvas sync path, cursor/pen state, terminal capability flags,
+/// by the buffer sync path, cursor/pen state, terminal capability flags,
 /// color-profile conversion cache, scroll-detection scratch storage, and
 /// tab-stop tables. It writes only to caller-provided byte buffers; the
 /// caller decides when those bytes are flushed to an I/O sink.
@@ -327,8 +327,8 @@ impl Renderer {
     /// Set whether cursor moves should be planned relative to the
     /// current tracked position.
     ///
-    /// Inline canvases use relative movement so they do not address
-    /// rows outside the managed surface. Fullscreen canvases can disable
+    /// Inline surfaces use relative movement so they do not address
+    /// rows outside the managed surface. Fullscreen surfaces can disable
     /// this and allow absolute CUP/CHA/HPA/VPA candidates.
     pub(crate) fn set_relative_cursor(&mut self, relative: bool) {
         self.relative_cursor = relative;
