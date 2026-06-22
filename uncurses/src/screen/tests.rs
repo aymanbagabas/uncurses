@@ -1820,6 +1820,9 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
 
 // --- teardown drain of pending capability-query replies ---
 
+// Uses a pipe the event source must poll; on Windows the source polls a
+// console handle, not a pipe, so this drain path is exercised on Unix only.
+#[cfg(unix)]
 #[test]
 fn drain_consumes_pending_da_reply_and_marks_done() {
     let (reader, mut writer) = std::io::pipe().unwrap();
@@ -1879,6 +1882,9 @@ fn drain_is_noop_when_no_queries_were_sent() {
     );
 }
 
+// Uses a pipe the event source must poll; Unix-only for the same reason as
+// drain_consumes_pending_da_reply_and_marks_done.
+#[cfg(unix)]
 #[test]
 fn drain_gives_up_after_timeout_when_no_reply_arrives() {
     // Keep the write end open so the input never reaches EOF and no reply
