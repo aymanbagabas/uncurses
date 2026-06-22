@@ -365,7 +365,7 @@ where
 
         let lines: Vec<&str> = content.split('\n').collect();
         let mut offset: u16 = lines.len() as u16;
-        let width_mode = TextSurface::width_mode(self);
+        let width_mode = self.width_mode();
         for line in &lines {
             let lw =
                 crate::ansi::text::string_width(line.as_bytes(), width_mode, self.eaw_wide) as u16;
