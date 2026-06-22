@@ -207,11 +207,13 @@ pub fn set_state<I: AsHandle, O: AsHandle>(input: I, output: O, state: &State) -
 
 /// Place the terminal into raw mode.
 ///
-/// On Unix this applies a `cfmakeraw(3)`-equivalent termios
-/// (`VMIN = 1`, `VTIME = 0`) using [`set_state`]. On Windows the input handle
-/// has cooked input flags cleared and virtual-terminal/window-input flags set;
-/// the output handle has virtual-terminal processing and newline-auto-return
-/// disabling set.
+/// On Unix this applies a `cfmakeraw(3)`-equivalent termios (`VMIN = 1`,
+/// `VTIME = 0`) using [`set_state`]. The flags match glibc's `cfmakeraw` on
+/// every platform, so raw mode behaves identically everywhere rather than
+/// following each libc's own variation. On Windows the input handle has cooked
+/// input flags and quick-edit cleared and virtual-terminal/window-input flags
+/// set; the output handle has processed output, virtual-terminal processing,
+/// and newline-auto-return disabling set.
 ///
 /// # Parameters
 ///
@@ -278,18 +280,26 @@ pub fn make_raw_mode<I: AsFd, O: AsFd>(input: I, output: O) -> io::Result<State>
 pub fn make_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<State> {
     use windows_sys::Win32::System::Console::{
         DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT,
-        ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-        ENABLE_WINDOW_INPUT,
+        ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT, ENABLE_QUICK_EDIT_MODE,
+        ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
     };
 
     let original = get_state(&input, &output)?;
+    // Clearing quick-edit while setting extended-flags is how the console API
+    // disables mouse selection, which would otherwise swallow mouse input.
     let raw_input = (original.input_mode
-        & !(ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT))
+        & !(ENABLE_ECHO_INPUT
+            | ENABLE_PROCESSED_INPUT
+            | ENABLE_LINE_INPUT
+            | ENABLE_QUICK_EDIT_MODE))
         | ENABLE_VIRTUAL_TERMINAL_INPUT
         | ENABLE_EXTENDED_FLAGS
         | ENABLE_WINDOW_INPUT;
-    let raw_output =
-        original.output_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+    // Virtual-terminal processing requires processed output, so set it too.
+    let raw_output = original.output_mode
+        | ENABLE_PROCESSED_OUTPUT
+        | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        | DISABLE_NEWLINE_AUTO_RETURN;
 
     set_state(
         &input,
