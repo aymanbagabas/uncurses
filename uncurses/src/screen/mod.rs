@@ -97,7 +97,6 @@
 
 mod cursor;
 mod modes;
-mod mouse;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -224,9 +223,9 @@ pub struct ScreenOptions {
     /// elsewhere, where resize reports already include pixel dimensions.
     pub request_pixel_size_on_resize: bool,
     /// Enable mouse tracking at init with the given motion/pixel preference
-    /// (see [`Screen::enable_mouse`]). The screen picks the best mode and
-    /// encoding the terminal supports once capabilities are known. Defaults
-    /// to `None` (mouse tracking off).
+    /// (see [`Screen::enable_mouse`]). The request is emitted unconditionally;
+    /// terminals ignore modes they do not support and degrade gracefully.
+    /// Defaults to `None` (mouse tracking off).
     pub mouse: Option<MousePreference>,
     /// Send terminal capability queries during
     /// [`init`](Screen::init_with).
@@ -259,11 +258,12 @@ pub struct ScreenOptions {
 /// Mouse tracking preference for [`ScreenOptions::mouse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MousePreference {
-    /// Report pointer motion (button-event or any-event tracking) rather
-    /// than presses and releases only.
+    /// Also report pointer motion with no button held (any-event tracking).
+    /// Button-event tracking (motion while a button is held) is always on;
+    /// this adds hover motion on terminals that support it.
     pub motion: bool,
-    /// Request coordinates in pixels rather than cells, when the terminal
-    /// supports pixel reporting.
+    /// Also request pixel coordinates (SGR-pixel). Terminals that support it
+    /// report pixels; the rest fall back to SGR cell coordinates.
     pub pixels: bool,
 }
 
@@ -896,13 +896,11 @@ where
             }
         }
 
-        // Mouse tracking: enable with the requested motion/pixel preference,
-        // letting the screen pick the best mode and encoding the terminal
-        // supports now that capabilities are known. Pixel coordinates are
-        // requested only when SGR-pixel encoding is actually available, so the
-        // preference degrades to cell coordinates on terminals without it.
+        // Mouse tracking: enable exactly what the options request. enable_mouse
+        // emits the mode set unconditionally; terminals that lack a requested
+        // mode (e.g. SGR-pixel) ignore it and degrade to cell coordinates.
         if let Some(pref) = self.options.mouse {
-            self.enable_mouse(pref.motion, pref.pixels && self.caps.mouse_sgr_pixel)?;
+            self.enable_mouse(pref.motion, pref.pixels)?;
         }
         Ok(())
     }

@@ -16,9 +16,9 @@ use crate::ansi::{self, background, cursor, kitty, mode, xterm};
 use crate::color::Color;
 use crate::event::source::Input;
 
+use super::MousePreference;
 use super::Screen;
 use super::cursor::CursorShape;
-use super::mouse::{MouseEncoding, MouseMode};
 
 /// DEC private modes for the mouse tracking modes and encodings this
 /// library supports. Reset together to unconditionally turn mouse
@@ -69,68 +69,64 @@ impl<I: Input, O: Write> Screen<I, O> {
         self.flush()
     }
 
-    /// Enable mouse tracking and flush, choosing the best mode and encoding
-    /// the terminal is known to support (see
-    /// [`capabilities`](Self::capabilities)).
+    /// Enable mouse tracking and flush.
     ///
-    /// * `motion` — report pointer motion. Uses any-event tracking when
-    ///   supported, else button-event, else plain button tracking.
-    /// * `pixels` — request coordinates in pixels rather than cells. Not all
-    ///   terminals support pixel reporting, so this first checks the
-    ///   detected [`mouse_sgr_pixel`](crate::screen::Capabilities::mouse_sgr_pixel)
-    ///   capability: SGR-pixel encoding is used only when supported,
-    ///   otherwise it falls back to SGR (cell) encoding, then the legacy
-    ///   encoding. When pixel reporting is active, a
-    ///   [`Mouse`](crate::event::Mouse) event's pixel coordinates can be
-    ///   converted to cells with
-    ///   [`mouse_pixel_to_cell`](crate::event::mouse_pixel_to_cell) using
-    ///   the terminal's pixel size (from
-    ///   [`request_window_pixel_size`](Self::request_window_pixel_size) →
-    ///   [`Event::WindowPixelSize`](crate::event::Event::WindowPixelSize))
-    ///   and its cell size ([`size`](Self::size)).
+    /// This emits exactly what is asked for and does not consult terminal
+    /// [`capabilities`](Self::capabilities). Unsupported modes are ignored by
+    /// the terminal, and because the mode requests are mutually exclusive, each
+    /// terminal settles on the most capable variant it understands:
     ///
-    /// The chosen mode and encoding are recorded for save/restore.
+    /// * Tracking: button (`1000`) and button-event (`1002`) are always
+    ///   requested, so a terminal reports drag where it can and plain clicks
+    ///   otherwise. When `motion` is set, any-event tracking (`1003`) is added
+    ///   on top, so motion without a button held is reported where supported.
+    /// * Encoding: SGR (`1006`) is always requested, since the legacy byte
+    ///   encoding caps coordinates at 223 and SGR is universally supported.
+    ///   When `pixels` is set, SGR-pixel (`1016`) is added; terminals that
+    ///   support it report pixel coordinates, and the rest fall back to SGR
+    ///   cell coordinates.
+    ///
+    /// To learn which variant a terminal actually chose, read
+    /// [`capabilities`](Self::capabilities) (for example
+    /// [`mouse_sgr_pixel`](crate::screen::Capabilities::mouse_sgr_pixel) to tell
+    /// whether pixels or cells will arrive). When pixel reporting is active, a
+    /// [`Mouse`](crate::event::Mouse) event's pixel coordinates can be converted
+    /// to cells with [`mouse_pixels_to_cells`](Self::mouse_pixels_to_cells).
+    ///
+    /// The request is recorded for save/restore.
     pub fn enable_mouse(&mut self, motion: bool, pixels: bool) -> io::Result<()> {
-        let encoding = if pixels && self.caps.mouse_sgr_pixel {
-            MouseEncoding::SgrPixel
-        } else if self.caps.mouse_sgr {
-            MouseEncoding::Sgr
-        } else {
-            MouseEncoding::X10
-        };
-        let mouse_mode = if motion && self.caps.mouse_any {
-            MouseMode::Any
-        } else if self.caps.mouse_button {
-            MouseMode::Button
-        } else {
-            MouseMode::Normal
-        };
-        // Drop any prior tracking first so encodings/modes don't stack.
+        let pref = MousePreference { motion, pixels };
+        // Drop any prior tracking first so modes don't stack ambiguously.
         mode::write_reset_mode(&mut self.out_buf, MOUSE_MODES)?;
-        self.write_mouse_modes(mouse_mode, encoding, true)?;
-        self.state.mouse_mode = Some(mouse_mode);
-        self.state.mouse_encoding = encoding;
+        self.write_mouse_modes(pref, true)?;
+        self.state.mouse = Some(pref);
         self.flush()
     }
 
     /// Disable all mouse tracking modes and encodings, and flush.
     pub fn disable_mouse(&mut self) -> io::Result<()> {
         mode::write_reset_mode(&mut self.out_buf, MOUSE_MODES)?;
-        self.state.mouse_mode = None;
+        self.state.mouse = None;
         self.flush()
     }
 
-    /// Set or reset the tracking mode and encoding for the given mouse
-    /// configuration. `enable` selects set vs reset.
-    fn write_mouse_modes(
-        &mut self,
-        mouse_mode: MouseMode,
-        encoding: MouseEncoding,
-        enable: bool,
-    ) -> io::Result<()> {
-        let mut modes = vec![mouse_mode.dec_mode()];
-        if let Some(e) = encoding.dec_mode() {
-            modes.push(e);
+    /// Set or reset the mouse tracking modes and encoding for the given
+    /// preference. `enable` selects set vs reset. The modes are emitted in
+    /// ascending order so that, where the requests are mutually exclusive, the
+    /// most capable supported variant wins (`1003` over `1002`/`1000`, `1016`
+    /// over `1006`).
+    fn write_mouse_modes(&mut self, pref: MousePreference, enable: bool) -> io::Result<()> {
+        // Always request plain and button-event tracking as a fallback pair,
+        // adding any-event tracking on top when motion is requested.
+        let mut modes = vec![mode::Mode::MOUSE_NORMAL, mode::Mode::MOUSE_BUTTON];
+        if pref.motion {
+            modes.push(mode::Mode::MOUSE_ANY);
+        }
+        // Always request SGR encoding; add SGR-pixel on top when pixels are
+        // requested. Terminals without pixel support fall back to SGR cells.
+        modes.push(mode::Mode::MOUSE_SGR);
+        if pref.pixels {
+            modes.push(mode::Mode::MOUSE_SGR_PIXEL);
         }
         if enable {
             mode::write_set_mode(&mut self.out_buf, &modes)
@@ -348,8 +344,8 @@ impl<I: Input, O: Write> Screen<I, O> {
         if self.state.focus_events {
             mode::Mode::FOCUS.reset(&mut self.out_buf)?;
         }
-        if let Some(m) = self.state.mouse_mode {
-            self.write_mouse_modes(m, self.state.mouse_encoding, false)?;
+        if let Some(pref) = self.state.mouse {
+            self.write_mouse_modes(pref, false)?;
         }
         if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.reset(&mut self.out_buf)?;
@@ -489,8 +485,8 @@ impl<I: Input, O: Write> Screen<I, O> {
         if self.state.focus_events {
             mode::Mode::FOCUS.set(&mut self.out_buf)?;
         }
-        if let Some(m) = self.state.mouse_mode {
-            self.write_mouse_modes(m, self.state.mouse_encoding, true)?;
+        if let Some(pref) = self.state.mouse {
+            self.write_mouse_modes(pref, true)?;
         }
         if let Some(c) = self.state.foreground_color {
             let (r, g, b) = c.to_rgb();
