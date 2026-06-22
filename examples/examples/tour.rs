@@ -136,7 +136,7 @@ fn run_scene(
     let end = dur.map(|d| start + d);
     let mut next_frame = start + FRAME;
     tick(screen, Duration::ZERO)?;
-    screen.render();
+    screen.render()?;
     screen.flush()?;
 
     loop {
@@ -179,7 +179,7 @@ fn run_scene(
                 next_frame = now + FRAME;
             }
             tick(screen, now - start)?;
-            screen.render();
+            screen.render()?;
             screen.flush()?;
         }
     }

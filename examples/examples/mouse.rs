@@ -100,5 +100,5 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
         screen.set_str((x, y), "▢", marker);
     }
 
-    let _ = screen.present();
+    let _ = screen.render();
 }

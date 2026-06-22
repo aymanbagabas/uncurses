@@ -38,7 +38,7 @@
 //!
 //! let style = Style::default().bold().fg(BasicColor::Green);
 //! screen.set_str((0, 0), "Hello, terminal!", style);
-//! screen.present()?; // stage the diff and flush it
+//! screen.render()?; // stage the diff and flush it
 //!
 //! screen.finish() // tear down modes and restore the terminal
 //! # }
@@ -85,8 +85,8 @@
 //!
 //! Drawing is infallible. [`Screen`](screen::Screen) stages every byte it
 //! emits into an internal buffer; nothing reaches the underlying writer
-//! until a flush. It flushes when you call [`present`](screen::Screen::present)
-//! (which renders the diff and flushes) or [`std::io::Write::flush`]. The one
+//! until a flush. It flushes when you call [`render`](screen::Screen::render)
+//! (which stages the diff and flushes) or [`std::io::Write::flush`]. The one
 //! place I/O can fail is the flush, so the hot path stays simple and the
 //! error handling stays honest. A stateless [`TextBuffer`](buffer::TextBuffer)
 //! has no writer of its own: [`encode`](text::Encode::encode) hands you the

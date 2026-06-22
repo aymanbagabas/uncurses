@@ -163,5 +163,5 @@ fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
         }
     }
 
-    let _ = screen.present();
+    let _ = screen.render();
 }

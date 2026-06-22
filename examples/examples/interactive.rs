@@ -41,7 +41,7 @@ impl App {
 
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen, &self.log, self.started.elapsed())?;
-        self.screen.present()
+        self.screen.render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {

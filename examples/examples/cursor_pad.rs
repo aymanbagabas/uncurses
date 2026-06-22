@@ -67,7 +67,7 @@ impl App {
 
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen)?;
-        self.screen.render();
+        self.screen.render()?;
         self.screen.move_cursor_to((self.cx, self.cy));
         self.screen.flush()
     }

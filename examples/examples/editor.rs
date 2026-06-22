@@ -109,5 +109,5 @@ fn render(screen: &mut Screen<Stdin, Stdout>, text: &str, status: &str) {
         screen.set_str((0, row), line, Style::default());
     }
 
-    let _ = screen.present();
+    let _ = screen.render();
 }

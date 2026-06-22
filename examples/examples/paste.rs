@@ -87,5 +87,5 @@ fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&str>) {
         }
     }
 
-    let _ = screen.present();
+    let _ = screen.render();
 }
