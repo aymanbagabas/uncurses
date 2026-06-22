@@ -3,15 +3,18 @@ title: "Terminals"
 weight: 1
 ---
 
-"Terminal" is an overloaded word. Here is the whole picture between a keypress
-and a character on screen, and where uncurses plugs in.
+"Terminal" is an overloaded word. It was once a real piece of hardware, today
+it is a *terminal emulator*, a program pretending to be that hardware, and
+there is a surprising amount of machinery wedged in between. Here is the whole
+picture between a keypress and a character on screen, and where uncurses plugs
+in.
 
 ## Then and now
 
 A terminal used to be hardware: a keyboard bolted to a screen, wired to a big
 computer by a serial cable. It shipped your keystrokes down the wire and
 painted whatever came back, obeying coded messages called escape sequences.
-Today it is a terminal *emulator*: a program that draws a grid of cells and
+Today it is a terminal emulator: a program that draws a grid of cells and
 pretends to be that old hardware. The hardware is gone, but its byte language
 never left.
 
