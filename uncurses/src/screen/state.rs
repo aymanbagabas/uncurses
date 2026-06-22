@@ -14,17 +14,15 @@ use crate::ansi::cursor::CursorStyle;
 use crate::color::Color;
 use crate::event::ModifyOtherKeysMode;
 
-use super::mouse::{MouseEncoding, MouseMode};
+use super::MousePreference;
 
 /// Tracked non-render mode state for save/restore.
 #[derive(Debug, Clone)]
 pub(super) struct State {
     /// Cursor style.
     pub cursor_style: CursorStyle,
-    /// Mouse tracking mode, or `None` when mouse tracking is disabled.
-    pub mouse_mode: Option<MouseMode>,
-    /// Mouse coordinate encoding.
-    pub mouse_encoding: MouseEncoding,
+    /// Requested mouse tracking, or `None` when mouse tracking is disabled.
+    pub mouse: Option<MousePreference>,
     /// Bracketed paste mode.
     pub bracketed_paste: bool,
     /// Focus in/out reporting (DECSET 1004).
@@ -84,8 +82,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             cursor_style: CursorStyle::Default,
-            mouse_mode: None,
-            mouse_encoding: MouseEncoding::X10,
+            mouse: None,
             bracketed_paste: false,
             focus_events: false,
             color_scheme_updates: false,
