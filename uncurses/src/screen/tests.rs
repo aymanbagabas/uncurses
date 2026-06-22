@@ -64,11 +64,21 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
             window_cells: None,
             window_pixels: None,
             terminal_name: None,
+            queries_sent_at: None,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
             screen.resize((w, h));
         }
+        screen
+    }
+
+    /// Like [`for_test`](Self::for_test) but the event source reads from
+    /// `input`, so a test can feed terminal replies (e.g. a Primary DA) and
+    /// exercise the teardown drain.
+    fn for_test_with_input(writer: O, size: (u16, u16), input: std::io::PipeReader) -> Self {
+        let mut screen = Self::for_test(writer, size);
+        screen.source = Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap()));
         screen
     }
 
@@ -1805,5 +1815,94 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
     assert!(
         tail.contains(&format!("\x1b[={bits};1u")),
         "alt set missing: tail={tail:?}"
+    );
+}
+
+// --- teardown drain of pending capability-query replies ---
+
+#[test]
+fn drain_consumes_pending_da_reply_and_marks_done() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    // A Primary DA reply terminates the capability-reply stream.
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer); // EOF after the reply so poll sees it and does not block
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    // Simulate post-init state: queries were just sent, not yet consumed.
+    screen.queries_sent_at = Some(std::time::Instant::now());
+    screen.defaults_applied = false;
+
+    screen.drain_pending_queries().unwrap();
+
+    assert!(
+        screen.defaults_applied,
+        "drain should consume the Primary DA reply and mark defaults applied"
+    );
+}
+
+#[test]
+fn drain_is_noop_when_defaults_already_applied() {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(writer);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    // Already consumed: drain must not block or read.
+    screen.defaults_applied = true;
+    screen.queries_sent_at = Some(std::time::Instant::now());
+    screen.options.query_drain_timeout = std::time::Duration::from_secs(10);
+
+    let start = std::time::Instant::now();
+    screen.drain_pending_queries().unwrap();
+    assert!(
+        start.elapsed() < std::time::Duration::from_millis(500),
+        "drain must return immediately when defaults are already applied"
+    );
+}
+
+#[test]
+fn drain_is_noop_when_no_queries_were_sent() {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(writer);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    // No queries sent (e.g. query_capabilities was off): nothing to drain.
+    screen.defaults_applied = false;
+    screen.queries_sent_at = None;
+    screen.options.query_drain_timeout = std::time::Duration::from_secs(10);
+
+    let start = std::time::Instant::now();
+    screen.drain_pending_queries().unwrap();
+    assert!(
+        start.elapsed() < std::time::Duration::from_millis(500),
+        "drain must return immediately when no queries were sent"
+    );
+}
+
+#[test]
+fn drain_gives_up_after_timeout_when_no_reply_arrives() {
+    // Keep the write end open so the input never reaches EOF and no reply
+    // ever arrives; the drain must still return once the budget elapses.
+    let (reader, _writer) = std::io::pipe().unwrap();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    screen.defaults_applied = false;
+    screen.queries_sent_at = Some(std::time::Instant::now());
+    screen.options.query_drain_timeout = std::time::Duration::from_millis(80);
+
+    let start = std::time::Instant::now();
+    screen.drain_pending_queries().unwrap();
+    let elapsed = start.elapsed();
+    assert!(
+        !screen.defaults_applied,
+        "no reply arrived, so defaults must stay unapplied"
+    );
+    assert!(
+        elapsed >= std::time::Duration::from_millis(60),
+        "drain should wait roughly the budget: {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(800),
+        "drain must not wait far beyond the budget: {elapsed:?}"
     );
 }
