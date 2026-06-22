@@ -28,7 +28,7 @@ fn main() -> std::io::Result<()> {
     screen.resize((w, 1)); // inline: one row tall
 
     screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
-    screen.present()?;
+    screen.render()?;
 
     let q: Key = "q".parse().unwrap();
     while !matches!(screen.read_event()?, Event::KeyPress(k) if k == q) {}
