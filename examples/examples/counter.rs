@@ -50,7 +50,7 @@ impl App {
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen, self.count);
         self.button_rect = button_bounds(&self.screen, self.count);
-        self.screen.present()
+        self.screen.render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {

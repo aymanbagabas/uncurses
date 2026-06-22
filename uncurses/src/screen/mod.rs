@@ -32,7 +32,7 @@
 //! screen.init()?; // raw mode + staged queries
 //! screen.enter_alt_screen()?;
 //! screen.set_str((0, 0), "hello", Style::default());
-//! screen.present()?;
+//! screen.render()?;
 //! let _event = screen.read_event()?;
 //! screen.finish()?; // restore the terminal
 //! # Ok(())
@@ -280,20 +280,12 @@ where
         self.front_buf.cell_mut(pos.into())
     }
 
-    /// Diff the staged frame against the tracked terminal and stage the
-    /// minimal escape bytes. Infallible; call [`flush`](Self::flush) or
-    /// [`present`](Self::present) to send them.
-    pub fn render(&mut self) {
-        if !self.renderer.sync_front(&mut self.front_buf) {
-            return;
+    /// Diff the staged frame against the tracked terminal, stage the
+    /// minimal escape bytes, and flush them through the terminal.
+    pub fn render(&mut self) -> io::Result<()> {
+        if self.renderer.sync_front(&mut self.front_buf) {
+            self.write_frame();
         }
-        self.write_frame();
-    }
-
-    /// Render the next frame and flush the staged bytes through the
-    /// terminal in one call.
-    pub fn present(&mut self) -> io::Result<()> {
-        self.render();
         self.flush()
     }
 

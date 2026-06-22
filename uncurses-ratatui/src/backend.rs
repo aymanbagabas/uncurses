@@ -73,10 +73,9 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 /// ## Rendering
 ///
 /// [`Backend::draw`] converts each concrete buffer cell to an uncurses cell and
-/// writes it into the screen's canvas. It then calls [`Screen::render`] to stage
-/// the diff bytes. Actual I/O is left to [`Backend::flush`], except for methods
-/// whose backend contract is immediate (`hide_cursor`, `show_cursor`,
-/// `set_cursor_position`, `clear`, `clear_region`, and line appending).
+/// writes it into the screen's canvas, staging the frame without any I/O.
+/// [`Backend::flush`] then calls [`Screen::render`], which diffs the canvas,
+/// stages the minimal escape bytes, and flushes them through the screen.
 ///
 /// ```text
 /// ┌─────────────────────┐
@@ -88,13 +87,13 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 /// │ UncursesBackend     │
 /// │ draw + conversion   │
 /// └─────────┬───────────┘
-///           │ Screen::set_cell / render
+///           │ Screen::set_cell
 ///           ▼
 /// ┌─────────────────────┐
 /// │ Screen (diff render) │
 /// │ diff against output │
 /// └─────────┬───────────┘
-///           │ flush
+///           │ flush → Screen::render
 ///           ▼
 ///       terminal
 /// ```
@@ -536,10 +535,9 @@ where
     /// Stage a frame's cells into the wrapped screen canvas.
     ///
     /// The iterator supplies absolute buffer coordinates and concrete cells.
-    /// Each cell is converted to an uncurses cell, written to the screen, and
-    /// then [`Screen::render`] stages the canvas diff. This method does not
-    /// flush the staged bytes; the surrounding terminal calls
-    /// [`Backend::flush`] when it wants output written.
+    /// Each cell is converted to an uncurses cell and written to the screen.
+    /// This method only stages into the canvas; the canvas diff is computed
+    /// and written when the surrounding terminal calls [`Backend::flush`].
     ///
     /// ## Parameters
     ///
@@ -547,8 +545,8 @@ where
     ///
     /// ## Errors
     ///
-    /// This implementation currently performs no fallible I/O and returns
-    /// `Ok(())`. Later flushing may surface renderer or output errors.
+    /// This implementation performs no I/O and returns `Ok(())`; renderer and
+    /// output errors surface from [`Backend::flush`].
     ///
     /// ## Usage note
     ///
@@ -594,7 +592,6 @@ where
             let cell = cell_from_ratatui(rc);
             self.screen.set_cell((x, y.saturating_sub(top)), &cell);
         }
-        self.screen.render();
         Ok(())
     }
 
@@ -826,8 +823,7 @@ where
         self.screen.invalidate_tracked_cursor();
         // Push the staged blanks to the wire so the clear takes effect
         // before this call returns, matching the immediate-clear contract.
-        self.screen.render();
-        Write::flush(&mut self.screen)
+        self.screen.render()
     }
 
     /// Return the current terminal size in cells.
@@ -897,16 +893,17 @@ where
         })
     }
 
-    /// Flush bytes staged by the screen renderer.
+    /// Diff the staged canvas and write the frame to the output handle.
     ///
-    /// This delegates to the wrapped screen's [`Write`] implementation. It is
-    /// where bytes staged by [`Backend::draw`] are written to the output handle.
+    /// [`Backend::draw`] only stages cells into the canvas; this is where the
+    /// renderer computes the minimal diff against the tracked terminal and
+    /// flushes the resulting bytes through the wrapped screen.
     ///
     /// ## Errors
     ///
-    /// Returns output errors from the wrapped screen.
+    /// Returns renderer or output errors from the wrapped screen.
     fn flush(&mut self) -> io::Result<()> {
-        Write::flush(&mut self.screen)
+        self.screen.render()
     }
 
     /// Append blank lines to the underlying output.

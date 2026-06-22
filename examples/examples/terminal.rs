@@ -39,7 +39,7 @@ impl App {
                 &format!("size: {w}x{h}   events: {events}      "),
                 uncurses::style::Style::default(),
             );
-            self.screen.present()?;
+            self.screen.render()?;
 
             match self.screen.read_event()? {
                 Event::KeyPress(Key {

@@ -69,5 +69,5 @@ fn render(screen: &mut Screen<Stdin, Stdout>, typed: &str) {
     let h = screen.height();
     screen.set_str((0, h / 2), typed, text);
 
-    let _ = screen.present();
+    let _ = screen.render();
 }

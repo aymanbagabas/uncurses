@@ -147,7 +147,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
         );
     }
 
-    let _ = screen.present();
+    let _ = screen.render();
 }
 
 /// Paint the half-block color field. Each cell is a left-half block `▌`: its

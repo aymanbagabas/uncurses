@@ -468,7 +468,7 @@ impl App {
 
     fn render(&mut self) -> io::Result<()> {
         draw(&self.state, &mut self.screen);
-        self.screen.present()
+        self.screen.render()
     }
 
     async fn run(&mut self) -> io::Result<()> {

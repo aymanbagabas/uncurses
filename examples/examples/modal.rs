@@ -66,7 +66,7 @@ impl App {
 
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen, self.modal_open);
-        self.screen.present()
+        self.screen.render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {

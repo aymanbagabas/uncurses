@@ -91,7 +91,7 @@ fn play(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
         }
 
         // `present` renders the diff and flushes it in one call.
-        screen.present()?;
+        screen.render()?;
         sleep(FRAME_TIME);
     }
     Ok(())

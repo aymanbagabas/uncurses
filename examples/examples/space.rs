@@ -149,7 +149,7 @@ impl App {
             &self.fps,
             self.frame_count,
         );
-        self.screen.present()
+        self.screen.render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {

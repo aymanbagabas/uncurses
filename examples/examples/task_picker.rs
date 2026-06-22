@@ -68,7 +68,7 @@ impl App {
 
     fn render(&mut self) -> std::io::Result<()> {
         fit_and_redraw(&mut self.screen, &self.state, self.term_cols);
-        self.screen.present()
+        self.screen.render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
@@ -170,7 +170,7 @@ impl App {
         self.screen.clear();
         self.screen
             .set_str((2, 1), "Bye!", uncurses::style::Style::default());
-        self.screen.render();
+        self.screen.render()?;
 
         Ok(())
     }
