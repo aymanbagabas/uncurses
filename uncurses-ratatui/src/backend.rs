@@ -727,7 +727,7 @@ where
             _ => 0,
         };
         self.screen
-            .assume_cursor_position((p.x, p.y.saturating_sub(top)));
+            .set_tracked_cursor((p.x, p.y.saturating_sub(top)));
         Write::flush(&mut self.screen)
     }
 
@@ -767,7 +767,7 @@ where
         let size = self.screen.size();
         let w = size.width;
         let h = size.height;
-        let cursor = self.screen.tracked_cursor_position();
+        let cursor = self.screen.tracked_cursor().unwrap_or_default();
         if w == 0 || h == 0 {
             return Ok(());
         }

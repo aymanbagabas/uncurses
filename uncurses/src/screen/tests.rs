@@ -116,7 +116,7 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
     }
 
     fn cursor_position(&self) -> Position {
-        self.tracked_cursor_position()
+        self.tracked_cursor().unwrap_or_default()
     }
 }
 
@@ -549,6 +549,47 @@ fn move_to_emits_relative_cursor_sequence() {
     }
     // Inline mode at first move: CR, then 3 newlines down, then CUF 5.
     assert_eq!(s(&buf), "\r\n\n\n\x1b[5C");
+}
+
+#[test]
+fn tracked_cursor_is_none_until_known() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    assert_eq!(screen.tracked_cursor(), None);
+    screen.move_cursor_to((3, 2));
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(3, 2)));
+    screen.invalidate_tracked_cursor();
+    assert_eq!(screen.tracked_cursor(), None);
+}
+
+#[test]
+fn set_tracked_cursor_updates_belief_without_emitting() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (80, 24));
+        screen.set_tracked_cursor((4, 1));
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(4, 1)));
+        screen.flush().unwrap();
+    }
+    assert!(buf.is_empty(), "set_tracked_cursor must not emit: {buf:?}");
+}
+
+#[test]
+fn move_cursor_by_offsets_the_tracked_cursor() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.move_cursor_to((10, 5));
+    screen.move_cursor_by(-3, 2);
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(7, 7)));
+    // Saturates at the origin rather than wrapping.
+    screen.move_cursor_by(-100, -100);
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+}
+
+#[test]
+fn move_cursor_by_treats_unknown_tracked_cursor_as_origin() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    assert_eq!(screen.tracked_cursor(), None);
+    screen.move_cursor_by(3, 2);
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(3, 2)));
 }
 
 #[test]
