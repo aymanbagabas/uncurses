@@ -691,6 +691,34 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
 }
 
 #[test]
+fn reset_tab_stops_noop_when_tabs_disabled() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let opts = Optimizations::default().difference(Optimizations::TABS);
+        let mut screen = Screen::for_test(&mut buf, (20, 1)).with_optimizations(opts);
+        screen.reset_tab_stops().unwrap();
+    }
+    assert!(buf.is_empty(), "tab reset leaked while TABS off: {buf:?}");
+}
+
+#[test]
+fn reset_tab_stops_emits_reset_when_tabs_enabled() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let opts = Optimizations::default().union(Optimizations::TABS);
+        let mut screen = Screen::for_test(&mut buf, (20, 1)).with_optimizations(opts);
+        screen.reset_tab_stops().unwrap();
+    }
+    let out = s(&buf);
+    // Either the DECST8C one-shot or the portable TBC clear-all, depending
+    // on the terminal detected from the environment.
+    assert!(
+        out.contains("\x1b[?5W") || out.contains("\x1b[3g"),
+        "expected a tab-stop reset: {out:?}"
+    );
+}
+
+#[test]
 fn tab_advance_does_not_overshoot_past_last_stop() {
     // Width 24: real tab stops are at 0, 8, 16. A move to column 21 sits
     // past the last interior stop. The renderer must not emit a tab that

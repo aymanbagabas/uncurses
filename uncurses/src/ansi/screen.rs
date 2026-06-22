@@ -209,6 +209,36 @@ pub fn write_tbc<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
+/// Reset tab stops to one every eight columns without DECST8C.
+///
+/// Clears every existing stop with TBC and re-establishes one at each
+/// eighth column through `width` using HTS. The cursor is parked at
+/// column zero with CR before and after, and nothing is printed, so the
+/// visible row is left untouched. This is the portable fallback for
+/// terminals that do not implement [`SET_TAB_EVERY_8_COLUMNS`].
+///
+/// `width` is the managed width in cells; a `width` of eight or fewer
+/// only clears stops, since the first default stop already lies at or
+/// past the right edge.
+pub fn write_reset_tab_stops_every_8<W: Write>(w: &mut W, width: u16) -> io::Result<()> {
+    // Snap to a known reference column before clearing stops.
+    w.write_all(b"\r")?;
+    write_tbc(w, 3)?;
+    let mut col = 8u16;
+    let mut moved = false;
+    while col < width {
+        super::cursor::write_cuf(w, 8)?;
+        write_hts(w)?;
+        moved = true;
+        col += 8;
+    }
+    // Return to column zero so the inline cursor is left where it started.
+    if moved {
+        w.write_all(b"\r")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +274,23 @@ mod tests {
         write_ed(&mut buf, 2).unwrap();
         write_ed(&mut buf, 3).unwrap();
         assert_eq!(buf, b"\x1b[J\x1b[1J\x1b[2J\x1b[3J");
+    }
+
+    #[test]
+    fn test_reset_tab_stops_every_8_clears_then_sets() {
+        let mut buf = Vec::new();
+        write_reset_tab_stops_every_8(&mut buf, 20).unwrap();
+        // CR, TBC clear-all, then CUF 8 + HTS for columns 8 and 16, then CR.
+        assert_eq!(buf, b"\r\x1b[3g\x1b[8C\x1bH\x1b[8C\x1bH\r");
+    }
+
+    #[test]
+    fn test_reset_tab_stops_every_8_narrow_only_clears() {
+        // Width 8 or less has no interior stop, so nothing moves the cursor
+        // and only the clear is emitted (no trailing CR).
+        let mut buf = Vec::new();
+        write_reset_tab_stops_every_8(&mut buf, 8).unwrap();
+        assert_eq!(buf, b"\r\x1b[3g");
     }
 
     #[test]
