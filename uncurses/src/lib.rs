@@ -83,14 +83,19 @@
 //!
 //! # Output buffering and flushing
 //!
-//! Drawing is infallible. [`Screen`](screen::Screen) stages every byte it
-//! emits into an internal buffer; nothing reaches the underlying writer
-//! until a flush. It flushes when you call [`render`](screen::Screen::render)
-//! (which stages the diff and flushes) or [`std::io::Write::flush`]. The one
-//! place I/O can fail is the flush, so the hot path stays simple and the
-//! error handling stays honest. A stateless [`TextBuffer`](buffer::TextBuffer)
-//! has no writer of its own: [`encode`](text::Encode::encode) hands you the
-//! bytes and you decide where they go.
+//! Painting is infallible. Drawing cells with
+//! [`set_str`](text::TextSurface::set_str),
+//! [`set_cell`](screen::Screen::set_cell), and friends only updates an
+//! in-memory frame; nothing is written until you call
+//! [`render`](screen::Screen::render), which diffs that frame against the
+//! terminal and writes just the changed cells.
+//!
+//! Mode changes are applied immediately. Entering the alternate screen,
+//! hiding the cursor, enabling mouse reporting, setting the title, and similar
+//! switches write their escape sequence on the spot. A stateless
+//! [`TextBuffer`](buffer::TextBuffer) has no writer of its own:
+//! [`encode`](text::Encode::encode) hands you the bytes and you decide where
+//! they go.
 
 #[cfg(not(any(feature = "icu", feature = "unicode-rs")))]
 compile_error!(
