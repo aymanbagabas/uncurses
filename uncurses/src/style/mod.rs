@@ -10,7 +10,7 @@
 //!
 //! ## Open/close versus wrapped rendering
 //!
-//! [`Style::write`] and the [`std::fmt::Display`] implementation for
+//! [`Style::write_style`] and the [`std::fmt::Display`] implementation for
 //! [`Style`] emit the opener: the SGR sequence (`CSI … m`), followed by the
 //! OSC 8 hyperlink start when the style carries a link. They do not reset the
 //! terminal or close the link afterward; following output remains in that
@@ -67,11 +67,10 @@
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
-pub mod diff;
+pub(crate) mod diff;
 pub mod parse;
 pub mod sgr;
 
-pub use diff::*;
 pub use parse::*;
 pub use sgr::*;
 
@@ -175,7 +174,7 @@ pub enum UnderlineStyle {
 /// It stores SGR state (foreground/background/underline colors, underline
 /// shape, and attributes) plus an optional OSC 8 hyperlink. Build styles with
 /// the provided value-taking builders, then either emit the opener with
-/// [`Style::write`] / [`std::fmt::Display`] or wrap text with
+/// [`Style::write_style`] / [`std::fmt::Display`] or wrap text with
 /// [`Style::write_styled`] / [`Style::styled`].
 ///
 /// Cloning is cheap for hyperlinks: the [`Link`] is reference-counted so a
@@ -269,9 +268,9 @@ impl Style {
 
     /// Style with no colors, attributes, underline, or hyperlink.
     ///
-    /// This is equivalent to [`Style::default()`]. Writing it as a style
-    /// opener emits the SGR reset sequence (`CSI m`); converting to an empty
-    /// style value does not by itself write anything.
+    /// This is equivalent to [`Style::default()`]. Writing it as a style opener
+    /// emits nothing, since the opener is additive; use [`Style::reset`] to
+    /// emit an explicit return to the terminal default.
     pub const EMPTY: Style = Style {
         fg: None,
         bg: None,
@@ -485,28 +484,66 @@ impl Style {
     /// followed by an OSC 8 hyperlink start when this style carries a
     /// [`link`](Self::link).
     ///
-    /// An SGR-empty style writes the reset sequence (`CSI m`). The opener does
-    /// not reset afterward, so following output stays in this style until
-    /// changed; a caller that opens a hyperlink here is responsible for
-    /// closing it. [`write_styled`](Self::write_styled) pairs this opener with
-    /// the matching close. Returns any I/O error from `w`; it does not panic.
-    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+    /// The opener is additive: it emits only the state this style sets, so an
+    /// [empty](Self::is_empty) style writes nothing at all. It does not reset
+    /// afterward, so following output stays in this style until changed; a
+    /// caller that opens a hyperlink here is responsible for closing it.
+    /// [`write_styled`](Self::write_styled) pairs this opener with the matching
+    /// close, and [`write_reset`](Self::write_reset) emits that close on its
+    /// own. Returns any I/O error from `w`; it does not panic.
+    pub fn write_style<W: Write>(&self, w: &mut W) -> io::Result<()> {
         sgr::write_style(w, self)?;
         if let Some(link) = &self.link {
-            crate::ansi::hyperlink::write_hyperlink_start(w, &link.url, &link.params)?;
+            crate::ansi::hyperlink::write_hyperlink(w, &link.url, &link.params)?;
         }
         Ok(())
     }
 
+    /// Write this style's closer to `w`: the OSC 8 hyperlink terminator when
+    /// this style carries a [`link`](Self::link), followed by the SGR reset
+    /// (`CSI m`) when it carries any SGR state.
+    ///
+    /// This is the mirror of [`write_style`](Self::write_style): it closes
+    /// exactly the
+    /// state machines that the opener touched and in reverse order, so an
+    /// [empty](Self::is_empty) style writes nothing at all. Closing state that
+    /// is already clear would be a harmless no-op, but skipping it keeps the
+    /// closer as compact as the opener. Returns any I/O error from `w`; it does
+    /// not panic.
+    pub fn write_reset<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        if self.link.is_some() {
+            w.write_all(crate::ansi::hyperlink::HYPERLINK_RESET)?;
+        }
+        if !self.is_sgr_empty() {
+            w.write_all(sgr::RESET)?;
+        }
+        Ok(())
+    }
+
+    /// Return a [`std::fmt::Display`] adapter that writes this style's closer.
+    ///
+    /// Formatting the returned [`Reset`] is equivalent to calling
+    /// [`Style::write_reset`]: it emits the OSC 8 hyperlink terminator (when the
+    /// style carries a link) followed by the SGR reset (when it carries SGR
+    /// state). An [empty](Self::is_empty) style renders nothing. Use it as the
+    /// closer when composing styled output through formatting macros:
+    /// `format!("{open}text{}", open.reset())`.
+    pub fn reset(&self) -> Reset {
+        Reset {
+            sgr: !self.is_sgr_empty(),
+            link: self.link.is_some(),
+        }
+    }
+
     /// Write `text` as a complete styled span.
     ///
-    /// This is the opener from [`write`](Self::write) followed by `text` and
-    /// the matching close, so the two methods are symmetric. The emitted order
-    /// is: SGR opener, optional OSC 8 hyperlink start, `text` bytes, optional
-    /// OSC 8 hyperlink end, then the SGR reset (`CSI m`). The hyperlink and SGR
-    /// state are closed in reverse order of opening, and the reset prevents the
-    /// style from leaking into later output. Returns any I/O error from `w`; it
-    /// does not panic.
+    /// This is the opener from [`write_style`](Self::write_style) followed by
+    /// `text` and
+    /// the matching close from [`write_reset`](Self::write_reset), so a span is
+    /// self-contained. The emitted order is: SGR opener, optional OSC 8
+    /// hyperlink start, `text` bytes, optional OSC 8 hyperlink terminator, then
+    /// the SGR reset (`CSI m`). The close prevents the style from leaking into
+    /// later output. Returns any I/O error from `w`; it does not panic.
     ///
     /// An [empty](Self::is_empty) style carries no terminal-visible state, so
     /// this writes `text` verbatim with no SGR or OSC 8 sequences at all.
@@ -514,13 +551,9 @@ impl Style {
         if self.is_empty() {
             return w.write_all(text.as_bytes());
         }
-        self.write(w)?;
+        self.write_style(w)?;
         w.write_all(text.as_bytes())?;
-        if self.link.is_some() {
-            crate::ansi::hyperlink::write_hyperlink_end(w)?;
-        }
-        w.write_all(sgr::RESET)?;
-        Ok(())
+        self.write_reset(w)
     }
 
     /// Return a [`std::fmt::Display`] adapter that renders `text` as a span.
@@ -543,25 +576,54 @@ impl Style {
 /// OSC 8 hyperlink start when this style carries a [`link`](Style::link).
 ///
 /// This is the opener only: it does not include a trailing reset and does not
-/// close the hyperlink. An SGR-empty style renders the reset sequence
-/// (`CSI m`). For a complete span, use [`Style::styled`].
+/// close the hyperlink. The opener is additive, so an empty style renders
+/// nothing. For a complete span, use [`Style::styled`]; for the closer on its
+/// own, use [`Style::reset`].
 impl std::fmt::Display for Style {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // SGR sequences are pure ASCII, so the bytes are valid UTF-8.
         let mut buf = Vec::new();
-        self.write(&mut buf).map_err(|_| std::fmt::Error)?;
+        self.write_style(&mut buf).map_err(|_| std::fmt::Error)?;
         let s = std::str::from_utf8(&buf).map_err(|_| std::fmt::Error)?;
         f.write_str(s)
     }
 }
 
+/// A [`std::fmt::Display`] adapter that writes a style's closer.
+///
+/// Created by [`Style::reset`]. Formatting it emits the OSC 8 hyperlink
+/// terminator (when the originating style carried a link) followed by the SGR
+/// reset (`CSI m`) (when it carried SGR state), mirroring the opener it closes.
+/// A reset for an empty style writes nothing. Use it as the closer in
+/// formatting macros when you open a style manually rather than through
+/// [`Style::styled`].
+#[derive(Debug, Clone, Copy)]
+pub struct Reset {
+    sgr: bool,
+    link: bool,
+}
+
+impl std::fmt::Display for Reset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Both the hyperlink terminator and the SGR reset are pure ASCII.
+        if self.link {
+            f.write_str(std::str::from_utf8(crate::ansi::hyperlink::HYPERLINK_RESET).unwrap())?;
+        }
+        if self.sgr {
+            f.write_str(std::str::from_utf8(sgr::RESET).unwrap())?;
+        }
+        Ok(())
+    }
+}
+
 /// A borrowed text span bound to an owned [`Style`].
 ///
-/// Created by [`Style::styled`]. Formatting it writes the style's SGR opener,
-/// the optional OSC 8 hyperlink start, the borrowed text, the optional OSC 8
-/// hyperlink terminator, and an SGR reset. Use it when composing styled text
-/// through formatting macros; use [`Style::write_styled`] when writing to an
-/// [`std::io::Write`] directly.
+/// Created by [`Style::styled`]. Formatting a non-empty style writes the SGR
+/// opener, the optional OSC 8 hyperlink start, the borrowed text, then the full
+/// close from [`Style::reset`] (OSC 8 terminator and SGR reset). An empty style
+/// renders the text alone. Use it when composing styled text through formatting
+/// macros; use [`Style::write_styled`] when writing to an [`std::io::Write`]
+/// directly.
 #[derive(Debug, Clone)]
 pub struct StyledText<'a> {
     style: Style,
@@ -625,23 +687,62 @@ mod tests {
         Style::EMPTY
             .bold()
             .fg(Color::Basic(BasicColor::Red))
-            .write(&mut buf)
+            .write_style(&mut buf)
             .unwrap();
         assert_eq!(buf, b"\x1b[1;31m");
     }
 
     #[test]
-    fn write_empty_style_emits_reset() {
+    fn write_empty_style_emits_nothing() {
         let mut buf = Vec::new();
-        Style::EMPTY.write(&mut buf).unwrap();
-        assert_eq!(buf, b"\x1b[m");
+        Style::EMPTY.write_style(&mut buf).unwrap();
+        assert!(buf.is_empty());
     }
 
     #[test]
     fn write_styled_wraps_text_in_style_and_reset() {
         let mut buf = Vec::new();
         Style::EMPTY.bold().write_styled(&mut buf, "hi").unwrap();
+        // SGR-only style: opener, text, then just the SGR reset (no link close).
         assert_eq!(buf, b"\x1b[1mhi\x1b[m");
+    }
+
+    #[test]
+    fn write_reset_closes_only_what_is_set() {
+        // SGR-only style closes with the SGR reset alone.
+        let mut buf = Vec::new();
+        Style::EMPTY.bold().write_reset(&mut buf).unwrap();
+        assert_eq!(buf, b"\x1b[m");
+
+        // A link adds the OSC 8 terminator before the SGR reset.
+        let mut buf = Vec::new();
+        Style::EMPTY
+            .bold()
+            .link("https://x", "")
+            .write_reset(&mut buf)
+            .unwrap();
+        assert_eq!(buf, b"\x1b]8;;\x1b\\\x1b[m");
+
+        // A link-only style emits just the OSC 8 terminator, no SGR reset.
+        let mut buf = Vec::new();
+        Style::EMPTY
+            .link("https://x", "")
+            .write_reset(&mut buf)
+            .unwrap();
+        assert_eq!(buf, b"\x1b]8;;\x1b\\");
+
+        // An empty style resets nothing.
+        let mut buf = Vec::new();
+        Style::EMPTY.write_reset(&mut buf).unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn reset_display_matches_write_reset() {
+        let style = Style::EMPTY.bold().link("https://x", "");
+        let mut buf = Vec::new();
+        style.write_reset(&mut buf).unwrap();
+        assert_eq!(style.reset().to_string().as_bytes(), buf.as_slice());
     }
 
     #[test]
@@ -712,7 +813,7 @@ mod tests {
         Style::EMPTY
             .underline()
             .link("https://example.com", "")
-            .write(&mut buf)
+            .write_style(&mut buf)
             .unwrap();
         // The opener is the SGR sequence followed by the OSC 8 hyperlink start.
         assert_eq!(buf, b"\x1b[4m\x1b]8;;https://example.com\x1b\\");
@@ -727,7 +828,7 @@ mod tests {
     #[test]
     fn display_is_the_opener_only() {
         assert_eq!(Style::EMPTY.bold().to_string(), "\x1b[1m");
-        // An empty style yields the reset sequence.
-        assert_eq!(Style::EMPTY.to_string(), "\x1b[m");
+        // An empty style's opener emits nothing.
+        assert_eq!(Style::EMPTY.to_string(), "");
     }
 }

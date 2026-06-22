@@ -15,7 +15,7 @@ use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::BasicColor;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
-use uncurses::style::{Style, write_style};
+use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::{Painter, TextSurface};
 
@@ -214,9 +214,8 @@ fn paint(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
 /// painted through a [`Painter`] (which interprets inline `CSI ... m`). The
 /// default [`TextSurface::set_str`] would draw the escape literally.
 fn sgr(style: &Style) -> String {
-    let mut buf = Vec::with_capacity(24);
-    write_style(&mut buf, style).expect("write to Vec is infallible");
-    String::from_utf8(buf).expect("SGR bytes are ASCII")
+    // `Style`'s `Display` emits the SGR opener (these styles carry no link).
+    style.to_string()
 }
 
 /// SGR reset (`ESC [ m`) — restores [`Style::default()`] for following cells.

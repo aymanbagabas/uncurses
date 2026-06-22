@@ -23,16 +23,18 @@
 
 use std::io::{self, Write};
 
+/// Bytes that reset the current OSC 8 hyperlink: `ESC ] 8 ; ; ESC \`.
+///
+/// Writing this empty-URI OSC 8 sequence closes any hyperlink opened by
+/// [`write_hyperlink`]; writing it with no hyperlink open is a harmless no-op.
+pub const HYPERLINK_RESET: &[u8] = b"\x1b]8;;\x1b\\";
+
 /// Begin an OSC 8 hyperlink with `ESC ] 8 ; <params> ; <url> ESC \`.
 ///
-/// `params` and `url` are emitted verbatim. The hyperlink applies to following printable text until [`write_hyperlink_end`] is emitted.
-pub fn write_hyperlink_start<W: Write>(w: &mut W, url: &str, params: &str) -> io::Result<()> {
+/// `params` and `url` are emitted verbatim. The hyperlink applies to following
+/// printable text until [`HYPERLINK_RESET`] is written.
+pub fn write_hyperlink<W: Write>(w: &mut W, url: &str, params: &str) -> io::Result<()> {
     write!(w, "\x1b]8;{params};{url}\x1b\\")
-}
-
-/// End the current OSC 8 hyperlink with exact bytes `ESC ] 8 ; ; ESC \`.
-pub fn write_hyperlink_end<W: Write>(w: &mut W) -> io::Result<()> {
-    w.write_all(b"\x1b]8;;\x1b\\")
 }
 
 /// Parse an OSC 8 body into `(params, url)`.
@@ -53,7 +55,7 @@ mod tests {
     #[test]
     fn test_hyperlink() {
         let mut buf = Vec::new();
-        write_hyperlink_start(&mut buf, "https://example.com", "").unwrap();
+        write_hyperlink(&mut buf, "https://example.com", "").unwrap();
         assert_eq!(buf, b"\x1b]8;;https://example.com\x1b\\");
     }
 
