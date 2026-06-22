@@ -1,157 +1,111 @@
 ---
-title: "The Screen facade"
-weight: 1
+title: "Screen"
+weight: 7
 ---
 
-`Screen<I, O>` is the high-level facade for terminal applications. It owns the
-three pieces most programs otherwise wire together by hand:
+`Screen` is the facade most apps actually use. It brings the other concepts
+together behind one object: a drawing [surface]({{< relref "surfaces.md" >}}) to
+paint into, an [event source]({{< relref "events.md" >}}) to read input from, and
+the [terminal]({{< relref "terminals.md" >}}) connection underneath, plus a
+diffing renderer that gets your changes onto the screen with the fewest bytes.
 
-- a `Terminal` for the raw-mode lifecycle,
-- a `Canvas` for cell-grid drawing and diffed rendering,
-- an `EventSource` for decoded input events.
+## What it brings together
 
-It also tracks non-render terminal and input modes so they can be reset for a
-shell handoff and restored later: cursor style, mouse tracking, bracketed
-paste, focus reporting, in-band resize reports, color-theme update reports,
-window title, pointer shape, xterm `modifyOtherKeys`, and default foreground,
-background, cursor, and palette colors.
+```mermaid
+flowchart TB
+  screen["Screen"] --> surface["Drawing surface: paint cells"]
+  screen --> renderer["Diffing renderer: cells to escape bytes"]
+  screen --> source["Event source: read input"]
+  screen --> terminal["Terminal: raw mode + I/O"]
+```
 
-See the [Screen rustdoc](/api/uncurses/screen/struct.Screen.html) for the full
-API surface, and [Canvas and rendering]({{< relref "canvas-and-rendering.md" >}})
-for the frame pipeline behind its drawing methods.
+You paint into a `Screen` exactly like any other surface, read events straight
+from it, and let it manage raw mode and teardown. The four pieces you would
+otherwise wire together by hand are owned and coordinated for you.
 
-## Lifecycle
+## The lifecycle
 
-Construction is inert. `Screen::new`, `Screen::stdio`, and `Screen::open` build
-the facade, size the canvas, and create the input decoder, but they do not put
-the terminal in raw mode or write startup escape sequences.
+A session has a clear shape: open, set up, loop, and hand the terminal back.
 
-Begin a session with `init()` or `init_with(options)`. Initialization enters raw
-mode, resizes the canvas to the terminal, applies always-on defaults such as
-bracketed paste, and stages capability queries whose replies arrive later
-through the event path.
+```mermaid
+flowchart TB
+  open["Screen::stdio / open"] --> init["init: raw mode + capability queries"]
+  init --> evloop["loop: paint, render, read_event"]
+  evloop --> evloop
+  evloop --> finish["finish: restore the terminal"]
+```
 
 ```rust
+use uncurses::event::{Event, KeyCode};
 use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::open()?;
-    screen.init()?;
-
-    // draw, present, and read events here
-
-    screen.finish()
+    let mut screen = Screen::stdio()?;
+    screen.init()?;                                    // raw mode + capability queries
+    loop {
+        screen.set_str((0, 0), "Press q to quit", Style::default());
+        screen.render()?;                              // diff against the terminal, flush
+        if let Event::KeyPress(key) = screen.read_event()? {
+            if key.code == KeyCode::Char('q') {
+                break;
+            }
+        }
+    }
+    screen.finish()                                    // restore the terminal
 }
 ```
 
-There is no `Drop` teardown. Restoring the terminal is explicit:
+`init` borrows raw mode and stages its capability queries; `finish` tears
+everything back down and restores the terminal exactly as it was. Skipping
+`finish` leaves the user in a broken shell, so it is the one call you never
+forget.
 
-| Method | Use |
-| --- | --- |
-| `finish(self)` | Consume the screen, tear down tracked modes, reset the canvas, flush, and restore the terminal state. |
-| `pause(&mut self)` | Temporarily hand the terminal back to the shell without consuming the screen, for example before spawning `$EDITOR`. |
-| `resume(&mut self)` | Re-enter raw mode after `pause` or `suspend`, refit the canvas, restore tracked modes, and force a repaint. |
-| `suspend(&mut self)` | On Unix, `pause`, raise `SIGTSTP`, then return after the process is foregrounded; call `resume()` next. |
+## Drawing is a diff
 
-Bracket every session with `init()` or `init_with(...)` at the start and
-`finish()` at the end.
+`render` is where the renderer earns its keep. `Screen` keeps a *desired* frame
+(the cells you painted) and a memory of what it believes is already on the
+terminal. On each `render` it compares the two and emits escape bytes only for
+the cells that actually changed.
 
-## Defaults: inline, visible cursor
-
-A newly initialized `Screen` starts in the normal buffer as an inline surface,
-with the cursor visible. It does not enter the alternate screen and does not
-hide the cursor unless you ask:
-
-```rust
-screen.init()?;
-screen.enter_alt_screen()?;
-screen.hide_cursor()?;
+```mermaid
+flowchart TB
+  desired["Desired frame: what you painted"] --> diff["Diff against the tracked terminal"]
+  tracked["Tracked terminal: what is already shown"] --> diff
+  diff --> bytes["Minimal escape bytes, then flush"]
 ```
 
-Those setters flush immediately because they change terminal state, not just
-the next frame.
+Repaint the whole frame every loop if you like; if only one cell changed, only
+one cell is written. That is what makes a redraw-everything style cheap, and it
+is why you describe *what the frame should look like* rather than hand-managing
+cursor moves and clears.
 
-## Inline and fullscreen
+## Inline or fullscreen
 
-With the alternate screen off, the managed area is inline: full terminal width,
-but only as many rows as the application chooses to draw. With the alternate
-screen on, the managed area is the whole viewport.
+A `Screen` starts *inline*: it draws on the rows where the cursor already is,
+right inside the normal scrollback, and the cursor stays visible. That suits a
+prompt, a progress display, or any widget that lives among the shell's output.
 
-```text
- Inline (default): the surface lives in the normal buffer, only as
- many rows as you draw; scrollback and the shell prompt stay intact.
+For a takeover interface, enter the *alternate screen*: a separate full-window
+buffer that leaves the shell's scrollback untouched and is restored on the way
+out. It is the right mode for an editor or a dashboard that owns the whole
+window.
 
-   $ earlier shell output
-   $ ... scrollback ...
-   ┌─────────────────────────┐
-   │ managed surface         │  <- only the rows you draw, full width
-   └─────────────────────────┘
-   $ shell prompt resumes
+<figure class="term-fig"><div class="term-windows"><div class="term-win"><div class="bar"><i></i><i></i><i></i><span>inline</span></div><div class="row">$ cargo build</div><div class="row">Compiling app v0.1.0</div><div class="row app">[####----] linking</div><div class="row app">3 of 8 crates done</div><div class="row">$ </div></div><div class="term-win"><div class="bar"><i></i><i></i><i></i><span>fullscreen</span></div><div class="row app">File  Edit  View</div><div class="row app">1  fn main() {</div><div class="row app">2      run();</div><div class="row app">3  }</div><div class="row app">~</div></div></div><figcaption>The highlighted rows are what the Screen owns. Inline draws a few live rows and hands them back, with unmanaged output (like the build log) scrolling above; fullscreen takes over the whole window on the alternate screen.</figcaption></figure>
 
- Fullscreen (after enter_alt_screen): the whole viewport is the
- surface, addressed with absolute moves, and restored on exit.
+Either way you paint the same surface and read the same events; only the canvas
+differs.
 
-   ┌─────────────────────────────┐
-   │                             │
-   │  the whole terminal         │
-   │  viewport is the surface    │
-   │                             │
-   └─────────────────────────────┘
-```
+## Drawing is deferred, modes are immediate
 
-Use `resize((width, height))` to set the canvas size. Inline programs usually
-keep the terminal width and choose their own height; fullscreen programs resize
-to the whole terminal. `autoresize()` queries the terminal and refits the width;
-in fullscreen it also uses the terminal height, while inline mode preserves the
-current inline height. `insert_above(content)` pushes lines into the scrollback
-above an inline surface.
+Painting cells does not touch the terminal. `set_str`, `set_cell`, and the rest
+only update the in-memory frame; the bytes are sent when you `render`, which
+diffs that frame against the terminal and writes just the difference. Painting
+is infallible, and `render` does the output.
 
-The `screen_toggle` example shows switching between inline and alternate-screen
-mode while preserving a clean teardown.
-
-## ScreenOptions
-
-`init()` is `init_with(ScreenOptions::default())`. Use `init_with(options)` when
-startup defaults should differ.
-
-| Field | Default | Effect |
-| --- | --- | --- |
-| `bracketed_paste` | `true` | Enables DEC private mode 2004 at init so pasted text arrives as paste events. |
-| `keyboard_enhancements` | `KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES` | Requests Kitty keyboard enhancements when supported, falling back to xterm `modifyOtherKeys` when Kitty is unavailable. |
-| `prefer_in_band_resize` | `true` | Enables DEC private mode 2048 after capability discovery when supported, preferring terminal resize reports over the `SIGWINCH` path. |
-| `request_pixel_size_on_resize` | `true` on Windows, `false` elsewhere | Requests `WindowPixelSize` after resize events that carry only cell dimensions, unless in-band resize is active. |
-| `mouse` | `None` | When set to `Some(MousePreference { motion, pixels })`, enables mouse tracking after capabilities are known and picks the best supported mode and encoding. |
-
-`MousePreference::default()` requests click reporting in cell coordinates:
-`motion: false`, `pixels: false`.
-
-## Capability detection
-
-`init` stages queries for terminal capabilities such as synchronized output,
-Unicode grapheme clusters, in-band resize, mouse modes and encodings, Kitty
-keyboard support, xterm `modifyOtherKeys`, terminal name, and true color. Their
-replies arrive asynchronously through the same read path as user input.
-
-As those replies pass through `read_event`, `try_read_event`, or `events()` with
-the `async` feature, `Screen` updates `capabilities()`. Render-affecting
-capabilities are applied as they are discovered: synchronized output wraps
-frames, grapheme-cluster support changes width measurement, and true-color
-support upgrades the renderer profile.
-
-Discovery-driven defaults from `ScreenOptions` are applied once, when the
-terminating Primary DA reply arrives.
-
-## Reading events
-
-Use the synchronous event methods when driving a normal loop:
-
-| Method | Behavior |
-| --- | --- |
-| `read_event()` | Blocks until the next decoded `Event`. |
-| `poll_event(timeout)` | Drives the input source for up to `timeout` and returns whether an event is available. |
-| `try_read_event()` | Takes the next queued event without doing I/O. |
-| `unread_event(event)` | Pushes an event back to the front of the queue. |
-
-With the `async` feature, `events()` returns a stream adapter that yields the
-same decoded events and runs the same capability-observation side effects as
-`read_event`.
+Mode changes work the other way. Entering the alternate screen, hiding the
+cursor, enabling mouse reporting, setting the title, and similar switches take
+effect immediately: each writes its escape sequence on the spot rather than
+waiting for the next `render`. That is why those methods return a `Result` while
+painting does not.

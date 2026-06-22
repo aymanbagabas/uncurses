@@ -5,16 +5,16 @@ sidebar:
   open: true
 ---
 
-The core ideas behind uncurses, one per page. Read these to understand how
-the pieces fit together and why the API is shaped the way it is.
+The core ideas behind uncurses, one per page. Each page stands on its own and
+links to the concepts it touches, so you can start with the terminal itself or
+jump straight to whatever you need.
 
 {{< cards >}}
-  {{< card link="screen" title="The Screen facade" subtitle="Lifecycle, inline vs fullscreen, options, and teardown." >}}
-  {{< card link="canvas-and-rendering" title="Canvas and rendering" subtitle="Cells, the diffing renderer, and render/flush/present." >}}
-  {{< card link="events-and-input" title="Events and input" subtitle="The decode pipeline, keys, mouse, paste, resize, and queries." >}}
-  {{< card link="styling-and-color" title="Styling and color" subtitle="Style, SGR, hyperlinks, and graceful color downsampling." >}}
-  {{< card link="text-and-width" title="Text and width" subtitle="Grapheme clusters, wide cells, and measuring text." >}}
-  {{< card link="terminal" title="The terminal handle" subtitle="Raw mode, window size, and talking to the tty." >}}
-  {{< card link="geometry" title="Geometry" subtitle="Position, Size, and Rect on the cell grid." >}}
-  {{< card link="capabilities-and-queries" title="Capabilities and queries" subtitle="Asking the terminal what it can do, instead of guessing." >}}
+  {{< card link="terminals" title="Terminals" subtitle="TTYs, PTYs, cooked vs raw, and where uncurses plugs in." >}}
+  {{< card link="cells" title="Cells" subtitle="The atomic slot: content, style, and how many columns it fills." >}}
+  {{< card link="buffers" title="Buffers" subtitle="An off-screen grid of cells you paint before anything is shown." >}}
+  {{< card link="width" title="Width" subtitle="Why one character is not always one column, and why it matters." >}}
+  {{< card link="surfaces" title="Surfaces" subtitle="The traits every grid implements, so you draw once and reuse." >}}
+  {{< card link="events" title="Events" subtitle="Turning the raw input stream into typed keys, mouse, and replies." >}}
+  {{< card link="screen" title="Screen" subtitle="The facade that unites drawing, input, the terminal, and the renderer." >}}
 {{< /cards >}}

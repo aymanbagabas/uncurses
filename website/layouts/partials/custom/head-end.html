@@ -10,4 +10,100 @@
     font-family: var(--hx-font-mono);
     font-variant-ligatures: none;
   }
+  /* Terminal-cell grid used in the docs to draw buffers/screens. Each
+     child is one cell; add class "cont" to mark a wide-cell continuation.
+     Borders use a translucent gray so it adapts to light and dark themes. */
+  .term-grid {
+    display: grid;
+    width: max-content;
+    margin: 1.25rem auto;
+    font-family: var(--hx-font-mono);
+    border: 1px solid rgba(127, 127, 127, 0.45);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .term-grid > span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2rem;
+    height: 2.2rem;
+    border: 1px solid rgba(127, 127, 127, 0.2);
+  }
+  .term-grid > span.cont {
+    opacity: 0.4;
+    font-size: 0.7rem;
+  }
+  /* Figure wrapper for a term-grid, with a descriptive caption that also
+     serves as the grid's accessible text. Centered on the page. */
+  figure.term-fig {
+    margin: 1.25rem 0;
+    text-align: center;
+  }
+  figure.term-fig .term-grid {
+    margin: 0 auto 0.4rem auto;
+  }
+  figure.term-fig figcaption {
+    font-size: 0.82rem;
+    opacity: 0.7;
+    font-style: italic;
+    max-width: 42rem;
+    margin: 0 auto;
+  }
+  /* Axis/index labels: no cell border, dimmed and smaller so they read as
+     metadata around the actual cells. */
+  .term-grid > span.lbl {
+    border: none;
+    opacity: 0.55;
+    font-size: 0.78rem;
+    padding: 0 0.4rem;
+  }
+  /* A little terminal-window mockup: a titlebar with traffic lights over a
+     stack of monospace rows. Rows tagged "app" are highlighted to show the
+     region a Screen draws into. Used to contrast inline and fullscreen. */
+  .term-windows {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    justify-content: center;
+    margin: 1.25rem 0;
+  }
+  .term-win {
+    flex: 1 1 18rem;
+    max-width: 22rem;
+    border: 1px solid rgba(127, 127, 127, 0.45);
+    border-radius: 8px;
+    overflow: hidden;
+    font-family: var(--hx-font-mono);
+    font-size: 0.82rem;
+  }
+  .term-win .bar {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.6rem;
+    background: rgba(127, 127, 127, 0.14);
+    border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+  }
+  .term-win .bar i {
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: rgba(127, 127, 127, 0.5);
+  }
+  .term-win .bar span {
+    margin-left: 0.4rem;
+    opacity: 0.6;
+    font-size: 0.74rem;
+  }
+  .term-win .row {
+    padding: 0.18rem 0.6rem;
+    white-space: pre;
+    min-height: 1.2rem;
+    text-align: left;
+  }
+  .term-win .row.app {
+    background: rgba(56, 139, 253, 0.16);
+    box-shadow: inset 2px 0 0 rgba(56, 139, 253, 0.7);
+  }
 </style>
