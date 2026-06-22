@@ -13,7 +13,7 @@
 //! ## Cell conversion
 //!
 //! Backend drawing uses the private cell converter to combine symbol width and
-//! style conversion before writing into the screen canvas.
+//! style conversion before writing into the screen buffer.
 //!
 //! ```text
 //! ratatui Cell
@@ -182,7 +182,7 @@ fn str_cell_width(s: &str) -> u16 {
     }
 }
 
-/// Convert a concrete buffer cell into the uncurses cell staged on the canvas.
+/// Convert a concrete buffer cell into the uncurses cell staged in the buffer.
 ///
 /// The symbol is classified as wide when its terminal-cell width is at least
 /// two; otherwise it is stored as a narrow cell. The source cell's foreground,

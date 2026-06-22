@@ -62,7 +62,7 @@ pub(super) struct State {
     /// using the terminal default. Drives the `OSC 22` reset on reset and
     /// re-emission on restore.
     pub pointer_shape: Option<String>,
-    // --- Render-coupled state (formerly tracked by the canvas) -----------
+    // --- Render-coupled state (formerly tracked by the renderer buffer) -----------
     /// Whether the alternate screen is currently active.
     pub alt_screen: bool,
     /// Cursor visibility.

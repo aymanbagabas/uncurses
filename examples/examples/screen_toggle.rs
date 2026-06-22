@@ -59,7 +59,7 @@ impl App {
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => {
                     // suspend()/resume() preserve the alt-screen state and
-                    // refit the canvas to the current window.
+                    // refit the managed area to the current window.
                     self.screen.suspend()?;
                     self.screen.resume()?;
                     self.render()?;

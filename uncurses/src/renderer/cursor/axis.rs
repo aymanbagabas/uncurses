@@ -198,7 +198,7 @@ impl Renderer {
     /// flags. Forward tabs are counted with
     /// [`crate::renderer::tabstops::TabStops::next_stop`], the unclamped
     /// terminal stop, so the planner never treats a tab that would
-    /// overshoot the target as landing on the canvas edge.
+    /// overshoot the target as landing on the surface edge.
     pub(super) fn plan_horizontal_cost(
         &self,
         fx: u16,
@@ -389,7 +389,7 @@ impl Renderer {
         let mut col = fx;
         // Tab while the true next tab stop still lands at or before the
         // target. `next_stop` is unclamped (it reports the real stop a
-        // terminal's tab reaches, which may be past the canvas edge), so a
+        // terminal's tab reaches, which may be past the surface edge), so a
         // tab is never counted unless it genuinely stays within `tx`. The
         // residual forward leg covers the rest. Mirrors ncurses' NEXTTAB
         // loop in `relative_move`.

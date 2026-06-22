@@ -9,7 +9,7 @@
 //! ## Diff pipeline
 //!
 //! The renderer keeps a tracked current buffer (`cur_buf`) representing
-//! what it believes is on the terminal. The canvas flow first syncs
+//! what it believes is on the terminal. The buffer flow first syncs
 //! touched desired cells into the renderer-owned staging buffer
 //! (`back_buf`), filtering unchanged cells. Rendering then prepares the
 //! frame, optionally applies scroll optimizations, transforms touched
@@ -61,7 +61,7 @@
 //! `TabStops` stores configurable horizontal tab stops and
 //! precomputes previous, clamped-next, and unclamped-next lookup tables.
 //! The unclamped next stop models the column a terminal tab would really
-//! reach beyond the canvas edge; cursor planning depends on that to
+//! reach beyond the surface edge; cursor planning depends on that to
 //! avoid over-counting forward tab moves near the right margin.
 
 pub(crate) mod buffer;

@@ -235,7 +235,7 @@ pub struct ScreenOptions {
     /// terminal for its keyboard, color, and feature support and waits for the
     /// replies, populating [`capabilities`](Screen::capabilities). Set it to
     /// `false` for output-only programs that draw frames and never read input:
-    /// `init_with` still enters raw mode, sizes the canvas, and applies the
+    /// `init_with` still enters raw mode, sizes the managed area, and applies the
     /// environment-detected color profile, but emits no query escapes and
     /// waits for no replies, so the terminal is never probed and
     /// [`capabilities`](Screen::capabilities) stays at its env-derived
@@ -844,7 +844,7 @@ where
                 self.terminal_name = Some(report.clone());
             }
             // Cache the full terminal size as it changes. Refitting the
-            // canvas is left to the app (call autoresize() as desired).
+            // managed area is left to the app (call autoresize() as desired).
             Event::Resize(ws) => {
                 self.cache_window_size(ws)?;
             }
@@ -918,7 +918,7 @@ where
 
     /// Stage the initial capability queries into the output stream. Their
     /// replies arrive asynchronously through the normal event flow and are
-    /// intercepted by the event delegates (see [`Self::intercept`]).
+    /// recorded as a side effect by [`observe`](Self::observe).
     ///
     /// The mode (DECRQM), XTVERSION, and XTGETTCAP queries are skipped on
     /// Apple's `Terminal.app`, which mishandles them. A Primary DA request
@@ -1303,9 +1303,9 @@ where
         self.terminal.get_window_size()
     }
 
-    /// Re-query the terminal size and resize the canvas to fit: the full
+    /// Re-query the terminal size and resize the managed area to fit: the full
     /// terminal size in fullscreen (alternate screen on), or the terminal
-    /// width with the current canvas height preserved inline (alternate
+    /// width with the current managed height preserved inline (alternate
     /// screen off). Refreshes the cached [`window_cells`](Self::window_cells)
     /// / [`window_pixels`](Self::window_pixels); on platforms whose size
     /// query reports no pixel size (e.g. the Windows console) the pixel size
@@ -1313,7 +1313,7 @@ where
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than
-            // collapsing the canvas to zero.
+            // collapsing the managed area to zero.
             return Ok(());
         };
         self.cache_window_size(ws)?;
@@ -1328,7 +1328,7 @@ where
 
     /// Consume the screen and hand the terminal back to the shell: stop the
     /// async event stream if one is running, tear down every staged mode,
-    /// reset the canvas, flush, and restore the terminal's prior state.
+    /// reset the managed area, flush, and restore the terminal's prior state.
     pub fn finish(mut self) -> io::Result<()> {
         // Stop the async event stream's helper thread, if one was started.
         // Consuming `self` would drop it anyway, but doing it explicitly here
@@ -1359,7 +1359,7 @@ where
     }
 
     /// Re-acquire the terminal after a [`Self::pause`] or [`Self::suspend`]:
-    /// re-enter raw mode, refit the canvas to the current viewport, re-apply
+    /// re-enter raw mode, refit the managed area to the current viewport, re-apply
     /// the saved render state and modes, and force a full repaint.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
@@ -1380,7 +1380,7 @@ where
     }
 
     /// Hand the terminal back: consume any pending capability-query replies,
-    /// reset every staged mode and the canvas to defaults, and flush. The
+    /// reset every staged mode and the managed area to defaults, and flush. The
     /// caller restores the saved raw-mode state afterward.
     fn teardown(&mut self) -> io::Result<()> {
         self.drain_pending_queries()?;
@@ -1445,9 +1445,9 @@ where
         self.terminal.get_window_size()
     }
 
-    /// Re-query the terminal size and resize the canvas to fit: the full
+    /// Re-query the terminal size and resize the managed area to fit: the full
     /// terminal size in fullscreen (alternate screen on), or the terminal
-    /// width with the current canvas height preserved inline (alternate
+    /// width with the current managed height preserved inline (alternate
     /// screen off). Refreshes the cached [`window_cells`](Self::window_cells)
     /// / [`window_pixels`](Self::window_pixels); on platforms whose size
     /// query reports no pixel size (e.g. the Windows console) the pixel size
@@ -1455,7 +1455,7 @@ where
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than
-            // collapsing the canvas to zero.
+            // collapsing the managed area to zero.
             return Ok(());
         };
         self.cache_window_size(ws)?;
@@ -1470,7 +1470,7 @@ where
 
     /// Consume the screen and hand the terminal back to the shell: stop the
     /// async event stream if one is running, tear down every staged mode,
-    /// reset the canvas, flush, and restore the terminal's prior state.
+    /// reset the managed area, flush, and restore the terminal's prior state.
     pub fn finish(mut self) -> io::Result<()> {
         // Stop the async event stream's helper thread, if one was started.
         // Consuming `self` would drop it anyway, but doing it explicitly here
@@ -1501,7 +1501,7 @@ where
     }
 
     /// Re-acquire the terminal after a [`Self::pause`]: re-enter raw mode,
-    /// refit the canvas to the current viewport, re-apply the saved
+    /// refit the managed area to the current viewport, re-apply the saved
     /// render state and modes, and force a full repaint.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
@@ -1512,7 +1512,7 @@ where
     }
 
     /// Hand the terminal back: consume any pending capability-query replies,
-    /// reset every staged mode and the canvas to defaults, and flush. The
+    /// reset every staged mode and the managed area to defaults, and flush. The
     /// caller restores the saved raw-mode state afterward.
     fn teardown(&mut self) -> io::Result<()> {
         self.drain_pending_queries()?;

@@ -63,19 +63,19 @@ pub trait TextSurface: SurfaceMut {
 
     /// Paint `s` at `pos`, clipped to the surface bounds.
     ///
-    /// `style` becomes the starting style for this call. Inline SGR sequences
-    /// update that style while painting, and OSC 8 sequences attach or clear a
-    /// hyperlink. Newline moves to the next row at the surface's left edge;
-    /// carriage return moves to that left edge on the current row. If a
-    /// non-zero-width grapheme cluster would cross the right edge, painting
-    /// stops.
+    /// Every cell painted gets `style`. This default implementation paints
+    /// *literally*: escape sequences in `s` are drawn as visible characters,
+    /// not interpreted. For SGR/OSC 8-aware painting that turns inline escapes
+    /// into styling, wrap the surface in a [`Painter`](super::Painter). Newline
+    /// moves to the next row at the surface's left edge; carriage return moves
+    /// to that left edge on the current row. If a non-zero-width grapheme
+    /// cluster would cross the right edge, painting stops.
     ///
     /// # Parameters
     ///
     /// * `pos` — starting cell position.
-    /// * `s` — UTF-8 string to paint. ANSI SGR and OSC 8 sequences are parsed.
-    /// * `style` — initial style applied to cells until changed by inline SGR
-    ///   or hyperlink escapes.
+    /// * `s` — UTF-8 string to paint. Escape sequences are drawn literally.
+    /// * `style` — style applied to every cell painted in this call.
     ///
     /// # Returns
     ///

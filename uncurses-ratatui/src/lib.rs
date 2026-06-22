@@ -13,9 +13,11 @@
 //!
 //! A frame is rendered into the widget library's buffer first. During
 //! [`Backend::draw`](ratatui::backend::Backend::draw), every visible buffer
-//! cell is converted into an uncurses cell and written into the screen's
-//! canvas. [`Backend::flush`](ratatui::backend::Backend::flush) then flushes
-//! the escape bytes staged by the canvas renderer.
+//! cell is converted into an uncurses cell and staged into the screen's
+//! buffer; no I/O happens yet.
+//! [`Backend::flush`](ratatui::backend::Backend::flush) then calls
+//! [`Screen::render`](uncurses::screen::Screen::render), which diffs the
+//! staged frame and writes the minimal escape bytes.
 //!
 //! ```text
 //! ┌──────────────────────┐
@@ -27,13 +29,13 @@
 //! │   UncursesBackend    │
 //! │ draw: Cell → Cell    │
 //! └──────────┬───────────┘
-//!            │ set_cell + render
+//!            │ set_cell (stage only)
 //!            ▼
 //! ┌──────────────────────┐
 //! │        Screen        │
 //! │   renderer diff bytes │
 //! └──────────┬───────────┘
-//!            │ flush
+//!            │ flush → Screen::render
 //!            ▼
 //!        terminal
 //! ```

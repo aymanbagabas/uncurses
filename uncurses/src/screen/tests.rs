@@ -773,7 +773,7 @@ fn reset_tab_stops_emits_reset_when_tabs_enabled() {
 fn tab_advance_does_not_overshoot_past_last_stop() {
     // Width 24: real tab stops are at 0, 8, 16. A move to column 21 sits
     // past the last interior stop. The renderer must not emit a tab that
-    // relies on landing past that stop (the canvas right edge), because on
+    // relies on landing past that stop (the surface right edge), because on
     // a wider display a tab from column 16 goes to 24, not 21. Replaying
     // the bytes with standard 8-column tab stops must still land "B" at
     // column 21.

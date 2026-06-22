@@ -8,9 +8,9 @@
 //!
 //! ## Clamped vs. unclamped next stops
 //!
-//! [`TabStops::next`] is for bounded canvas work and clamps the "no next
+//! [`TabStops::next`] is for bounded surface work and clamps the "no next
 //! stop" case to the right edge. [`TabStops::next_stop`] models an
-//! actual terminal tab: if the next interval stop lies past the canvas
+//! actual terminal tab: if the next interval stop lies past the surface
 //! edge, that past-edge column is returned. Forward cursor planning uses
 //! the unclamped value so it never emits a tab that would overshoot the
 //! requested target.
@@ -144,7 +144,7 @@ impl TabStops {
         (self.stops[idx] >> bit) & 1 != 0
     }
 
-    /// Return the next in-canvas tab stop strictly after `x`.
+    /// Return the next in-bounds tab stop strictly after `x`.
     ///
     /// Returns the right edge (`width - 1`) when no further stop exists.
     /// This is the clamped helper; cursor planning for literal tabs uses
@@ -163,7 +163,7 @@ impl TabStops {
 
     /// The true next tab stop strictly after `x`, *unclamped*: it may lie
     /// past the right edge, exactly as a terminal's tab advance would land
-    /// past the last in-canvas stop (a tab from the last interior stop
+    /// past the last in-bounds stop (a tab from the last interior stop
     /// goes to the next interval stop, not the screen edge). Mirrors
     /// ncurses' `NEXTTAB`. The cursor planner uses this so it never emits a
     /// tab unless the tab genuinely lands at or before the target column.
