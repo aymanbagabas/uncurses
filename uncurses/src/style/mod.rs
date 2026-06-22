@@ -478,7 +478,13 @@ impl Style {
     /// state are closed in reverse order of opening, and the reset prevents the
     /// style from leaking into later output. Returns any I/O error from `w`; it
     /// does not panic.
+    ///
+    /// An [empty](Self::is_empty) style carries no terminal-visible state, so
+    /// this writes `text` verbatim with no SGR or OSC 8 sequences at all.
     pub fn write_styled<W: Write>(&self, w: &mut W, text: &str) -> io::Result<()> {
+        if self.is_empty() {
+            return w.write_all(text.as_bytes());
+        }
         self.write(w)?;
         w.write_all(text.as_bytes())?;
         if self.link.is_some() {
@@ -492,8 +498,9 @@ impl Style {
     ///
     /// Formatting the returned [`StyledText`] is equivalent to calling
     /// [`Style::write_styled`]: it includes the SGR opener, text, reset, and
-    /// any OSC 8 hyperlink wrapper. Use this with `format!`, `println!`, or
-    /// `write!` when a `Display` value is more convenient than an
+    /// any OSC 8 hyperlink wrapper. An [empty](Self::is_empty) style renders
+    /// `text` verbatim with no escape sequences. Use this with `format!`,
+    /// `println!`, or `write!` when a `Display` value is more convenient than an
     /// [`std::io::Write`].
     pub fn styled<'a>(&self, text: &'a str) -> StyledText<'a> {
         StyledText {
@@ -606,6 +613,18 @@ mod tests {
         let mut buf = Vec::new();
         Style::EMPTY.bold().write_styled(&mut buf, "hi").unwrap();
         assert_eq!(buf, b"\x1b[1mhi\x1b[m");
+    }
+
+    #[test]
+    fn write_styled_empty_style_emits_text_only() {
+        let mut buf = Vec::new();
+        Style::EMPTY.write_styled(&mut buf, "hi").unwrap();
+        assert_eq!(buf, b"hi");
+    }
+
+    #[test]
+    fn styled_empty_style_displays_text_only() {
+        assert_eq!(format!("{}", Style::EMPTY.styled("hi")), "hi");
     }
 
     #[test]
