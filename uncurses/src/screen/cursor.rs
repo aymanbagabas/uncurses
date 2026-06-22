@@ -2,7 +2,7 @@
 //!
 //! The facade exposes the cursor as a shape plus a separate blinking flag,
 //! rather than the underlying DECSCUSR codes which interleave the two. A
-//! shape and blinking flag map to one of the low-level cursor styles.
+//! shape and blinking flag map to one of the underlying cursor styles.
 
 use crate::ansi::cursor::CursorStyle;
 
@@ -19,7 +19,7 @@ pub enum CursorShape {
 }
 
 impl CursorShape {
-    /// Map a shape and blinking flag to the low-level cursor style.
+    /// Map a shape and blinking flag to the underlying cursor style.
     pub(super) fn style(self, blinking: bool) -> CursorStyle {
         match (self, blinking) {
             (CursorShape::Block, true) => CursorStyle::BlinkingBlock,

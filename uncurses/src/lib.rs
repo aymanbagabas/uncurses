@@ -1,4 +1,4 @@
-//! `uncurses` is a low-level terminal library for building terminal user
+//! `uncurses` is a terminal toolkit library for building terminal user
 //! interfaces. It hands you the pieces (a cell grid with a diffing
 //! renderer, a typed input decoder, ANSI escape helpers, and a raw-mode
 //! terminal handle) and stays out of the way: you own the event loop and
@@ -7,10 +7,9 @@
 //!
 //! # Where to start
 //!
-//! Two layers cover most needs. Pick the one that fits how much control
-//! you want.
+//! Two routes cover most needs. Pick the one that fits your use case.
 //!
-//! - **[`screen::Screen`]** is the high-level facade and the home of the
+//! - **[`screen::Screen`]** is the facade and the home of the
 //!   diffing renderer. It owns a terminal and an [`event::EventSource`],
 //!   tracks the live terminal across frames, and emits only the cells that
 //!   changed. It also manages raw mode, capability detection, sane default
@@ -23,7 +22,7 @@
 //!   no renderer and no terminal session, which makes it the tool for
 //!   one-shot frames, snapshot tests, transcripts, and append-style output.
 //!
-//! # Quick start (high-level)
+//! # Quick start with `Screen`
 //!
 //! ```no_run
 //! use uncurses::buffer::SurfaceMut;
@@ -44,7 +43,7 @@
 //! # }
 //! ```
 //!
-//! # Quick start (low-level)
+//! # Quick start with `TextBuffer`
 //!
 //! Paint a [`buffer::TextBuffer`] and serialize it yourself, with no
 //! terminal involved:

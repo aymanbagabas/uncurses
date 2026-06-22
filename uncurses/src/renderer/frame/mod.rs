@@ -8,7 +8,7 @@
 //!   and the scroll-detection pass.
 //! - [`diff`] – the line-by-line diff: bottom-trim ED followed by
 //!   the per-row transform loop.
-//! - [`emit`] – low-level cursor and glyph emission helpers used by
+//! - [`emit`] – cursor and glyph emission helpers used by
 //!   both the diff loop and the rest of the renderer.
 //! - [`finalize`] – per-frame epilogue: inline-resize cursor snap and
 //!   pen/link reset.
@@ -50,8 +50,7 @@ impl Renderer {
     ///
     /// # Errors
     ///
-    /// Propagates errors from `Write` implementations used by low-level
-    /// emit helpers. With the current `Vec<u8>` output this is
+    /// Propagates errors from `Write` implementations used by the emit helpers. With the current `Vec<u8>` output this is
     /// effectively infallible.
     ///
     /// # Usage notes

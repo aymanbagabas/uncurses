@@ -61,7 +61,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 }
 
 /// Backend implementation that drives rendering, input, and lifecycle through
-/// one high-level [`Screen`].
+/// one [`Screen`].
 ///
 /// ## What it wraps
 ///

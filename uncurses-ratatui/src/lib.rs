@@ -4,7 +4,7 @@
 //! ## What this backend is
 //!
 //! [`UncursesBackend`] implements [`ratatui::backend::Backend`] by wrapping a
-//! single high-level [`Screen`](uncurses::screen::Screen). The screen owns the
+//! single [`Screen`](uncurses::screen::Screen). The screen owns the
 //! terminal handle, its diffing renderer, and the input source. The backend's job is to adapt
 //! frame drawing, cursor operations, clearing, size queries, and event access
 //! to that one screen.

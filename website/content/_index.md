@@ -5,7 +5,7 @@ layout: hextra-home
 
 {{< hextra/hero-badge >}}
   <div class="hx:w-2 hx:h-2 hx:rounded-full hx:bg-primary-400"></div>
-  A terminal library for Rust
+  A terminal toolkit library for Rust
 {{< /hextra/hero-badge >}}
 
 <div class="hx:mt-6 hx:mb-6">
@@ -16,7 +16,7 @@ layout: hextra-home
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  A low-level, modern, VT100/xterm-style terminal library.&nbsp;<br class="hx:sm:block hx:hidden" />
+  A modern, VT100/xterm-style terminal toolkit library.&nbsp;<br class="hx:sm:block hx:hidden" />
   You own the event loop; it makes the bytes correct and minimal.
 {{< /hextra/hero-subtitle >}}
 </div>
