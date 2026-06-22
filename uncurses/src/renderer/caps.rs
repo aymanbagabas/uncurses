@@ -362,11 +362,140 @@ impl Optimizations {
             None => Self::default(),
         }
     }
+
+    /// Report whether `env` names a terminal known to implement DECST8C,
+    /// the `ESC [ ? 5 W` sequence that resets tab stops to one every
+    /// eight columns in a single, cursor-safe write.
+    ///
+    /// The allowlist covers Ghostty, kitty, Rio, Alacritty, iTerm2, and
+    /// Windows Terminal. Terminals outside it fall back to the portable
+    /// TBC-then-HTS reset, so a false negative only costs a few extra
+    /// bytes, never correctness. This inspects the environment only and
+    /// never probes the terminal.
+    pub(crate) fn supports_decst8c(env: &Env) -> bool {
+        // Windows Terminal announces itself with a session token rather
+        // than through $TERM.
+        if env.has("WT_SESSION") {
+            return true;
+        }
+        // kitty, Alacritty, and iTerm2 export a session/window id that
+        // survives login shells and multiplexers rewriting $TERM.
+        if env.has("KITTY_WINDOW_ID")
+            || env.has("ALACRITTY_WINDOW_ID")
+            || env.has("ITERM_SESSION_ID")
+        {
+            return true;
+        }
+        // iTerm2 sets $LC_TERMINAL, which also propagates across ssh.
+        if env
+            .get("LC_TERMINAL")
+            .is_some_and(|t| t.eq_ignore_ascii_case("iterm2"))
+        {
+            return true;
+        }
+        // $TERM_PROGRAM outlives some xterm-compatible $TERM rewrites.
+        if let Some(program) = env.get("TERM_PROGRAM")
+            && matches!(
+                program.to_ascii_lowercase().as_str(),
+                "ghostty" | "rio" | "iterm.app"
+            )
+        {
+            return true;
+        }
+        let Some(term) = env.get("TERM") else {
+            return false;
+        };
+        // Match the bare vendor head and the xterm-<vendor> promotion
+        // form, mirroring how `from_term` resolves these terminals.
+        let head = term.split('-').next().unwrap_or("");
+        if matches!(head, "alacritty" | "ghostty" | "kitty" | "rio") {
+            return true;
+        }
+        if let Some(rest) = term.strip_prefix("xterm-") {
+            let vendor = rest.split('-').next().unwrap_or("");
+            return matches!(vendor, "ghostty" | "kitty" | "rio");
+        }
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env_with(pairs: &[(&str, &str)]) -> Env {
+        Env::from_pairs(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+    }
+
+    #[test]
+    fn supports_decst8c_matches_allowlisted_terms() {
+        for term in [
+            "alacritty",
+            "ghostty",
+            "kitty",
+            "rio",
+            "xterm-kitty",
+            "xterm-ghostty",
+        ] {
+            assert!(
+                Optimizations::supports_decst8c(&env_with(&[("TERM", term)])),
+                "expected DECST8C support for TERM={term}",
+            );
+        }
+    }
+
+    #[test]
+    fn supports_decst8c_rejects_plain_xterm_and_unknown() {
+        for term in [
+            "xterm-256color",
+            "screen-256color",
+            "tmux",
+            "vt100",
+            "dumb",
+            "",
+        ] {
+            assert!(
+                !Optimizations::supports_decst8c(&env_with(&[("TERM", term)])),
+                "did not expect DECST8C support for TERM={term}",
+            );
+        }
+    }
+
+    #[test]
+    fn supports_decst8c_detects_terminals_via_env_tokens() {
+        // Windows Terminal and window-id exporters are recognized even when
+        // $TERM is rewritten to a generic value.
+        assert!(Optimizations::supports_decst8c(&env_with(&[
+            ("TERM", "xterm-256color"),
+            ("WT_SESSION", "abc"),
+        ])));
+        assert!(Optimizations::supports_decst8c(&env_with(&[
+            ("TERM", "xterm-256color"),
+            ("KITTY_WINDOW_ID", "1"),
+        ])));
+        assert!(Optimizations::supports_decst8c(&env_with(&[
+            ("TERM", "xterm-256color"),
+            ("ALACRITTY_WINDOW_ID", "1"),
+        ])));
+        assert!(Optimizations::supports_decst8c(&env_with(&[
+            ("TERM", "screen"),
+            ("TERM_PROGRAM", "ghostty"),
+        ])));
+        // iTerm2 keeps $TERM generic and identifies itself through its own
+        // tokens, including $LC_TERMINAL which survives ssh.
+        assert!(Optimizations::supports_decst8c(&env_with(&[
+            ("TERM", "xterm-256color"),
+            ("TERM_PROGRAM", "iTerm.app"),
+        ])));
+        assert!(Optimizations::supports_decst8c(&env_with(&[
+            ("TERM", "xterm-256color"),
+            ("ITERM_SESSION_ID", "w0t0p0:abc"),
+        ])));
+        assert!(Optimizations::supports_decst8c(&env_with(&[
+            ("TERM", "xterm-256color"),
+            ("LC_TERMINAL", "iTerm2"),
+        ])));
+    }
 
     #[test]
     fn default_is_xterm() {

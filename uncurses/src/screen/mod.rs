@@ -861,6 +861,28 @@ where
         self.renderer.set_color_profile(profile);
     }
 
+    /// Reconcile the terminal's hardware tab stops with the every-eight
+    /// columns layout the renderer assumes whenever the `TABS`
+    /// optimization is on. A prior program may have left arbitrary stops
+    /// behind, which would make the `HT` (`\t`) moves the cursor planner
+    /// emits land on the wrong columns. Modern terminals reset in one
+    /// cursor-safe write via DECST8C; the rest get the portable
+    /// TBC-then-HTS fallback. Skipped entirely when `TABS` is off, since
+    /// the planner then never relies on tab stops. Staged and flushed so
+    /// it reaches the terminal even when capability queries are disabled.
+    fn reset_tab_stops(&mut self) -> io::Result<()> {
+        if !self.optimizations().contains(Optimizations::TABS) {
+            return Ok(());
+        }
+        if Optimizations::supports_decst8c(self.terminal.env()) {
+            self.out_buf
+                .write_all(crate::ansi::screen::SET_TAB_EVERY_8_COLUMNS)?;
+        } else {
+            crate::ansi::screen::write_reset_tab_stops_every_8(&mut self.out_buf, self.width)?;
+        }
+        self.flush()
+    }
+
     fn stage_init_queries(&mut self) -> io::Result<()> {
         use crate::ansi::ctrl::{REQUEST_PRIMARY_DA, REQUEST_XTVERSION};
         use crate::ansi::kitty::REQUEST_KITTY_KEYBOARD;
@@ -1181,6 +1203,7 @@ where
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped.
         self.apply_env_color_profile();
+        self.reset_tab_stops()?;
         if self.options.bracketed_paste {
             self.enable_bracketed_paste()?;
         }
@@ -1315,6 +1338,7 @@ where
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped.
         self.apply_env_color_profile();
+        self.reset_tab_stops()?;
         if self.options.bracketed_paste {
             self.enable_bracketed_paste()?;
         }
