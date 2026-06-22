@@ -29,11 +29,11 @@ pub(super) struct State {
     pub bracketed_paste: bool,
     /// Focus in/out reporting (DECSET 1004).
     pub focus_events: bool,
-    /// Color-theme update notifications (DEC 2031). When `true`, the
+    /// Color-scheme update notifications (DEC 2031). When `true`, the
     /// terminal sends unsolicited reports as the user/OS toggles the
-    /// dark/light theme. Reports the dark/light preference only, not the
+    /// dark/light scheme. Reports the dark/light preference only, not the
     /// actual colors.
-    pub color_theme_updates: bool,
+    pub color_scheme_updates: bool,
     /// In-band resize notifications (DEC 2048). When `true`, the
     /// terminal sends a `CSI 48 ; … t` report whenever the surface
     /// changes size, surfaced as [`Event::Resize`].
@@ -88,7 +88,7 @@ impl Default for State {
             mouse_encoding: MouseEncoding::X10,
             bracketed_paste: false,
             focus_events: false,
-            color_theme_updates: false,
+            color_scheme_updates: false,
             in_band_resize: false,
             title: None,
             foreground_color: None,

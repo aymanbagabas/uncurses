@@ -280,13 +280,10 @@ pub enum Event {
         /// Reported palette color.
         color: Color,
     },
-    /// Color theme report (DEC 2031): `dark` is `true` for a dark theme,
-    /// `false` for a light theme. Indicates only the dark/light preference,
-    /// not the actual colors.
-    ColorTheme {
-        /// Whether the reported theme is dark.
-        dark: bool,
-    },
+    /// Color-scheme report (DEC mode 2031): whether the terminal is in its
+    /// dark or light scheme. Indicates only the dark/light preference, not
+    /// the actual colors.
+    ColorScheme(ColorScheme),
 
     // -- Clipboard / graphics ------------------------------------------------
     /// OSC 52 clipboard content reply.

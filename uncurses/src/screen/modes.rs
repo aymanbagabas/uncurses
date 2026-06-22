@@ -167,24 +167,24 @@ impl<I: Input, O: Write> Screen<I, O> {
         self.flush()
     }
 
-    /// Enable color-theme update notifications (DEC private mode 2031) and
+    /// Enable color-scheme update notifications (DEC private mode 2031) and
     /// flush. The terminal then sends a `CSI ? 997 ; {1|2} n` report
     /// whenever the user or operating system switches between dark and
-    /// light themes; these surface as [`Event::ColorTheme`]. The report
+    /// light schemes; these surface as [`Event::ColorScheme`]. The report
     /// indicates only the dark/light preference, not the actual colors.
     ///
-    /// [`Event::ColorTheme`]: crate::event::Event::ColorTheme
-    pub fn enable_color_theme_updates(&mut self) -> io::Result<()> {
+    /// [`Event::ColorScheme`]: crate::event::Event::ColorScheme
+    pub fn enable_color_scheme_updates(&mut self) -> io::Result<()> {
         mode::Mode::LIGHT_DARK.set(&mut self.out_buf)?;
-        self.state.color_theme_updates = true;
+        self.state.color_scheme_updates = true;
         self.flush()
     }
 
-    /// Disable color-theme update notifications (DEC private mode 2031) and
+    /// Disable color-scheme update notifications (DEC private mode 2031) and
     /// flush.
-    pub fn disable_color_theme_updates(&mut self) -> io::Result<()> {
+    pub fn disable_color_scheme_updates(&mut self) -> io::Result<()> {
         mode::Mode::LIGHT_DARK.reset(&mut self.out_buf)?;
-        self.state.color_theme_updates = false;
+        self.state.color_scheme_updates = false;
         self.flush()
     }
 
@@ -351,7 +351,7 @@ impl<I: Input, O: Write> Screen<I, O> {
         if let Some(m) = self.state.mouse_mode {
             self.write_mouse_modes(m, self.state.mouse_encoding, false)?;
         }
-        if self.state.color_theme_updates {
+        if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.reset(&mut self.out_buf)?;
         }
         if self.state.in_band_resize {
@@ -468,7 +468,7 @@ impl<I: Input, O: Write> Screen<I, O> {
         if self.state.cursor_style != cursor::CursorStyle::Default {
             cursor::write_cursor_style(&mut self.out_buf, self.state.cursor_style)?;
         }
-        if self.state.color_theme_updates {
+        if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.set(&mut self.out_buf)?;
         }
         if self.state.in_band_resize {
@@ -622,11 +622,11 @@ impl<I: Input, O: Write> Screen<I, O> {
         self.flush()
     }
 
-    /// Request the current color theme (`CSI ? 996 n`): whether the
-    /// terminal's theme is dark or light. This reports only the dark/light
+    /// Request the current color scheme (`CSI ? 996 n`): whether the
+    /// terminal's scheme is dark or light. This reports only the dark/light
     /// preference, not the actual colors. Reply:
-    /// [`Event::ColorTheme`](crate::event::Event::ColorTheme).
-    pub fn request_color_theme(&mut self) -> io::Result<()> {
+    /// [`Event::ColorScheme`](crate::event::Event::ColorScheme).
+    pub fn request_color_scheme(&mut self) -> io::Result<()> {
         self.out_buf
             .write_all(crate::ansi::status::REQUEST_LIGHT_DARK_REPORT)?;
         self.flush()
