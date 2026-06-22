@@ -338,14 +338,19 @@ where
         Ok(())
     }
 
-    /// Insert `content` into the scrollback above the managed area, then
-    /// force a full redraw on the next [`render`](Self::render). In inline
-    /// mode this pushes the lines into the terminal's scrollback; in
-    /// alternate-screen mode they go into the alt screen's hidden
-    /// scrollback. An empty string is a no-op.
-    pub fn insert_above(&mut self, content: &str) {
+    /// Insert `content` into the scrollback above the managed area and flush
+    /// it to the terminal. In inline mode this pushes the lines into the
+    /// terminal's scrollback; in alternate-screen mode they go into the alt
+    /// screen's hidden scrollback. The managed area is preserved in place, so
+    /// no redraw is needed and a following [`render`](Self::render) sees no
+    /// change. An empty string is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from flushing the inserted lines to the terminal.
+    pub fn insert_above(&mut self, content: &str) -> io::Result<()> {
         if content.is_empty() {
-            return;
+            return Ok(());
         }
 
         let width = self.width;
@@ -387,7 +392,7 @@ where
         }
 
         self.renderer.set_cursor_position(Position { y: 0, x: 0 });
-        self.renderer.request_clear();
+        self.flush()
     }
 
     /// The managed area size in cells.
