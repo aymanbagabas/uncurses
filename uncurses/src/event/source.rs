@@ -3,7 +3,7 @@
 //! ## Purpose
 //!
 //! [`EventSource`] owns the input handle, waits for platform readiness, feeds a
-//! [`Decoder`], and queues typed [`Event`] values. It is the high-level entry
+//! [`Decoder`], and queues typed [`Event`] values. It is the entry
 //! point for applications that want blocking, timeout-based, or wakeable event
 //! reads.
 //!

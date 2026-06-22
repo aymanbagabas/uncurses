@@ -54,8 +54,8 @@
 //! To ask the terminal a question (its background color, cell size,
 //! device attributes, and so on), write the request bytes from the
 //! [`ansi`](crate::ansi) module to the output and read the matching reply
-//! event back through the same source. The high-level
-//! [`Screen`](crate::screen::Screen) wraps this in `request_*` methods
+//! event back through the same source. The
+//! [`Screen`](crate::screen::Screen) facade wraps this in `request_*` methods
 //! whose replies surface as ordinary events, never swallowing the user's
 //! keystrokes in between.
 //!

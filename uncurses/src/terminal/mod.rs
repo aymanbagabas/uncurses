@@ -1,6 +1,6 @@
 //! Terminal handles, raw-mode state, window-size queries, and tty helpers.
 //!
-//! The terminal module provides the low-level pieces used by renderers and
+//! The terminal module provides the building blocks used by renderers and
 //! event sources: [`Terminal`] for pairing input and output handles,
 //! raw-mode save/restore helpers, direct stdio handles, controlling-terminal
 //! opening, and environment snapshots.

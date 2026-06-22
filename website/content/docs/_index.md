@@ -5,7 +5,7 @@ sidebar:
   open: true
 ---
 
-uncurses is a low-level terminal library for Rust. It hands you the building
+uncurses is a terminal toolkit library for Rust. It hands you the building
 blocks to build a terminal UI and then steps out of the way: you own the
 event loop and decide when bytes hit the wire. No terminfo, no widget tree,
 no hidden global state.

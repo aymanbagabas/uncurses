@@ -1,6 +1,6 @@
 # uncurses
 
-A low-level terminal library for Rust that hands you the building blocks and
+A terminal toolkit library for Rust that hands you the building blocks and
 gets out of the way. No terminfo, no widget tree, no hidden global state, no
 framework, just a modern VT100/xterm-style terminal, talked to directly.
 
@@ -27,7 +27,7 @@ fn main() -> std::io::Result<()> {
     let mut screen = Screen::stdio()?;
     screen.init()?; // raw mode + capability detection; inline, cursor visible
     let w = screen.width();
-    screen.resize((w, 1)); // inline: one row tall
+    screen.resize((w, 2)); // inline: one text row plus a trailing blank line
 
     screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
     screen.render()?;

@@ -2,7 +2,8 @@
 
 <img width="480" height="294" alt="output" src="https://github.com/user-attachments/assets/3e9d7066-f435-40aa-9000-fe80185e6966" />
 
-A low-level terminal library for Rust. The name winks at the venerable
+A terminal toolkit library for Rust that hands you the building blocks and stays out of
+the way. The name winks at the venerable
 `curses` and `ncurses`, then quietly walks away from their baggage: no
 terminfo database, no compatibility matrix for terminals that stopped
 shipping decades ago. uncurses assumes a modern, VT100/xterm-compatible

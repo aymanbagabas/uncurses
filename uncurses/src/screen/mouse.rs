@@ -1,9 +1,9 @@
-//! High-level mouse tracking mode and encoding selection for the
+//! Mouse tracking mode and encoding selection for the
 //! [`Screen`](super::Screen) facade.
 //!
 //! These types abstract over the underlying DEC private modes (the
 //! `MOUSE_*` constants in [`crate::ansi::mode`]); the facade maps the
-//! chosen mode and encoding to those low-level modes when enabling or
+//! chosen mode and encoding to those underlying modes when enabling or
 //! restoring mouse tracking. They are private to the facade.
 
 use crate::ansi::mode::Mode;

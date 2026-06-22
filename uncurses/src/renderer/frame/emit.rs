@@ -1,6 +1,6 @@
 //! Cursor/glyph emission helpers.
 //!
-//! Low-level routines that the diff loop and other phases use to
+//! Routines that the diff loop and other phases use to
 //! relocate the cursor and to push glyph bytes through the right-margin
 //! phantom and lower-right corner edge cases.
 
