@@ -182,7 +182,7 @@ impl App {
             }
 
             let line = format_event(&ev);
-            self.screen.insert_above(&line);
+            self.screen.insert_above(&line)?;
             self.last = line;
             self.render()?;
         }

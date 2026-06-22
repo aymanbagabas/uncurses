@@ -647,7 +647,7 @@ fn insert_above_emits_il_and_content() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (10, 5));
-        screen.insert_above("Prepended line");
+        screen.insert_above("Prepended line").unwrap();
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -664,7 +664,7 @@ fn insert_above_renders_styled_line() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (10, 5));
-        screen.insert_above("Hello");
+        screen.insert_above("Hello").unwrap();
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -681,9 +681,9 @@ fn multiple_insert_above_emit_one_il_per_call() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (20, 10));
-        screen.insert_above("First line");
-        screen.insert_above("Second line");
-        screen.insert_above("Third line\nFourth lin");
+        screen.insert_above("First line").unwrap();
+        screen.insert_above("Second line").unwrap();
+        screen.insert_above("Third line\nFourth lin").unwrap();
         screen.render().unwrap();
         screen.flush().unwrap();
     }
