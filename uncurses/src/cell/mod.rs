@@ -64,10 +64,6 @@
 //! the one-`Cell`-per-column layout while still representing wide graphemes
 //! accurately.
 
-pub mod segment;
-
-pub use segment::graphemes;
-
 use compact_str::CompactString;
 
 use crate::style::Style;

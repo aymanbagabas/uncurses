@@ -18,8 +18,8 @@
 //! bytes are passed through as zero-width tokens so callers can preserve or drop
 //! them according to their own policy.
 
-use crate::cell::graphemes;
 pub use crate::text::WidthMode;
+use crate::unicode::graphemes;
 
 /// A single token produced by [`tokenize`].
 #[derive(Debug, Clone, PartialEq, Eq)]

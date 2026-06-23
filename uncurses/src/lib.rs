@@ -115,6 +115,7 @@ pub mod screen;
 pub mod style;
 pub mod terminal;
 pub mod text;
+pub mod unicode;
 
 #[cfg(debug_assertions)]
 mod trace;
