@@ -49,8 +49,8 @@ The compose-it-yourself route. A `TextBuffer`, or any [surface]({{< relref
 "../concepts/surfaces.md" >}}) grid, is a structured grid of cells you paint full
 frames into and compose before sending them anywhere. There is no renderer, no
 diffing, and no terminal session; it owns neither input nor output, so it never
-touches raw mode. When a frame is ready, the [`Encode`]({{< relref
-"../concepts/buffers.md" >}}) trait serializes it to bytes you write wherever you
+touches raw mode. When a frame is ready, the [`Encode`](/api/uncurses/text/trait.Encode.html)
+trait serializes it to bytes you write wherever you
 like: a terminal, a pipe, a file, a string.
 
 ```rust
