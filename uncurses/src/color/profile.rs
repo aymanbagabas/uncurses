@@ -107,7 +107,7 @@ impl Profile {
     /// on non-Windows platforms, an empty `TERM` start as disabled before other
     /// forcing/upgrading rules are applied.
     pub fn detect_from(env: &Env, is_tty: bool) -> Self {
-        let is_tty = is_tty || env.bool("TTY_FORCE");
+        let is_tty = is_tty || env.is_truthy("TTY_FORCE");
         let term = env.get("TERM").unwrap_or_default();
 
         // `env_color_profile` is responsible for translating the
@@ -120,7 +120,7 @@ impl Profile {
         let mut p = if !is_tty { Profile::Disabled } else { envp };
 
         // NO_COLOR: clamp to Ascii (decoration still allowed).
-        if env.bool("NO_COLOR") && is_tty {
+        if env.is_truthy("NO_COLOR") && is_tty {
             if p > Profile::Ascii {
                 p = Profile::Ascii;
             }
@@ -128,7 +128,7 @@ impl Profile {
         }
 
         // CLICOLOR_FORCE: at least Ansi, take max of env-derived.
-        if env.bool("CLICOLOR_FORCE") {
+        if env.is_truthy("CLICOLOR_FORCE") {
             if p < Profile::Ansi {
                 p = Profile::Ansi;
             }
@@ -140,7 +140,7 @@ impl Profile {
 
         let is_dumb = term.is_empty() || term == DUMB_TERM;
         // CLICOLOR: bump non-dumb TTY to at least Ansi.
-        if env.bool("CLICOLOR") && is_tty && !is_dumb && p < Profile::Ansi {
+        if env.is_truthy("CLICOLOR") && is_tty && !is_dumb && p < Profile::Ansi {
             p = Profile::Ansi;
         }
 
@@ -190,13 +190,13 @@ fn env_color_profile(env: &Env, term: &str) -> Profile {
         return Profile::TrueColor;
     }
 
-    if env.bool("GOOGLE_CLOUD_SHELL") {
+    if env.is_truthy("GOOGLE_CLOUD_SHELL") {
         return Profile::TrueColor;
     }
 
     // CI runners advertise themselves with CI=true and render ANSI
     // color in their logs even though TERM is usually unset or `dumb`.
-    if env.bool("CI") {
+    if env.is_truthy("CI") {
         return Profile::TrueColor;
     }
 
@@ -443,7 +443,7 @@ mod tests {
         ];
         for (v, want) in cases {
             let e = env(&[("X", v)]);
-            assert_eq!(e.bool("X"), want, "bool({v:?})");
+            assert_eq!(e.is_truthy("X"), want, "bool({v:?})");
         }
     }
 

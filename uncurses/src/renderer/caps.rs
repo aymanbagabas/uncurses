@@ -767,7 +767,7 @@ mod tests {
 
     #[test]
     fn from_env_missing_term_falls_back_to_default() {
-        let env = Env::empty();
+        let env = Env::new();
         assert_eq!(Optimizations::from_env(&env), Optimizations::default());
     }
 

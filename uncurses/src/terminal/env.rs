@@ -44,7 +44,7 @@ impl Env {
     /// # Errors and panics
     ///
     /// This method does not fail or intentionally panic.
-    pub fn empty() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -52,7 +52,7 @@ impl Env {
     ///
     /// Pair order and duplicate keys are preserved. Later duplicates shadow
     /// earlier values for [`get`](Self::get), [`has`](Self::has), and
-    /// [`bool`](Self::bool).
+    /// [`is_truthy`](Self::is_truthy).
     ///
     /// # Parameters
     ///
@@ -83,7 +83,7 @@ impl Env {
     /// Append a variable to the snapshot.
     ///
     /// If `key` already exists, the new value shadows earlier values for
-    /// [`get`](Self::get), [`bool`](Self::bool), and [`has`](Self::has)
+    /// [`get`](Self::get), [`is_truthy`](Self::is_truthy), and [`has`](Self::has)
     /// lookups. Existing entries are not removed.
     ///
     /// # Parameters
@@ -157,7 +157,7 @@ impl Env {
     /// # Errors and panics
     ///
     /// This method does not fail or intentionally panic.
-    pub fn bool(&self, key: &str) -> bool {
+    pub fn is_truthy(&self, key: &str) -> bool {
         matches!(
             self.lookup(key).unwrap_or_default(),
             "1" | "t" | "T" | "TRUE" | "true" | "True"
@@ -210,7 +210,7 @@ mod tests {
             ("F", "T"),
         ]);
         for k in ["A", "B", "C", "D", "E", "F"] {
-            assert!(e.bool(k), "{k} should be truthy");
+            assert!(e.is_truthy(k), "{k} should be truthy");
         }
     }
 
@@ -218,8 +218,8 @@ mod tests {
     fn bool_falsy_values() {
         let e = Env::from_pairs([("A", "0"), ("B", "false"), ("C", ""), ("D", "yes")]);
         for k in ["A", "B", "C", "D"] {
-            assert!(!e.bool(k), "{k} should be falsy");
+            assert!(!e.is_truthy(k), "{k} should be falsy");
         }
-        assert!(!e.bool("MISSING"));
+        assert!(!e.is_truthy("MISSING"));
     }
 }
