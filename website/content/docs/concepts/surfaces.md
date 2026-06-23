@@ -1,6 +1,6 @@
 ---
 title: "Surfaces"
-weight: 5
+weight: 6
 ---
 
 A [buffer]({{< relref "buffers.md" >}}) is one kind of cell grid, but it is not

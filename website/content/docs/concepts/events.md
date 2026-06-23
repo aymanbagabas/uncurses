@@ -1,6 +1,6 @@
 ---
 title: "Events"
-weight: 6
+weight: 7
 ---
 
 In [raw mode]({{< relref "terminals.md" >}}) the terminal hands you a bare byte
