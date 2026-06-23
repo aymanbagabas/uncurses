@@ -117,7 +117,7 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
         self.stage_set_grapheme_clusters(enable);
     }
 
-    fn set_kitty_keyboard_flags(&mut self, flags: crate::ansi::KittyKeyboardFlags) {
+    fn set_kitty_keyboard_flags(&mut self, flags: crate::ansi::kitty::KittyKeyboardFlags) {
         self.stage_set_kitty_keyboard_flags(flags);
     }
 
@@ -1721,7 +1721,7 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
 
 #[test]
 fn set_kitty_keyboard_flags_always_emits_set() {
-    use crate::ansi::KittyKeyboardFlags;
+    use crate::ansi::kitty::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (20, 1));
@@ -1739,7 +1739,7 @@ fn set_kitty_keyboard_flags_always_emits_set() {
 
 #[test]
 fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
-    use crate::ansi::KittyKeyboardFlags;
+    use crate::ansi::kitty::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (20, 1));
@@ -1756,7 +1756,7 @@ fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
 
 #[test]
 fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
-    use crate::ansi::KittyKeyboardFlags;
+    use crate::ansi::kitty::KittyKeyboardFlags;
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (20, 1));
@@ -1788,7 +1788,7 @@ fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
 
 #[test]
 fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
-    use crate::ansi::KittyKeyboardFlags;
+    use crate::ansi::kitty::KittyKeyboardFlags;
     let mut setup: Vec<u8> = Vec::new();
     let mut restore_buf: Vec<u8> = Vec::new();
     {

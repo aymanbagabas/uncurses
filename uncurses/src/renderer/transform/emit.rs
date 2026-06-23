@@ -100,7 +100,7 @@ impl Renderer {
                 && can_clear_with(cell0, self.opts.contains(Optimizations::BCE))
             {
                 self.update_pen(out, Some(cell0))?;
-                ansi::write_ech(out, count)?;
+                ansi::screen::write_ech(out, count)?;
                 if j > last {
                     return Ok(true);
                 }
@@ -136,7 +136,7 @@ impl Renderer {
                 rep_count -= 1;
 
                 if rep_count > 0 {
-                    ansi::write_rep(out, rep_count)?;
+                    ansi::screen::write_rep(out, rep_count)?;
                     self.cur.x = Some(
                         self.cur
                             .pos()
@@ -322,9 +322,9 @@ impl Renderer {
         }
         let use_ich = self.opts.contains(Optimizations::ICH);
         if use_ich {
-            ansi::write_ich(out, count as u16)?;
+            ansi::screen::write_ich(out, count as u16)?;
         } else {
-            ansi::write_set_mode(out, &[ansi::Mode::INSERT])?;
+            ansi::mode::write_set_mode(out, &[ansi::mode::Mode::INSERT])?;
         }
         let surface_width = self.last_width;
         let surface_height = self.last_height;
@@ -352,7 +352,7 @@ impl Renderer {
             }
         }
         if !use_ich {
-            ansi::write_reset_mode(out, &[ansi::Mode::INSERT])?;
+            ansi::mode::write_reset_mode(out, &[ansi::mode::Mode::INSERT])?;
         }
         Ok(())
     }

@@ -1137,8 +1137,8 @@ mod tests {
         assert_eq!(
             events[0],
             Event::KittyKeyboardEnhancements(
-                crate::ansi::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | crate::ansi::KittyKeyboardFlags::REPORT_ALTERNATE_KEYS
+                crate::ansi::kitty::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | crate::ansi::kitty::KittyKeyboardFlags::REPORT_ALTERNATE_KEYS
             )
         );
     }

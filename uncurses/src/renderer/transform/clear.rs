@@ -103,7 +103,7 @@ impl Renderer {
     /// what BCE leaves on every cell.
     pub(crate) fn clear_screen(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
         ansi_cursor::write_cup(out, 0, 0)?;
-        ansi::write_erase_screen(out)?;
+        ansi::screen::write_erase_screen(out)?;
         self.cur.set_pos(Position { y: 0, x: 0 });
         self.cur.at_phantom = false;
         // The CUP just emitted authoritatively places the tracked
@@ -141,7 +141,7 @@ impl Renderer {
     /// diff sees the post-erase state. The caller is responsible for
     /// moving the cursor first and for any hash bookkeeping.
     pub(crate) fn clear_to_bottom(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
-        ansi::write_erase_below(out)?;
+        ansi::screen::write_erase_below(out)?;
 
         let row = self.cur.pos().y;
         let col = self.cur.pos().x;
@@ -212,7 +212,7 @@ impl Renderer {
         self.update_pen(out, Some(blank))?;
         let count = width.saturating_sub(cur_x);
         if self.el0_cost() <= count {
-            ansi::write_erase_to_eol(out)?;
+            ansi::screen::write_erase_to_eol(out)?;
         } else if count > 0 {
             // Bulk-emit the ASCII space fill. Going through
             // put_glyph_bytes per byte paid the phantom check + the

@@ -269,7 +269,7 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
     if final_byte == b'u' && view.private == Some(b'?') && no_intermediate && params.len() == 1 {
         let bits = params.get_or(0, 0) as u8;
         return Some(Event::KittyKeyboardEnhancements(
-            crate::ansi::KittyKeyboardFlags::from_bits_truncate(bits),
+            crate::ansi::kitty::KittyKeyboardFlags::from_bits_truncate(bits),
         ));
     }
 
