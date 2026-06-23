@@ -107,7 +107,7 @@ pub use state::Capabilities;
 /// Cell-diff capability flags controlling which optimized escape
 /// sequences the screen's renderer may emit. Re-exported from the
 /// renderer so applications can configure rendering with
-/// [`Screen::use_optimizations`] without depending on renderer internals.
+/// [`Screen::set_optimizations`] without depending on renderer internals.
 pub use crate::renderer::Optimizations;
 
 use std::io::{self, Write};
@@ -525,14 +525,14 @@ where
     }
 
     /// Set the color profile used when emitting styled cells.
-    pub fn use_color_profile(&mut self, profile: crate::color::Profile) {
+    pub fn set_color_profile(&mut self, profile: crate::color::Profile) {
         self.renderer.set_color_profile(profile);
     }
 
     /// Return the color profile used when emitting styled cells.
     ///
     /// This is the profile the renderer downsamples colors to, set by
-    /// [`use_color_profile`](Self::use_color_profile) or detected from the
+    /// [`set_color_profile`](Self::set_color_profile) or detected from the
     /// environment when the screen was constructed. Pass it to
     /// [`Encode::encode_with`](crate::text::Encode::encode_with) to serialize
     /// a surface the same way this screen renders it.
@@ -541,7 +541,7 @@ where
     }
 
     /// Set the renderer optimization flags.
-    pub fn use_optimizations(&mut self, optimizations: Optimizations) {
+    pub fn set_optimizations(&mut self, optimizations: Optimizations) {
         self.renderer.set_optimizations(optimizations);
     }
 
