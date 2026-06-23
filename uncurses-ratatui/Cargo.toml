@@ -3,8 +3,16 @@ name = "uncurses-ratatui"
 description = "Integration adapter for the uncurses terminal rendering library"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "README.md"
+keywords = ["ratatui", "terminal", "tui", "backend", "ansi"]
+categories = ["command-line-interface", "rendering"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["unicode-rs"]

@@ -97,6 +97,8 @@
 //! [`encode`](text::Encode::encode) hands you the bytes and you decide where
 //! they go.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 #[cfg(not(any(feature = "icu", feature = "unicode-rs")))]
 compile_error!(
     "uncurses requires one of the `icu` or `unicode-rs` features to be enabled (the default)"
