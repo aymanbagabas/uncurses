@@ -1,7 +1,7 @@
 use super::{Color, XTERM_COLORS};
 
 /// Convert an RGB color to the nearest xterm 256-color index.
-pub fn rgb_to_ansi256((r, g, b): (u8, u8, u8)) -> Color {
+pub(crate) fn rgb_to_ansi256((r, g, b): (u8, u8, u8)) -> Color {
     // Check for exact match in the 6x6x6 cube
     let cube_values: [u8; 6] = [0, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
 
@@ -31,7 +31,7 @@ pub fn rgb_to_ansi256((r, g, b): (u8, u8, u8)) -> Color {
 }
 
 /// Convert an RGB color to the nearest 16-color ANSI color.
-pub fn rgb_to_ansi16((r, g, b): (u8, u8, u8)) -> Color {
+pub(crate) fn rgb_to_ansi16((r, g, b): (u8, u8, u8)) -> Color {
     let mut best_idx = 0u8;
     let mut best_dist = u32::MAX;
 

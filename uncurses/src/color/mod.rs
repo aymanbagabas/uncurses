@@ -60,7 +60,7 @@
 mod convert;
 mod profile;
 
-pub use profile::*;
+pub use profile::Profile;
 
 /// A terminal color in one of the supported palette spaces.
 ///
@@ -369,7 +369,7 @@ const XTERM_COLORS: [(u8, u8, u8); 256] = {
 /// Indices `0..=15` are the standard ANSI colors, `16..=231` are the 6×6×6
 /// color cube, and `232..=255` are the grayscale ramp. Every `u8` is a valid
 /// palette index, so this function does not fail or panic.
-pub fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
+pub(crate) fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
     XTERM_COLORS[idx as usize]
 }
 

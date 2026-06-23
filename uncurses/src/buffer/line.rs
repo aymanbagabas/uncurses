@@ -11,7 +11,7 @@ pub type Line = Vec<Cell>;
 /// Fill an existing row slot in place with `fill`. Wide fills
 /// (`fill.width() > 1`) lay down primary + continuation pairs; any
 /// trailing slot too narrow to fit another pair is a plain blank.
-pub fn fill_line_into(slot: &mut [Cell], fill: &Cell) {
+pub(crate) fn fill_line_into(slot: &mut [Cell], fill: &Cell) {
     let width = slot.len();
     if fill.width() <= 1 {
         slot.fill(fill.clone());

@@ -14,7 +14,7 @@ use std::io::{self, Write};
 
 use crate::ansi::{self, background, cursor, kitty, mode, xterm};
 use crate::color::Color;
-use crate::event::source::Input;
+use crate::event::Input;
 
 use super::MousePreference;
 use super::Screen;

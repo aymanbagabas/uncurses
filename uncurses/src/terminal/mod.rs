@@ -17,9 +17,9 @@
 //! ## Raw-mode lifecycle
 //!
 //! Raw mode is an explicit save/apply/restore flow. [`Terminal::make_raw`]
-//! calls [`make_raw_mode`], stores the returned [`State`] inside the
+//! calls `make_raw_mode`, stores the returned [`State`] inside the
 //! `Terminal`, and returns a clone of that state. [`Terminal::restore`] applies
-//! the stored state with [`set_state`] and clears it. The free functions expose
+//! the stored state with `set_state` and clears it. The free functions expose
 //! the same lifecycle for callers that manage handles and state themselves.
 //!
 //! ```text
@@ -37,7 +37,7 @@
 //!
 //! ## Window size
 //!
-//! [`get_window_size`] queries the operating system for cell dimensions and,
+//! `get_window_size` queries the operating system for cell dimensions and,
 //! where available, pixel dimensions. [`Terminal::get_window_size`] applies the
 //! platform-specific handle selection: Unix tries output first, then input;
 //! Windows queries the output console screen buffer.
@@ -45,7 +45,7 @@
 //! ## Stdio and controlling-terminal handles
 //!
 //! [`stdin`], [`stdout`], and [`stderr`] wrap the inherited process streams as
-//! cheap, copyable, unbuffered handles. [`open_tty`] opens the controlling
+//! cheap, copyable, unbuffered handles. `open_tty` opens the controlling
 //! terminal directly: Unix uses `/dev/tty` for both halves, and Windows uses
 //! `CONIN$` for input and `CONOUT$` for output. The direct tty path is useful
 //! for applications whose stdin or stdout may be a pipe but which still need a
@@ -62,16 +62,18 @@
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
-pub mod env;
+mod env;
 mod handle;
-pub mod raw;
-pub mod size;
-pub mod stdio;
-pub mod tty;
+mod raw;
+mod size;
+mod stdio;
+mod tty;
 
 pub use env::Env;
 pub use handle::Terminal;
-pub use raw::*;
-pub use size::*;
-pub use stdio::{Stderr, Stdin, Stdout, stderr, stdin, stdout};
-pub use tty::*;
+pub use raw::State;
+pub use size::Winsize;
+pub use stdio::{Stderr, StderrLock, Stdin, StdinLock, Stdout, StdoutLock, stderr, stdin, stdout};
+pub use tty::{TtyInput, TtyOutput};
+
+pub(crate) use size::get_window_size;

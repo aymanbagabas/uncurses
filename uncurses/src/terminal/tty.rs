@@ -1,13 +1,13 @@
 //! Controlling-terminal helpers.
 //!
-//! [`open_tty`] opens the controlling terminal directly, useful when
+//! `open_tty` opens the controlling terminal directly, useful when
 //! stdio is piped or redirected but the program still needs to talk to
 //! a real terminal. On Unix both halves of the returned pair refer to
 //! `/dev/tty`; on Windows the input is `CONIN$` and the output is
 //! `CONOUT$`.
 //!
 //! The pair is cached process-wide on the first successful call, so
-//! [`open_tty`] can be called freely from multiple sites without
+//! `open_tty` can be called freely from multiple sites without
 //! reopening the device. Both [`TtyInput`] and [`TtyOutput`] are
 //! [`Copy`] handles that reference the shared cache and serialise
 //! concurrent reads / writes through a [`Mutex`].
@@ -19,7 +19,7 @@
 //!
 //! ## When to use this module
 //!
-//! Use [`open_tty`] through [`Terminal::open`](super::Terminal::open) when an
+//! Use `open_tty` through [`Terminal::open`](super::Terminal::open) when an
 //! application may receive data on stdin or write data to stdout but still
 //! needs to control the user's terminal. Use [`stdin`](super::stdin) and
 //! [`stdout`](super::stdout) instead when inherited stdio is the terminal
@@ -40,7 +40,7 @@ use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, RawHandle};
 // Process-wide singletons
 //
 // Both halves of the controlling-terminal pair are cached the first
-// time [`open_tty`] is called. Subsequent calls return new `Copy`
+// time `open_tty` is called. Subsequent calls return new `Copy`
 // handles that reference the same underlying [`File`] guarded by a
 // [`Mutex`], so concurrent writes from multiple threads are serialised
 // at the byte level. The cached state includes failures: if the
@@ -152,7 +152,7 @@ pub fn open_tty() -> io::Result<(TtyInput, TtyOutput)> {
     ))
 }
 
-/// Read end of the controlling terminal returned by [`open_tty`].
+/// Read end of the controlling terminal returned by `open_tty`.
 ///
 /// A cheap `Copy` handle that references a process-wide cached
 /// [`File`] guarded by a [`Mutex`]; concurrent reads from multiple
@@ -166,7 +166,7 @@ pub struct TtyInput {
     inner: &'static Mutex<File>,
 }
 
-/// Write end of the controlling terminal returned by [`open_tty`].
+/// Write end of the controlling terminal returned by `open_tty`.
 ///
 /// A cheap `Copy` handle that references a process-wide cached
 /// [`File`] guarded by a [`Mutex`]; concurrent writes from multiple

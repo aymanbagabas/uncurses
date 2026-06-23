@@ -11,8 +11,10 @@
 
 use std::io::{self, Write};
 
-use super::sgr::{SgrSeq, push_bg_params, push_fg_params, push_sep, push_underline_color_params};
-use super::{AttrFlags, RESET, Style, UnderlineStyle};
+use super::sgr::{
+    RESET, SgrSeq, push_bg_params, push_fg_params, push_sep, push_underline_color_params,
+};
+use super::{AttrFlags, Style, UnderlineStyle};
 
 /// Write the compact visual transition from `from` to `to`.
 ///

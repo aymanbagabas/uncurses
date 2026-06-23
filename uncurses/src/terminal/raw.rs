@@ -30,19 +30,21 @@ use windows_sys::Win32::Foundation::HANDLE;
 /// falling back to the output descriptor if necessary. On Windows it stores
 /// both input and output console-mode bitfields.
 ///
-/// Use values returned by [`get_state`] or [`make_raw_mode`] with
-/// [`set_state`] to restore a terminal to a previous configuration.
+/// Use values returned by [`Terminal::get_state`](crate::terminal::Terminal::get_state)
+/// or [`Terminal::make_raw`](crate::terminal::Terminal::make_raw) with
+/// [`Terminal::set_state`](crate::terminal::Terminal::set_state) to restore a
+/// terminal to a previous configuration.
 #[derive(Clone)]
 pub struct State {
     #[cfg(unix)]
     /// Saved terminal attributes.
-    pub termios: libc::termios,
+    pub(crate) termios: libc::termios,
     #[cfg(windows)]
     /// Saved input console-mode bits.
-    pub input_mode: u32,
+    pub(crate) input_mode: u32,
     #[cfg(windows)]
     /// Saved output console-mode bits.
-    pub output_mode: u32,
+    pub(crate) output_mode: u32,
 }
 
 #[cfg(windows)]

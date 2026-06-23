@@ -76,7 +76,7 @@ mod surface;
 mod width;
 
 pub use display::{Encode, SurfaceDisplay};
-pub use mode::{WidthMode, grapheme_cells};
-pub use painter::{Painter, WrapMode};
+pub use mode::{WidthMode, WrapMode, grapheme_cells};
+pub use painter::Painter;
 pub use surface::TextSurface;
 pub use width::{char_width, grapheme_width};

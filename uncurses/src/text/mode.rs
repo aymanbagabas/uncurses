@@ -1,9 +1,10 @@
-//! Width-measurement policy and grapheme-cell iteration.
+//! Width-measurement and wrapping policy, plus grapheme-cell iteration.
 //!
 //! Strings are always segmented into extended grapheme clusters by
 //! [`grapheme_cells`]. [`WidthMode`] changes only how each cluster's cell width
 //! is computed: by the first code point (`Wc`) or by cluster-aware Unicode
-//! presentation rules (`Grapheme`).
+//! presentation rules (`Grapheme`). [`WrapMode`] controls what happens when a
+//! cluster would run past the right edge of a clip rectangle.
 
 use crate::unicode::graphemes;
 
@@ -91,6 +92,27 @@ pub fn grapheme_cells(
     eaw_wide: bool,
 ) -> impl Iterator<Item = (&str, u8)> {
     graphemes(s).map(move |g| (g, mode.grapheme_width(g, eaw_wide)))
+}
+
+/// Behavior when a cluster would extend past the right edge of the clip
+/// rectangle.
+///
+/// Newlines and carriage returns are handled independently of this setting:
+/// `\n` advances to the next row at the clip rectangle's left edge, and `\r`
+/// returns to that left edge on the current row.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum WrapMode {
+    /// Stop painting at the right edge of the current row.
+    ///
+    /// The cluster that would cross the edge is not written, and the returned
+    /// cursor position is where painting stopped.
+    #[default]
+    Truncate,
+    /// Continue on the next row at the left edge of the clip rectangle.
+    ///
+    /// Wrapping stops when the bottom edge is reached. If a cluster is wider
+    /// than the clip rectangle itself, it is not written.
+    Wrap,
 }
 
 #[cfg(test)]

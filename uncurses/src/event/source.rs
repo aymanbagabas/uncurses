@@ -62,7 +62,7 @@ use super::source_unix::UnixWakerInner;
 use super::source_windows::WindowsWakerInner;
 use crate::event::Event;
 #[cfg(unix)]
-use crate::terminal::size::Winsize;
+use crate::terminal::Winsize;
 
 /// Platform-specific capabilities required from a Unix event input handle.
 ///
@@ -186,7 +186,7 @@ impl Waker {
 /// Wakeable event source backed by a platform readiness primitive.
 ///
 /// `EventSource` is the synchronous owner of terminal input. It stores pending
-/// bytes, a [`Decoder`], an event queue, deadline state for ambiguous `ESC`
+/// bytes, a `Decoder`, an event queue, deadline state for ambiguous `ESC`
 /// prefixes and open bracketed pastes, and the platform handles needed for
 /// wakeups and resize notifications.
 ///
