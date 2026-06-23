@@ -5,7 +5,7 @@
 //! process and it resumes cleanly with `fg`.
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -113,10 +113,10 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, alt: bool) {
         " inline mode "
     };
     let keyword = Style::default()
-        .fg(BasicColor::BrightCyan)
-        .bg(BasicColor::Black)
+        .fg(Color::BrightCyan)
+        .bg(Color::Black)
         .bold();
-    let help = Style::default().fg(BasicColor::BrightBlack);
+    let help = Style::default().fg(Color::BrightBlack);
 
     screen.set_str((2, 1), "You're in", uncurses::style::Style::default());
     screen.set_str((12, 1), mode, keyword);

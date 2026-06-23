@@ -28,7 +28,7 @@
 //! ```text
 //! TrueColor ─────────► Some(original Color)
 //! Ansi256   ─────────► Some(nearest Color::Indexed(_))
-//! Ansi      ─────────► Some(nearest Color::Basic(_))
+//! Ansi      ─────────► Some(nearest named Color)
 //! Ascii     ─┐
 //! Disabled  ─┴──────► None
 //! ```
@@ -57,7 +57,7 @@ pub enum Profile {
     Ascii,
     /// Standard 16-color ANSI palette.
     ///
-    /// Color conversion returns the nearest [`Color::Basic`](super::Color::Basic)
+    /// Color conversion returns the nearest named [`Color`](super::Color)
     /// using weighted RGB distance against the xterm palette entries `0..=15`.
     Ansi,
     /// xterm 256-color palette.

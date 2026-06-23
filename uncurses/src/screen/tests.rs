@@ -380,7 +380,7 @@ fn test_screen_clears_stale_chars_after_navigating() {
 // single Screen lifetime, and assert that the relevant content and
 // clearing sequences appear in the cumulative byte stream.
 
-use crate::color::{BasicColor, Color};
+use crate::color::Color;
 use crate::renderer::Optimizations;
 use crate::style::{Style, UnderlineStyle};
 
@@ -1471,7 +1471,7 @@ fn basic_color_fg_emits_sgr_31() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1, 1));
-        let cell = Cell::narrow("X").style(Style::default().fg(Color::Basic(BasicColor::Red)));
+        let cell = Cell::narrow("X").style(Style::default().fg(Color::Red));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render().unwrap();
         screen.flush().unwrap();

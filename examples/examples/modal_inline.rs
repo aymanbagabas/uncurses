@@ -8,7 +8,7 @@
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
@@ -120,9 +120,9 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
 }
 
 fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
-    let cyan = Style::default().fg(BasicColor::BrightCyan);
+    let cyan = Style::default().fg(Color::BrightCyan);
     let plain = Style::default();
-    let bullet_color = Style::default().fg(BasicColor::Yellow);
+    let bullet_color = Style::default().fg(Color::Yellow);
 
     screen.set_str((0, 1), "Press m to toggle the modal.", cyan);
     screen.set_str(
@@ -132,7 +132,7 @@ fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
     );
     for (i, label) in ["item 1", "item 2", "item 3", "item 4"].iter().enumerate() {
         let y = 3 + i as u16;
-        screen.set_str((0, y), "•", Style::default().fg(BasicColor::Yellow));
+        screen.set_str((0, y), "•", Style::default().fg(Color::Yellow));
         screen.set_str((2, y), label, bullet_color.clone());
     }
 }
@@ -159,15 +159,11 @@ fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
 
 fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
-        .fg(BasicColor::BrightWhite)
-        .bg(BasicColor::Blue)
+        .fg(Color::BrightWhite)
+        .bg(Color::Blue)
         .bold();
-    let body = Style::default()
-        .fg(BasicColor::BrightWhite)
-        .bg(BasicColor::Blue);
-    let hint = Style::default()
-        .fg(BasicColor::BrightYellow)
-        .bg(BasicColor::Blue);
+    let body = Style::default().fg(Color::BrightWhite).bg(Color::Blue);
+    let hint = Style::default().fg(Color::BrightYellow).bg(Color::Blue);
 
     screen.fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
 
@@ -194,8 +190,8 @@ fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
         rect.height.saturating_sub(2),
     );
     let title = Style::default()
-        .fg(BasicColor::BrightWhite)
-        .bg(BasicColor::Blue)
+        .fg(Color::BrightWhite)
+        .bg(Color::Blue)
         .bold();
     screen.set_str_rect(
         Rect::new(inner.x, inner.y, inner.width, 1),

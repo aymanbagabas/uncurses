@@ -16,7 +16,7 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -134,7 +134,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 
 fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
     screen.clear();
-    let dim = Style::default().fg(BasicColor::BrightBlack);
+    let dim = Style::default().fg(Color::BrightBlack);
     let hint = format!("Paste text. Pastes over {THRESHOLD} bytes spill to a file. q quits.");
     screen.set_str((0, 0), &hint, dim.clone());
 
@@ -146,7 +146,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
         Some(Outcome::Memory { preview, bytes }) => {
             let head = format!("kept {bytes} bytes in memory:");
             screen.set_str((0, 2), &head, Style::default());
-            let body = Style::default().fg(BasicColor::BrightGreen);
+            let body = Style::default().fg(Color::BrightGreen);
             for (i, line) in preview.lines().enumerate() {
                 let row = 4 + i as u16;
                 if row >= height {
@@ -158,7 +158,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
         Some(Outcome::File { path, bytes }) => {
             let head = format!("spilled {bytes} bytes to a file:");
             screen.set_str((0, 2), &head, Style::default());
-            let body = Style::default().fg(BasicColor::BrightYellow);
+            let body = Style::default().fg(Color::BrightYellow);
             screen.set_str((0, 4), &path.display().to_string(), body);
         }
     }

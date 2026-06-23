@@ -18,7 +18,7 @@
 
 use super::{AttrFlags, Style, UnderlineStyle};
 use crate::ansi::params::{Group, Params};
-use crate::color::{BasicColor, Color};
+use crate::color::Color;
 
 /// Read SGR parameters into a mutable style.
 ///
@@ -63,30 +63,22 @@ pub fn read_style(params: Params<'_>, style: &mut Style) {
             28 => style.attrs.remove(AttrFlags::CONCEAL),
             29 => style.attrs.remove(AttrFlags::STRIKETHROUGH),
             30..=37 => {
-                style.fg = Some(Color::Basic(
-                    BasicColor::from_u8((main - 30) as u8).unwrap(),
-                ));
+                style.fg = Color::from_named((main - 30) as u8);
             }
             38 => style.fg = read_extended_color(g, &mut groups),
             39 => style.fg = None,
             40..=47 => {
-                style.bg = Some(Color::Basic(
-                    BasicColor::from_u8((main - 40) as u8).unwrap(),
-                ));
+                style.bg = Color::from_named((main - 40) as u8);
             }
             48 => style.bg = read_extended_color(g, &mut groups),
             49 => style.bg = None,
             58 => style.underline_color = read_extended_color(g, &mut groups),
             59 => style.underline_color = None,
             90..=97 => {
-                style.fg = Some(Color::Basic(
-                    BasicColor::from_u8((main - 90 + 8) as u8).unwrap(),
-                ));
+                style.fg = Color::from_named((main - 90 + 8) as u8);
             }
             100..=107 => {
-                style.bg = Some(Color::Basic(
-                    BasicColor::from_u8((main - 100 + 8) as u8).unwrap(),
-                ));
+                style.bg = Color::from_named((main - 100 + 8) as u8);
             }
             _ => {} // unknown — ignore
         }
@@ -193,11 +185,7 @@ where
 }
 
 fn index_to_color(n: u8) -> Color {
-    if let Some(b) = BasicColor::from_u8(n) {
-        Color::Basic(b)
-    } else {
-        Color::Indexed(n)
-    }
+    Color::from_named(n).unwrap_or(Color::Indexed(n))
 }
 
 #[cfg(test)]
@@ -235,25 +223,25 @@ mod tests {
     }
 
     #[test]
-    fn basic_fg_bg() {
+    fn named_fg_bg() {
         let s = rs(b"31;42");
-        assert_eq!(s.fg, Some(Color::Basic(BasicColor::Red)));
-        assert_eq!(s.bg, Some(Color::Basic(BasicColor::Green)));
+        assert_eq!(s.fg, Some(Color::Red));
+        assert_eq!(s.bg, Some(Color::Green));
     }
 
     #[test]
     fn bright_fg_bg() {
         let s = rs(b"91;107");
-        assert_eq!(s.fg, Some(Color::Basic(BasicColor::BrightRed)));
-        assert_eq!(s.bg, Some(Color::Basic(BasicColor::BrightWhite)));
+        assert_eq!(s.fg, Some(Color::BrightRed));
+        assert_eq!(s.bg, Some(Color::BrightWhite));
     }
 
     #[test]
     fn defaults_clear() {
         let mut s = Style::default()
-            .fg(Color::Basic(BasicColor::Red))
-            .bg(Color::Basic(BasicColor::Blue))
-            .underline_color(Color::Basic(BasicColor::Green));
+            .fg(Color::Red)
+            .bg(Color::Blue)
+            .underline_color(Color::Green);
         read_style(Params::from_raw(b"39;49;59"), &mut s);
         assert_eq!(s.fg, None);
         assert_eq!(s.bg, None);
@@ -288,8 +276,8 @@ mod tests {
 
     #[test]
     fn bg_256_semicolon() {
-        // 0..=15 promotes to BasicColor.
-        assert_eq!(rs(b"48;5;7").bg, Some(Color::Basic(BasicColor::White)));
+        // 0..=15 promotes to a named Color.
+        assert_eq!(rs(b"48;5;7").bg, Some(Color::White));
     }
 
     #[test]
@@ -320,7 +308,7 @@ mod tests {
     fn from_subparam_body() {
         let s = rs(b"1;31");
         assert!(s.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(s.fg, Some(Color::Basic(BasicColor::Red)));
+        assert_eq!(s.fg, Some(Color::Red));
     }
 
     #[test]

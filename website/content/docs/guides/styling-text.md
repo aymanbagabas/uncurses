@@ -15,22 +15,22 @@ underline, and no link. Builder methods return an updated style, so you chain
 only what you want.
 
 ```rust
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::style::{Style, UnderlineStyle};
 
 let heading = Style::new()
     .bold()
-    .fg(BasicColor::BrightCyan);
+    .fg(Color::BrightCyan);
 
 let warning = Style::new()
     .fg(Color::Rgb(255, 105, 180))
-    .bg(BasicColor::Black)
+    .bg(Color::Black)
     .italic();
 
 let spelling = Style::new()
     .underline()
     .underline_style(UnderlineStyle::Curly)
-    .underline_color(BasicColor::BrightRed);
+    .underline_color(Color::BrightRed);
 ```
 
 Attributes include `bold`, `faint`, `italic`, `underline`, `reverse`,
@@ -43,7 +43,7 @@ underline color.
 Colors come in three representations, and you can use them freely:
 
 ```rust
-Style::new().fg(BasicColor::Green);        // 16-color
+Style::new().fg(Color::Green);        // 16-color
 Style::new().fg(Color::Indexed(208));      // 256-color palette
 Style::new().fg(Color::Rgb(255, 105, 180)); // 24-bit truecolor
 ```
@@ -95,7 +95,7 @@ The `\x1b[1;32m` and `\x1b[0m` are read as `Painter` walks the string, so
 pass is the *base*: inline escapes layer on top of it, winning where they set a
 field and letting the base fill in the rest. An inline reset (`\x1b[0m`) clears
 the inline state, so the cells after it fall back to your base rather than to
-the terminal default. Had you passed `Style::new().fg(BasicColor::Blue)` above,
+the terminal default. Had you passed `Style::new().fg(Color::Blue)` above,
 "back to plain" would return blue, not colorless.
 
 The painter keeps no style of its own between calls: every `set_str` starts
@@ -112,7 +112,7 @@ renderer closes or changes the OSC 8 span as the link changes from cell to cell.
 ```rust
 let docs = Style::new()
     .underline()
-    .fg(BasicColor::BrightBlue)
+    .fg(Color::BrightBlue)
     .link("https://github.com/aymanbagabas/uncurses", "");
 
 screen.set_str((2, 5), "uncurses on GitHub", docs);

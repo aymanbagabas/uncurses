@@ -30,7 +30,7 @@ zero. It also parses the quit keys once, up front, so the loop can compare
 against them cheaply.
 
 ```rust
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -74,14 +74,14 @@ impl App {
     fn render(&mut self) -> std::io::Result<()> {
         self.screen.clear();
 
-        let title = Style::default().bold().fg(BasicColor::BrightCyan);
+        let title = Style::default().bold().fg(Color::BrightCyan);
         self.screen.set_str((2, 1), "Counter", title);
 
         let value = Style::default().bold();
         self.screen
             .set_str((2, 3), &format!("count: {}", self.count), value);
 
-        let hint = Style::default().fg(BasicColor::BrightBlack);
+        let hint = Style::default().fg(Color::BrightBlack);
         self.screen
             .set_str((2, 5), "up/down: change   r: reset   q: quit", hint);
 

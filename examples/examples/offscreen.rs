@@ -18,7 +18,7 @@ use std::io::{self, Write};
 
 use uncurses::buffer::{Surface, SurfaceMut, TextBuffer};
 use uncurses::cell::Cell;
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::layout::{Position, Rect};
 use uncurses::style::Style;
 use uncurses::text::{Encode, TextSurface};
@@ -66,7 +66,7 @@ fn draw_card(buf: &mut TextBuffer) {
     let h = buf.height();
 
     // Rounded border.
-    let border = Style::default().fg(BasicColor::BrightBlack);
+    let border = Style::default().fg(Color::BrightBlack);
     let edge = |s: &str| Cell::narrow(s).style(border.clone());
     buf.fill_rect(Rect::new(1, 0, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(1, h - 1, w - 2, 1), &edge("─"));
@@ -80,20 +80,20 @@ fn draw_card(buf: &mut TextBuffer) {
     // A colored title chip on the top border.
     let title = Style::default()
         .bold()
-        .fg(BasicColor::Black)
-        .bg(BasicColor::BrightMagenta);
+        .fg(Color::Black)
+        .bg(Color::BrightMagenta);
     buf.set_str((3, 0), " uncurses ", title);
 
     // Headline with a wide emoji to show off-screen wide-cell handling.
     buf.set_str(
         (3, 2),
         "Rendered off-screen ✨",
-        Style::default().bold().fg(BasicColor::BrightWhite),
+        Style::default().bold().fg(Color::BrightWhite),
     );
     buf.set_str(
         (3, 3),
         "cells in, escape bytes out",
-        Style::default().fg(BasicColor::BrightBlack),
+        Style::default().fg(Color::BrightBlack),
     );
 
     // A true-color gradient bar. Each cell is a left-half block `▌`: its
@@ -110,7 +110,7 @@ fn draw_card(buf: &mut TextBuffer) {
     buf.set_str(
         (3, 6),
         "24-bit color, encoded as written",
-        Style::default().fg(BasicColor::BrightBlack),
+        Style::default().fg(Color::BrightBlack),
     );
 }
 

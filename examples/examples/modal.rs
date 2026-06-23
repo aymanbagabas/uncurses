@@ -7,7 +7,7 @@
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key};
 use uncurses::layout::Rect;
 use uncurses::screen::Screen;
@@ -121,7 +121,7 @@ fn paint_background(screen: &mut Screen<Stdin, Stdout>) {
     if w == 0 || h == 0 {
         return;
     }
-    let body = Style::default().fg(BasicColor::BrightBlack);
+    let body = Style::default().fg(Color::BrightBlack);
     // Reserve the bottom row for the status line.
     let body_rows = h.saturating_sub(1);
     for y in 0..body_rows {
@@ -136,9 +136,7 @@ fn paint_status(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
         return;
     }
     let y = h - 1;
-    let status = Style::default()
-        .fg(BasicColor::Black)
-        .bg(BasicColor::BrightWhite);
+    let status = Style::default().fg(Color::Black).bg(Color::BrightWhite);
     screen.fill_rect(
         Rect::new(0, y, screen.width(), 1),
         &Cell::narrow(" ").style(status.clone()),
@@ -164,15 +162,13 @@ fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
 
 fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
-        .fg(BasicColor::BrightWhite)
-        .bg(BasicColor::Blue)
+        .fg(Color::BrightWhite)
+        .bg(Color::Blue)
         .bold();
-    let body = Style::default()
-        .fg(BasicColor::BrightWhite)
-        .bg(BasicColor::Blue);
+    let body = Style::default().fg(Color::BrightWhite).bg(Color::Blue);
     let hint = Style::default()
-        .fg(BasicColor::BrightYellow)
-        .bg(BasicColor::Blue)
+        .fg(Color::BrightYellow)
+        .bg(Color::Blue)
         .italic();
 
     // Solid fill so background text never bleeds through the modal.

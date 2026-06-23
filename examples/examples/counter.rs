@@ -4,7 +4,7 @@
 //! `q`, `Esc`, or `Ctrl-C` exits.
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
 use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::style::Style;
@@ -139,12 +139,12 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, count: u32) {
     let y = h / 2;
 
     let button = Style::default()
-        .fg(BasicColor::BrightWhite)
-        .bg(BasicColor::Blue)
+        .fg(Color::BrightWhite)
+        .bg(Color::Blue)
         .bold();
     screen.set_str((x, y), &inner, button);
 
-    let help = Style::default().fg(BasicColor::BrightBlack);
+    let help = Style::default().fg(Color::BrightBlack);
     let hint = "click / enter / space: increment • q: quit";
     let hint_w = hint.chars().count() as u16;
     let hx = w.saturating_sub(hint_w) / 2;

@@ -12,7 +12,7 @@
 
 use std::io::{self, Write};
 
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::style::{Style, UnderlineStyle};
 
 fn main() -> io::Result<()> {
@@ -36,7 +36,7 @@ fn main() -> io::Result<()> {
         let style = Style::new()
             .underline()
             .underline_style(kind)
-            .underline_color(BasicColor::BrightRed);
+            .underline_color(Color::BrightRed);
         show(&mut out, name, style)?;
     }
 
@@ -44,7 +44,7 @@ fn main() -> io::Result<()> {
     show(
         &mut out,
         "basic green (16-color)",
-        Style::new().fg(BasicColor::Green),
+        Style::new().fg(Color::Green),
     )?;
     show(
         &mut out,
@@ -59,10 +59,7 @@ fn main() -> io::Result<()> {
     show(
         &mut out,
         " foreground on background ",
-        Style::new()
-            .fg(BasicColor::White)
-            .bg(BasicColor::Blue)
-            .bold(),
+        Style::new().fg(Color::White).bg(Color::Blue).bold(),
     )?;
 
     section(&mut out, "Hyperlink (OSC 8)")?;
@@ -70,10 +67,7 @@ fn main() -> io::Result<()> {
     // its terminator, so the same opener/closer pattern that styles text also
     // makes it clickable.
     let url = "https://github.com/aymanbagabas/uncurses";
-    let link = Style::new()
-        .underline()
-        .fg(BasicColor::BrightBlue)
-        .link(url, "");
+    let link = Style::new().underline().fg(Color::BrightBlue).link(url, "");
     writeln!(
         out,
         "  {link}uncurses on GitHub{} (Ctrl/Cmd-click in a supporting terminal)",
@@ -92,6 +86,6 @@ fn show(out: &mut impl Write, label: &str, style: Style) -> io::Result<()> {
 }
 
 fn section(out: &mut impl Write, title: &str) -> io::Result<()> {
-    let heading = Style::new().bold().fg(BasicColor::BrightCyan);
+    let heading = Style::new().bold().fg(Color::BrightCyan);
     writeln!(out, "\n{heading}{title}{}", heading.reset())
 }

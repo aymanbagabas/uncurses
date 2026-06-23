@@ -2,19 +2,21 @@
 //!
 //! ## Color values
 //!
-//! [`Color`] has three representations: [`Color::Basic`] for the standard
-//! 16-color ANSI palette, [`Color::Indexed`] for the xterm 256-color palette,
-//! and [`Color::Rgb`] for 24-bit true color. All three can be converted to RGB
-//! with [`Color::to_rgb`], which makes palette colors usable with true-color
-//! helpers such as [`Color::to_hex`] and [`Color::to_hsl`].
+//! [`Color`] covers three palette spaces in one enum: the sixteen named ANSI
+//! colors ([`Color::Green`], [`Color::BrightBlue`], and so on),
+//! [`Color::Indexed`] for the xterm 256-color palette, and [`Color::Rgb`] for
+//! 24-bit true color. All of them convert to RGB with [`Color::to_rgb`], which
+//! makes palette colors usable with true-color helpers such as
+//! [`Color::to_hex`] and [`Color::to_hsl`].
 //!
-//! ## Basic colors
+//! ## Named colors
 //!
-//! [`BasicColor`] is the named 16-color ANSI palette. Its discriminants are
-//! the palette indices `0..=15`; `0..=7` are normal intensity and `8..=15` are
-//! bright/high-intensity variants. Converting a [`BasicColor`] into [`Color`]
-//! yields [`Color::Basic`], and converting into `Option<Color>` yields
-//! `Some(Color::Basic(_))` for builder ergonomics.
+//! The sixteen named variants are the standard ANSI palette: `Black` through
+//! `White` are normal intensity (palette indices `0..=7`) and `BrightBlack`
+//! through `BrightWhite` are the bright/high-intensity variants (`8..=15`).
+//! [`Color::named_index`] returns that `0..=15` index for a named color and
+//! `None` for [`Color::Indexed`]/[`Color::Rgb`]; [`Color::from_named`]
+//! goes the other way.
 //!
 //! ## Hex and HSL helpers
 //!
@@ -24,9 +26,9 @@
 //! wraps hue into `0..360`, clamps saturation/lightness into `0.0..=1.0`, and
 //! rounds computed RGB channels to the nearest byte.
 //!
-//! [`Color::to_hex`] and [`Color::to_hsl`] first resolve basic/indexed colors
-//! through the xterm palette. Gray HSL colors report hue `0.0` because the hue
-//! is undefined when saturation is zero.
+//! [`Color::to_hex`] and [`Color::to_hsl`] first resolve named and indexed
+//! colors through the xterm palette. Gray HSL colors report hue `0.0` because
+//! the hue is undefined when saturation is zero.
 //!
 //! ## Profile downsampling
 //!
@@ -36,19 +38,19 @@
 //! `Ascii`/`Disabled`.
 //!
 //! ```text
-//! Color::Rgb / Indexed / Basic
+//! Color::Rgb / Indexed / named
 //!          │
 //!          ├─ Profile::TrueColor ──► original color
 //!          ├─ Profile::Ansi256   ──► nearest xterm index
-//!          ├─ Profile::Ansi      ──► nearest BasicColor
+//!          ├─ Profile::Ansi      ──► nearest named color
 //!          └─ Ascii / Disabled   ──► None
 //! ```
 //!
 //! ```rust,ignore
-//! use uncurses::color::{BasicColor, Color, Profile};
+//! use uncurses::color::{Color, Profile};
 //!
 //! let orange = Color::Rgb(255, 128, 0);
-//! let green: Color = BasicColor::Green.into();
+//! let green = Color::Green;
 //!
 //! assert_eq!(Profile::TrueColor.convert(orange), Some(orange));
 //! assert!(matches!(Profile::Ansi256.convert(orange), Some(Color::Indexed(_))));
@@ -62,15 +64,45 @@ pub use profile::*;
 
 /// A terminal color in one of the supported palette spaces.
 ///
-/// Use [`Color::Rgb`] when exact 24-bit color should be preserved on
-/// true-color terminals, [`Color::Indexed`] when targeting a specific xterm
-/// 256-color palette entry, and [`Color::Basic`] for the portable 16-color ANSI
-/// palette. A [`Profile`] can downsample any variant to the capability of a
-/// particular output stream.
+/// The sixteen named variants are the standard ANSI palette. Use
+/// [`Color::Rgb`] when exact 24-bit color should be preserved on true-color
+/// terminals and [`Color::Indexed`] when targeting a specific xterm 256-color
+/// palette entry. A [`Profile`] can downsample any variant to the capability
+/// of a particular output stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
-    /// Standard 16-color ANSI palette entry.
-    Basic(BasicColor),
+    /// Black (palette `0`, foreground `30`, background `40`).
+    Black,
+    /// Red (palette `1`, foreground `31`, background `41`).
+    Red,
+    /// Green (palette `2`, foreground `32`, background `42`).
+    Green,
+    /// Yellow (palette `3`, foreground `33`, background `43`).
+    Yellow,
+    /// Blue (palette `4`, foreground `34`, background `44`).
+    Blue,
+    /// Magenta (palette `5`, foreground `35`, background `45`).
+    Magenta,
+    /// Cyan (palette `6`, foreground `36`, background `46`).
+    Cyan,
+    /// White (palette `7`, foreground `37`, background `47`).
+    White,
+    /// Bright black (palette `8`, foreground `90`, background `100`).
+    BrightBlack,
+    /// Bright red (palette `9`, foreground `91`, background `101`).
+    BrightRed,
+    /// Bright green (palette `10`, foreground `92`, background `102`).
+    BrightGreen,
+    /// Bright yellow (palette `11`, foreground `93`, background `103`).
+    BrightYellow,
+    /// Bright blue (palette `12`, foreground `94`, background `104`).
+    BrightBlue,
+    /// Bright magenta (palette `13`, foreground `95`, background `105`).
+    BrightMagenta,
+    /// Bright cyan (palette `14`, foreground `96`, background `106`).
+    BrightCyan,
+    /// Bright white (palette `15`, foreground `97`, background `107`).
+    BrightWhite,
     /// Extended xterm 256-color palette index (`0..=255`).
     Indexed(u8),
     /// 24-bit true color as red, green, and blue bytes.
@@ -87,16 +119,83 @@ impl Color {
         Self::Rgb(r, g, b)
     }
 
+    /// Return the `0..=15` ANSI palette index for a named color.
+    ///
+    /// Returns `Some(0..=15)` for the sixteen named variants and `None` for
+    /// [`Color::Indexed`] and [`Color::Rgb`]. The index is also the xterm
+    /// 256-color palette index used when resolving a named color through
+    /// [`Color::to_rgb`].
+    pub const fn named_index(self) -> Option<u8> {
+        Some(match self {
+            Color::Black => 0,
+            Color::Red => 1,
+            Color::Green => 2,
+            Color::Yellow => 3,
+            Color::Blue => 4,
+            Color::Magenta => 5,
+            Color::Cyan => 6,
+            Color::White => 7,
+            Color::BrightBlack => 8,
+            Color::BrightRed => 9,
+            Color::BrightGreen => 10,
+            Color::BrightYellow => 11,
+            Color::BrightBlue => 12,
+            Color::BrightMagenta => 13,
+            Color::BrightCyan => 14,
+            Color::BrightWhite => 15,
+            Color::Indexed(_) | Color::Rgb(..) => return None,
+        })
+    }
+
+    /// Convert a `0..=15` ANSI palette index into the matching named color.
+    ///
+    /// Returns `Some` for values in `0..=15` and `None` for any higher value.
+    pub const fn from_named(v: u8) -> Option<Self> {
+        Some(match v {
+            0 => Color::Black,
+            1 => Color::Red,
+            2 => Color::Green,
+            3 => Color::Yellow,
+            4 => Color::Blue,
+            5 => Color::Magenta,
+            6 => Color::Cyan,
+            7 => Color::White,
+            8 => Color::BrightBlack,
+            9 => Color::BrightRed,
+            10 => Color::BrightGreen,
+            11 => Color::BrightYellow,
+            12 => Color::BrightBlue,
+            13 => Color::BrightMagenta,
+            14 => Color::BrightCyan,
+            15 => Color::BrightWhite,
+            _ => return None,
+        })
+    }
+
+    /// Return whether this is one of the sixteen named ANSI colors.
+    pub const fn is_named(self) -> bool {
+        self.named_index().is_some()
+    }
+
+    /// Return whether this is a bright/high-intensity named color.
+    ///
+    /// Bright colors are the named variants with palette indices `8..=15` and
+    /// encode as foreground SGR `90..=97` or background SGR `100..=107`.
+    /// [`Color::Indexed`] and [`Color::Rgb`] are never bright.
+    pub const fn is_named_bright(self) -> bool {
+        matches!(self.named_index(), Some(8..=15))
+    }
+
     /// Convert this color to `(red, green, blue)` bytes.
     ///
-    /// [`Color::Rgb`] returns its stored components unchanged. [`Color::Basic`]
-    /// and [`Color::Indexed`] are resolved through the xterm 256-color palette,
-    /// where basic colors use their `0..=15` palette index.
+    /// [`Color::Rgb`] returns its stored components unchanged. Named colors and
+    /// [`Color::Indexed`] are resolved through the xterm 256-color palette,
+    /// where named colors use their `0..=15` palette index.
     pub fn to_rgb(self) -> (u8, u8, u8) {
         match self {
             Color::Rgb(r, g, b) => (r, g, b),
             Color::Indexed(idx) => indexed_to_rgb(idx),
-            Color::Basic(c) => indexed_to_rgb(c.as_u8()),
+            other => indexed_to_rgb(other.named_index().unwrap_or(0)),
         }
     }
 
@@ -214,107 +313,6 @@ fn hex_byte(hi: u8, lo: u8) -> Option<u8> {
     Some(hex_nibble(hi)? * 16 + hex_nibble(lo)?)
 }
 
-/// The 16 standard ANSI colors.
-///
-/// The numeric value of each variant is its ANSI/xterm palette index. Normal
-/// colors occupy `0..=7`; bright colors occupy `8..=15` and encode as bright
-/// foreground/background SGR parameters when used in a [`Style`](crate::style::Style).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum BasicColor {
-    /// Black (`0`, foreground `30`, background `40`).
-    Black = 0,
-    /// Red (`1`, foreground `31`, background `41`).
-    Red = 1,
-    /// Green (`2`, foreground `32`, background `42`).
-    Green = 2,
-    /// Yellow (`3`, foreground `33`, background `43`).
-    Yellow = 3,
-    /// Blue (`4`, foreground `34`, background `44`).
-    Blue = 4,
-    /// Magenta (`5`, foreground `35`, background `45`).
-    Magenta = 5,
-    /// Cyan (`6`, foreground `36`, background `46`).
-    Cyan = 6,
-    /// White (`7`, foreground `37`, background `47`).
-    White = 7,
-    /// Bright black (`8`, foreground `90`, background `100`).
-    BrightBlack = 8,
-    /// Bright red (`9`, foreground `91`, background `101`).
-    BrightRed = 9,
-    /// Bright green (`10`, foreground `92`, background `102`).
-    BrightGreen = 10,
-    /// Bright yellow (`11`, foreground `93`, background `103`).
-    BrightYellow = 11,
-    /// Bright blue (`12`, foreground `94`, background `104`).
-    BrightBlue = 12,
-    /// Bright magenta (`13`, foreground `95`, background `105`).
-    BrightMagenta = 13,
-    /// Bright cyan (`14`, foreground `96`, background `106`).
-    BrightCyan = 14,
-    /// Bright white (`15`, foreground `97`, background `107`).
-    BrightWhite = 15,
-}
-
-impl BasicColor {
-    /// Return the `0..=15` ANSI palette index.
-    ///
-    /// This value is also the xterm 256-color palette index used when
-    /// resolving a basic color through [`Color::to_rgb`].
-    pub const fn as_u8(self) -> u8 {
-        self as u8
-    }
-
-    /// Return whether this is a bright/high-intensity color.
-    ///
-    /// Bright colors are variants with indices `8..=15` and encode as
-    /// foreground SGR `90..=97` or background SGR `100..=107`.
-    pub const fn is_bright(self) -> bool {
-        self as u8 >= 8
-    }
-
-    /// Convert a palette index to a [`BasicColor`].
-    ///
-    /// Returns `Some` for values in `0..=15` and `None` for any higher value.
-    pub const fn from_u8(v: u8) -> Option<Self> {
-        Some(match v {
-            0 => Self::Black,
-            1 => Self::Red,
-            2 => Self::Green,
-            3 => Self::Yellow,
-            4 => Self::Blue,
-            5 => Self::Magenta,
-            6 => Self::Cyan,
-            7 => Self::White,
-            8 => Self::BrightBlack,
-            9 => Self::BrightRed,
-            10 => Self::BrightGreen,
-            11 => Self::BrightYellow,
-            12 => Self::BrightBlue,
-            13 => Self::BrightMagenta,
-            14 => Self::BrightCyan,
-            15 => Self::BrightWhite,
-            _ => return None,
-        })
-    }
-}
-
-impl From<BasicColor> for Color {
-    /// Convert a [`BasicColor`] into [`Color::Basic`].
-    fn from(c: BasicColor) -> Self {
-        Color::Basic(c)
-    }
-}
-
-impl From<BasicColor> for Option<Color> {
-    /// Convert a [`BasicColor`] into `Some(Color::Basic(_))`.
-    ///
-    /// This supports style builders that accept `impl Into<Option<Color>>`.
-    fn from(c: BasicColor) -> Self {
-        Some(Color::Basic(c))
-    }
-}
-
 /// The standard xterm 256-color palette RGB values.
 const XTERM_COLORS: [(u8, u8, u8); 256] = {
     let mut table = [(0u8, 0u8, 0u8); 256];
@@ -380,15 +378,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_basic_color_as_u8() {
-        assert_eq!(BasicColor::Black.as_u8(), 0);
-        assert_eq!(BasicColor::BrightWhite.as_u8(), 15);
+    fn named_index_round_trips() {
+        assert_eq!(Color::Black.named_index(), Some(0));
+        assert_eq!(Color::BrightWhite.named_index(), Some(15));
+        assert_eq!(Color::Indexed(42).named_index(), None);
+        assert_eq!(Color::Rgb(1, 2, 3).named_index(), None);
+        assert_eq!(Color::from_named(0), Some(Color::Black));
+        assert_eq!(Color::from_named(15), Some(Color::BrightWhite));
+        assert_eq!(Color::from_named(16), None);
+        assert!(Color::Green.is_named());
+        assert!(!Color::Indexed(2).is_named());
+        assert!(Color::BrightRed.is_named_bright());
+        assert!(!Color::Red.is_named_bright());
     }
 
     #[test]
     fn test_color_to_rgb() {
         assert_eq!(Color::Rgb(255, 128, 0).to_rgb(), (255, 128, 0));
-        assert_eq!(Color::Basic(BasicColor::Black).to_rgb(), (0, 0, 0));
+        assert_eq!(Color::Black.to_rgb(), (0, 0, 0));
     }
 
     #[test]
@@ -437,7 +444,7 @@ mod tests {
     fn test_to_hex() {
         assert_eq!(Color::Rgb(255, 136, 0).to_hex(), "#ff8800");
         assert_eq!(Color::Rgb(0, 0, 0).to_hex(), "#000000");
-        assert_eq!(Color::Basic(BasicColor::Black).to_hex(), "#000000");
+        assert_eq!(Color::Black.to_hex(), "#000000");
         // Round-trips with `hex`.
         assert_eq!(
             Color::hex(&Color::Rgb(18, 52, 86).to_hex()),
@@ -463,8 +470,8 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_color_into_option() {
-        let c: Option<Color> = BasicColor::Red.into();
-        assert_eq!(c, Some(Color::Basic(BasicColor::Red)));
+    fn color_into_option() {
+        let c: Option<Color> = Color::Red.into();
+        assert_eq!(c, Some(Color::Red));
     }
 }

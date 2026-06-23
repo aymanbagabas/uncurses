@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use uncurses::buffer::Bounded;
 use uncurses::cell::Cell;
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -41,7 +41,7 @@ impl Rng {
         slice[(self.next_u64() as usize) % slice.len()]
     }
     fn color(&mut self) -> Color {
-        Color::Basic(BasicColor::from_u8((self.next_u64() % 16) as u8).unwrap())
+        Color::from_named((self.next_u64() % 16) as u8).unwrap()
     }
 }
 
