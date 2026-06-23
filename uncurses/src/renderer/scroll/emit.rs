@@ -45,12 +45,12 @@ pub(super) fn scroll_up(
         Ok(true)
     } else if n == 1 && bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
         renderer.move_to(out, new_buf, top as u16, 0)?;
-        ansi::write_delete_lines(out, 1)?;
+        ansi::screen::write_delete_lines(out, 1)?;
         Ok(true)
     } else if top == min_y && bot == max_y {
         renderer.move_to(out, new_buf, bot as u16, 0)?;
         if renderer.opts.contains(Optimizations::SU_SD) {
-            ansi::write_scroll_up(out, n)?;
+            ansi::screen::write_scroll_up(out, n)?;
         } else {
             for _ in 0..n {
                 out.push(b'\n');
@@ -59,7 +59,7 @@ pub(super) fn scroll_up(
         Ok(true)
     } else if bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
         renderer.move_to(out, new_buf, top as u16, 0)?;
-        ansi::write_delete_lines(out, n)?;
+        ansi::screen::write_delete_lines(out, n)?;
         Ok(true)
     } else {
         Ok(false)
@@ -84,25 +84,25 @@ pub(super) fn scroll_down(
 ) -> io::Result<bool> {
     if n == 1 && top == min_y && bot == max_y {
         renderer.move_to(out, new_buf, top as u16, 0)?;
-        ansi::write_reverse_index(out)?;
+        ansi::cursor::write_reverse_index(out)?;
         Ok(true)
     } else if n == 1 && bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
         renderer.move_to(out, new_buf, top as u16, 0)?;
-        ansi::write_insert_lines(out, 1)?;
+        ansi::screen::write_insert_lines(out, 1)?;
         Ok(true)
     } else if top == min_y && bot == max_y {
         renderer.move_to(out, new_buf, top as u16, 0)?;
         if renderer.opts.contains(Optimizations::SU_SD) {
-            ansi::write_scroll_down(out, n)?;
+            ansi::screen::write_scroll_down(out, n)?;
         } else {
             for _ in 0..n {
-                ansi::write_reverse_index(out)?;
+                ansi::cursor::write_reverse_index(out)?;
             }
         }
         Ok(true)
     } else if bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
         renderer.move_to(out, new_buf, top as u16, 0)?;
-        ansi::write_insert_lines(out, n)?;
+        ansi::screen::write_insert_lines(out, n)?;
         Ok(true)
     } else {
         Ok(false)
@@ -122,8 +122,8 @@ pub(super) fn scroll_idl(
     ins: usize,
 ) -> io::Result<bool> {
     renderer.move_to(out, new_buf, del as u16, 0)?;
-    ansi::write_delete_lines(out, n)?;
+    ansi::screen::write_delete_lines(out, n)?;
     renderer.move_to(out, new_buf, ins as u16, 0)?;
-    ansi::write_insert_lines(out, n)?;
+    ansi::screen::write_insert_lines(out, n)?;
     Ok(true)
 }

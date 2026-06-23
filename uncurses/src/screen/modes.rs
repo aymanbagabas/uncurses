@@ -207,7 +207,7 @@ impl<I: Input, O: Write> Screen<I, O> {
 
     /// Set the window title (`OSC 2`) and flush.
     pub fn set_title(&mut self, title: &str) -> io::Result<()> {
-        ansi::write_window_title(&mut self.out_buf, title)?;
+        ansi::title::write_window_title(&mut self.out_buf, title)?;
         self.state.title = Some(title.to_string());
         self.flush()
     }
@@ -369,7 +369,7 @@ impl<I: Input, O: Write> Screen<I, O> {
             self.out_buf.write_all(background::RESET_PALETTE_COLORS)?;
         }
         if self.state.title.is_some() {
-            ansi::write_window_title(&mut self.out_buf, "")?;
+            ansi::title::write_window_title(&mut self.out_buf, "")?;
         }
         if self.state.pointer_shape.is_some() {
             cursor::write_set_pointer_shape(&mut self.out_buf, "")?;
@@ -518,7 +518,7 @@ impl<I: Input, O: Write> Screen<I, O> {
             )?;
         }
         if let Some(title) = self.state.title.clone() {
-            ansi::write_window_title(&mut self.out_buf, &title)?;
+            ansi::title::write_window_title(&mut self.out_buf, &title)?;
         }
         if let Some(shape) = self.state.pointer_shape.clone() {
             cursor::write_set_pointer_shape(&mut self.out_buf, &shape)?;
@@ -600,10 +600,10 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// Request a terminal mode's current setting (DECRQM). Reply:
     /// [`Event::ModeReport`](crate::event::Event::ModeReport).
     ///
-    /// The reply's [`ModeSetting`](crate::ansi::ModeSetting) reports whether
+    /// The reply's [`ModeSetting`](crate::ansi::mode::ModeSetting) reports whether
     /// the mode is set, reset, or permanently fixed. A permanently reset mode
     /// is recognized but can never be enabled, so check
-    /// [`ModeSetting::is_available`](crate::ansi::ModeSetting::is_available)
+    /// [`ModeSetting::is_available`](crate::ansi::mode::ModeSetting::is_available)
     /// before relying on it.
     pub fn request_mode(&mut self, mode: crate::ansi::mode::Mode) -> io::Result<()> {
         mode.request(&mut self.out_buf)?;

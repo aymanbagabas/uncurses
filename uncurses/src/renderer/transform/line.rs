@@ -147,7 +147,7 @@ impl Renderer {
                     if n_first >= width {
                         self.move_to(out, new_buf, y, 0)?;
                         self.update_pen(out, Some(leading_blank))?;
-                        ansi::write_erase_to_eol(out)?;
+                        ansi::screen::write_erase_to_eol(out)?;
                     } else {
                         self.move_to(out, new_buf, y, (n_first - 1) as u16)?;
                         self.update_pen(out, Some(leading_blank))?;
@@ -382,7 +382,7 @@ impl Renderer {
                     self.clear_to_end(out, cur_slice, blank, width, false)?;
                 } else {
                     self.update_pen(out, Some(blank))?;
-                    ansi::write_dch(out, dch_count as u16)?;
+                    ansi::screen::write_dch(out, dch_count as u16)?;
                 }
             }
         }

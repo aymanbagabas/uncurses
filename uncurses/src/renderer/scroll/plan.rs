@@ -35,10 +35,10 @@ pub(super) fn scrolln(
         let amt = n as u16;
         v = scroll_up(out, renderer, new_buf, amt, top, bot, 0, max_y)?;
         if !v && renderer.opts.contains(Optimizations::CSR) {
-            ansi::write_scroll_region(out, top as u16, bot as u16)?;
+            ansi::screen::write_scroll_region(out, top as u16, bot as u16)?;
             renderer.invalidate_cursor();
             v = scroll_up(out, renderer, new_buf, amt, top, bot, top, bot)?;
-            ansi::write_reset_scroll_region(out)?;
+            ansi::screen::write_reset_scroll_region(out)?;
             renderer.invalidate_cursor();
         }
         if !v && renderer.opts.contains(Optimizations::IL_DL) {
@@ -48,10 +48,10 @@ pub(super) fn scrolln(
         let amt = (-n) as u16;
         v = scroll_down(out, renderer, new_buf, amt, top, bot, 0, max_y)?;
         if !v && renderer.opts.contains(Optimizations::CSR) {
-            ansi::write_scroll_region(out, top as u16, bot as u16)?;
+            ansi::screen::write_scroll_region(out, top as u16, bot as u16)?;
             renderer.invalidate_cursor();
             v = scroll_down(out, renderer, new_buf, amt, top, bot, top, bot)?;
-            ansi::write_reset_scroll_region(out)?;
+            ansi::screen::write_reset_scroll_region(out)?;
             renderer.invalidate_cursor();
         }
         if !v && renderer.opts.contains(Optimizations::IL_DL) {

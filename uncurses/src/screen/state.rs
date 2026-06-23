@@ -9,8 +9,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::ansi::KittyKeyboardFlags;
 use crate::ansi::cursor::CursorStyle;
+use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::color::Color;
 use crate::event::ModifyOtherKeysMode;
 

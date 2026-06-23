@@ -209,8 +209,8 @@ pub struct ScreenOptions {
     /// unavailable. Defaults to
     /// [`KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES`].
     ///
-    /// [`KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES`]: crate::ansi::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
-    pub keyboard_enhancements: crate::ansi::KittyKeyboardFlags,
+    /// [`KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES`]: crate::ansi::kitty::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+    pub keyboard_enhancements: crate::ansi::kitty::KittyKeyboardFlags,
     /// Prefer in-band resize reports over the `SIGWINCH` path when the
     /// terminal supports them. Defaults to `true`.
     pub prefer_in_band_resize: bool,
@@ -271,7 +271,8 @@ impl Default for ScreenOptions {
     fn default() -> Self {
         Self {
             bracketed_paste: true,
-            keyboard_enhancements: crate::ansi::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+            keyboard_enhancements:
+                crate::ansi::kitty::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
             prefer_in_band_resize: true,
             request_pixel_size_on_resize: cfg!(windows),
             mouse: None,
@@ -516,9 +517,9 @@ where
     /// `None` disables every enhancement.
     pub fn set_kitty_keyboard(
         &mut self,
-        flags: Option<crate::ansi::KittyKeyboardFlags>,
+        flags: Option<crate::ansi::kitty::KittyKeyboardFlags>,
     ) -> io::Result<()> {
-        let flags = flags.unwrap_or(crate::ansi::KittyKeyboardFlags::NONE);
+        let flags = flags.unwrap_or(crate::ansi::kitty::KittyKeyboardFlags::NONE);
         self.stage_set_kitty_keyboard_flags(flags);
         self.flush()
     }
@@ -666,11 +667,11 @@ where
 
     /// Stage a replacement Kitty keyboard enhancement flag set. Always emits
     /// the `CSI = flags ; 1 u` set; the tracked set is updated to match.
-    fn stage_set_kitty_keyboard_flags(&mut self, flags: crate::ansi::KittyKeyboardFlags) {
+    fn stage_set_kitty_keyboard_flags(&mut self, flags: crate::ansi::kitty::KittyKeyboardFlags) {
         kitty::write_set_kitty_keyboard(
             &mut self.out_buf,
             flags,
-            crate::ansi::KittyKeyboardMode::Set,
+            crate::ansi::kitty::KittyKeyboardMode::Set,
         )
         .unwrap();
         self.state.kitty_keyboard = flags;

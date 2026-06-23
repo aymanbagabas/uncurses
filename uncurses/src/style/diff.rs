@@ -33,8 +33,8 @@ pub(crate) fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) ->
     let wrote_link = from.link != to.link;
     if wrote_link {
         match to.link.as_deref() {
-            Some(link) => crate::ansi::write_hyperlink(w, &link.url, &link.params)?,
-            None => w.write_all(crate::ansi::HYPERLINK_RESET)?,
+            Some(link) => crate::ansi::hyperlink::write_hyperlink(w, &link.url, &link.params)?,
+            None => w.write_all(crate::ansi::hyperlink::HYPERLINK_RESET)?,
         }
     }
 
