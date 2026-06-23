@@ -3,23 +3,25 @@ title: "Handling paste"
 weight: 5
 ---
 
-When you paste into a terminal, the bytes look just like very fast typing, which
-is dangerous: a pasted script could trigger shortcuts. Bracketed paste fixes
+When you paste into a terminal, the bytes can look like very fast typing, which
+can be unsafe: a pasted script could trigger shortcuts. Bracketed paste fixes
 that by wrapping the pasted text in markers, so you can treat it as data instead
-of keystrokes. uncurses turns those markers into events, and it is on by default.
+of keystrokes. uncurses turns those markers into events, and bracketed paste is
+enabled by default.
 
 ## The paste events
 
-A paste arrives as a stream: one `PasteStart`, one or more `PasteChunk` payloads,
-then one `PasteEnd`. The chunks are raw bytes, because a paste can be large and
-a chunk might not be valid UTF-8 mid-stream: a multi-byte character can land
-across a chunk boundary.
+A paste arrives as a stream: one `PasteStart`, zero or more `PasteChunk`
+payloads, then one `PasteEnd`. The chunks are raw bytes, because a paste can be
+large and a chunk might not be valid UTF-8 on its own: a multibyte character can
+be split across a chunk boundary.
 
 ```mermaid
 flowchart TB
   s["Event::PasteStart"]
-  s --> c["Event::PasteChunk(Vec&lt;u8&gt;) ... repeated"]
-  c --> e["Event::PasteEnd"]
+  s --> c["Event::PasteChunk(Vec&lt;u8&gt;) ... zero or more"]
+  s --> e["Event::PasteEnd"]
+  c --> e
 ```
 
 ## Collecting a paste
@@ -50,7 +52,7 @@ match screen.read_event()? {
 ```
 
 {{< callout type="warning" >}}
-Decode at the end, not per chunk: a multibyte character can be split across two
+Decode at the end, not per chunk: a multibyte character can be split across
 `PasteChunk` events, so decoding each chunk on its own would corrupt it. Pastes
 also carry their own newlines, so normalize `\r\n` and lone `\r` to `\n` if your
 buffer has a line model.

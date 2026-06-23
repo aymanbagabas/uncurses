@@ -10,9 +10,9 @@ paints the text.
 
 ## Building a style
 
-`Style::new()` (or `Style::default()`) is empty: no color, no attributes. From
-there the builder methods each return an updated style, so you chain only what
-you want.
+`Style::new()` (or `Style::default()`) starts empty: no color, no attributes, no
+underline, and no link. Builder methods return an updated style, so you chain
+only what you want.
 
 ```rust
 use uncurses::color::{BasicColor, Color};
@@ -33,13 +33,14 @@ let spelling = Style::new()
     .underline_color(BasicColor::BrightRed);
 ```
 
-Attributes available include `bold`, `faint`, `italic`, `underline`, `reverse`,
-`strikethrough`, `conceal`, and blink. Underline shapes go beyond a single line:
-double, curly, dotted, and dashed, each with their own color.
+Attributes include `bold`, `faint`, `italic`, `underline`, `reverse`,
+`strikethrough`, `conceal`, `blink`, and `rapid_blink`. Underline shapes go
+beyond a single line: double, curly, dotted, and dashed, and each can have an
+underline color.
 
 ## Colors
 
-Colors come in three depths, and you mix them freely:
+Colors come in three representations, and you can use them freely:
 
 ```rust
 Style::new().fg(BasicColor::Green);        // 16-color
@@ -54,7 +55,8 @@ not branch on terminal capability yourself.
 
 ## Painting styled text
 
-On a `Screen` or any surface, pass the style as the third argument to `set_str`:
+On a `Screen`, `TextBuffer`, or any other `TextSurface`, pass the style as the
+third argument to `set_str`:
 
 ```rust
 use uncurses::text::TextSurface;
@@ -69,16 +71,17 @@ escape sequences in the string are drawn as visible characters, not interpreted.
 ## Inline escapes with a Painter
 
 Sometimes the string you want to draw already *contains* SGR or OSC 8 escapes,
-the colored output of another program, a log line with ANSI codes, a snippet you
+perhaps from another program, a log line with ANSI codes, or a snippet you
 assembled by hand. A [`Painter`]({{< relref "../concepts/surfaces.md" >}})
 interprets those inline escapes and turns them into cell styles, where the
 default `set_str` would draw them literally.
 
-Wrap any surface (a `Screen`, a `TextBuffer`) in a `Painter` and paint through
-it:
+Wrap any `TextSurface`, such as a `Screen` or `TextBuffer`, in a `Painter` and
+paint through it:
 
 ```rust
-use uncurses::text::Painter;
+use uncurses::style::Style;
+use uncurses::text::{Painter, TextSurface};
 
 Painter::new(&mut screen).set_str(
     (2, 1),
@@ -87,13 +90,13 @@ Painter::new(&mut screen).set_str(
 );
 ```
 
-The `\x1b[1;32m` and `\x1b[0m` are read as you go, so "bold green" lands bold
-and green while the rest stays plain. The `Style` you pass is the *base*: inline
-escapes layer on top of it, winning where they set something and letting the
-base fill in the rest. An inline reset (`\x1b[0m`) clears the inline state, so
-the cells after it fall back to your base rather than to the terminal default.
-Had you passed `Style::new().fg(BasicColor::Blue)` above, "back to plain" would
-come back blue, not colorless.
+The `\x1b[1;32m` and `\x1b[0m` are read as `Painter` walks the string, so
+"bold green" lands bold and green while the rest stays plain. The `Style` you
+pass is the *base*: inline escapes layer on top of it, winning where they set a
+field and letting the base fill in the rest. An inline reset (`\x1b[0m`) clears
+the inline state, so the cells after it fall back to your base rather than to
+the terminal default. Had you passed `Style::new().fg(BasicColor::Blue)` above,
+"back to plain" would return blue, not colorless.
 
 The painter keeps no style of its own between calls: every `set_str` starts
 fresh from the base you hand it, so calls never bleed into each other. It owns
@@ -102,9 +105,9 @@ no cells and has no side effects when dropped, so a one-shot
 
 ## Hyperlinks
 
-A `Style` can carry an OSC 8 hyperlink with `link`. Any cell whose style has a
-link renders the hyperlink automatically, and the diffing renderer opens and
-closes the OSC 8 span as the link changes from cell to cell.
+A `Style` can carry an OSC 8 hyperlink with `Style::link`. Any rendered cell
+whose style has a link opens the hyperlink automatically, and the diffing
+renderer closes or changes the OSC 8 span as the link changes from cell to cell.
 
 ```rust
 let docs = Style::new()
@@ -116,31 +119,30 @@ screen.set_str((2, 5), "uncurses on GitHub", docs);
 ```
 
 The second argument is the OSC 8 parameter string, usually left empty. A
-nonempty `id=...` marks several runs as parts of the same link, so a terminal
-can treat them as one piece. That is handy when a link wraps across lines; how
-it is presented is up to the terminal.
+nonempty value such as `id=docs` asks terminals that support it to treat
+separate runs as parts of the same link. That can help when a link wraps across
+lines; the exact presentation is terminal-dependent.
 
 ## Styling plain output
 
-Off the grid, a `Style` is also a `Display` value: formatting it writes the
-opener (the SGR sequence, plus an OSC 8 start if the style carries a link). Its
-`reset()` returns a matching `Display` closer that undoes exactly what the
-opener set, so styled `println!` is a one-liner that follows an open/close
-pattern:
+Off the grid, a `Style` also implements `Display`: formatting it writes the
+opener, which is any SGR sequence plus an OSC 8 start if the style carries a
+link. Its `reset()` returns a matching `Display` closer that undoes exactly what
+the opener set, so styled `println!` follows an open/close pattern:
 
 ```rust
 let bold = Style::new().bold();
 println!("{bold}important{}", bold.reset());
 ```
 
-The opener is additive, so an empty style writes nothing, and the closer only
-emits what it needs to: an SGR-only style closes with `CSI m`, while a linked
-style also writes the OSC 8 terminator. For a fully self-contained span, reach
-for `styled` instead, which wraps the text with both for you:
+The opener is additive, so an empty style writes nothing. The closer only emits
+what it needs: an SGR-only style closes with `CSI m`, while a linked style also
+writes the OSC 8 terminator. For a self-contained span, use `styled`, which wraps
+the text with both for you:
 
 ```rust
 println!("{}", Style::new().bold().styled("important"));
 ```
 
-See the `styles` example for a full tour of attributes, underline shapes,
-colors, and a clickable hyperlink.
+See the `styles` example in `examples/examples/styles.rs` for a full tour of
+attributes, underline shapes, colors, and a clickable hyperlink.

@@ -3,9 +3,9 @@ title: "Screen"
 weight: 8
 ---
 
-`Screen` is the facade most apps actually use. It brings the other concepts
+`Screen` is the main object most apps use. It brings the other concepts
 together behind one object: a drawing [surface]({{< relref "surfaces.md" >}}) to
-paint into, an [event source]({{< relref "events.md" >}}) to read input from, and
+paint into, an [event source]({{< relref "events.md" >}}) to read events from, and
 the [terminal]({{< relref "terminals.md" >}}) connection underneath, plus a
 diffing renderer that gets your changes onto the screen with the fewest bytes.
 
@@ -29,8 +29,8 @@ A session has a clear shape: open, set up, loop, and hand the terminal back.
 
 ```mermaid
 flowchart TB
-  open["Screen::stdio / open"] --> init["init: raw mode + capability queries"]
-  init --> evloop["loop: paint, render, read_event"]
+  open["Screen::stdio or Screen::open"] --> init["init: raw mode + capability queries"]
+  init --> evloop["loop: paint, render, read_event()"]
   evloop --> evloop
   evloop --> finish["finish: restore the terminal"]
 ```
@@ -57,10 +57,10 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`init` borrows raw mode and stages its capability queries; `finish` tears
-everything back down and restores the terminal exactly as it was. Skipping
-`finish` leaves the user in a broken shell, so it is the one call you never
-forget.
+`init` enters raw mode and sends capability queries; `finish` drains pending
+query replies, resets modes and the managed area, then restores the terminal.
+Bracket every session with `init` and `finish` so the user's shell is handed
+back cleanly.
 
 ## Drawing is a diff
 
@@ -106,6 +106,6 @@ is infallible, and `render` does the output.
 
 Mode changes work the other way. Entering the alternate screen, hiding the
 cursor, enabling mouse reporting, setting the title, and similar switches take
-effect immediately: each writes its escape sequence on the spot rather than
+effect immediately. Each writes its escape sequence on the spot instead of
 waiting for the next `render`. That is why those methods return a `Result` while
 painting does not.

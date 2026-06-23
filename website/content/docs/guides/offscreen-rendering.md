@@ -10,17 +10,17 @@ transcript recorders, and shipping frames over a socket.
 
 ## Painting into memory
 
-`TextBuffer::new(width, height)` gives you a grid that draws with the same
-`set_str`, `set_cell`, and `fill_rect` as a `Screen`, but owns no input or
-output and never touches raw mode.
+`TextBuffer::new(width, height)` gives you a grid that supports the same
+`set_str`, `set_cell`, and `fill_rect` calls as a `Screen`, but owns no input
+or output and never touches raw mode.
 
 ```rust
-use uncurses::buffer::{SurfaceMut, TextBuffer};
+use uncurses::buffer::TextBuffer;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
 
 let mut frame = TextBuffer::new(40, 3);
-frame.set_str((1, 1), "rendered with no terminal", Style::new());
+frame.set_str((0, 0), "rendered with no terminal", Style::new());
 ```
 
 There is no renderer and no diffing here. Every serialization produces a
@@ -41,16 +41,16 @@ frame.encode(&mut bytes)?;        // into a Vec<u8>
 let string = frame.display().to_string(); // or straight to a String
 ```
 
-Write those bytes to stdout and the frame paints inline, right where the cursor
-is, because it carries its own SGR and positioning. Send them over a socket and
-the other end renders the same frame.
+Write those bytes to stdout and the frame paints inline at the current cursor,
+carrying its own SGR and line breaks. Send them over a socket and the other end
+renders the same frame.
 
 ## Plain text and snapshot tests
 
-To pin output for a golden test, you usually want the text without color
-escapes. Serialize through a [color `Profile`]({{< relref "../concepts/color.md"
->}}) with the `*_with` variants: `Profile::Disabled` drops all styling and gives
-you plain text, while `Profile::Ascii` keeps attributes but strips color.
+To pin output for a golden test, you usually want plain text or escapes without
+color. Serialize through a [color `Profile`]({{< relref "../concepts/color.md" >}})
+with the `*_with` variants: `Profile::Disabled` drops all styling and gives you
+plain text, while `Profile::Ascii` keeps attributes but strips color.
 
 ```rust
 use uncurses::color::Profile;
@@ -84,8 +84,8 @@ for y in 0..frame.height() {
 
 Nothing here is `TextBuffer`-specific. `cell`, `width`, and `height` come from
 the `Surface` and `Bounded` traits, so the same walk reads back any surface: a
-`Buffer`, a `Window` view, or even a live `Screen`. Anywhere you can paint, you
-can also query.
+`Buffer`, `Window`, `View`, or live `Screen`. Anywhere you can paint, you can
+also query.
 
 See the `offscreen` example, which composes a bordered, colored card entirely in
 memory and then replays the exact bytes on your terminal.

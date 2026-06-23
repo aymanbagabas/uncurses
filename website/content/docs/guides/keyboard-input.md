@@ -3,14 +3,15 @@ title: "Keyboard input"
 weight: 4
 ---
 
-Keyboard input arrives as `Event::KeyPress` carrying a `Key`. A `Key` has three
-parts: a `code` (which key), `modifiers` (Ctrl, Alt, Shift, and friends), and the
-`text` it would produce. You can match keys two ways, and turn on the kitty
-protocol when you need releases, repeats, and disambiguation.
+Keyboard input arrives as key events. A press is `Event::KeyPress` carrying a
+`Key`; with the kitty keyboard protocol enabled, repeats and releases arrive as
+`Event::KeyRepeat` and `Event::KeyRelease`. The `Key` fields you usually use are
+`code` (which key), `modifiers` (Ctrl, Alt, Shift, and friends), and the optional
+`text` it would produce.
 
 ## Matching keys the easy way
 
-`Key` parses from strings, so the readable way to check for a shortcut is to
+`Key` parses from strings, so the readable way to check a shortcut is to
 parse it once and compare. Equality compares the canonical chord, so this is
 exactly right for keybindings.
 
@@ -28,13 +29,14 @@ match screen.read_event()? {
 ```
 
 The grammar covers plain characters (`"q"`), named keys (`"enter"`, `"esc"`,
-`"up"`, `"f1"`), and modifier chords (`"ctrl+c"`, `"alt+shift+left"`). Collect a
-set of bindings into an array and ask `contains`:
+`"up"`, `"f1"`), and modifier chords (`"ctrl+c"`, `"alt+shift+left"`). For quick
+checks against string patterns, use `matches` or `matches_any`:
 
 ```rust
-let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
-// ...
-Event::KeyPress(ref k) if quit.contains(k) => break,
+match screen.read_event()? {
+    Event::KeyPress(ref k) if k.matches_any(["q", "esc", "ctrl+c"]) => break,
+    _ => {}
+}
 ```
 
 ## Matching keys structurally
@@ -59,11 +61,12 @@ match screen.read_event()? {
 The modifier flags are `SHIFT`, `ALT`, `CTRL`, `META`, `HYPER`, `SUPER`,
 `CAPS_LOCK`, and `NUM_LOCK`.
 
-A `Key` carries `text` only for printable input: a character typed on its own.
-Shift, Caps Lock, and Num Lock keep it; Ctrl, Alt, and named keys (`Enter`,
-arrows, function keys) clear it. So a present `text` means the key would type
-something, already in the right layout (`"!"` for `shift+1`), which is what you
-want for text entry rather than the physical `code`.
+A `Key` carries `text` only for printable input: a character or space with no
+modifiers other than Shift, Caps Lock, or Num Lock. Ctrl, Alt, Meta, Hyper, Super,
+and named keys (`Enter`, arrows, function keys) clear it. So a present `text`
+means the key would type something, already in the right layout (`"!"` for
+`shift+1`), which is what you want for text entry rather than the physical
+`code`.
 
 ```rust
 if let Event::KeyPress(k) = screen.read_event()? {
@@ -93,24 +96,25 @@ screen.set_kitty_keyboard(Some(
 //   Event::KeyRelease(k)
 ```
 
-The flags stack, and each one buys a specific thing:
+The flags combine, and each one enables a specific behavior:
 
 - `DISAMBIGUATE_ESCAPE_CODES` makes keys that the legacy encoding blurs together
   distinct: `Esc` on its own, `Ctrl+I` versus `Tab`, and `Ctrl+M` versus
   `Enter` all become unambiguous escape codes.
 - `REPORT_EVENT_TYPES` adds `KeyRepeat` and `KeyRelease`, but only for keys the
-  terminal sends as escape codes: arrows, function keys, and modifier chords.
-  Keys that produce text are still delivered as plain UTF-8, so a held letter
-  keeps arriving as repeated `KeyPress` events with no release.
-- `REPORT_ALL_KEYS_AS_ESCAPE` reports every key as an escape code, printable
-  ones included. Combine it with `REPORT_EVENT_TYPES` when you want repeats and
+  terminal sends as escape codes: arrows, function keys, and modified keys that
+  are not sent as text. Keys that produce text are still delivered as plain
+  UTF-8, so a held letter keeps arriving as repeated `KeyPress` events with no
+  release.
+- `REPORT_ALL_KEYS_AS_ESCAPE` reports every key as an escape code, including
+  printable keys. Combine it with `REPORT_EVENT_TYPES` when you want repeats and
   releases for letters and digits too, for instance to track a held `w` in a
   game.
-- `REPORT_ALTERNATE_KEYS` and `REPORT_ASSOCIATED_TEXT` add the shifted and base
-  layout key codes and the produced text to each report.
+- `REPORT_ALTERNATE_KEYS` adds shifted and base key values.
+- `REPORT_ASSOCIATED_TEXT` adds the produced text.
 
 A terminal that does not speak the protocol ignores the request, so you keep
 getting plain presses and it is safe to ask unconditionally.
 
-See the `keylog` example for a live readout of every key, modifier, repeat, and
-release.
+See the `keylog` example in `examples/examples/` for a live readout of every key,
+modifier, repeat, and release.

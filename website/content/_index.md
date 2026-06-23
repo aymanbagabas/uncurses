@@ -16,26 +16,26 @@ layout: hextra-home
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  A modern, VT100/xterm-style terminal toolkit library.&nbsp;<br class="hx:sm:block hx:hidden" />
-  You own the event loop; it makes the bytes correct and minimal.
+  A modern, VT100/xterm-compatible terminal toolkit library.&nbsp;<br class="hx:sm:block hx:hidden" />
+  You own the event loop; uncurses keeps the bytes correct and minimal.
 {{< /hextra/hero-subtitle >}}
 </div>
 
 <div class="hx:mb-6">
-{{< hextra/hero-button text="Get Started" link="docs" >}}
+{{< hextra/hero-button text="Get Started" link="/docs/getting-started/" >}}
 </div>
 
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card title="Layered, not a framework"
-    subtitle="Reach for Screen to ship fast, or drop to Canvas, EventSource, and Terminal. Nothing is hidden." >}}
+    subtitle="Start with Screen, or grab TextBuffer, EventSource, and Terminal directly. Nothing is hidden." >}}
   {{< hextra/feature-card title="Cell-diffing renderer"
-    subtitle="Render to a terminal, or any Write sink, and ship only the bytes that changed." >}}
+    subtitle="Screen diffs frames against the terminal and writes only the cells that changed." >}}
   {{< hextra/feature-card title="Typed events"
-    subtitle="Keys, mouse, paste, focus, resize, and query replies, decoded from the raw byte soup." >}}
+    subtitle="Keys, mouse, paste, focus, resize, and query replies decoded from raw terminal input." >}}
   {{< hextra/feature-card title="Degrades gracefully"
-    subtitle="24-bit color downsamples to 256/16/none; you write true color once." >}}
+    subtitle="Write true color once; uncurses maps it to 256-color, ANSI, or plain text when needed." >}}
   {{< hextra/feature-card title="Inline or fullscreen"
-    subtitle="Starts inline in the normal buffer; opt into the alternate screen when you want it." >}}
-  {{< hextra/feature-card title="Async optional"
-    subtitle="A runtime-agnostic futures Stream of events, behind a feature flag." >}}
+    subtitle="Run in the normal buffer by default; switch to the alternate screen when you want it." >}}
+  {{< hextra/feature-card title="Async when you want it"
+    subtitle="Enable the async feature for a runtime-agnostic futures Stream of events." >}}
 {{< /hextra/feature-grid >}}
