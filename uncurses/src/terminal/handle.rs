@@ -637,6 +637,6 @@ mod tests {
         assert!(!term.has_env("MISSING"));
         // The full snapshot is reachable for richer queries (e.g. bool).
         assert_eq!(term.env().get("NO_COLOR").as_deref(), Some("1"));
-        assert!(term.env().bool("NO_COLOR"));
+        assert!(term.env().is_truthy("NO_COLOR"));
     }
 }
