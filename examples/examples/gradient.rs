@@ -28,7 +28,7 @@
 
 use uncurses::buffer::Bounded;
 use uncurses::cell::Cell;
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, Mouse};
 use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::style::Style;
@@ -138,8 +138,8 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
         };
         let label = Style::default()
             .bold()
-            .fg(BasicColor::Black)
-            .bg(BasicColor::BrightWhite);
+            .fg(Color::Black)
+            .bg(Color::BrightWhite);
         screen.set_str(
             (2, 1),
             &format!(" gradient {where_} — click: inspect · space: toggle · q: quit "),
@@ -231,9 +231,9 @@ fn draw_info_box(screen: &mut Screen<Stdin, Stdout>, bx: u16, by: u16, color: Co
     let (hue, sat, light) = color.to_hsl();
 
     let bg = Color::Rgb(24, 24, 32);
-    let panel = Style::default().fg(BasicColor::BrightWhite).bg(bg);
-    let border = Style::default().fg(BasicColor::BrightBlack).bg(bg);
-    let dim = Style::default().fg(BasicColor::BrightBlack).bg(bg);
+    let panel = Style::default().fg(Color::BrightWhite).bg(bg);
+    let border = Style::default().fg(Color::BrightBlack).bg(bg);
+    let dim = Style::default().fg(Color::BrightBlack).bg(bg);
 
     let span = usize::from(BOX_W - 2);
     screen.set_str((bx, by), &format!("╭{}╮", "─".repeat(span)), border.clone());

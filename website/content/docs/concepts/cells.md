@@ -56,14 +56,14 @@ will reserve:
 
 ```rust
 use uncurses::cell::Cell;
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::style::Style;
 
 fn main() {
     let cell = Cell::narrow("a").style(
         Style::default()
             .bold()
-            .fg(BasicColor::Green)
+            .fg(Color::Green)
             .link("https://example.com", ""),
     );
     assert_eq!(cell.width(), 1);

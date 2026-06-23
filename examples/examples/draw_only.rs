@@ -16,7 +16,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::screen::{Screen, ScreenOptions};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -64,7 +64,7 @@ fn play(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
             "draw-only demo (Screen, no input) - exiting in {:.1}s",
             remaining_ms as f32 / 1000.0,
         );
-        let dim = Style::default().fg(BasicColor::BrightBlack);
+        let dim = Style::default().fg(Color::BrightBlack);
         screen.set_str((0, 0), &header, dim);
 
         if w >= label_w && h >= 3 {
@@ -79,12 +79,12 @@ fn play(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 
             // Cycle the color so the marquee shimmers.
             let palette = [
-                BasicColor::BrightRed,
-                BasicColor::BrightYellow,
-                BasicColor::BrightGreen,
-                BasicColor::BrightCyan,
-                BasicColor::BrightBlue,
-                BasicColor::BrightMagenta,
+                Color::BrightRed,
+                Color::BrightYellow,
+                Color::BrightGreen,
+                Color::BrightCyan,
+                Color::BrightBlue,
+                Color::BrightMagenta,
             ];
             let color = palette[(frame as usize / 4) % palette.len()];
             screen.set_str((x, h / 2), label, Style::default().bold().fg(color));

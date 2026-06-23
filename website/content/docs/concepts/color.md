@@ -14,7 +14,7 @@ A `Color` has three representations, and you mix them freely:
 
 | Kind | Range | Example |
 | --- | --- | --- |
-| `Color::Basic` | the 16 named ANSI colors | `BasicColor::Green` |
+| named | the 16 named ANSI colors | `Color::Green`, `Color::BrightBlue` |
 | `Color::Indexed` | the 256-color xterm palette | `Color::Indexed(208)` |
 | `Color::Rgb` | 24-bit true color | `Color::Rgb(255, 105, 180)` |
 
@@ -38,10 +38,10 @@ profile decides how it comes out.
 
 ```mermaid
 flowchart TB
-  color["a color you set (Rgb / Indexed / Basic)"]
+  color["a color you set (Rgb / Indexed / named)"]
   color --> tc["TrueColor: the original color"]
   color --> a256["Ansi256: nearest palette index"]
-  color --> ansi["Ansi: nearest of the 16 basics"]
+  color --> ansi["Ansi: nearest of the 16 named colors"]
   color --> off["Ascii / Disabled: no color"]
 ```
 
@@ -80,12 +80,12 @@ produce full-color escapes for the terminal and plain text for a snapshot test:
 
 ```rust
 use uncurses::buffer::TextBuffer;
-use uncurses::color::{BasicColor, Profile};
+use uncurses::color::{Color, Profile};
 use uncurses::style::Style;
 use uncurses::text::{Encode, TextSurface};
 
 let mut buffer = TextBuffer::new(6, 1);
-buffer.set_str((0, 0), "hello", Style::new().fg(BasicColor::Green));
+buffer.set_str((0, 0), "hello", Style::new().fg(Color::Green));
 
 let colored = buffer.display().to_string(); // TrueColor by default
 let plain = buffer.display_with(Profile::Disabled).to_string(); // no escapes

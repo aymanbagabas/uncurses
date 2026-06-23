@@ -11,7 +11,7 @@ pub(super) mod predicates;
 mod tests {
     use super::predicates::can_clear_with;
     use crate::cell::Cell;
-    use crate::color::{BasicColor, Color};
+    use crate::color::Color;
     use crate::renderer::{RenderBuffer, Renderer};
     use crate::style::{AttrFlags, Style, UnderlineStyle};
 
@@ -33,7 +33,7 @@ mod tests {
         // would paint with the terminal's default background — the
         // styled bg would be lost.
         let style = Style {
-            bg: Some(Color::Basic(BasicColor::Red)),
+            bg: Some(Color::Red),
             ..Style::default()
         };
         let cell = Cell::BLANK.style(style);
@@ -240,7 +240,7 @@ mod tests {
         r.cur_buf = Some(RenderBuffer::new(10, 1));
 
         let mut new_buf = RenderBuffer::new(10, 1);
-        let style = Style::default().fg(Color::Basic(BasicColor::Red));
+        let style = Style::default().fg(Color::Red);
         new_buf.set_cell((0, 0), &Cell::narrow("R").style(style));
 
         let mut sink = Vec::new();

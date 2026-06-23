@@ -1,6 +1,6 @@
 use super::{Optimizations, RenderBuffer, Renderer};
 use crate::cell::Cell;
-use crate::color::{BasicColor, Color};
+use crate::color::Color;
 use crate::style::Style;
 
 fn opts_with(mut f: impl FnMut(&mut Optimizations)) -> Optimizations {
@@ -233,7 +233,7 @@ fn transform_pen_change_emits_sgr() {
     renderer.cur_buf = Some(RenderBuffer::new(width, 1));
 
     let mut new_buf = RenderBuffer::new(width, 1);
-    let red = Style::default().fg(Color::Basic(BasicColor::Red));
+    let red = Style::default().fg(Color::Red);
     new_buf.set_cell((0, 0), &Cell::narrow("R").style(red));
 
     let out = transform_output(&mut renderer, &new_buf);
@@ -334,7 +334,7 @@ fn clear_bottom_without_bce_still_uses_ed_for_default_blank() {
 fn clear_bottom_with_styled_blank() {
     let width = 8;
     let height = 4;
-    let bg = Style::default().bg(Color::Basic(BasicColor::Blue));
+    let bg = Style::default().bg(Color::Blue);
     let blank = Cell::BLANK.style(bg);
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
     renderer.cur.set_style(blank.style.clone());
@@ -368,7 +368,7 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
     // transform emit styled spaces explicitly.
     let width = 8;
     let height = 4;
-    let bg = Style::default().bg(Color::Basic(BasicColor::Blue));
+    let bg = Style::default().bg(Color::Blue);
     let blank = Cell::BLANK.style(bg);
     let mut renderer = renderer(width, height, Optimizations::none());
     renderer.cur.set_style(blank.style.clone());

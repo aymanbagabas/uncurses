@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Position;
 use uncurses::screen::Screen;
@@ -115,7 +115,7 @@ fn write_link(
 }
 
 fn footer(screen: &mut Screen<Stdin, Stdout>, a: Anchor, hint: &str) {
-    let dim = Style::default().fg(BasicColor::BrightBlack);
+    let dim = Style::default().fg(Color::BrightBlack);
     let label_w = hint.chars().count() as i32;
     let center = a.x as i32 + BOX_W as i32 / 2;
     let lx = (center - label_w / 2).max(0) as u16;
@@ -193,16 +193,16 @@ fn scene_sprinkles(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> 
         let a = anchor(screen);
         if frame_no == 0 {
             paint_blank(screen);
-            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
+            draw_box(screen, a, &Style::default().fg(Color::BrightWhite));
             footer(screen, a, "scene 1 / 6 — sprinkles");
         }
         let inner_w = (BOX_W - 2) as u32;
         let inner_h = (BOX_H - 2) as u32;
         let glyph = if frame_no < 30 { "·" } else { "✦" };
         let fg = if frame_no < 30 {
-            Color::Basic(BasicColor::BrightCyan)
+            Color::BrightCyan
         } else {
-            Color::Basic(BasicColor::BrightYellow)
+            Color::BrightYellow
         };
         let style = Style::default().fg(fg);
         let cell = Cell::narrow(glyph).style(style);
@@ -223,16 +223,7 @@ fn scene_panels(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     let mut last_tick = u64::MAX;
 
     type PanelAttr = fn(Style) -> Style;
-    type Panel = (
-        u16,
-        u16,
-        u16,
-        u16,
-        BasicColor,
-        BasicColor,
-        &'static str,
-        PanelAttr,
-    );
+    type Panel = (u16, u16, u16, u16, Color, Color, &'static str, PanelAttr);
     let id_attr: PanelAttr = |s| s.italic();
     let bd_attr: PanelAttr = |s| s.bold();
     let mx_attr: PanelAttr = |s| s.bold().italic();
@@ -242,8 +233,8 @@ fn scene_panels(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             2,
             32,
             7,
-            BasicColor::Blue,
-            BasicColor::BrightWhite,
+            Color::Blue,
+            Color::BrightWhite,
             "back panel — italic",
             id_attr,
         ),
@@ -252,8 +243,8 @@ fn scene_panels(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             4,
             32,
             7,
-            BasicColor::Magenta,
-            BasicColor::BrightWhite,
+            Color::Magenta,
+            Color::BrightWhite,
             "middle — bold",
             bd_attr,
         ),
@@ -262,8 +253,8 @@ fn scene_panels(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             6,
             32,
             7,
-            BasicColor::Green,
-            BasicColor::Black,
+            Color::Green,
+            Color::Black,
             "front — bold + italic",
             mx_attr,
         ),
@@ -290,7 +281,7 @@ fn scene_panels(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
 
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
+            draw_box(screen, a, &Style::default().fg(Color::BrightWhite));
             for &(dx, dy, w, h, bg, fg, label, attr) in &panels {
                 let x = a.x + dx;
                 let y = a.y + dy;
@@ -347,14 +338,12 @@ fn scene_art(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
                 }
                 if last_row == usize::MAX {
                     paint_blank(screen);
-                    fill_inside(screen, a, &Style::default().bg(BasicColor::Black));
-                    draw_box(screen, a, &Style::default().fg(BasicColor::Red));
+                    fill_inside(screen, a, &Style::default().bg(Color::Black));
+                    draw_box(screen, a, &Style::default().fg(Color::Red));
                     footer(screen, a, "scene 3 / 6 — line-by-line art");
                 }
                 last_row = row;
-                let style = Style::default()
-                    .fg(BasicColor::BrightWhite)
-                    .bg(BasicColor::Black);
+                let style = Style::default().fg(Color::BrightWhite).bg(Color::Black);
                 for (i, line) in ART.iter().take(row).enumerate() {
                     write(screen, label_x, label_y + i as u16, line, &style);
                 }
@@ -364,9 +353,7 @@ fn scene_art(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
                     return Ok(());
                 }
                 last_phase = Some(phase);
-                let mut style = Style::default()
-                    .fg(BasicColor::BrightWhite)
-                    .bg(BasicColor::Black);
+                let mut style = Style::default().fg(Color::BrightWhite).bg(Color::Black);
                 if phase {
                     style = style.faint();
                 }
@@ -391,9 +378,9 @@ fn scene_banner(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             drawn = true;
             let a = anchor(screen);
             paint_blank(screen);
-            draw_box(screen, a, &Style::default().fg(BasicColor::BrightCyan));
+            draw_box(screen, a, &Style::default().fg(Color::BrightCyan));
 
-            let title = Style::default().fg(BasicColor::BrightWhite).bold();
+            let title = Style::default().fg(Color::BrightWhite).bold();
             write(screen, a.x + 4, a.y + 1, "Style sampler", &title);
 
             // Underline styles row.
@@ -401,37 +388,37 @@ fn scene_banner(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             let col = a.x + 4;
 
             let single = Style::default()
-                .fg(BasicColor::BrightWhite)
+                .fg(Color::BrightWhite)
                 .underline_style(UnderlineStyle::Single);
             write(screen, col, row, "single", &single);
 
             let double = Style::default()
-                .fg(BasicColor::BrightWhite)
+                .fg(Color::BrightWhite)
                 .underline_style(UnderlineStyle::Double)
-                .underline_color(BasicColor::Cyan);
+                .underline_color(Color::Cyan);
             write(screen, col + 10, row, "double", &double);
 
             let curly = Style::default()
-                .fg(BasicColor::BrightWhite)
+                .fg(Color::BrightWhite)
                 .underline_style(UnderlineStyle::Curly)
-                .underline_color(BasicColor::BrightRed);
+                .underline_color(Color::BrightRed);
             write(screen, col + 20, row, "curly", &curly);
 
             let dotted = Style::default()
-                .fg(BasicColor::BrightWhite)
+                .fg(Color::BrightWhite)
                 .underline_style(UnderlineStyle::Dotted)
-                .underline_color(BasicColor::BrightYellow);
+                .underline_color(Color::BrightYellow);
             write(screen, col + 30, row, "dotted", &dotted);
 
             let dashed = Style::default()
-                .fg(BasicColor::BrightWhite)
+                .fg(Color::BrightWhite)
                 .underline_style(UnderlineStyle::Dashed)
-                .underline_color(BasicColor::BrightGreen);
+                .underline_color(Color::BrightGreen);
             write(screen, col + 40, row, "dashed", &dashed);
 
             // Text attributes row.
             let attr_row = a.y + 5;
-            let white = || Style::default().fg(BasicColor::BrightWhite);
+            let white = || Style::default().fg(Color::BrightWhite);
             write(screen, col, attr_row, "bold", &white().bold());
             write(screen, col + 6, attr_row, "italic", &white().italic());
             write(screen, col + 14, attr_row, "faint", &white().faint());
@@ -450,20 +437,17 @@ fn scene_banner(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             write(screen, col, a.y + 7, "spell-check look:", &plain);
             let typo = white()
                 .underline_style(UnderlineStyle::Curly)
-                .underline_color(BasicColor::BrightRed);
+                .underline_color(Color::BrightRed);
             write(screen, col + 19, a.y + 7, "teh", &typo);
             write(screen, col + 23, a.y + 7, "quick brown fox", &plain);
 
             // Mixed-style demo line: bold + italic + colored fg.
-            let mixed = Style::default()
-                .fg(BasicColor::BrightMagenta)
-                .bold()
-                .italic();
+            let mixed = Style::default().fg(Color::BrightMagenta).bold().italic();
             write(screen, col, a.y + 9, "bold + italic + magenta", &mixed);
 
             // Hyperlink line.
             let link_label = Style::default()
-                .fg(BasicColor::BrightBlue)
+                .fg(Color::BrightBlue)
                 .underline_style(UnderlineStyle::Single)
                 .bold();
             write(screen, col, a.y + 11, "open the project page →", &plain);
@@ -482,31 +466,31 @@ fn scene_banner(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
     )
 }
 
-const MARQUEE: &[(&str, UnderlineStyle, BasicColor)] = &[
+const MARQUEE: &[(&str, UnderlineStyle, Color)] = &[
     (
         "welcome to the tour",
         UnderlineStyle::Single,
-        BasicColor::BrightCyan,
+        Color::BrightCyan,
     ),
     (
         "six small scenes",
         UnderlineStyle::Double,
-        BasicColor::BrightMagenta,
+        Color::BrightMagenta,
     ),
     (
         "hyperlinks travel with the cell",
         UnderlineStyle::Curly,
-        BasicColor::BrightYellow,
+        Color::BrightYellow,
     ),
     (
         "each underline has its own color",
         UnderlineStyle::Dotted,
-        BasicColor::BrightGreen,
+        Color::BrightGreen,
     ),
     (
         "press any key to advance",
         UnderlineStyle::Dashed,
-        BasicColor::BrightRed,
+        Color::BrightRed,
     ),
 ];
 
@@ -525,7 +509,7 @@ fn scene_marquee(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
         s
     };
 
-    let mut spans: Vec<(usize, usize, UnderlineStyle, BasicColor)> = Vec::new();
+    let mut spans: Vec<(usize, usize, UnderlineStyle, Color)> = Vec::new();
     {
         let mut cursor = 0usize;
         for (i, (msg, us, c)) in MARQUEE.iter().enumerate() {
@@ -546,7 +530,7 @@ fn scene_marquee(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
         if !drawn_box {
             drawn_box = true;
             paint_blank(screen);
-            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
+            draw_box(screen, a, &Style::default().fg(Color::BrightWhite));
             footer(
                 screen,
                 a,
@@ -572,7 +556,7 @@ fn scene_marquee(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             let ch = chars[idx];
             let mut buf = [0u8; 4];
             let s = ch.encode_utf8(&mut buf);
-            let mut style = Style::default().fg(BasicColor::BrightWhite);
+            let mut style = Style::default().fg(Color::BrightWhite);
             for (lo, hi, us, c) in &spans {
                 if idx >= *lo && idx < *hi {
                     style = style.underline_style(*us).underline_color(*c);
@@ -591,7 +575,7 @@ struct Ball {
     dx: f32,
     dy: f32,
     glyph: &'static str,
-    color: BasicColor,
+    color: Color,
 }
 
 fn scene_balls(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
@@ -602,7 +586,7 @@ fn scene_balls(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             dx: 0.7,
             dy: 0.4,
             glyph: "O",
-            color: BasicColor::BrightRed,
+            color: Color::BrightRed,
         },
         Ball {
             x: 18.0,
@@ -610,7 +594,7 @@ fn scene_balls(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             dx: -0.5,
             dy: 0.6,
             glyph: "*",
-            color: BasicColor::BrightYellow,
+            color: Color::BrightYellow,
         },
         Ball {
             x: 32.0,
@@ -618,7 +602,7 @@ fn scene_balls(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
             dx: 0.6,
             dy: -0.5,
             glyph: "@",
-            color: BasicColor::BrightCyan,
+            color: Color::BrightCyan,
         },
     ];
     let mut box_drawn = false;
@@ -633,7 +617,7 @@ fn scene_balls(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<bool> {
         if !box_drawn {
             box_drawn = true;
             paint_blank(screen);
-            draw_box(screen, a, &Style::default().fg(BasicColor::BrightWhite));
+            draw_box(screen, a, &Style::default().fg(Color::BrightWhite));
             // Hint sits below the box; full interior is free for bouncing.
             footer(
                 screen,

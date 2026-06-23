@@ -287,11 +287,11 @@ mod tests {
 
     #[test]
     fn styled_trailing_space_is_not_trimmed() {
-        use crate::color::{BasicColor, Color};
+        use crate::color::Color;
         let mut buf = Buffer::new(3, 1);
         buf.set_cell((0, 0).into(), &Cell::narrow("a"));
         // A trailing space with a background is visible, so it survives.
-        let bg = Style::new().bg(Color::Basic(BasicColor::Red));
+        let bg = Style::new().bg(Color::Red);
         buf.set_cell((2, 0).into(), &Cell::narrow(" ").style(&bg));
         // "a", a positional blank, then the bg-styled space, then reset.
         assert_eq!(buf.display().to_string(), "a \x1b[41m \x1b[m");
@@ -299,10 +299,10 @@ mod tests {
 
     #[test]
     fn disabled_profile_trims_styled_trailing_space() {
-        use crate::color::{BasicColor, Color, Profile};
+        use crate::color::{Color, Profile};
         let mut buf = Buffer::new(3, 1);
         buf.set_cell((0, 0).into(), &Cell::narrow("a"));
-        let bg = Style::new().bg(Color::Basic(BasicColor::Red));
+        let bg = Style::new().bg(Color::Red);
         buf.set_cell((2, 0).into(), &Cell::narrow(" ").style(&bg));
         // Under Disabled the background is dropped, so the trailing space is
         // unstyled and gets trimmed along with the interior blank.
@@ -311,9 +311,9 @@ mod tests {
 
     #[test]
     fn profile_disabled_drops_all_styling() {
-        use crate::color::{BasicColor, Color, Profile};
+        use crate::color::{Color, Profile};
         let mut buf = Buffer::new(2, 1);
-        let styled = Style::new().bold().fg(Color::Basic(BasicColor::Red));
+        let styled = Style::new().bold().fg(Color::Red);
         buf.set_cell((0, 0).into(), &Cell::narrow("h").style(&styled));
         buf.set_cell((1, 0).into(), &Cell::narrow("i").style(&styled));
         // Disabled strips every escape: only the text remains.

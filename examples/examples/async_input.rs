@@ -12,7 +12,7 @@
 use tokio_stream::StreamExt;
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key};
 use uncurses::screen::{Screen, ScreenOptions};
 use uncurses::style::Style;
@@ -62,10 +62,10 @@ async fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 
 fn render(screen: &mut Screen<Stdin, Stdout>, typed: &str) {
     screen.clear();
-    let dim = Style::default().fg(BasicColor::BrightBlack);
+    let dim = Style::default().fg(Color::BrightBlack);
     screen.set_str((0, 0), "Async echo. Type away; q quits.", dim);
 
-    let text = Style::default().fg(BasicColor::BrightGreen);
+    let text = Style::default().fg(Color::BrightGreen);
     let h = screen.height();
     screen.set_str((0, h / 2), typed, text);
 

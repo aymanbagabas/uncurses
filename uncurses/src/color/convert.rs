@@ -1,4 +1,4 @@
-use super::{BasicColor, Color, XTERM_COLORS};
+use super::{Color, XTERM_COLORS};
 
 /// Convert an RGB color to the nearest xterm 256-color index.
 pub fn rgb_to_ansi256((r, g, b): (u8, u8, u8)) -> Color {
@@ -44,7 +44,7 @@ pub fn rgb_to_ansi16((r, g, b): (u8, u8, u8)) -> Color {
         }
     }
 
-    Color::Basic(ansi16_from_u8(best_idx))
+    Color::from_named(best_idx).unwrap_or(Color::White)
 }
 
 fn nearest_cube_index(v: u8, cube: &[u8; 6]) -> u8 {
@@ -84,27 +84,6 @@ fn color_distance_sq(a: (u8, u8, u8), b: (u8, u8, u8)) -> u32 {
     (2 * dr * dr + 4 * dg * dg + 3 * db * db) as u32
 }
 
-fn ansi16_from_u8(v: u8) -> BasicColor {
-    match v {
-        0 => BasicColor::Black,
-        1 => BasicColor::Red,
-        2 => BasicColor::Green,
-        3 => BasicColor::Yellow,
-        4 => BasicColor::Blue,
-        5 => BasicColor::Magenta,
-        6 => BasicColor::Cyan,
-        7 => BasicColor::White,
-        8 => BasicColor::BrightBlack,
-        9 => BasicColor::BrightRed,
-        10 => BasicColor::BrightGreen,
-        11 => BasicColor::BrightYellow,
-        12 => BasicColor::BrightBlue,
-        13 => BasicColor::BrightMagenta,
-        14 => BasicColor::BrightCyan,
-        _ => BasicColor::BrightWhite,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,12 +115,12 @@ mod tests {
     #[test]
     fn test_pure_red_to_16() {
         let c = rgb_to_ansi16((255, 0, 0));
-        assert_eq!(c, Color::Basic(BasicColor::BrightRed));
+        assert_eq!(c, Color::BrightRed);
     }
 
     #[test]
     fn test_black_to_16() {
         let c = rgb_to_ansi16((0, 0, 0));
-        assert_eq!(c, Color::Basic(BasicColor::Black));
+        assert_eq!(c, Color::Black);
     }
 }

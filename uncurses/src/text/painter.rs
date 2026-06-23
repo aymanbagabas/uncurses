@@ -628,7 +628,7 @@ fn osc_body(seq: &[u8]) -> Option<&[u8]> {
 mod tests {
     use super::*;
     use crate::buffer::{Surface, TextBuffer};
-    use crate::color::{BasicColor, Color};
+    use crate::color::Color;
     use crate::style::AttrFlags;
 
     fn buf(width: u16, height: u16) -> TextBuffer {
@@ -683,10 +683,7 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(
-            cell_at(&b, 0, 0).style.fg,
-            Some(Color::Basic(BasicColor::Red))
-        );
+        assert_eq!(cell_at(&b, 0, 0).style.fg, Some(Color::Red));
     }
 
     #[test]
@@ -854,12 +851,12 @@ mod tests {
     #[test]
     fn base_applies_and_inline_reset_returns_to_base() {
         let mut b = buf(10, 1);
-        let base = Style::default().fg(Color::Basic(BasicColor::Red));
+        let base = Style::default().fg(Color::Red);
         // "a" gets the base red; the inline bold adds to "b"; the inline reset
         // clears only the inline state, so "c" falls back to the base red
         // rather than to a fully default style.
         Painter::new(&mut b).set_str_wrap((0, 0), "a\x1b[1mb\x1b[0mc", WrapMode::Truncate, base);
-        let red = Some(Color::Basic(BasicColor::Red));
+        let red = Some(Color::Red);
         assert_eq!(cell_at(&b, 0, 0).style.fg, red);
         assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
         assert_eq!(cell_at(&b, 1, 0).style.fg, red);
@@ -923,13 +920,10 @@ mod tests {
             (0, 0),
             "abcdefgh",
             "…",
-            Style::default().fg(Color::Basic(BasicColor::Red)),
+            Style::default().fg(Color::Red),
         );
         // The tail cell gets the supplied base style.
-        assert_eq!(
-            cell_at(&b, 4, 0).style.fg,
-            Some(Color::Basic(BasicColor::Red))
-        );
+        assert_eq!(cell_at(&b, 4, 0).style.fg, Some(Color::Red));
     }
 
     #[test]

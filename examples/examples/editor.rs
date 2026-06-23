@@ -16,7 +16,7 @@
 use std::process::Command;
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -94,10 +94,10 @@ fn edit_in_editor(screen: &mut Screen<Stdin, Stdout>, text: &str) -> std::io::Re
 
 fn render(screen: &mut Screen<Stdin, Stdout>, text: &str, status: &str) {
     screen.clear();
-    let dim = Style::default().fg(BasicColor::BrightBlack);
+    let dim = Style::default().fg(Color::BrightBlack);
     screen.set_str((0, 0), "e: edit in $EDITOR   q: quit", dim.clone());
     if !status.is_empty() {
-        screen.set_str((0, 1), status, Style::default().fg(BasicColor::BrightGreen));
+        screen.set_str((0, 1), status, Style::default().fg(Color::BrightGreen));
     }
 
     let height = screen.height();

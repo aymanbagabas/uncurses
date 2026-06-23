@@ -35,7 +35,7 @@ use std::path::PathBuf;
 
 use tokio_stream::StreamExt;
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::{BasicColor, Color};
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
 use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::style::Style;
@@ -274,18 +274,11 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdin, Stdout>) {
     let preview_w: u16 = w - preview_x;
     let body_h: u16 = h.saturating_sub(2);
 
-    let header = Style::default()
-        .fg(Color::Basic(BasicColor::Black))
-        .bg(Color::Basic(BasicColor::Cyan))
-        .bold();
+    let header = Style::default().fg(Color::Black).bg(Color::Cyan).bold();
     let normal = Style::default();
     let dim = Style::default().faint();
-    let dir_style = Style::default()
-        .fg(Color::Basic(BasicColor::BrightBlue))
-        .bold();
-    let selected = Style::default()
-        .bg(Color::Basic(BasicColor::Blue))
-        .fg(Color::Basic(BasicColor::BrightWhite));
+    let dir_style = Style::default().fg(Color::BrightBlue).bold();
+    let selected = Style::default().bg(Color::Blue).fg(Color::BrightWhite);
     let selected_dir = selected.clone().bold();
 
     // Header bar across full width.
@@ -357,9 +350,7 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdin, Stdout>) {
     screen.set_str(
         (0, status_y),
         &status_line,
-        Style::default()
-            .bg(Color::Basic(BasicColor::BrightBlack))
-            .fg(Color::Basic(BasicColor::White)),
+        Style::default().bg(Color::BrightBlack).fg(Color::White),
     );
 }
 

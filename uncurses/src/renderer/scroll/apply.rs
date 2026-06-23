@@ -269,10 +269,9 @@ mod tests {
             .union(Optimizations::IL_DL)
             .difference(Optimizations::CSR | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 8, opts);
-        renderer.cur.set_style(
-            crate::style::Style::default()
-                .bg(crate::color::Color::Basic(crate::color::BasicColor::Red)),
-        );
+        renderer
+            .cur
+            .set_style(crate::style::Style::default().bg(crate::color::Color::Red));
         let mut new_buf = RenderBuffer::new(10, 8);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -466,13 +465,13 @@ mod tests {
         // the exposed row, and cur_buf must record the styled blank
         // so the subsequent diff sees the row as already-correct.
         use crate::cell::Cell;
-        use crate::color::{BasicColor, Color};
+        use crate::color::Color;
         use crate::style::Style;
 
         let opts = Optimizations::default()
             .difference(Optimizations::CSR | Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
-        let bg_style = Style::default().bg(Color::Basic(BasicColor::Blue));
+        let bg_style = Style::default().bg(Color::Blue);
         renderer.cur.set_style(bg_style.clone());
         renderer.cur.set_pos(Position { y: 3, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 4);
@@ -504,16 +503,13 @@ mod tests {
         // that or the next-frame diff will think those rows already
         // carry attrs the screen never received.
         use crate::cell::Cell;
-        use crate::color::{BasicColor, Color};
+        use crate::color::Color;
         use crate::style::Style;
 
         let opts = Optimizations::default()
             .difference(Optimizations::CSR | Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
-        let pen = Style::default()
-            .bg(Color::Basic(BasicColor::Red))
-            .fg(Color::Basic(BasicColor::White))
-            .bold();
+        let pen = Style::default().bg(Color::Red).fg(Color::White).bold();
         renderer.cur.set_style(pen);
         renderer.cur.mark_pen_changed();
         renderer.cur.set_pos(Position { y: 3, x: 0 });
@@ -525,7 +521,7 @@ mod tests {
 
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
-        let bg_only = Style::default().bg(Color::Basic(BasicColor::Red));
+        let bg_only = Style::default().bg(Color::Red);
         let expected = Cell::BLANK.style(bg_only);
         assert!(
             bottom_row.iter().all(|c| *c == expected),
@@ -545,15 +541,13 @@ mod tests {
         // terminal's default bg, so cur_buf's fill must be the
         // default Cell::BLANK regardless of the active pen.
         use crate::cell::Cell;
-        use crate::color::{BasicColor, Color};
+        use crate::color::Color;
         use crate::style::Style;
 
         let opts = Optimizations::default()
             .difference(Optimizations::BCE | Optimizations::CSR | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
-        renderer
-            .cur
-            .set_style(Style::default().bg(Color::Basic(BasicColor::Red)));
+        renderer.cur.set_style(Style::default().bg(Color::Red));
         renderer.cur.mark_pen_changed();
         renderer.cur.set_pos(Position { y: 3, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 4);

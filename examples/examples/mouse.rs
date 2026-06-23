@@ -9,7 +9,7 @@
 //! press `q` or `Ctrl-C` to quit.
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
 use uncurses::screen::{MousePreference, Screen, ScreenOptions};
 use uncurses::style::Style;
@@ -77,7 +77,7 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
     let w = screen.width();
     let h = screen.height();
 
-    let dim = Style::default().fg(BasicColor::BrightBlack);
+    let dim = Style::default().fg(Color::BrightBlack);
     screen.set_str((0, 0), "Move and click. q quits.", dim);
 
     let info = format!(
@@ -95,8 +95,8 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
     {
         let marker = Style::default()
             .bold()
-            .fg(BasicColor::Black)
-            .bg(BasicColor::BrightYellow);
+            .fg(Color::Black)
+            .bg(Color::BrightYellow);
         screen.set_str((x, y), "▢", marker);
     }
 

@@ -21,7 +21,7 @@ use uncurses::ansi::cursor::write_cup;
 use uncurses::ansi::mode::{Mode, write_reset_mode, write_set_mode};
 use uncurses::ansi::screen::write_erase_screen;
 use uncurses::buffer::{SurfaceMut, TextBuffer};
-use uncurses::color::BasicColor;
+use uncurses::color::Color;
 use uncurses::event::{Event, EventSource};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout, Terminal};
@@ -90,7 +90,7 @@ fn redraw(buf: &mut TextBuffer) {
     let h = buf.height();
 
     let msg = "Low-level TextBuffer. Press any key to quit.";
-    let style = Style::default().bold().fg(BasicColor::BrightCyan);
+    let style = Style::default().bold().fg(Color::BrightCyan);
     let x = w.saturating_sub(msg.len() as u16) / 2;
     buf.set_str((x, h / 2), msg, style);
 }

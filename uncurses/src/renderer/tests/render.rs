@@ -723,13 +723,13 @@ fn test_inline_resize_sequence_round_trip() {
 /// 8 rows again — rows 4-7 must reappear.
 #[test]
 fn test_clear_bottom_syncs_cur_buf_so_next_frame_repaints() {
-    use crate::color::{BasicColor, Color};
+    use crate::color::Color;
     use crate::style::Style;
 
     let mut r = Renderer::new();
     r.set_fullscreen(false);
 
-    let scrim = Cell::narrow(" ").style(Style::default().bg(Color::Basic(BasicColor::Blue)));
+    let scrim = Cell::narrow(" ").style(Style::default().bg(Color::Blue));
 
     // Frame 1: scrim across all 8 rows.
     let mut rb1 = RenderBuffer::new(10, 8);

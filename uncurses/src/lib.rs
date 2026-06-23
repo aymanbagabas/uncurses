@@ -26,7 +26,7 @@
 //!
 //! ```no_run
 //! use uncurses::buffer::SurfaceMut;
-//! use uncurses::color::BasicColor;
+//! use uncurses::color::Color;
 //! use uncurses::screen::Screen;
 //! use uncurses::style::Style;
 //! use uncurses::text::TextSurface;
@@ -35,7 +35,7 @@
 //! let mut screen = Screen::stdio()?;
 //! screen.init()?; // raw mode + capability detection
 //!
-//! let style = Style::default().bold().fg(BasicColor::Green);
+//! let style = Style::default().bold().fg(Color::Green);
 //! screen.set_str((0, 0), "Hello, terminal!", style);
 //! screen.render()?; // stage the diff and flush it
 //!
@@ -50,14 +50,14 @@
 //!
 //! ```rust
 //! use uncurses::buffer::TextBuffer;
-//! use uncurses::color::{Color, BasicColor};
+//! use uncurses::color::Color;
 //! use uncurses::style::Style;
 //! use uncurses::text::{Encode, TextSurface};
 //!
 //! let mut frame = TextBuffer::new(80, 24);
 //! let style = Style::default()
 //!     .bold()
-//!     .fg(Color::Basic(BasicColor::Green));
+//!     .fg(Color::Green);
 //! frame.set_str((0, 0), "Hello, terminal!", style);
 //!
 //! // Serialize the painted grid to escape bytes you can write anywhere.

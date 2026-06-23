@@ -53,10 +53,10 @@
 //! ```
 //!
 //! ```rust,ignore
-//! use uncurses::color::BasicColor;
+//! use uncurses::color::Color;
 //! use uncurses::style::Style;
 //!
-//! let heading = Style::default().bold().fg(BasicColor::Green);
+//! let heading = Style::default().bold().fg(Color::Green);
 //! let mut out = Vec::new();
 //! heading.write_styled(&mut out, "Hello")?;
 //!
@@ -417,7 +417,7 @@ impl Style {
     /// Set or clear the foreground color and return the updated style.
     ///
     /// Accepts any value convertible into `Option<Color>`, including a
-    /// [`Color`], a [`BasicColor`](crate::color::BasicColor), or `None`.
+    /// [`Color`] or `None`.
     /// Passing `None` clears any foreground color carried by the base style.
     pub fn fg(mut self, color: impl Into<Option<Color>>) -> Self {
         self.fg = color.into();
@@ -427,7 +427,7 @@ impl Style {
     /// Set or clear the background color and return the updated style.
     ///
     /// Accepts any value convertible into `Option<Color>`, including a
-    /// [`Color`], a [`BasicColor`](crate::color::BasicColor), or `None`.
+    /// [`Color`] or `None`.
     /// Passing `None` clears any background color carried by the base style.
     pub fn bg(mut self, color: impl Into<Option<Color>>) -> Self {
         self.bg = color.into();
@@ -437,7 +437,7 @@ impl Style {
     /// Set or clear the underline color and return the updated style.
     ///
     /// Accepts any value convertible into `Option<Color>`, including a
-    /// [`Color`], a [`BasicColor`](crate::color::BasicColor), or `None`.
+    /// [`Color`] or `None`.
     /// Passing `None` clears any underline color carried by the base style.
     pub fn underline_color(mut self, color: impl Into<Option<Color>>) -> Self {
         self.underline_color = color.into();
@@ -646,7 +646,7 @@ impl std::fmt::Display for StyledText<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::BasicColor;
+    use crate::color::Color;
 
     #[test]
     fn test_style_empty() {
@@ -656,13 +656,10 @@ mod tests {
 
     #[test]
     fn test_style_builder() {
-        let s = Style::EMPTY
-            .bold()
-            .italic()
-            .fg(Color::Basic(BasicColor::Red));
+        let s = Style::EMPTY.bold().italic().fg(Color::Red);
         assert!(s.attrs.contains(AttrFlags::BOLD));
         assert!(s.attrs.contains(AttrFlags::ITALIC));
-        assert_eq!(s.fg, Some(Color::Basic(BasicColor::Red)));
+        assert_eq!(s.fg, Some(Color::Red));
         assert!(!s.is_empty());
     }
 
@@ -686,7 +683,7 @@ mod tests {
         let mut buf = Vec::new();
         Style::EMPTY
             .bold()
-            .fg(Color::Basic(BasicColor::Red))
+            .fg(Color::Red)
             .write_style(&mut buf)
             .unwrap();
         assert_eq!(buf, b"\x1b[1;31m");
@@ -754,35 +751,26 @@ mod tests {
 
     #[test]
     fn inherit_self_wins_and_fills_unset_from_base() {
-        let style = Style::EMPTY.italic().fg(BasicColor::Blue);
-        let base = Style::EMPTY
-            .bold()
-            .fg(BasicColor::Red)
-            .bg(BasicColor::Black);
+        let style = Style::EMPTY.italic().fg(Color::Blue);
+        let base = Style::EMPTY.bold().fg(Color::Red).bg(Color::Black);
         let merged = style.inherit(base);
         // self's fg wins; bg is inherited from base; attributes combine.
-        assert_eq!(
-            merged.fg,
-            Some(crate::color::Color::Basic(BasicColor::Blue))
-        );
-        assert_eq!(
-            merged.bg,
-            Some(crate::color::Color::Basic(BasicColor::Black))
-        );
+        assert_eq!(merged.fg, Some(crate::color::Color::Blue));
+        assert_eq!(merged.bg, Some(crate::color::Color::Black));
         assert!(merged.attrs.contains(AttrFlags::BOLD));
         assert!(merged.attrs.contains(AttrFlags::ITALIC));
     }
 
     #[test]
     fn inherit_empty_self_returns_base() {
-        let base = Style::EMPTY.bold().fg(BasicColor::Red);
+        let base = Style::EMPTY.bold().fg(Color::Red);
         // An empty child inherits everything from the base.
         assert_eq!(Style::EMPTY.inherit(&base), base);
     }
 
     #[test]
     fn inherit_empty_base_keeps_self() {
-        let style = Style::EMPTY.bold().fg(BasicColor::Red);
+        let style = Style::EMPTY.bold().fg(Color::Red);
         let merged = style.inherit(Style::EMPTY);
         assert_eq!(merged, style);
     }

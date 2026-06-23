@@ -24,7 +24,7 @@
 
 use ratatui::style::{Color as RtColor, Modifier, Style as RtStyle};
 use uncurses::cell::Cell as CzCell;
-use uncurses::color::{BasicColor, Color as CzColor};
+use uncurses::color::Color as CzColor;
 use uncurses::style::{AttrFlags, Style as CzStyle, UnderlineStyle};
 
 /// Convert a widget-library color into an uncurses color.
@@ -37,7 +37,7 @@ use uncurses::style::{AttrFlags, Style as CzStyle, UnderlineStyle};
 ///
 /// `None` for [`RtColor::Reset`], because reset means "no explicit color" in
 /// the target style. All other variants return `Some`: named colors map to
-/// [`BasicColor`] values, [`RtColor::Indexed`] keeps the same palette index,
+/// named [`CzColor`] values, [`RtColor::Indexed`] keeps the same palette index,
 /// and [`RtColor::Rgb`] keeps the same red, green, and blue channels.
 ///
 /// ## Errors
@@ -55,22 +55,22 @@ use uncurses::style::{AttrFlags, Style as CzStyle, UnderlineStyle};
 pub fn to_uncurses_color(c: RtColor) -> Option<CzColor> {
     Some(match c {
         RtColor::Reset => return None,
-        RtColor::Black => BasicColor::Black.into(),
-        RtColor::Red => BasicColor::Red.into(),
-        RtColor::Green => BasicColor::Green.into(),
-        RtColor::Yellow => BasicColor::Yellow.into(),
-        RtColor::Blue => BasicColor::Blue.into(),
-        RtColor::Magenta => BasicColor::Magenta.into(),
-        RtColor::Cyan => BasicColor::Cyan.into(),
-        RtColor::Gray => BasicColor::White.into(),
-        RtColor::DarkGray => BasicColor::BrightBlack.into(),
-        RtColor::LightRed => BasicColor::BrightRed.into(),
-        RtColor::LightGreen => BasicColor::BrightGreen.into(),
-        RtColor::LightYellow => BasicColor::BrightYellow.into(),
-        RtColor::LightBlue => BasicColor::BrightBlue.into(),
-        RtColor::LightMagenta => BasicColor::BrightMagenta.into(),
-        RtColor::LightCyan => BasicColor::BrightCyan.into(),
-        RtColor::White => BasicColor::BrightWhite.into(),
+        RtColor::Black => CzColor::Black,
+        RtColor::Red => CzColor::Red,
+        RtColor::Green => CzColor::Green,
+        RtColor::Yellow => CzColor::Yellow,
+        RtColor::Blue => CzColor::Blue,
+        RtColor::Magenta => CzColor::Magenta,
+        RtColor::Cyan => CzColor::Cyan,
+        RtColor::Gray => CzColor::White,
+        RtColor::DarkGray => CzColor::BrightBlack,
+        RtColor::LightRed => CzColor::BrightRed,
+        RtColor::LightGreen => CzColor::BrightGreen,
+        RtColor::LightYellow => CzColor::BrightYellow,
+        RtColor::LightBlue => CzColor::BrightBlue,
+        RtColor::LightMagenta => CzColor::BrightMagenta,
+        RtColor::LightCyan => CzColor::BrightCyan,
+        RtColor::White => CzColor::BrightWhite,
         RtColor::Rgb(r, g, b) => CzColor::Rgb(r, g, b),
         RtColor::Indexed(i) => CzColor::Indexed(i),
     })

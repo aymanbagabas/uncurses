@@ -167,15 +167,12 @@ fn push_underline_param<const N: usize>(
 }
 
 pub(super) fn push_fg_params<const N: usize>(buf: &mut SmallSeq<N>, color: Color) {
+    if let Some(i) = color.named_index() {
+        let code = if i >= 8 { 90 + i - 8 } else { 30 + i };
+        push_u8(buf, code);
+        return;
+    }
     match color {
-        Color::Basic(c) => {
-            let code = if c.is_bright() {
-                90 + c.as_u8() - 8
-            } else {
-                30 + c.as_u8()
-            };
-            push_u8(buf, code);
-        }
         Color::Indexed(idx) => {
             buf.extend_from_slice(b"38;5;");
             push_u8(buf, idx);
@@ -188,19 +185,18 @@ pub(super) fn push_fg_params<const N: usize>(buf: &mut SmallSeq<N>, color: Color
             buf.push(b';');
             push_u8(buf, b);
         }
+        // Named colors are handled above via `named_index`.
+        _ => {}
     }
 }
 
 pub(super) fn push_bg_params<const N: usize>(buf: &mut SmallSeq<N>, color: Color) {
+    if let Some(i) = color.named_index() {
+        let code = if i >= 8 { 100 + i - 8 } else { 40 + i };
+        push_u8(buf, code);
+        return;
+    }
     match color {
-        Color::Basic(c) => {
-            let code = if c.is_bright() {
-                100 + c.as_u8() - 8
-            } else {
-                40 + c.as_u8()
-            };
-            push_u8(buf, code);
-        }
         Color::Indexed(idx) => {
             buf.extend_from_slice(b"48;5;");
             push_u8(buf, idx);
@@ -213,6 +209,8 @@ pub(super) fn push_bg_params<const N: usize>(buf: &mut SmallSeq<N>, color: Color
             buf.push(b';');
             push_u8(buf, b);
         }
+        // Named colors are handled above via `named_index`.
+        _ => {}
     }
 }
 
@@ -223,10 +221,6 @@ pub(super) fn push_underline_color_params<const N: usize>(buf: &mut SmallSeq<N>,
     // unsupporting parsers re-interpret `5`/`n` as standalone SGR
     // codes, leaking spurious attributes (slow blink, etc.).
     match color {
-        Color::Basic(c) => {
-            buf.extend_from_slice(b"58:5:");
-            push_u8(buf, c.as_u8());
-        }
         Color::Indexed(idx) => {
             buf.extend_from_slice(b"58:5:");
             push_u8(buf, idx);
@@ -239,13 +233,18 @@ pub(super) fn push_underline_color_params<const N: usize>(buf: &mut SmallSeq<N>,
             buf.push(b':');
             push_u8(buf, b);
         }
+        // Named colors: emit their `0..=15` palette index in the `58:5:n` form.
+        named => {
+            buf.extend_from_slice(b"58:5:");
+            push_u8(buf, named.named_index().unwrap_or(0));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::{BasicColor, Color};
+    use crate::color::Color;
 
     #[test]
     fn test_write_empty_style_emits_nothing() {
@@ -267,7 +266,7 @@ mod tests {
         let s = Style::default()
             .bold()
             .italic()
-            .fg(Color::Basic(BasicColor::Red))
+            .fg(Color::Red)
             .bg(Color::Indexed(42));
         write_style(&mut buf, &s).unwrap();
         // single CSI ... m with all params joined by ;
