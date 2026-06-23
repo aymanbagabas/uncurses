@@ -3,43 +3,42 @@ title: "Width"
 weight: 4
 ---
 
-A terminal lays text out in cells, so the make-or-break question for any string
-is simple to ask and surprisingly hard to answer: how many cells does it take?
-Guess wrong by one, and every character after it slides over, and the row
-smears.
+A terminal lays text out in cells. The make-or-break question for any string is
+simple to ask and surprisingly hard to answer: how many cells does it take?
+Guess wrong by one, and everything after it shifts and the row smears.
 
 ## Not every character is one cell
 
-Text comes in three widths. Most characters are *narrow* and take one cell. A
-few are *wide* and take two, like CJK characters. And some take *zero*: a
-combining accent stacks onto the glyph before it rather than claiming a column
-of its own.
+Terminal text comes in three cell widths. Most characters are *narrow* and take
+one cell. A few are *wide* and take two cells, like CJK characters. Some take
+*zero*: a combining accent stacks onto the glyph before it rather than claiming
+a column of its own.
 
-<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(4, 2.2rem);"><span class="lbl">col:</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">4</span><span class="lbl">row 1</span><span>a</span><span>世</span><span class="cont">cont</span><span>é</span></div><figcaption>One row, four columns: narrow <code>a</code> (width 1), wide <code>世</code> (width 2, with its continuation cell), and <code>é</code> (the letter <code>e</code> plus a combining accent, still one cell).</figcaption></figure>
+<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(4, 2.2rem);"><span class="lbl">col:</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">4</span><span class="lbl">row 1</span><span>a</span><span>世</span><span class="cont">cont</span><span>e&#x0301;</span></div><figcaption>One row, four columns: narrow <code>a</code> (width 1), wide <code>世</code> (width 2, with its continuation cell), and <code>e&#x0301;</code> (the letter <code>e</code> plus a combining accent, still one cell).</figcaption></figure>
 
 ## Graphemes, not bytes or code points
 
-That last one is the catch. The `é` above might be a single code point, or it
-might be an `e` followed by a separate combining accent. Either way a human sees
-one character, and it fills one cell. uncurses measures the way a human counts,
-by *extended grapheme cluster*, so a cluster built from several code points
-still lands in the right number of cells. Counting bytes or code points would
-overcount and shove the rest of the row sideways.
+That last one is the catch. An `é` might be a single code point, or it might be
+an `e` followed by a separate combining accent. Either way, a human sees one
+character, and it fills one cell. uncurses measures the way a human counts: by
+*extended grapheme cluster*, so a cluster built from several code points still
+lands in the right number of cells. Counting bytes or code points would overcount
+and shove the rest of the row sideways.
 
 ## Two ways to measure
 
-How a cluster is measured is a policy, captured by `WidthMode`:
+How a cluster is measured is a policy, captured by
+[`WidthMode`](/api/uncurses/text/enum.WidthMode.html):
 
 - **`Wc`** is wcwidth-style: it measures each cluster by its first code point
-  and ignores the rest. Simple, and it matches how older or plainer terminals
-  behave. This is the default.
+  and ignores the rest. It is simple, and it matches how older or plainer
+  terminals behave. This is the default.
 - **`Grapheme`** measures the whole cluster, accounting for variation
   selectors, regional-indicator flags, and zero-width-joiner emoji sequences.
   The cluster boundaries follow the Unicode text-segmentation rules in
-  [UAX #29](https://unicode.org/reports/tr29/), and this mode is what terminals
-  advertise as [Unicode Core](https://contour-terminal.org/vt-extensions/unicode-core/)
-  mode (DEC mode 2027). Reach for it when the terminal draws a joined cluster as
-  one unit.
+  [UTS-29](https://unicode.org/reports/tr29/). Pair it with terminal
+  [Unicode Core](https://contour-terminal.org/vt-extensions/unicode-core/) mode
+  (DEC mode 2027), which measures display width per grapheme cluster.
 
 ## East Asian ambiguous width
 
@@ -65,7 +64,10 @@ Measuring right is what keeps the grid honest.
 You rarely call the measurement functions yourself. Any
 [surface]({{< relref "surfaces.md" >}}) that paints text carries a width mode
 and an `eaw_wide` flag, and its string-painting methods use them, laying down
-wide primaries and their continuations for you. When you do want the raw answer:
+wide primaries and their continuations for you. [`TextBuffer`](/api/uncurses/buffer/struct.TextBuffer.html)
+exposes `set_width_mode` and `set_eaw_wide`; a
+[screen]({{< relref "screen.md" >}}) pairs grapheme-cluster mode with DEC mode
+2027. When you do want the raw measurement:
 
 ```rust
 use uncurses::text::grapheme_width;

@@ -10,8 +10,8 @@ function, and an event loop.
 
 ## The shape of an app
 
-Almost every uncurses app follows the same four-beat structure. A type that owns
-the screen and the app state, a setup step, a loop, and a teardown step.
+Almost every uncurses app follows the same four-beat structure: a type that owns
+the screen and app state, a setup step, a loop, and a teardown step.
 
 ```mermaid
 flowchart TB
@@ -93,8 +93,8 @@ impl App {
 ## The event loop
 
 `run` draws once, then blocks on `read_event` and reacts. Arrows change the
-count, `r` resets it, a resize re-lays-out, and a quit key breaks the loop. We
-only redraw when something actually changed.
+count, `r` resets it, a resize updates the screen size, and a quit key breaks
+the loop. We only redraw when something actually changed.
 
 ```rust
 impl App {
@@ -127,9 +127,9 @@ terminal only repaints when the frame would actually differ.
 ## Putting the terminal back
 
 `stop` consumes the app and finishes the screen, restoring the terminal exactly
-as it was. `main` wires the three beats together, and crucially runs `stop` even
-when `run` returned an error, so a crash mid-loop never leaves the terminal in a
-weird state.
+as it was. `main` wires the three lifecycle steps together and still runs `stop`
+when `run` returns an error, so an error mid-loop never leaves the terminal in an
+altered state.
 
 ```rust
 impl App {
@@ -155,7 +155,7 @@ shell prompt comes back garbled.
 That is a complete, well-behaved terminal app in under a hundred lines. From
 here:
 
-- Add mouse support by initializing with mouse tracking, then matching on
+- Add mouse support with `ScreenOptions::mouse`, then match on
   `Event::MouseClick`.
 - Lay widgets out by reading `screen.width()` and `screen.height()` and doing the
   arithmetic, the way the `counter` example centers a button.

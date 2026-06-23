@@ -4,7 +4,7 @@ weight: 2
 ---
 
 Here is the smallest complete uncurses program. It prints a line, waits for you
-to press `q`, and hands the terminal back exactly as it found it.
+to press `q`, and hands the terminal back cleanly.
 
 ```rust
 use uncurses::buffer::Bounded;
@@ -30,8 +30,9 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-Run it, see your line, press `q`, and you are back at the shell prompt with the
-scrollback untouched. That is the whole contract.
+Run it, see your line, press `q`, and you are back at the shell prompt. The
+inline rows are reset, and your earlier scrollback stays intact. That is the
+whole contract.
 
 ## Line by line
 
@@ -42,13 +43,13 @@ let mut screen = Screen::stdio()?;
 screen.init()?;
 ```
 
-`Screen::stdio()` wires the screen to standard input and output. `init()` flips
-the terminal into raw mode and detects what it can do. A session is bracketed by
-`init()` and `finish()`, and nothing before `init()` touches the terminal.
+`Screen::stdio()` wires the screen to standard input and output. `init()` enters
+raw mode and starts capability discovery. A session is bracketed by `init()` and
+`finish()`; before `init()`, construction does not change terminal modes.
 
-A fresh screen starts *inline*: it draws in the normal buffer, right where your
-cursor already is, and it leaves the cursor visible. The alternate screen and a
-hidden cursor are opt-in, which we will get to below.
+After `init()`, the screen starts *inline*: it draws in the normal buffer, right
+where your cursor already is, and it leaves the cursor visible. The alternate
+screen and a hidden cursor are opt-in, which we will get to below.
 
 **Claim some space.**
 
@@ -58,9 +59,9 @@ screen.resize((w, 2));
 ```
 
 Inline, the screen owns however many rows you ask for. Here we take the full
-width and two rows tall: one for the text, and one left empty below it. That
-trailing blank row means when the program finishes, the shell prompt comes back
-on a fresh line of its own instead of butting up against your last line.
+width and make it two rows tall: one for the text, and one left empty below it.
+That trailing blank row means when the program finishes, the shell prompt comes
+back on a fresh line of its own instead of butting up against your last line.
 
 **Draw, then show.**
 
@@ -91,9 +92,10 @@ Here we loop until that something is the `q` key. Keys parse from strings, so
 screen.finish()
 ```
 
-One call. `finish()` tears down every mode it turned on, restores the terminal
-to its prior state, and consumes the screen so you cannot use it by accident
-afterward. Always finish, even on the error path.
+One call. `finish()` drains pending capability-query replies, resets tracked
+modes and the managed area, restores the terminal's prior state, and consumes the
+screen so you cannot use it by accident afterward. Arrange for `finish()` to run
+before your app returns, including from error paths.
 
 ## Going fullscreen
 
@@ -126,15 +128,15 @@ fn main() -> std::io::Result<()> {
 Two differences from the inline version. First, `enter_alt_screen()` switches to
 the terminal's alternate buffer, so your drawing does not scroll into the
 shell's history and the original screen comes back untouched on `finish()`.
-Second, there is no manual `resize`: on the alternate screen the screen fills the
-whole terminal and tracks its size for you. `hide_cursor()` just keeps the
-blinking caret out of your layout.
+Second, there is no manual `resize`: right after `init()`, the screen is already
+sized to the terminal. `hide_cursor()` just keeps the blinking caret out of your
+layout.
 
-Everything else is the same, `finish()` included. It puts the cursor back and
-leaves the alternate screen for you.
+Everything else is the same, `finish()` included. It resets tracked modes, puts
+the cursor back, and leaves the alternate screen for you.
 
 ## Next steps
 
 You have met `Screen`, the front-door entry point. It is not the only one. The
-next page maps out [the layers]({{< relref "the-layers.md" >}}) and when to
-reach for each.
+next page maps out [the layers]({{< relref "the-layers.md" >}})
+and when to reach for each.

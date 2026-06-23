@@ -5,8 +5,9 @@ weight: 10
 
 If you already write your UI with [ratatui](https://docs.rs/ratatui) widgets, you
 do not have to give that up to get uncurses underneath. The `uncurses-ratatui`
-crate is a ratatui `Backend` that renders through a uncurses `Screen`: you keep
-writing widgets, and uncurses diffs the frames and ships the minimal bytes.
+crate is a ratatui `Backend` that renders through an uncurses `Screen`: you keep
+writing widgets, and uncurses diffs the frames and writes only the necessary
+bytes.
 
 ## Install
 
@@ -22,9 +23,9 @@ The features mirror the core crate: `unicode-rs` (default), `icu`, and `async`.
 
 ## Setup and teardown
 
-`try_init` enters raw mode and the alternate screen and hands you a ready
-ratatui `Terminal`; `restore` puts the terminal back. One call each, bracketing
-your app.
+`try_init` enters raw mode, switches to the alternate screen, and hands you a
+ready ratatui `Terminal`; `restore` restores the terminal state. One call each,
+bracketing your app.
 
 ```rust
 use std::io;
@@ -39,14 +40,38 @@ fn main() -> io::Result<()> {
 
 `try_init` returns an `io::Result`; if you would rather panic on failure, `init`
 gives you the terminal directly. There are `*_with_options` variants when you
-want to pass `ScreenOptions`, for example to skip the startup capability probe
-with `query_capabilities: false`.
+want to pass ratatui `TerminalOptions` and uncurses `ScreenOptions`, for example
+to skip the startup capability probe with `query_capabilities: false`.
+
+```rust
+use std::io;
+
+use ratatui::{TerminalOptions, Viewport};
+use uncurses_ratatui::ScreenOptions;
+
+fn main() -> io::Result<()> {
+    let screen_options = ScreenOptions {
+        query_capabilities: false,
+        ..ScreenOptions::default()
+    };
+
+    let mut terminal = uncurses_ratatui::try_init_with_options(
+        TerminalOptions {
+            viewport: Viewport::Fullscreen,
+        },
+        screen_options,
+    )?;
+
+    uncurses_ratatui::restore(&mut terminal);
+    Ok(())
+}
+```
 
 ## Drawing and input
 
 `terminal.draw` is plain ratatui. Render any widget into the frame; uncurses
-turns the resulting buffer into the smallest possible update. Input comes back
-from uncurses through the backend.
+turns the resulting buffer into the smallest possible update. Input comes from
+uncurses through the backend's `Screen`.
 
 ```rust
 use uncurses::event::Event;
@@ -72,9 +97,10 @@ fn run(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 `backend_mut` exposes the same `read_event`, `poll_event`, and `try_read_event`
 you use on a bare `Screen`, producing uncurses `Event` values. So your render
 layer is ratatui and your input layer is uncurses, each doing what it is best
-at. Everything from the other guides, mouse, paste, async, querying, works
-through the backend's `Screen`.
+at. Features covered in the other guides, including [mouse input]({{< relref "mouse-input.md" >}}),
+[paste]({{< relref "handling-paste.md" >}}), [async events]({{< relref "async-events.md" >}}),
+and [terminal queries]({{< relref "querying-the-terminal.md" >}}), work through the backend's `Screen`.
 
 See the `ratatui_minimal` example for the smallest complete program, and browse
-the other `ratatui_*` examples for more, such as popups, inline viewports, and
-user input.
+the other `ratatui_*` examples for more, such as `ratatui_popup`,
+`ratatui_inline`, and `ratatui_user_input`.

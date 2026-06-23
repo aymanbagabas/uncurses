@@ -19,14 +19,14 @@ A `Color` has three representations, and you mix them freely:
 | `Color::Rgb` | 24-bit true color | `Color::Rgb(255, 105, 180)` |
 
 All three convert to RGB with `to_rgb`, so palette colors work with the true-color
-helpers. `Color::hex` parses `#rgb`, `#rrggbb`, or `#rrggbbaa` (alpha is ignored,
-terminals have none), and `Color::hsl` builds a color from hue, saturation, and
-lightness.
+helpers. `Color::hex` parses `rgb`, `rrggbb`, or `rrggbbaa`, with or without a
+leading `#` (alpha is ignored, terminals have none), and `Color::hsl` builds a
+color from hue, saturation, and lightness.
 
 ## Profiles and downsampling
 
-A [`Profile`] is the color capability of an output stream. There are five, ordered
-from least to most capable:
+A [`Profile`](/api/uncurses/color/enum.Profile.html) is the color capability of
+an output stream. There are five, ordered from least to most capable:
 
 ```
 Disabled  <  Ascii  <  Ansi  <  Ansi256  <  TrueColor
@@ -51,17 +51,21 @@ but still has structure, and one that is plain text.
 
 ## Detection is automatic
 
-A `Screen` picks its profile for you at `init`. It starts from the environment,
-the same way other CLI tools decide whether to emit color, then probes the
-terminal once for direct-color support and upgrades to `TrueColor` if it gets a
-confirmation (you can suppress that probe with `query_capabilities: false`). The
-environment conventions it reads:
+A `Screen` picks its profile for you when you call `init`. It starts from the
+environment, the same way other CLI tools decide whether to emit color, then
+probes the terminal once for direct-color support and upgrades to `TrueColor` if
+it gets a confirmation (you can suppress that probe with
+`query_capabilities: false`). The environment conventions it reads:
 
-- Output that is not a TTY is `Disabled`, unless `TTY_FORCE` or `CLICOLOR_FORCE`.
-- `NO_COLOR` clamps to `Ascii`: no color, but decoration may remain.
-- `COLORTERM=truecolor` (or `24bit`) upgrades to `TrueColor`.
-- `TERM=dumb` is `Disabled`; `*-256color` is `Ansi256`; `*-direct` is `TrueColor`.
-- `CLICOLOR` and `CLICOLOR_FORCE` raise a terminal to at least `Ansi`.
+- Output that is not a TTY is `Disabled`, unless `TTY_FORCE` makes it follow TTY
+  rules or `CLICOLOR_FORCE` forces color.
+- On a TTY, `NO_COLOR` clamps to `Ascii`: no color, but decoration may remain.
+- `COLORTERM=truecolor`, `24bit`, `yes`, or `true` upgrades to `TrueColor`,
+  except inside `screen`.
+- `TERM=dumb` is `Disabled`; `*-256color`, `tmux*`, and `screen*` are `Ansi256`;
+  `*-direct` and known true-color terminal names are `TrueColor`.
+- `CLICOLOR` raises a non-dumb TTY to at least `Ansi`; `CLICOLOR_FORCE` raises any
+  output to at least `Ansi`.
 
 Read the result with `screen.color_profile()`, and override it with
 `screen.use_color_profile(..)` when you want to force a level regardless of the
@@ -69,14 +73,22 @@ environment.
 
 ## Choosing a profile yourself
 
-Off the screen, the [`Encode`](/api/uncurses/text/trait.Encode.html) trait's `*_with`
-variants take a profile directly, so the same painted [buffer]({{< relref
-"buffers.md" >}}) can produce full-color escapes for the terminal and plain text
-for a snapshot test:
+When you are not using a `Screen`, the
+[`Encode`](/api/uncurses/text/trait.Encode.html) trait's `*_with` variants take a
+profile directly, so the same painted [buffer]({{< relref "buffers.md" >}}) can
+produce full-color escapes for the terminal and plain text for a snapshot test:
 
 ```rust
-let colored = frame.display().to_string();              // TrueColor by default
-let plain = frame.display_with(Profile::Disabled).to_string(); // no escapes
+use uncurses::buffer::TextBuffer;
+use uncurses::color::{BasicColor, Profile};
+use uncurses::style::Style;
+use uncurses::text::{Encode, TextSurface};
+
+let mut buffer = TextBuffer::new(6, 1);
+buffer.set_str((0, 0), "hello", Style::new().fg(BasicColor::Green));
+
+let colored = buffer.display().to_string(); // TrueColor by default
+let plain = buffer.display_with(Profile::Disabled).to_string(); // no escapes
 ```
 
 This is the basis of the [offscreen rendering]({{< relref
