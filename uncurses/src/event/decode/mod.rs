@@ -74,7 +74,7 @@ pub(crate) use util::is_c1_introducer;
 /// [`Decoder::drain`] or use [`EventSource`](crate::event::EventSource), which
 /// applies the timeout around [`Decoder::parse_one`].
 pub struct Decoder {
-    #[cfg(any(test, windows))]
+    #[cfg(test)]
     buf: Vec<u8>,
     /// Decoder behavior flags (disambiguation toggles for legacy keys).
     pub(super) flags: DecoderFlags,
@@ -114,7 +114,7 @@ impl Decoder {
     /// `parse` buffer but performs no I/O and never panics.
     pub fn new(flags: DecoderFlags) -> Self {
         Self {
-            #[cfg(any(test, windows))]
+            #[cfg(test)]
             buf: Vec::with_capacity(256),
             flags,
             in_paste: false,
@@ -308,7 +308,7 @@ impl Decoder {
     /// This method never panics for malformed terminal input; unknown or invalid
     /// bytes are surfaced as unknown events or skipped according to the parser's
     /// recovery rules.
-    #[cfg(any(test, windows))]
+    #[cfg(test)]
     pub(crate) fn parse(&mut self, data: &[u8]) -> Vec<Event> {
         self.buf.extend_from_slice(data);
         let mut events = Vec::new();
