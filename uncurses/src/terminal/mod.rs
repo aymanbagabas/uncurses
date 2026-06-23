@@ -76,4 +76,5 @@ pub use size::Winsize;
 pub use stdio::{Stderr, StderrLock, Stdin, StdinLock, Stdout, StdoutLock, stderr, stdin, stdout};
 pub use tty::{TtyInput, TtyOutput};
 
+#[cfg(unix)]
 pub(crate) use size::get_window_size;
