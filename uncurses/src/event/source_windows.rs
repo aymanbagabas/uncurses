@@ -687,7 +687,8 @@ mod tests {
     /// codepoints.
     #[test]
     fn windows_paste_pipeline_preserves_unicode_round_trip() {
-        use crate::event::{Decoder, Event};
+        use crate::event::Event;
+        use crate::event::decode::Decoder;
 
         let body = "héllo 日本 😀 world";
         let mut pending = [None, None];
@@ -739,7 +740,8 @@ mod tests {
     /// calls, the paste must equal the original.
     #[test]
     fn windows_paste_pipeline_chunked_feed_preserves_emoji() {
-        use crate::event::{Decoder, Event};
+        use crate::event::Event;
+        use crate::event::decode::Decoder;
 
         let body = "ok 😀 done";
         let mut pending = [None, None];

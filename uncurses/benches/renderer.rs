@@ -1,6 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use uncurses::bench_support::{RenderBuffer, Renderer};
 use uncurses::cell::Cell;
-use uncurses::renderer::{RenderBuffer, Renderer};
 
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;

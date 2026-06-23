@@ -1,7 +1,7 @@
 //! Terminal events and event-stream decoding.
 //!
 //! This module owns the core [`Event`] enum together with the
-//! [`Decoder`] that parses raw terminal bytes into events, the
+//! internal decoder that parses raw terminal bytes into events, the
 //! platform-specific [`EventSource`] that drives the decoder from a
 //! tty, and the key/mouse types that events carry.
 //!
@@ -67,32 +67,31 @@
 //!
 //! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 
-pub mod decode;
+pub(crate) mod decode;
 #[cfg(test)]
 mod decode_safety_tests;
 mod key;
 mod mouse;
 mod pending;
-pub mod poll;
+pub(crate) mod poll;
 mod sigwinch;
-pub mod source;
+mod source;
 #[cfg(unix)]
-pub mod source_unix;
+mod source_unix;
 #[cfg(windows)]
-pub mod source_windows;
+mod source_windows;
 #[cfg(feature = "async")]
-pub mod stream;
+mod stream;
 
-pub use decode::*;
-pub use key::*;
-pub use mouse::*;
-pub use source::*;
+pub use key::{Key, KeyCode, KeyModifiers, ParseKeyError};
+pub use mouse::{Mouse, MouseButton, mouse_pixel_to_cell};
+pub use source::{DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, Waker};
 #[cfg(feature = "async")]
 pub use stream::EventStream;
 
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
-use crate::terminal::size::Winsize;
+use crate::terminal::Winsize;
 
 /// Which system clipboard selection an OSC 52 event refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

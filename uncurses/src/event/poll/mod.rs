@@ -50,13 +50,13 @@ use std::time::{Duration, Instant};
 /// is reported separately by [`Poller::poll`] into a caller-owned
 /// `&mut [bool]`, indexed by registration order.
 #[cfg(unix)]
-pub type PollFd = RawFd;
+pub(crate) type PollFd = RawFd;
 /// A watched handle: a raw fd on unix, a raw `HANDLE` on Windows. The
 /// caller registers a slice of these once via [`Poller::new`]; readiness
 /// is reported separately by [`Poller::poll`] into a caller-owned
 /// `&mut [bool]`, indexed by registration order.
 #[cfg(windows)]
-pub type PollFd = RawHandle;
+pub(crate) type PollFd = RawHandle;
 
 /// Reset every readiness flag to `false`. Called by each backend at the
 /// top of `poll` so stale bits never leak from a previous call.
@@ -139,7 +139,7 @@ fn remaining(deadline: Option<Instant>) -> Option<Duration> {
 /// implementations are exposed per target and the caller picks one. On
 /// Darwin, `kqueue` spins on tty character devices, so a caller watching
 /// a tty input fd selects `Select` over `Kqueue`.
-pub trait Poller: Send + Sync {
+pub(crate) trait Poller: Send + Sync {
     /// Construct a poller watching exactly `fds`, registered once for
     /// the poller's lifetime.
     fn new(fds: &[PollFd]) -> io::Result<Self>

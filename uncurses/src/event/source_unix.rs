@@ -42,7 +42,7 @@ use super::source::{
     Waker,
 };
 use crate::event::Event;
-use crate::terminal::size::get_window_size;
+use crate::terminal::get_window_size;
 
 pub(super) struct UnixWakerInner {
     /// Write end of the self-pipe. Non-blocking; closed on drop.

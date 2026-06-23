@@ -329,7 +329,7 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
         && params.len() >= 3
         && params.get_or(0, 0) == 48
     {
-        return Some(Event::Resize(crate::terminal::size::Winsize {
+        return Some(Event::Resize(crate::terminal::Winsize {
             row: params.get_or(1, 0) as u16,
             col: params.get_or(2, 0) as u16,
             ypixel: params.get_or(3, 0) as u16,

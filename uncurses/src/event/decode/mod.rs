@@ -74,6 +74,7 @@ pub(crate) use util::is_c1_introducer;
 /// [`Decoder::drain`] or use [`EventSource`](crate::event::EventSource), which
 /// applies the timeout around [`Decoder::parse_one`].
 pub struct Decoder {
+    #[cfg(any(test, windows))]
     buf: Vec<u8>,
     /// Decoder behavior flags (disambiguation toggles for legacy keys).
     pub(super) flags: DecoderFlags,
@@ -113,6 +114,7 @@ impl Decoder {
     /// `parse` buffer but performs no I/O and never panics.
     pub fn new(flags: DecoderFlags) -> Self {
         Self {
+            #[cfg(any(test, windows))]
             buf: Vec::with_capacity(256),
             flags,
             in_paste: false,
@@ -132,7 +134,8 @@ impl Decoder {
     /// Callers can use this to drive an escape-sequence timeout: if no
     /// further bytes arrive before the timeout elapses, call
     /// [`Decoder::drain`] to resolve the partial sequence.
-    pub fn has_pending(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn has_pending(&self) -> bool {
         if self.buf.is_empty() || self.in_paste {
             return false;
         }
@@ -150,7 +153,8 @@ impl Decoder {
     ///
     /// While a bracketed paste is in progress this is a no-op — paste content
     /// is allowed to span arbitrary time.
-    pub fn drain(&mut self) -> Vec<Event> {
+    #[cfg(test)]
+    pub(crate) fn drain(&mut self) -> Vec<Event> {
         if self.in_paste || self.buf.is_empty() {
             return Vec::new();
         }
@@ -165,15 +169,9 @@ impl Decoder {
     /// When enabled, X10-style `CSI M` mouse reports read their three values as
     /// UTF-8 codepoints instead of raw bytes. This setting only affects future
     /// parses and does not modify already-buffered bytes.
-    pub fn set_utf8_mouse(&mut self, enabled: bool) {
+    #[cfg(test)]
+    pub(crate) fn set_utf8_mouse(&mut self, enabled: bool) {
         self.utf8_mouse = enabled;
-    }
-
-    /// Return whether UTF-8 mouse decoding (xterm mode 1005) is enabled.
-    ///
-    /// Reading this flag has no side effects and performs no parsing.
-    pub fn utf8_mouse(&self) -> bool {
-        self.utf8_mouse
     }
 
     /// Slice-driven parse — pulls **one** event from `data` and returns
@@ -310,7 +308,8 @@ impl Decoder {
     /// This method never panics for malformed terminal input; unknown or invalid
     /// bytes are surfaced as unknown events or skipped according to the parser's
     /// recovery rules.
-    pub fn parse(&mut self, data: &[u8]) -> Vec<Event> {
+    #[cfg(any(test, windows))]
+    pub(crate) fn parse(&mut self, data: &[u8]) -> Vec<Event> {
         self.buf.extend_from_slice(data);
         let mut events = Vec::new();
 

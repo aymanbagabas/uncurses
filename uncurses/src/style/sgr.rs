@@ -19,7 +19,7 @@ use crate::color::Color;
 /// SGR reset sequence (`ESC [ m`).
 ///
 /// This clears SGR attributes and colors. It does not close OSC 8 hyperlinks.
-pub const RESET: &[u8] = b"\x1b[m";
+pub(crate) const RESET: &[u8] = b"\x1b[m";
 
 /// Fixed-capacity stack byte collector for short escape sequences.
 ///

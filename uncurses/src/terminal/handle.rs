@@ -108,7 +108,7 @@ impl Terminal<TtyInput, TtyOutput> {
     ///
     /// # Errors
     ///
-    /// Returns the error from [`open_tty`] if the process has no controlling
+    /// Returns the error from `open_tty` if the process has no controlling
     /// terminal or if the platform device cannot be opened.
     ///
     /// # Panics
@@ -333,7 +333,7 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
 
     /// Put the terminal into raw mode and save the previous state.
     ///
-    /// This calls [`raw::make_raw_mode`] with the terminal's input and output
+    /// This calls `make_raw_mode` with the terminal's input and output
     /// descriptors. The returned pre-raw [`State`] is cloned into the terminal
     /// so [`restore`](Self::restore) can later apply it without an argument.
     ///
@@ -357,7 +357,7 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
 
     /// Restore the state cached by the most recent [`make_raw`](Self::make_raw).
     ///
-    /// If a state is cached, it is applied with [`raw::set_state`] and then
+    /// If a state is cached, it is applied with `set_state` and then
     /// cleared. If no state is cached, this is a no-op.
     ///
     /// # Returns
@@ -389,7 +389,7 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     ///
     /// # Errors
     ///
-    /// Returns any error from [`raw::get_state`].
+    /// Returns any error from `get_state`.
     ///
     /// # Panics
     ///
@@ -414,7 +414,7 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     ///
     /// # Errors
     ///
-    /// Returns any error from [`raw::set_state`].
+    /// Returns any error from `set_state`.
     ///
     /// # Panics
     ///
@@ -494,7 +494,7 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
 
     /// Put the terminal into raw mode and save the previous state.
     ///
-    /// This calls [`raw::make_raw_mode`] with the terminal's input and output
+    /// This calls `make_raw_mode` with the terminal's input and output
     /// handles. The returned pre-raw [`State`] is cloned into the terminal so
     /// [`restore`](Self::restore) can later apply it without an argument.
     ///
@@ -518,7 +518,7 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
 
     /// Restore the state cached by the most recent [`make_raw`](Self::make_raw).
     ///
-    /// If a state is cached, it is applied with [`raw::set_state`] and then
+    /// If a state is cached, it is applied with `set_state` and then
     /// cleared. If no state is cached, this is a no-op.
     ///
     /// # Returns
@@ -550,7 +550,7 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     ///
     /// # Errors
     ///
-    /// Returns any error from [`raw::get_state`].
+    /// Returns any error from `get_state`.
     ///
     /// # Panics
     ///
@@ -575,7 +575,7 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     ///
     /// # Errors
     ///
-    /// Returns any error from [`raw::set_state`].
+    /// Returns any error from `set_state`.
     ///
     /// # Panics
     ///

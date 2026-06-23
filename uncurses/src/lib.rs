@@ -107,15 +107,24 @@ pub mod cell;
 pub mod color;
 pub mod event;
 pub mod layout;
-#[cfg(feature = "bench")]
-pub mod renderer;
-#[cfg(not(feature = "bench"))]
-pub(crate) mod renderer;
 pub mod screen;
 pub mod style;
 pub mod terminal;
 pub mod text;
 pub mod unicode;
+
+pub(crate) mod renderer;
+
+/// Internal renderer types re-exported only for the criterion benchmarks.
+///
+/// This module is gated behind the dev-only `bench` feature and hidden from
+/// the documentation. It is not part of the public API and offers no
+/// stability guarantees; do not depend on it.
+#[cfg(feature = "bench")]
+#[doc(hidden)]
+pub mod bench_support {
+    pub use crate::renderer::{RenderBuffer, Renderer};
+}
 
 #[cfg(debug_assertions)]
 mod trace;

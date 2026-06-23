@@ -60,17 +60,18 @@
 //! preserves the same invariant when blitting between surfaces: orphan
 //! continuations and clipped wide primaries are emitted as blanks.
 
-pub mod ops;
-pub mod surface;
-pub mod view;
-pub mod window;
+mod ops;
+mod surface;
+mod view;
+mod window;
 
 mod line;
 #[cfg(test)]
 mod tests;
 mod text_buffer;
 
-pub use line::{Line, blank_line, fill_line, fill_line_into};
+pub(crate) use line::fill_line_into;
+pub use line::{Line, blank_line, fill_line};
 pub use surface::{Bounded, Surface, SurfaceMut};
 pub use text_buffer::TextBuffer;
 pub use view::View;

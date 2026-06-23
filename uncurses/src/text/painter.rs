@@ -57,28 +57,7 @@ use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 use crate::style::{Style, read_style};
 
-use super::{TextSurface, WidthMode};
-
-/// Behavior when a cluster would extend past the right edge of the clip
-/// rectangle.
-///
-/// Newlines and carriage returns are handled independently of this setting:
-/// `\n` advances to the next row at the clip rectangle's left edge, and `\r`
-/// returns to that left edge on the current row.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum WrapMode {
-    /// Stop painting at the right edge of the current row.
-    ///
-    /// The cluster that would cross the edge is not written, and the returned
-    /// cursor position is where painting stopped.
-    #[default]
-    Truncate,
-    /// Continue on the next row at the left edge of the clip rectangle.
-    ///
-    /// Wrapping stops when the bottom edge is reached. If a cluster is wider
-    /// than the clip rectangle itself, it is not written.
-    Wrap,
-}
+use super::{TextSurface, WidthMode, WrapMode};
 
 /// Paint styled strings into a [`TextSurface`].
 ///

@@ -120,7 +120,7 @@ use crate::cell::Cell;
 use crate::color::Profile;
 #[cfg(feature = "async")]
 use crate::event::EventStream;
-use crate::event::source::Input;
+use crate::event::Input;
 use crate::event::{Event, EventSource};
 use crate::layout::{Position, Rect, Size};
 use crate::renderer::{RenderBuffer, Renderer};

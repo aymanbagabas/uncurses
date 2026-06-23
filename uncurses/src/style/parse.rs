@@ -25,7 +25,7 @@ use crate::color::Color;
 /// Modifies `style` in place. A `0` parameter, an omitted parameter that
 /// decodes as `0`, or an empty parameter list resets the style to
 /// [`Style::default()`]. Unknown parameters are ignored.
-pub fn read_style(params: Params<'_>, style: &mut Style) {
+pub(crate) fn read_style(params: Params<'_>, style: &mut Style) {
     if params.is_empty() {
         *style = Style::default();
         return;
@@ -83,27 +83,6 @@ pub fn read_style(params: Params<'_>, style: &mut Style) {
             _ => {} // unknown — ignore
         }
     }
-}
-
-/// Parse one extended color parameter group.
-///
-/// `idx` must point at a `38`, `48`, or `58` group inside `params`. Returns the
-/// parsed color and the number of top-level groups consumed. Both colon and
-/// semicolon forms are accepted; invalid or unsupported color kinds return
-/// `None` while still reporting the consumed groups.
-pub fn read_style_color(params: Params<'_>, idx: usize) -> (Option<Color>, usize) {
-    let Some(g) = params.group(idx) else {
-        return (None, 1);
-    };
-    let before = remaining_groups(params, idx + 1);
-    let mut rest = params.slice_from(idx + 1).iter();
-    let color = read_extended_color(g, &mut rest);
-    let after = rest.count();
-    (color, 1 + (before - after))
-}
-
-fn remaining_groups(params: Params<'_>, start: usize) -> usize {
-    params.slice_from(start).iter().count()
 }
 
 /// Main parameter value of an SGR group. Omitted slot → `0` per

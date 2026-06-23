@@ -79,7 +79,7 @@ fn stdin_lock() -> &'static Mutex<StdinRaw> {
 ///
 /// Every call returns a cheap `Copy` handle referencing the same process-wide
 /// stdout state. Writes through this handle are unbuffered except for the
-/// platform console transcoding described in the [module documentation](self).
+/// platform console transcoding described in the module-level documentation.
 ///
 /// # Returns
 ///
@@ -185,7 +185,7 @@ impl Read for StdinRaw {
 ///
 /// Use [`lock`](Stdout::lock) to hold the stdout lock across multiple writes,
 /// or write directly to the handle for per-call locking. See the
-/// [module documentation](self) for buffering and Windows console behavior.
+/// module-level documentation for buffering and Windows console behavior.
 #[derive(Clone, Copy)]
 pub struct Stdout {
     inner: &'static Mutex<StdoutRaw>,

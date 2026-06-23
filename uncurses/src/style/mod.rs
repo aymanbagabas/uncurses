@@ -68,11 +68,12 @@
 //! ```
 
 pub(crate) mod diff;
-pub mod parse;
-pub mod sgr;
+mod parse;
+mod sgr;
 
-pub use parse::*;
-pub use sgr::*;
+pub(crate) use parse::read_style;
+#[cfg(test)]
+pub(crate) use sgr::RESET;
 
 use std::borrow::Borrow;
 use std::io::{self, Write};
