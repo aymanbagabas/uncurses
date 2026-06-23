@@ -1,15 +1,7 @@
-//! Grapheme-cluster segmentation abstraction.
+//! Grapheme-cluster segmentation, backed by `unicode-rs` or `icu`.
 //!
-//! Selecting a backend:
-//!
-//! - default backend: small pure-Rust UAX #29 implementation.
-//! - alternate table-driven backend: faster on emoji/ZWJ-heavy text at the
-//!   cost of a larger binary. Wins when both backends are enabled.
-//!
-//! At least one of the two features must be enabled — the crate
-//! root emits a `compile_error!` otherwise.
-//!
-//! Both implementations honour Unicode extended grapheme clusters.
+//! See the [`unicode`](super) module docs for backend selection. Both
+//! implementations honour Unicode extended grapheme clusters.
 
 /// Iterate over the extended grapheme clusters in a string.
 ///

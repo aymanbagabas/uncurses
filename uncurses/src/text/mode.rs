@@ -5,7 +5,7 @@
 //! is computed: by the first code point (`Wc`) or by cluster-aware Unicode
 //! presentation rules (`Grapheme`).
 
-use crate::cell::graphemes;
+use crate::unicode::graphemes;
 
 use super::width::{char_width, grapheme_width};
 
