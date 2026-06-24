@@ -135,6 +135,12 @@ let bold = Style::new().bold();
 println!("{bold}important{bold:#}");
 ```
 
+{{< callout type="info" >}}
+The `#` is Rust's alternate format flag. On a `Style` it flips `Display` from
+the opener to the closer, so `{bold:#}` means "close this style". It is the same
+convention the `anstyle` crate uses.
+{{< /callout >}}
+
 The opener is additive, so an empty style writes nothing. The closer only emits
 what it needs: an SGR-only style closes with `CSI m`, while a linked style also
 writes the OSC 8 terminator. The closer resets to defaults rather than restoring

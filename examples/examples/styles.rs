@@ -1,10 +1,10 @@
 //! Styling showcase: SGR attributes, colors, and OSC 8 hyperlinks.
 //!
 //! Writes styled lines straight to stdout with no raw mode or alternate
-//! screen. Each line follows the opener/closer pattern: a [`Style`] renders
-//! through its [`Display`] to the SGR (and optional OSC 8) opener, and
-//! [`Style::reset`] renders the matching closer. Both drop into an ordinary
-//! [`writeln!`] like any other value: `writeln!(out, "{open}text{close}")`.
+//! screen. Each line follows the opener/closer pattern: `{style}` renders a
+//! [`Style`] to the SGR (and optional OSC 8) opener, and the alternate form
+//! `{style:#}` renders the matching closer. Both drop into an ordinary
+//! [`writeln!`] like any other value: `writeln!(out, "{style}text{style:#}")`.
 //!
 //! Run with `cargo run --example styles`. Truecolor and fancy underlines
 //! need a capable terminal; terminals that ignore a sequence simply render
