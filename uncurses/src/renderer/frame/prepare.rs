@@ -4,31 +4,15 @@
 //! the inline-shrink partial clear), and dispatches the force-clear /
 //! scroll-detection branch before the per-row diff runs.
 
-use std::hash::{Hash, Hasher};
 use std::io;
-
-use rustc_hash::FxHasher;
 
 const SCROLL_OPTIMIZE_MIN_TOUCHED_LINES: usize = 2;
 const SCROLL_OPTIMIZE_TOUCHED_DIVISOR: usize = 8;
 
-use crate::cell::Cell;
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
+use crate::renderer::hash::hash_line;
 use crate::renderer::scroll;
-
-/// Hash a line's content (ignoring style) for scroll detection.
-///
-/// Uses a non-cryptographic hasher because the only consequence of an
-/// unlucky collision is a missed scroll opportunity — the affected
-/// rows fall through to direct redraw, never visual corruption.
-pub(crate) fn hash_line(line: &[Cell]) -> u64 {
-    let mut hasher = FxHasher::default();
-    for cell in line {
-        cell.content().hash(&mut hasher);
-    }
-    hasher.finish()
-}
 
 impl Renderer {
     /// Run the pre-diff phase. Returns whether the surface size

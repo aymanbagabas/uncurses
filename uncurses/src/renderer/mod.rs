@@ -71,6 +71,7 @@ pub(crate) mod cursor;
 #[cfg(test)]
 mod cursor_planner_tests;
 pub(crate) mod frame;
+pub(crate) mod hash;
 pub(crate) mod pen;
 pub(crate) mod scroll;
 pub(crate) mod state;

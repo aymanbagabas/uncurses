@@ -3,7 +3,7 @@
 //! the actual content rather than stale or zeroed entries.
 
 use crate::renderer::Renderer;
-use crate::renderer::frame::prepare::hash_line;
+use crate::renderer::hash::hash_line;
 
 /// Recompute `old_hashes[start..end]` from cur_buf. Used after a
 /// hardscroll to give the rows that the scroll byte blanked an
