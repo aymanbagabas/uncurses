@@ -88,8 +88,8 @@ pub(super) fn push_sep<const N: usize>(buf: &mut SmallSeq<N>, body_start: usize)
 /// All present attributes, underline shape, foreground color, background color,
 /// and underline color are joined into a single parameter list. If the style
 /// has no SGR-relevant state, this writes nothing at all. Hyperlinks are not
-/// emitted here; [`Style::write_style`](super::Style::write_style) handles OSC 8
-/// wrapping.
+/// emitted here; the [`Display`](std::fmt::Display) implementation for
+/// [`Style`](super::Style) handles OSC 8 wrapping around this sequence.
 ///
 /// Returns any I/O error from `w` and does not panic.
 pub(crate) fn write_style<W: Write>(w: &mut W, style: &Style) -> io::Result<()> {
