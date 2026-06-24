@@ -68,7 +68,7 @@ it gets a confirmation (you can suppress that probe with
   output to at least `Ansi`.
 
 Read the result with `screen.color_profile()`, and override it with
-`screen.use_color_profile(..)` when you want to force a level regardless of the
+`screen.set_color_profile(..)` when you want to force a level regardless of the
 environment.
 
 ## Choosing a profile yourself
