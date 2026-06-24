@@ -69,7 +69,7 @@ you can stop waiting before the deadline. uncurses uses the same pattern for the
 `Screen` capability probe.
 
 ```rust
-use uncurses::ansi::background::REQUEST_BACKGROUND_COLOR;
+use uncurses::ansi::color::REQUEST_BACKGROUND_COLOR;
 use uncurses::ansi::ctrl::REQUEST_PRIMARY_DA;
 use uncurses::event::{Event, EventSource};
 use uncurses::terminal::Terminal;
