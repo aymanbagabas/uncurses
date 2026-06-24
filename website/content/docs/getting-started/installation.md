@@ -35,7 +35,6 @@ some characters are two cells wide. uncurses ships two, and you pick one.
 | `unicode-rs` | yes | Pure-Rust width and segmentation tables. Small build, conservative on emoji and zero-width-joiner edge cases. |
 | `icu` | no | ICU4X-backed segmentation and Unicode properties. Strictly more correct on the tricky clusters, at the cost of a larger binary. Wins when both are on. |
 | `async` | no | Adds `EventStream`, a runtime-agnostic [`futures_core::Stream`](https://docs.rs/futures-core) of decoded events. Pulls in only `futures-core`, no executor. |
-| `bench` | no | Enables the `renderer` benchmark target. Not needed for applications. |
 
 The default is `unicode-rs`. If you turn default features off, choose
 `unicode-rs` or `icu`; building without a width backend fails. To trade size
