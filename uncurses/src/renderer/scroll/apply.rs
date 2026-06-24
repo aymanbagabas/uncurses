@@ -117,7 +117,7 @@ mod tests {
     use super::*;
     use crate::layout::Position;
     use crate::renderer::Optimizations;
-    use crate::renderer::frame::prepare::hash_line;
+    use crate::renderer::hash::hash_line;
 
     fn make_renderer(width: u16, height: u16, opts: Optimizations) -> Renderer {
         let mut r = Renderer::new();
