@@ -1,6 +1,22 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use uncurses::bench_support::{RenderBuffer, Renderer};
-use uncurses::cell::Cell;
+//! Renderer micro-benchmarks (nightly only).
+//!
+//! These run against the crate-private renderer internals through the
+//! built-in libtest harness, so `Renderer` and `RenderBuffer` never need to
+//! be exposed outside the crate. Build and run them with:
+//!
+//! ```sh
+//! RUSTFLAGS="--cfg uncurses_bench" cargo +nightly bench
+//! ```
+//!
+//! On a stable toolchain this module is not compiled at all, so it has no
+//! effect on normal builds, tests, or downstream consumers.
+
+extern crate test;
+
+use test::{Bencher, black_box};
+
+use crate::cell::Cell;
+use crate::renderer::{RenderBuffer, Renderer};
 
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
@@ -33,9 +49,10 @@ fn prime(renderer: &mut Renderer, buf: &mut RenderBuffer, out: &mut Vec<u8>) {
     out.clear();
 }
 
+/// Run a swap-and-render loop between two prepared frames, optionally mutating
+/// the renderer before each render (e.g. to force a clear).
 fn bench_swap_render(
-    c: &mut Criterion,
-    name: &str,
+    b: &mut Bencher,
     mut renderer: Renderer,
     mut current: RenderBuffer,
     mut next: RenderBuffer,
@@ -44,18 +61,17 @@ fn bench_swap_render(
     let mut out = Vec::with_capacity(16 * 1024);
     prime(&mut renderer, &mut current, &mut out);
 
-    c.bench_function(name, |b| {
-        b.iter(|| {
-            std::mem::swap(black_box(&mut current), black_box(&mut next));
-            out.clear();
-            before_render(black_box(&mut renderer));
-            black_box(renderer.render(black_box(&mut out), black_box(&mut current))).unwrap();
-            black_box(&out);
-        });
+    b.iter(|| {
+        std::mem::swap(black_box(&mut current), black_box(&mut next));
+        out.clear();
+        before_render(black_box(&mut renderer));
+        black_box(renderer.render(black_box(&mut out), black_box(&mut current))).unwrap();
+        black_box(&out);
     });
 }
 
-fn full_frame_no_changes(c: &mut Criterion) {
+#[bench]
+fn full_frame_no_changes(b: &mut Bencher) {
     let mut first = filled_buffer(0);
     let mut second = first.clone();
     first.clear_touched();
@@ -66,20 +82,18 @@ fn full_frame_no_changes(c: &mut Criterion) {
     let mut initial = filled_buffer(0);
     prime(&mut renderer, &mut initial, &mut out);
 
-    c.bench_function("full_frame_no_changes", |b| {
-        b.iter(|| {
-            std::mem::swap(black_box(&mut first), black_box(&mut second));
-            out.clear();
-            black_box(renderer.render(black_box(&mut out), black_box(&mut first))).unwrap();
-            black_box(&out);
-        });
+    b.iter(|| {
+        std::mem::swap(black_box(&mut first), black_box(&mut second));
+        out.clear();
+        black_box(renderer.render(black_box(&mut out), black_box(&mut first))).unwrap();
+        black_box(&out);
     });
 }
 
-fn full_frame_all_cells_changed(c: &mut Criterion) {
+#[bench]
+fn full_frame_all_cells_changed(b: &mut Bencher) {
     bench_swap_render(
-        c,
-        "full_frame_all_cells_changed",
+        b,
         Renderer::new(),
         filled_buffer(0),
         filled_buffer(1),
@@ -87,7 +101,8 @@ fn full_frame_all_cells_changed(c: &mut Criterion) {
     );
 }
 
-fn single_cell_change(c: &mut Criterion) {
+#[bench]
+fn single_cell_change(b: &mut Bencher) {
     let mut first = filled_buffer(0);
     let mut second = first.clone();
     first.clear_touched();
@@ -95,20 +110,13 @@ fn single_cell_change(c: &mut Criterion) {
     first.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::narrow("0"));
     second.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::narrow("1"));
 
-    bench_swap_render(
-        c,
-        "single_cell_change",
-        Renderer::new(),
-        first,
-        second,
-        |_| {},
-    );
+    bench_swap_render(b, Renderer::new(), first, second, |_| {});
 }
 
-fn scroll_shift_up_by_1(c: &mut Criterion) {
+#[bench]
+fn scroll_shift_up_by_1(b: &mut Bencher) {
     bench_swap_render(
-        c,
-        "scroll_shift_up_by_1",
+        b,
         Renderer::new(),
         filled_buffer(0),
         shifted_up_buffer(),
@@ -116,23 +124,13 @@ fn scroll_shift_up_by_1(c: &mut Criterion) {
     );
 }
 
-fn force_clear_frame(c: &mut Criterion) {
+#[bench]
+fn force_clear_frame(b: &mut Bencher) {
     bench_swap_render(
-        c,
-        "force_clear_frame",
+        b,
         Renderer::new(),
         filled_buffer(0),
         filled_buffer(0),
         |renderer| renderer.request_clear(),
     );
 }
-
-criterion_group!(
-    benches,
-    full_frame_no_changes,
-    full_frame_all_cells_changed,
-    single_cell_change,
-    scroll_shift_up_by_1,
-    force_clear_frame
-);
-criterion_main!(benches);

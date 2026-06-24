@@ -98,6 +98,7 @@
 //! they go.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(uncurses_bench, feature(test))]
 
 #[cfg(not(any(feature = "icu", feature = "unicode-rs")))]
 compile_error!(
@@ -117,17 +118,6 @@ pub mod text;
 pub mod unicode;
 
 pub(crate) mod renderer;
-
-/// Internal renderer types re-exported only for the criterion benchmarks.
-///
-/// This module is gated behind the dev-only `bench` feature and hidden from
-/// the documentation. It is not part of the public API and offers no
-/// stability guarantees; do not depend on it.
-#[cfg(feature = "bench")]
-#[doc(hidden)]
-pub mod bench_support {
-    pub use crate::renderer::{RenderBuffer, Renderer};
-}
 
 #[cfg(debug_assertions)]
 mod trace;
