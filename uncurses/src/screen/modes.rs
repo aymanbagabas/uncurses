@@ -12,7 +12,7 @@
 
 use std::io::{self, Write};
 
-use crate::ansi::{self, background, cursor, kitty, mode, xterm};
+use crate::ansi::{self, color, cursor, kitty, mode, xterm};
 use crate::color::Color;
 use crate::event::Input;
 
@@ -242,10 +242,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// can re-apply it.
     pub fn set_foreground_color(&mut self, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
-        background::write_set_foreground_color(
-            &mut self.out_buf,
-            &background::xparse_rgb(r, g, b),
-        )?;
+        color::write_set_foreground_color(&mut self.out_buf, &color::xparse_rgb(r, g, b))?;
         self.state.foreground_color = Some(color);
         self.flush()
     }
@@ -253,7 +250,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// Restore the terminal's default foreground color (`OSC 110`) and
     /// flush.
     pub fn reset_foreground_color(&mut self) -> io::Result<()> {
-        self.out_buf.write_all(background::RESET_FOREGROUND_COLOR)?;
+        self.out_buf.write_all(color::RESET_FOREGROUND_COLOR)?;
         self.state.foreground_color = None;
         self.flush()
     }
@@ -263,10 +260,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// state-tracking semantics.
     pub fn set_background_color(&mut self, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
-        background::write_set_background_color(
-            &mut self.out_buf,
-            &background::xparse_rgb(r, g, b),
-        )?;
+        color::write_set_background_color(&mut self.out_buf, &color::xparse_rgb(r, g, b))?;
         self.state.background_color = Some(color);
         self.flush()
     }
@@ -274,7 +268,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// Restore the terminal's default background color (`OSC 111`) and
     /// flush.
     pub fn reset_background_color(&mut self) -> io::Result<()> {
-        self.out_buf.write_all(background::RESET_BACKGROUND_COLOR)?;
+        self.out_buf.write_all(color::RESET_BACKGROUND_COLOR)?;
         self.state.background_color = None;
         self.flush()
     }
@@ -284,14 +278,14 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// state-tracking semantics.
     pub fn set_cursor_color(&mut self, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
-        background::write_set_cursor_color(&mut self.out_buf, &background::xparse_rgb(r, g, b))?;
+        color::write_set_cursor_color(&mut self.out_buf, &color::xparse_rgb(r, g, b))?;
         self.state.cursor_color = Some(color);
         self.flush()
     }
 
     /// Restore the terminal's default cursor color (`OSC 112`) and flush.
     pub fn reset_cursor_color(&mut self) -> io::Result<()> {
-        self.out_buf.write_all(background::RESET_CURSOR_COLOR)?;
+        self.out_buf.write_all(color::RESET_CURSOR_COLOR)?;
         self.state.cursor_color = None;
         self.flush()
     }
@@ -301,11 +295,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// restore it and [`Screen::resume`](super::Screen::resume) re-apply it.
     pub fn set_palette_color(&mut self, index: u8, color: Color) -> io::Result<()> {
         let (r, g, b) = color.to_rgb();
-        background::write_set_palette_color(
-            &mut self.out_buf,
-            index,
-            &background::xparse_rgb(r, g, b),
-        )?;
+        color::write_set_palette_color(&mut self.out_buf, index, &color::xparse_rgb(r, g, b))?;
         self.state.palette.insert(index, color);
         self.flush()
     }
@@ -313,7 +303,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// Reset a single terminal palette color to its default
     /// (`OSC 104 ; index`) and flush.
     pub fn reset_palette_color(&mut self, index: u8) -> io::Result<()> {
-        background::write_reset_palette_color(&mut self.out_buf, index)?;
+        color::write_reset_palette_color(&mut self.out_buf, index)?;
         self.state.palette.remove(&index);
         self.flush()
     }
@@ -321,7 +311,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// Reset the entire terminal palette to its defaults (`OSC 104`) and
     /// flush, clearing every tracked palette override.
     pub fn reset_palette_colors(&mut self) -> io::Result<()> {
-        self.out_buf.write_all(background::RESET_PALETTE_COLORS)?;
+        self.out_buf.write_all(color::RESET_PALETTE_COLORS)?;
         self.state.palette.clear();
         self.flush()
     }
@@ -357,16 +347,16 @@ impl<I: Input, O: Write> Screen<I, O> {
             self.out_buf.write_all(xterm::RESET_MODIFY_OTHER_KEYS)?;
         }
         if self.state.foreground_color.is_some() {
-            self.out_buf.write_all(background::RESET_FOREGROUND_COLOR)?;
+            self.out_buf.write_all(color::RESET_FOREGROUND_COLOR)?;
         }
         if self.state.background_color.is_some() {
-            self.out_buf.write_all(background::RESET_BACKGROUND_COLOR)?;
+            self.out_buf.write_all(color::RESET_BACKGROUND_COLOR)?;
         }
         if self.state.cursor_color.is_some() {
-            self.out_buf.write_all(background::RESET_CURSOR_COLOR)?;
+            self.out_buf.write_all(color::RESET_CURSOR_COLOR)?;
         }
         if !self.state.palette.is_empty() {
-            self.out_buf.write_all(background::RESET_PALETTE_COLORS)?;
+            self.out_buf.write_all(color::RESET_PALETTE_COLORS)?;
         }
         if self.state.title.is_some() {
             ansi::title::write_window_title(&mut self.out_buf, "")?;
@@ -490,32 +480,19 @@ impl<I: Input, O: Write> Screen<I, O> {
         }
         if let Some(c) = self.state.foreground_color {
             let (r, g, b) = c.to_rgb();
-            background::write_set_foreground_color(
-                &mut self.out_buf,
-                &background::xparse_rgb(r, g, b),
-            )?;
+            color::write_set_foreground_color(&mut self.out_buf, &color::xparse_rgb(r, g, b))?;
         }
         if let Some(c) = self.state.background_color {
             let (r, g, b) = c.to_rgb();
-            background::write_set_background_color(
-                &mut self.out_buf,
-                &background::xparse_rgb(r, g, b),
-            )?;
+            color::write_set_background_color(&mut self.out_buf, &color::xparse_rgb(r, g, b))?;
         }
         if let Some(c) = self.state.cursor_color {
             let (r, g, b) = c.to_rgb();
-            background::write_set_cursor_color(
-                &mut self.out_buf,
-                &background::xparse_rgb(r, g, b),
-            )?;
+            color::write_set_cursor_color(&mut self.out_buf, &color::xparse_rgb(r, g, b))?;
         }
         for (&index, &c) in &self.state.palette {
             let (r, g, b) = c.to_rgb();
-            background::write_set_palette_color(
-                &mut self.out_buf,
-                index,
-                &background::xparse_rgb(r, g, b),
-            )?;
+            color::write_set_palette_color(&mut self.out_buf, index, &color::xparse_rgb(r, g, b))?;
         }
         if let Some(title) = self.state.title.clone() {
             ansi::title::write_window_title(&mut self.out_buf, &title)?;
@@ -570,7 +547,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// [`Event::ForegroundColor`](crate::event::Event::ForegroundColor).
     pub fn request_foreground_color(&mut self) -> io::Result<()> {
         self.out_buf
-            .write_all(crate::ansi::background::REQUEST_FOREGROUND_COLOR)?;
+            .write_all(crate::ansi::color::REQUEST_FOREGROUND_COLOR)?;
         self.flush()
     }
 
@@ -578,7 +555,7 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// [`Event::BackgroundColor`](crate::event::Event::BackgroundColor).
     pub fn request_background_color(&mut self) -> io::Result<()> {
         self.out_buf
-            .write_all(crate::ansi::background::REQUEST_BACKGROUND_COLOR)?;
+            .write_all(crate::ansi::color::REQUEST_BACKGROUND_COLOR)?;
         self.flush()
     }
 
@@ -586,14 +563,14 @@ impl<I: Input, O: Write> Screen<I, O> {
     /// [`Event::CursorColor`](crate::event::Event::CursorColor).
     pub fn request_cursor_color(&mut self) -> io::Result<()> {
         self.out_buf
-            .write_all(crate::ansi::background::REQUEST_CURSOR_COLOR)?;
+            .write_all(crate::ansi::color::REQUEST_CURSOR_COLOR)?;
         self.flush()
     }
 
     /// Request a terminal palette color by index (`OSC 4 ; index ; ? ST`).
     /// Reply: `OSC 4 ; index ; rgb:... ST`.
     pub fn request_palette_color(&mut self, index: u8) -> io::Result<()> {
-        crate::ansi::background::write_request_palette_color(&mut self.out_buf, index)?;
+        crate::ansi::color::write_request_palette_color(&mut self.out_buf, index)?;
         self.flush()
     }
 

@@ -51,11 +51,11 @@
 //! ```
 
 pub mod ascii;
-pub mod background;
 pub mod c0;
 pub mod c1;
 pub mod charset;
 pub mod clipboard;
+pub mod color;
 pub mod cost;
 pub mod ctrl;
 pub mod cursor;
