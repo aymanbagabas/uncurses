@@ -199,6 +199,14 @@ where
 /// defaults are applied once the terminating Primary DA reply confirms the
 /// detected [`Capabilities`]; if the terminal never answers, only the
 /// always-on defaults are in effect.
+///
+/// Most fields are app-level toggles you set to taste. Two are low-level
+/// transport knobs that most applications should leave at their defaults:
+/// [`request_pixel_size_on_resize`](Self::request_pixel_size_on_resize)
+/// (when to re-query the window pixel size) and
+/// [`query_drain_timeout`](Self::query_drain_timeout) (how long teardown
+/// waits for capability replies). They exist for unusual terminals and
+/// latency-sensitive teardown, not everyday configuration.
 #[derive(Debug, Clone)]
 pub struct ScreenOptions {
     /// Enable bracketed paste at init. Defaults to `true`.
