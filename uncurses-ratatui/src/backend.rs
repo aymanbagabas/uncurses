@@ -21,11 +21,12 @@ use crate::convert::cell_from_ratatui;
 /// controlling-terminal output handles satisfy this bound.
 ///
 /// This trait is sealed only by its bounds: any type that implements the listed
-/// platform traits implements `OutputHandle` automatically.
+/// platform traits implements `Output` automatically. It is the output
+/// counterpart to the `Input` bound on the backend's input handle.
 #[cfg(unix)]
-pub trait OutputHandle: Write + Copy + std::os::fd::AsFd {}
+pub trait Output: Write + Copy + std::os::fd::AsFd {}
 #[cfg(unix)]
-impl<T: Write + Copy + std::os::fd::AsFd> OutputHandle for T {}
+impl<T: Write + Copy + std::os::fd::AsFd> Output for T {}
 /// Platform bound required for an output handle usable by the backend.
 ///
 /// The handle must be writable, cheaply copyable, and expose the platform OS
@@ -33,11 +34,12 @@ impl<T: Write + Copy + std::os::fd::AsFd> OutputHandle for T {}
 /// controlling-terminal output handles satisfy this bound.
 ///
 /// This trait is sealed only by its bounds: any type that implements the listed
-/// platform traits implements `OutputHandle` automatically.
+/// platform traits implements `Output` automatically. It is the output
+/// counterpart to the `Input` bound on the backend's input handle.
 #[cfg(windows)]
-pub trait OutputHandle: Write + Copy + std::os::windows::io::AsHandle {}
+pub trait Output: Write + Copy + std::os::windows::io::AsHandle {}
 #[cfg(windows)]
-impl<T: Write + Copy + std::os::windows::io::AsHandle> OutputHandle for T {}
+impl<T: Write + Copy + std::os::windows::io::AsHandle> Output for T {}
 
 /// How long [`Backend::get_cursor_position`] waits for a cursor-position
 /// report before falling back to the origin. The widget library calls it at
@@ -423,7 +425,7 @@ where
 impl<I, O> UncursesBackend<I, O>
 where
     I: Input + Copy,
-    O: OutputHandle,
+    O: Output,
 {
     /// Begin an interactive session with default [`ScreenOptions`].
     ///
@@ -528,7 +530,7 @@ where
 impl<I, O> Backend for UncursesBackend<I, O>
 where
     I: Input + Copy,
-    O: OutputHandle,
+    O: Output,
 {
     type Error = io::Error;
 
