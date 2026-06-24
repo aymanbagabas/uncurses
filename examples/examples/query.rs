@@ -13,7 +13,7 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use uncurses::ansi::background::REQUEST_BACKGROUND_COLOR;
+use uncurses::ansi::color::REQUEST_BACKGROUND_COLOR;
 use uncurses::ansi::ctrl::REQUEST_PRIMARY_DA;
 use uncurses::ansi::cursor::write_request_cursor_position;
 use uncurses::ansi::winop::REQUEST_CELL_PIXEL_SIZE;
