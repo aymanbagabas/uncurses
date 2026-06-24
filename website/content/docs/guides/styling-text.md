@@ -127,21 +127,23 @@ lines; the exact presentation is terminal-dependent.
 
 Off the grid, a `Style` also implements `Display`: formatting it writes the
 opener, which is any SGR sequence plus an OSC 8 start if the style carries a
-link. Its `reset()` returns a matching `Display` closer that undoes exactly what
-the opener set, so styled `println!` follows an open/close pattern:
+link. The alternate form `{style:#}` writes the matching closer, so styled
+`println!` follows an open/close pattern with a single value:
 
 ```rust
 let bold = Style::new().bold();
-println!("{bold}important{}", bold.reset());
+println!("{bold}important{bold:#}");
 ```
 
 The opener is additive, so an empty style writes nothing. The closer only emits
 what it needs: an SGR-only style closes with `CSI m`, while a linked style also
-writes the OSC 8 terminator. For a self-contained span, use `styled`, which wraps
-the text with both for you:
+writes the OSC 8 terminator. The closer resets to defaults rather than restoring
+a previously active style, so wrap each span with its own style.
+
+This works with any `io::Write` too, since `write!` forwards `Display`:
 
 ```rust
-println!("{}", Style::new().bold().styled("important"));
+write!(out, "{bold}important{bold:#}")?;
 ```
 
 See the `styles` example in `examples/examples/styles.rs` for a full tour of

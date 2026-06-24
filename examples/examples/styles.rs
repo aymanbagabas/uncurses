@@ -70,8 +70,7 @@ fn main() -> io::Result<()> {
     let link = Style::new().underline().fg(Color::BrightBlue).link(url, "");
     writeln!(
         out,
-        "  {link}uncurses on GitHub{} (Ctrl/Cmd-click in a supporting terminal)",
-        link.reset()
+        "  {link}uncurses on GitHub{link:#} (Ctrl/Cmd-click in a supporting terminal)",
     )?;
 
     out.flush()
@@ -79,13 +78,13 @@ fn main() -> io::Result<()> {
 
 /// Write `label` wrapped in `style`'s opener and closer.
 ///
-/// `style` renders the opener through its `Display`; `style.reset()` renders
-/// the matching closer through the `Display` of the returned value.
+/// `{style}` renders the opener through `Display`; the alternate form
+/// `{style:#}` renders the matching closer.
 fn show(out: &mut impl Write, label: &str, style: Style) -> io::Result<()> {
-    writeln!(out, "  {style}{label}{}", style.reset())
+    writeln!(out, "  {style}{label}{style:#}")
 }
 
 fn section(out: &mut impl Write, title: &str) -> io::Result<()> {
     let heading = Style::new().bold().fg(Color::BrightCyan);
-    writeln!(out, "\n{heading}{title}{}", heading.reset())
+    writeln!(out, "\n{heading}{title}{heading:#}")
 }
