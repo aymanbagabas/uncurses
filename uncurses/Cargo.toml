@@ -16,7 +16,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["unicode-rs"]
-bench = []
 # Asynchronous event streaming. Adds `EventStream`, a `futures_core::Stream`
 # of decoded events backed by a reader thread. Runtime-agnostic: depends
 # only on `futures-core`, no executor or reactor.
@@ -46,10 +45,8 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
-[dev-dependencies]
-criterion.workspace = true
-
-[[bench]]
-name = "renderer"
-harness = false
-required-features = ["bench"]
+[lints.rust]
+# Set by `RUSTFLAGS="--cfg uncurses_bench"` to compile the nightly-only
+# renderer micro-benchmarks (see src/renderer/bench.rs). Declared here so
+# stable builds don't warn about the unknown cfg.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(uncurses_bench)'] }

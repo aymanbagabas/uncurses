@@ -79,6 +79,9 @@ pub(crate) mod sync;
 pub(crate) mod tabstops;
 pub(crate) mod transform;
 
+#[cfg(uncurses_bench)]
+mod bench;
+
 #[cfg(test)]
 mod transform_branch_tests;
 
