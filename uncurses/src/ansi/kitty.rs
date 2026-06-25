@@ -31,8 +31,6 @@ bitflags::bitflags! {
     /// CSI `u` requests such as `ESC [ = <flags> ; <mode> u`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct KittyKeyboardFlags: u8 {
-        /// No keyboard enhancements enabled; flag value `0`.
-        const NONE                        = 0;
         /// Flag bit `1`: request disambiguated escape-coded keys.
         const DISAMBIGUATE_ESCAPE_CODES   = 0b0000_0001;
         /// Flag bit `2`: request press, repeat, and release event-type reporting.
