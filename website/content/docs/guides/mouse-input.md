@@ -10,26 +10,28 @@ pixels.
 
 ## Turning it on
 
-A `MousePreference` controls what gets reported: `motion` adds pointer movement
-with no button held, and `pixels` asks for pixel-accurate coordinates.
+`MouseTracking` is a bitflags set of optional extras layered on basic button
+tracking: `MouseTracking::MOTION` adds pointer movement with no button held, and
+`MouseTracking::PIXELS` asks for pixel-accurate coordinates. An empty set
+(`MouseTracking::empty()`) is basic tracking with no extras.
 
 To start tracking at init, set `ScreenOptions::mouse` and pass it to `init_with`:
 
 ```rust
-use uncurses::screen::{MousePreference, Screen, ScreenOptions};
+use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
 
 let mut screen = Screen::stdio()?;
 screen.init_with(ScreenOptions {
-    mouse: Some(MousePreference { motion: true, pixels: false }),
+    mouse: Some(MouseTracking::MOTION),
     ..ScreenOptions::default()
 })?;
 ```
 
-To turn it on and off during a session, call `enable_mouse` with the same two
-flags, and `disable_mouse` to stop:
+To turn it on and off during a session, call `enable_mouse` with the flags you
+want, and `disable_mouse` to stop:
 
 ```rust
-screen.enable_mouse(true, false)?; // motion on, pixels off
+screen.enable_mouse(MouseTracking::MOTION)?; // motion on, pixels off
 
 // ... later, to stop tracking:
 screen.disable_mouse()?;
@@ -58,7 +60,7 @@ match screen.read_event()? {
     }
     Event::MouseMove(m) => {
         // Motion while a button is held always arrives; buttonless hover
-        // motion only when you asked for `motion: true`.
+        // motion only when you asked for `MouseTracking::MOTION`.
         let at = Position::new(m.x, m.y);
     }
     Event::MouseWheel(m) => match m.button {
@@ -97,9 +99,9 @@ if let Event::MouseClick(m) = event {
 
 ## Pixel mode
 
-When you ask for `pixels: true`, a capable terminal reports the pointer in pixel
-offsets instead of cells, which is what you want for sub-cell precision like
-dragging a graphic. Two things change, and the screen helps with both.
+When you ask for `MouseTracking::PIXELS`, a capable terminal reports the pointer
+in pixel offsets instead of cells, which is what you want for sub-cell precision
+like dragging a graphic. Two things change, and the screen helps with both.
 
 First, find out whether you are actually getting pixels. The terminal may not
 support the request, in which case you quietly keep getting cells.
