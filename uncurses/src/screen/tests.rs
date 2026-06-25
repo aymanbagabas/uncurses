@@ -1728,7 +1728,7 @@ fn set_kitty_keyboard_flags_always_emits_set() {
         screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
         // Always emits, even when the tracked flags are unchanged.
         screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
-        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::NONE);
+        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::empty());
         screen.flush().unwrap();
     }
     let out = String::from_utf8_lossy(&buf);
