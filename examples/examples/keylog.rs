@@ -15,7 +15,7 @@
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::{MousePreference, Screen, ScreenOptions};
+use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
 use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::TextSurface;
 
@@ -125,10 +125,7 @@ impl App {
         // Enable motion mouse tracking (for drag) and focus reporting so the
         // log shows the full breadth of events.
         screen.init_with(ScreenOptions {
-            mouse: Some(MousePreference {
-                motion: true,
-                pixels: false,
-            }),
+            mouse: Some(MouseTracking::MOTION),
             ..ScreenOptions::default()
         })?;
         screen.enable_focus_events()?;

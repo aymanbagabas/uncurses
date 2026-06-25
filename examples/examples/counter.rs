@@ -6,7 +6,7 @@
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
-use uncurses::screen::{MousePreference, Screen, ScreenOptions};
+use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -29,7 +29,7 @@ impl App {
         // Begin a session and enable plain (click) mouse tracking; the
         // screen picks the best mode and encoding the terminal supports.
         screen.init_with(ScreenOptions {
-            mouse: Some(MousePreference::default()),
+            mouse: Some(MouseTracking::empty()),
             ..ScreenOptions::default()
         })?;
         screen.enter_alt_screen()?;

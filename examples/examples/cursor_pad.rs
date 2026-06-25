@@ -16,7 +16,7 @@ use std::io::Write;
 
 use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton};
-use uncurses::screen::{MousePreference, Screen, ScreenOptions};
+use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -52,7 +52,7 @@ impl App {
         let mut screen = Screen::stdio()?;
         // Enable plain mouse tracking so left clicks reposition the cursor.
         screen.init_with(ScreenOptions {
-            mouse: Some(MousePreference::default()),
+            mouse: Some(MouseTracking::empty()),
             ..ScreenOptions::default()
         })?;
         screen.enter_alt_screen()?;
