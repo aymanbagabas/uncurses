@@ -1,13 +1,15 @@
-//! Style diffing for compact SGR transitions.
+//! Style diffing for compact visual transitions.
 //!
-//! A diff compares only the SGR-relevant fields of two [`Style`] values and
-//! emits a single `CSI … m` sequence that moves the terminal from `from` to
-//! `to`. Hyperlinks are intentionally ignored here because OSC 8 state is
-//! independent of SGR state.
+//! A diff compares two [`Style`] values and emits only what changed to move
+//! the terminal from `from` to `to`. [`write_style_diff`] emits both deltas:
+//! the SGR delta (a single `CSI … m` sequence) followed by the OSC 8 hyperlink
+//! delta. SGR and OSC 8 are independent terminal state machines, so each is
+//! written only when its own state changed.
 //!
-//! The diff uses targeted reset parameters when possible (`22`, `23`, `24`,
-//! `25`, `27`, `28`, `29`, `39`, `49`, `59`) and falls back to a full reset
-//! only when transitioning to an SGR-empty style.
+//! [`write_sgr_diff`] is the SGR-only core: it compares just the SGR-relevant
+//! fields and ignores hyperlinks. It uses targeted reset parameters when
+//! possible (`22`, `23`, `24`, `25`, `27`, `28`, `29`, `39`, `49`, `59`) and
+//! falls back to a full reset only when transitioning to an SGR-empty style.
 
 use std::io::{self, Write};
 
