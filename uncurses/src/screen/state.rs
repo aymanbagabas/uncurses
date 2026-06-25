@@ -14,7 +14,7 @@ use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::color::Color;
 use crate::event::ModifyOtherKeysMode;
 
-use super::MousePreference;
+use super::MouseTracking;
 
 /// Tracked non-render mode state for save/restore.
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ pub(super) struct State {
     /// Cursor style.
     pub cursor_style: CursorStyle,
     /// Requested mouse tracking, or `None` when mouse tracking is disabled.
-    pub mouse: Option<MousePreference>,
+    pub mouse: Option<MouseTracking>,
     /// Bracketed paste mode.
     pub bracketed_paste: bool,
     /// Focus in/out reporting (DECSET 1004).
@@ -98,7 +98,7 @@ impl Default for State {
             cursor_visible: true,
             sync_updates: false,
             grapheme_clusters: false,
-            kitty_keyboard: KittyKeyboardFlags::NONE,
+            kitty_keyboard: KittyKeyboardFlags::empty(),
         }
     }
 }

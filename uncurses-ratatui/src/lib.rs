@@ -112,4 +112,4 @@ pub use init::{
     DefaultTerminal, init, init_with_options, restore, try_init, try_init_with_options, try_restore,
 };
 #[doc(no_inline)]
-pub use uncurses::screen::{MousePreference, ScreenOptions};
+pub use uncurses::screen::{MouseTracking, ScreenOptions};

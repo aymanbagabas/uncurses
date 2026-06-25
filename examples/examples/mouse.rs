@@ -11,7 +11,7 @@
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
-use uncurses::screen::{MousePreference, Screen, ScreenOptions};
+use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -28,10 +28,7 @@ fn main() -> std::io::Result<()> {
     // `motion: true` asks for move events (not just press/release); the
     // screen negotiates the best mode and encoding the terminal supports.
     screen.init_with(ScreenOptions {
-        mouse: Some(MousePreference {
-            motion: true,
-            pixels: false,
-        }),
+        mouse: Some(MouseTracking::MOTION),
         ..ScreenOptions::default()
     })?;
     screen.enter_alt_screen()?;

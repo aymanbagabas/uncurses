@@ -114,6 +114,8 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use bitflags::bitflags;
+
 use crate::ansi::{kitty, mode};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
@@ -230,11 +232,11 @@ pub struct ScreenOptions {
     /// Windows (whose console resize events carry no pixel size) and `false`
     /// elsewhere, where resize reports already include pixel dimensions.
     pub request_pixel_size_on_resize: bool,
-    /// Enable mouse tracking at init with the given motion/pixel preference
+    /// Enable mouse tracking at init with the given [`MouseTracking`] extras
     /// (see [`Screen::enable_mouse`]). The request is emitted unconditionally;
     /// terminals ignore modes they do not support and degrade gracefully.
     /// Defaults to `None` (mouse tracking off).
-    pub mouse: Option<MousePreference>,
+    pub mouse: Option<MouseTracking>,
     /// Send terminal capability queries during
     /// [`init`](Screen::init_with).
     ///
@@ -263,16 +265,26 @@ pub struct ScreenOptions {
     pub query_drain_timeout: Duration,
 }
 
-/// Mouse tracking preference for [`ScreenOptions::mouse`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct MousePreference {
-    /// Also report pointer motion with no button held (any-event tracking).
-    /// Button-event tracking (motion while a button is held) is always on;
-    /// this adds hover motion on terminals that support it.
-    pub motion: bool,
-    /// Also request pixel coordinates (SGR-pixel). Terminals that support it
-    /// report pixels; the rest fall back to SGR cell coordinates.
-    pub pixels: bool,
+bitflags! {
+    /// Optional mouse tracking features layered on top of basic button
+    /// tracking.
+    ///
+    /// When mouse tracking is enabled, button-event tracking (presses,
+    /// releases, and drags) and SGR encoding are always requested; these flags
+    /// add optional extras on top. An empty set ([`MouseTracking::empty()`])
+    /// means basic tracking with no extras.
+    ///
+    /// Mouse tracking is turned *off* through [`Screen::disable_mouse`] or by
+    /// leaving [`ScreenOptions::mouse`] as `None`, not by an empty flag set.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct MouseTracking: u8 {
+        /// Report pointer motion with no button held (any-event tracking).
+        /// Adds hover motion on terminals that support it.
+        const MOTION = 1 << 0;
+        /// Request pixel coordinates (SGR-pixel). Terminals that support it
+        /// report pixels; the rest fall back to SGR cell coordinates.
+        const PIXELS = 1 << 1;
+    }
 }
 
 impl Default for ScreenOptions {
@@ -527,7 +539,7 @@ where
         &mut self,
         flags: Option<crate::ansi::kitty::KittyKeyboardFlags>,
     ) -> io::Result<()> {
-        let flags = flags.unwrap_or(crate::ansi::kitty::KittyKeyboardFlags::NONE);
+        let flags = flags.unwrap_or(crate::ansi::kitty::KittyKeyboardFlags::empty());
         self.stage_set_kitty_keyboard_flags(flags);
         self.flush()
     }
@@ -908,8 +920,8 @@ where
         // Mouse tracking: enable exactly what the options request. enable_mouse
         // emits the mode set unconditionally; terminals that lack a requested
         // mode (e.g. SGR-pixel) ignore it and degrade to cell coordinates.
-        if let Some(pref) = self.options.mouse {
-            self.enable_mouse(pref.motion, pref.pixels)?;
+        if let Some(tracking) = self.options.mouse {
+            self.enable_mouse(tracking)?;
         }
         Ok(())
     }
