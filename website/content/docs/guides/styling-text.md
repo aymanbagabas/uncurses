@@ -137,8 +137,7 @@ println!("{bold}important{bold:#}");
 
 {{< callout type="info" >}}
 The `#` is Rust's alternate format flag. On a `Style` it flips `Display` from
-the opener to the closer, so `{bold:#}` means "close this style". It is the same
-convention the `anstyle` crate uses.
+the opener to the closer, so `{bold:#}` means "close this style".
 {{< /callout >}}
 
 The opener is additive, so an empty style writes nothing. The closer only emits
