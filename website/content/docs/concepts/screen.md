@@ -109,3 +109,51 @@ cursor, enabling mouse reporting, setting the title, and similar switches take
 effect immediately. Each writes its escape sequence on the spot instead of
 waiting for the next `render`. That is why those methods return a `Result` while
 painting does not.
+
+## Placing the cursor
+
+Where the cursor rests after a frame is part of the frame, so you stage it the
+same way you stage cells. `set_cursor_position(Position::new(x, y))` records a
+resting position that `render` applies at the end of every frame, inside the same
+frame bracket as the cell diff so the cursor lands in one clean step instead of
+skittering across the row. It is sticky: set it once and each `render` parks the
+cursor right back there, even as the diff churns the screen underneath. Pass
+`None` to forget the request and let the cursor stay wherever the diff left it.
+
+```rust
+// A text field that wants the caret at the edit position every frame.
+screen.set_str((0, 0), &input, Style::default());
+screen.set_cursor_position(Position::new(caret_col, 0));
+screen.render()?; // paints the line and rests the cursor at the caret
+```
+
+Cursor *visibility* is a separate switch: `show_cursor` and `hide_cursor` decide
+whether the cursor is drawn at all, independent of where it rests. Staging a
+position never reveals a hidden cursor, and hiding the cursor never forgets the
+staged position.
+
+When you do need to move the cursor right now, outside the frame loop,
+`move_cursor_to` and `move_cursor_by` move it immediately and flush, the way the
+mode toggles do. They are imperative and do not disturb the sticky resting
+position, so the next `render` snaps the cursor back to it. Reach for them for
+one-off moves; reach for `set_cursor_position` for the per-frame caret.
+
+## Atomic frames
+
+By default a `render` writes the diff straight to the terminal, and a visible
+cursor is hidden around it so it does not dance across cells while the renderer
+repositions it. Synchronized output (DEC mode 2026) is the better tool when the
+terminal supports it: `set_synchronized_output(true)` wraps each frame in
+begin/end markers so a supporting terminal paints the whole frame at once, with
+no mid-frame repaint and no tearing.
+
+```rust
+screen.set_synchronized_output(true); // present each frame atomically
+```
+
+This is your switch to flip. uncurses turns it on automatically when the
+terminal advertises 2026 support during `init`, but it never second-guesses you:
+flip it back off whenever you like. With synchronized output on, the per-frame
+cursor hide/show is dropped, since the frame already arrives in one piece.
+Toggling the cursor every frame would otherwise reset its blink phase, which
+shows up as a flickering caret, so leaving it alone keeps the cursor steady.

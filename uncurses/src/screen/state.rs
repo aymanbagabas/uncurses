@@ -13,6 +13,7 @@ use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::color::Color;
 use crate::event::ModifyOtherKeysMode;
+use crate::layout::Position;
 
 use super::MouseTracking;
 
@@ -76,6 +77,16 @@ pub(super) struct State {
     /// per-screen-buffer, so the screen re-emits this onto whichever buffer
     /// becomes active. `NONE` means no frame is set.
     pub kitty_keyboard: KittyKeyboardFlags,
+    /// Declarative resting position for the cursor, applied at the end of
+    /// every [`render`](super::Screen::render) via
+    /// [`set_cursor_position`](super::Screen::set_cursor_position). Sticky:
+    /// it persists across frames and is re-applied each render (a no-op when
+    /// the cursor is already there) until changed or cleared. `None` means no
+    /// declarative resting position, so the cursor is left wherever the cell
+    /// diff ended. Visibility is orthogonal — see
+    /// [`show_cursor`](super::Screen::show_cursor) /
+    /// [`hide_cursor`](super::Screen::hide_cursor).
+    pub desired_cursor: Option<Position>,
 }
 
 impl Default for State {
@@ -99,6 +110,7 @@ impl Default for State {
             sync_updates: false,
             grapheme_clusters: false,
             kitty_keyboard: KittyKeyboardFlags::empty(),
+            desired_cursor: None,
         }
     }
 }
