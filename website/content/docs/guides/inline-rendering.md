@@ -56,6 +56,26 @@ Keep the width at `screen.width()` and vary only the height. The renderer keeps
 the block anchored in the normal buffer, so growing from two rows to ten expands
 the managed area instead of taking over the whole terminal.
 
+## Placing the caret
+
+An inline prompt keeps the cursor visible, and you usually want it sitting on the
+character the user is editing, not wherever the last cell write happened to land.
+Stage it with `set_cursor_position` and every `render` parks the cursor there at
+the end of the frame:
+
+```rust
+screen.set_str((0, 0), &line, Style::new());
+screen.set_cursor_position(Position::new(caret_col, 0));
+screen.render()?;
+```
+
+It is sticky, so set it when the caret moves and later frames keep the cursor
+there on their own. Pass `None` to stop steering it. Visibility stays separate:
+`show_cursor` and `hide_cursor` decide whether the caret is drawn, while
+`set_cursor_position` only decides where it rests. See
+[placing the cursor]({{< relref "../concepts/screen.md#placing-the-cursor" >}})
+for the full picture.
+
 ## Committing to scrollback
 
 Sometimes you want a line to leave the live region and become permanent history,

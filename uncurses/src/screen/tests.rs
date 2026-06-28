@@ -121,10 +121,6 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
         self.stage_set_kitty_keyboard_flags(flags);
     }
 
-    fn set_cursor_position(&mut self, x: u16, y: u16) {
-        self.move_cursor_to((x, y));
-    }
-
     fn cursor_position(&self) -> Position {
         self.tracked_cursor().unwrap_or_default()
     }
@@ -544,7 +540,7 @@ fn ascii_profile_emits_no_color_sgr() {
 #[test]
 fn cursor_position_round_trip() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.set_cursor_position(5, 10);
+    screen.move_cursor_to((5, 10)).unwrap();
     let p = screen.cursor_position();
     assert_eq!((p.x, p.y), (5, 10));
 }
@@ -554,7 +550,7 @@ fn move_to_emits_relative_cursor_sequence() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (80, 24));
-        screen.set_cursor_position(5, 3);
+        screen.move_cursor_to((5, 3)).unwrap();
         screen.flush().unwrap();
     }
     // Inline mode at first move: CR, then 3 newlines down, then CUF 5.
@@ -565,7 +561,7 @@ fn move_to_emits_relative_cursor_sequence() {
 fn tracked_cursor_is_none_until_known() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
     assert_eq!(screen.tracked_cursor(), None);
-    screen.move_cursor_to((3, 2));
+    screen.move_cursor_to((3, 2)).unwrap();
     assert_eq!(screen.tracked_cursor(), Some(Position::new(3, 2)));
     screen.invalidate_tracked_cursor();
     assert_eq!(screen.tracked_cursor(), None);
@@ -586,11 +582,11 @@ fn set_tracked_cursor_updates_belief_without_emitting() {
 #[test]
 fn move_cursor_by_offsets_the_tracked_cursor() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.move_cursor_to((10, 5));
-    screen.move_cursor_by(-3, 2);
+    screen.move_cursor_to((10, 5)).unwrap();
+    screen.move_cursor_by(-3, 2).unwrap();
     assert_eq!(screen.tracked_cursor(), Some(Position::new(7, 7)));
     // Saturates at the origin rather than wrapping.
-    screen.move_cursor_by(-100, -100);
+    screen.move_cursor_by(-100, -100).unwrap();
     assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
 }
 
@@ -598,8 +594,109 @@ fn move_cursor_by_offsets_the_tracked_cursor() {
 fn move_cursor_by_treats_unknown_tracked_cursor_as_origin() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
     assert_eq!(screen.tracked_cursor(), None);
-    screen.move_cursor_by(3, 2);
+    screen.move_cursor_by(3, 2).unwrap();
     assert_eq!(screen.tracked_cursor(), Some(Position::new(3, 2)));
+}
+
+#[test]
+fn set_cursor_position_applied_at_end_of_render() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_str((0, 0), "Hi", crate::style::Style::default());
+    screen.set_cursor_position(Position::new(5, 3));
+    screen.render().unwrap();
+    // After the cell diff the renderer parks the cursor at the staged spot.
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(5, 3)));
+}
+
+#[test]
+fn set_cursor_position_is_sticky_across_frames() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_cursor_position(Some(Position::new(2, 1)));
+
+    screen.set_str((0, 0), "a", crate::style::Style::default());
+    screen.render().unwrap();
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(2, 1)));
+
+    // A later frame whose diff moves the cursor elsewhere still ends parked
+    // at the sticky position without re-staging it.
+    screen.set_str((0, 0), "b", crate::style::Style::default());
+    screen.render().unwrap();
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(2, 1)));
+}
+
+#[test]
+fn cursor_only_frame_emits_move_without_cell_changes() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (80, 24));
+        screen.set_cursor_position(Position::new(4, 2));
+        screen.render().unwrap();
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(4, 2)));
+    }
+    assert!(!buf.is_empty(), "cursor-only frame must emit a move: {buf:?}");
+}
+
+#[test]
+fn set_cursor_position_clamps_out_of_bounds() {
+    let mut screen = Screen::for_test(Vec::new(), (5, 3));
+    screen.set_cursor_position(Position::new(99, 99));
+    screen.render().unwrap();
+    // Clamped to the bottom-right cell of the 5x3 surface.
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(4, 2)));
+}
+
+#[test]
+fn clearing_desired_cursor_emits_nothing_on_cursor_only_frame() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_cursor_position(Position::new(4, 2));
+    screen.render().unwrap();
+    let len_after_move = screen.writer().len();
+    // With no staged position and no cell changes, render does nothing.
+    screen.set_cursor_position(None);
+    screen.render().unwrap();
+    assert_eq!(
+        screen.writer().len(),
+        len_after_move,
+        "cleared cursor-only frame must be silent"
+    );
+}
+
+#[test]
+fn sync_frame_omits_cursor_hide_show() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (80, 24));
+        // The caller is in control: enabling sync is trusted, not gated on
+        // detected capabilities.
+        screen.set_synchronized_output(true);
+        screen.set_str((0, 0), "Hi", crate::style::Style::default());
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&buf);
+    // The frame is wrapped in synchronized-output begin/end (DEC 2026) ...
+    assert!(out.contains("\x1b[?2026h"), "missing BSU: {out:?}");
+    assert!(out.contains("\x1b[?2026l"), "missing ESU: {out:?}");
+    // ... and the per-frame DECTCEM toggle is dropped, so the cursor's blink
+    // phase is never reset.
+    assert!(!out.contains("\x1b[?25l"), "unexpected cursor hide: {out:?}");
+    assert!(!out.contains("\x1b[?25h"), "unexpected cursor show: {out:?}");
+}
+
+#[test]
+fn non_sync_frame_brackets_visible_cursor() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (80, 24));
+        // Sync off: the visible cursor is bracketed so it doesn't dance.
+        screen.set_str((0, 0), "Hi", crate::style::Style::default());
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&buf);
+    assert!(!out.contains("\x1b[?2026h"), "unexpected BSU: {out:?}");
+    assert!(out.contains("\x1b[?25l"), "missing cursor hide: {out:?}");
+    assert!(out.contains("\x1b[?25h"), "missing cursor show: {out:?}");
 }
 
 #[test]
@@ -1432,7 +1529,7 @@ fn alt_screen_enter_exit_emits_decset_decrst_and_clear() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (3, 3));
-        screen.set_cursor_position(1, 1);
+        screen.move_cursor_to((1, 1)).unwrap();
         screen.set_alt_screen(true);
         screen.render().unwrap();
         screen.set_alt_screen(false);

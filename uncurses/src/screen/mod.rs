@@ -321,8 +321,14 @@ where
 
     /// Diff the staged frame against the tracked terminal, stage the
     /// minimal escape bytes, and flush them through the terminal.
+    ///
+    /// When a declarative cursor rest position has been staged with
+    /// [`set_cursor_position`](Self::set_cursor_position), the cursor is moved
+    /// there at the end of the frame, inside the same hide/synchronized-output
+    /// bracket as the cell diff, so it lands atomically and without flicker.
     pub fn render(&mut self) -> io::Result<()> {
-        if self.renderer.sync_front(&mut self.front_buf) {
+        let changed = self.renderer.sync_front(&mut self.front_buf);
+        if changed || self.cursor_move_pending() {
             self.write_frame();
         }
         self.flush()
@@ -421,30 +427,95 @@ where
         Size::new(self.width, self.height)
     }
 
-    /// Stage a cursor move to a buffer-relative position. No-op when the
-    /// renderer already reports the cursor there with both axes known.
-    pub fn move_cursor_to(&mut self, pos: impl Into<Position>) {
+    /// Immediately move the terminal cursor to a buffer-relative position and
+    /// flush. No-op when the renderer already reports the cursor there with
+    /// both axes known.
+    ///
+    /// This is imperative: the move is emitted and flushed now, independent of
+    /// [`render`](Self::render). It does **not** affect the declarative resting
+    /// position staged with [`set_cursor_position`](Self::set_cursor_position);
+    /// a subsequent `render` will snap the cursor back to that sticky position
+    /// if one is set. To change where frames leave the cursor, use
+    /// `set_cursor_position` instead.
+    pub fn move_cursor_to(&mut self, pos: impl Into<Position>) -> io::Result<()> {
         let target = pos.into();
         if self.renderer.cursor_known() && self.renderer.cursor_position() == target {
-            return;
+            return Ok(());
         }
         self.renderer
             .move_to(&mut self.out_buf, &self.front_buf, target.y, target.x)
             .unwrap();
+        self.flush()
     }
 
-    /// Stage a cursor move relative to the
-    /// [tracked cursor](Self::tracked_cursor).
+    /// Immediately move the terminal cursor relative to the
+    /// [tracked cursor](Self::tracked_cursor) and flush.
     ///
     /// Convenience over [`move_cursor_to`](Self::move_cursor_to): the target
     /// is the tracked cursor offset by `(dx, dy)`, saturating at the buffer
     /// origin. Like `move_cursor_to`, it does not clamp to the right or
     /// bottom edge. An unknown tracked cursor is treated as the origin.
-    pub fn move_cursor_by(&mut self, dx: i16, dy: i16) {
+    pub fn move_cursor_by(&mut self, dx: i16, dy: i16) -> io::Result<()> {
         let cur = self.tracked_cursor().unwrap_or(Position::ORIGIN);
         let x = cur.x.saturating_add_signed(dx);
         let y = cur.y.saturating_add_signed(dy);
-        self.move_cursor_to((x, y));
+        self.move_cursor_to((x, y))
+    }
+
+    /// Stage a declarative resting position for the cursor, applied at the end
+    /// of every [`render`](Self::render).
+    ///
+    /// This is the cursor analogue of [`set_cell`](Self::set_cell): it stages
+    /// intent rather than emitting now. `Some(pos)` asks `render` to leave the
+    /// terminal cursor at the buffer-relative `pos` after each frame's cell
+    /// diff; `None` clears the request, leaving the cursor wherever the diff
+    /// ended.
+    ///
+    /// The position is **sticky** — it persists across frames and is re-applied
+    /// on every `render` (cheaply, as a no-op when the cursor is already there)
+    /// until you change or clear it. An app whose cursor follows content
+    /// (e.g. a text field) should call this each time that content moves.
+    ///
+    /// Cursor visibility is orthogonal: this never shows or hides the cursor.
+    /// Use [`show_cursor`](Self::show_cursor) / [`hide_cursor`](Self::hide_cursor)
+    /// for that. A position outside the managed area is clamped to its edges.
+    ///
+    /// The argument is anything that converts into `Option<Position>`: pass a
+    /// [`Position`] (or [`Position::new`]) to stage a rest position, or `None`
+    /// to clear it.
+    ///
+    /// ```no_run
+    /// # use uncurses::layout::Position;
+    /// # fn main() -> std::io::Result<()> {
+    /// let mut screen = uncurses::screen::Screen::open()?;
+    /// screen.set_cursor_position(Position::new(4, 0)); // stage
+    /// screen.set_cursor_position(None);                // clear
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_cursor_position(&mut self, pos: impl Into<Option<Position>>) {
+        self.state.desired_cursor = pos.into();
+    }
+
+    /// Clamp a buffer-relative position to the managed area's edges.
+    fn clamp_to_surface(&self, pos: Position) -> Position {
+        Position {
+            x: pos.x.min(self.width.saturating_sub(1)),
+            y: pos.y.min(self.height.saturating_sub(1)),
+        }
+    }
+
+    /// Whether a declarative cursor rest position is staged and the renderer's
+    /// tracked cursor isn't already there, so [`render`](Self::render) must
+    /// emit a move even when no cells changed.
+    fn cursor_move_pending(&self) -> bool {
+        match self.state.desired_cursor {
+            Some(pos) => {
+                let pos = self.clamp_to_surface(pos);
+                !self.renderer.cursor_known() || self.renderer.cursor_position() != pos
+            }
+            None => false,
+        }
     }
 
     /// The renderer's tracked cursor: the buffer-relative cell where the
@@ -501,19 +572,28 @@ where
         self.flush()
     }
 
-    /// Enable synchronized-output frame wrapping: each non-empty
-    /// [`render`](Self::render) is wrapped in begin/end synchronized-output
-    /// sequences so terminals that support DECSET 2026 treat a frame as
-    /// atomic. Takes effect on the next frame that has render work.
-    pub fn enable_synchronized_output(&mut self) -> io::Result<()> {
-        self.state.sync_updates = true;
-        Ok(())
-    }
-
-    /// Disable synchronized-output frame wrapping.
-    pub fn disable_synchronized_output(&mut self) -> io::Result<()> {
-        self.state.sync_updates = false;
-        Ok(())
+    /// Enable or disable synchronized-output frame wrapping.
+    ///
+    /// When enabled, each non-empty [`render`](Self::render) is wrapped in
+    /// begin/end synchronized-output sequences (DEC mode 2026) so terminals
+    /// that support it present the frame atomically, with no mid-frame
+    /// repaint. Terminals that don't support 2026 ignore the markers.
+    ///
+    /// This is your switch to flip: uncurses does not second-guess it against
+    /// detected capabilities. It is enabled automatically when the terminal
+    /// reports 2026 support during [`init`](Self::init), and you can override
+    /// that here at any time.
+    ///
+    /// Enabling it also changes how the cursor is handled per frame. With sync
+    /// off, a visible cursor is hidden around the cell diff so it doesn't dance
+    /// across cells as the renderer repositions it. With sync on, the frame is
+    /// presented in one step, so that hide/show pair is dropped: it is
+    /// redundant, and toggling the cursor every frame resets its blink phase,
+    /// which reads as flicker.
+    ///
+    /// This only sets state; the markers are emitted on the next `render`.
+    pub fn set_synchronized_output(&mut self, enabled: bool) {
+        self.state.sync_updates = enabled;
     }
 
     /// Enable Unicode core / grapheme-cluster mode (DECSET 2027) and flush:
@@ -595,22 +675,44 @@ where
     // --- Render staging internals ---------------------------------------
 
     /// Stage a single rendered frame into [`out_buf`](Self::out_buf):
-    /// synchronized-output begin, cursor hide (so the cursor doesn't dance
-    /// across cells during the diff), the renderer's cell diff, cursor show,
-    /// synchronized-output end. Assumes the front buffer was synced.
+    /// synchronized-output begin, the renderer's cell diff, the optional
+    /// declarative cursor move, synchronized-output end. Assumes the front
+    /// buffer was synced.
+    ///
+    /// A visible cursor is hidden around the diff so it doesn't dance across
+    /// cells as the renderer repositions it, *unless* synchronized output is
+    /// enabled. A synchronized frame is presented in one step, so the cursor
+    /// never visibly moves mid-frame; the hide/show pair is then skipped, both
+    /// because it is redundant and because toggling DECTCEM every frame resets
+    /// the cursor's blink phase, which reads as flicker. Whether to trust
+    /// synchronized output is the caller's choice via
+    /// [`set_synchronized_output`](Self::set_synchronized_output), not gated on
+    /// detected capabilities.
     fn write_frame(&mut self) {
+        let bracket_cursor = self.state.cursor_visible && !self.state.sync_updates;
+
         if self.state.sync_updates {
             mode::Mode::SYNCHRONIZED_OUTPUT
                 .set(&mut self.out_buf)
                 .unwrap();
         }
-        if self.state.cursor_visible {
+        if bracket_cursor {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.out_buf).unwrap();
         }
 
         self.renderer.render_back(&mut self.out_buf).unwrap();
 
-        if self.state.cursor_visible {
+        // Apply the declarative resting position (if any) inside the same
+        // bracket as the cell diff, so the cursor lands atomically.
+        // Sticky: re-applied every frame; move_to no-ops when already there.
+        if let Some(pos) = self.state.desired_cursor {
+            let pos = self.clamp_to_surface(pos);
+            self.renderer
+                .move_to(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
+                .unwrap();
+        }
+
+        if bracket_cursor {
             mode::Mode::CURSOR_VISIBLE.set(&mut self.out_buf).unwrap();
         }
         if self.state.sync_updates {

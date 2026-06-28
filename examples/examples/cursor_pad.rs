@@ -12,10 +12,10 @@
 //! - Enter: move to column 0 of the next row.
 //! - Ctrl-C: quit.
 
-use std::io::Write;
 
 use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton};
+use uncurses::layout::Position;
 use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -67,9 +67,10 @@ impl App {
 
     fn render(&mut self) -> std::io::Result<()> {
         redraw(&mut self.screen)?;
-        self.screen.render()?;
-        self.screen.move_cursor_to((self.cx, self.cy));
-        self.screen.flush()
+        // Stage the caret position so render() leaves the cursor here, applied
+        // atomically inside the frame's hide/sync bracket.
+        self.screen.set_cursor_position(Position::new(self.cx, self.cy));
+        self.screen.render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
