@@ -113,17 +113,18 @@ painting does not.
 ## Placing the cursor
 
 Where the cursor rests after a frame is part of the frame, so you stage it the
-same way you stage cells. `set_cursor_position(Position::new(x, y))` records a
+same way you stage cells. `set_cursor_position((x, y))` records a
 resting position that `render` applies at the end of every frame, inside the same
 frame bracket as the cell diff so the cursor lands in one clean step instead of
 skittering across the row. It is sticky: set it once and each `render` parks the
-cursor right back there, even as the diff churns the screen underneath. Pass
-`None` to forget the request and let the cursor stay wherever the diff left it.
+cursor right back there, even as the diff churns the screen underneath. Call
+`clear_cursor_position` to forget the request and let the cursor stay wherever
+the diff left it.
 
 ```rust
 // A text field that wants the caret at the edit position every frame.
 screen.set_str((0, 0), &input, Style::default());
-screen.set_cursor_position(Position::new(caret_col, 0));
+screen.set_cursor_position((caret_col, 0));
 screen.render()?; // paints the line and rests the cursor at the caret
 ```
 
