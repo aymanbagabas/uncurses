@@ -611,7 +611,7 @@ fn set_cursor_position_applied_at_end_of_render() {
 #[test]
 fn set_cursor_position_is_sticky_across_frames() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.set_cursor_position(Some(Position::new(2, 1)));
+    screen.set_cursor_position(Position::new(2, 1));
 
     screen.set_str((0, 0), "a", crate::style::Style::default());
     screen.render().unwrap();
@@ -652,13 +652,21 @@ fn clearing_desired_cursor_emits_nothing_on_cursor_only_frame() {
     screen.render().unwrap();
     let len_after_move = screen.writer().len();
     // With no staged position and no cell changes, render does nothing.
-    screen.set_cursor_position(None);
+    screen.clear_cursor_position();
     screen.render().unwrap();
     assert_eq!(
         screen.writer().len(),
         len_after_move,
         "cleared cursor-only frame must be silent"
     );
+}
+
+#[test]
+fn set_cursor_position_accepts_bare_tuple() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_cursor_position((5, 3));
+    screen.render().unwrap();
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(5, 3)));
 }
 
 #[test]

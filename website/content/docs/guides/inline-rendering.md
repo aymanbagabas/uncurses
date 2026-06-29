@@ -65,12 +65,13 @@ the end of the frame:
 
 ```rust
 screen.set_str((0, 0), &line, Style::new());
-screen.set_cursor_position(Position::new(caret_col, 0));
+screen.set_cursor_position((caret_col, 0));
 screen.render()?;
 ```
 
 It is sticky, so set it when the caret moves and later frames keep the cursor
-there on their own. Pass `None` to stop steering it. Visibility stays separate:
+there on their own. Call `clear_cursor_position` to stop steering it. Visibility
+stays separate:
 `show_cursor` and `hide_cursor` decide whether the caret is drawn, while
 `set_cursor_position` only decides where it rests. See
 [placing the cursor]({{< relref "../concepts/screen.md#placing-the-cursor" >}})

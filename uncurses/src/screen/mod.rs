@@ -466,10 +466,10 @@ where
     /// of every [`render`](Self::render).
     ///
     /// This is the cursor analogue of [`set_cell`](Self::set_cell): it stages
-    /// intent rather than emitting now. `Some(pos)` asks `render` to leave the
-    /// terminal cursor at the buffer-relative `pos` after each frame's cell
-    /// diff; `None` clears the request, leaving the cursor wherever the diff
-    /// ended.
+    /// intent rather than emitting now. `render` leaves the terminal cursor at
+    /// the buffer-relative `pos` after each frame's cell diff. Call
+    /// [`clear_cursor_position`](Self::clear_cursor_position) to stop steering
+    /// it and leave the cursor wherever the diff ended.
     ///
     /// The position is **sticky** — it persists across frames and is re-applied
     /// on every `render` (cheaply, as a no-op when the cursor is already there)
@@ -480,21 +480,25 @@ where
     /// Use [`show_cursor`](Self::show_cursor) / [`hide_cursor`](Self::hide_cursor)
     /// for that. A position outside the managed area is clamped to its edges.
     ///
-    /// The argument is anything that converts into `Option<Position>`: pass a
-    /// [`Position`] (or [`Position::new`]) to stage a rest position, or `None`
-    /// to clear it.
+    /// The argument is anything that converts into a [`Position`], so a bare
+    /// `(x, y)` works:
     ///
     /// ```no_run
-    /// # use uncurses::layout::Position;
     /// # fn main() -> std::io::Result<()> {
     /// let mut screen = uncurses::screen::Screen::open()?;
-    /// screen.set_cursor_position(Position::new(4, 0)); // stage
-    /// screen.set_cursor_position(None);                // clear
+    /// screen.set_cursor_position((4, 0)); // stage
+    /// screen.clear_cursor_position();      // stop steering it
     /// # Ok(())
     /// # }
     /// ```
-    pub fn set_cursor_position(&mut self, pos: impl Into<Option<Position>>) {
-        self.state.desired_cursor = pos.into();
+    pub fn set_cursor_position(&mut self, pos: impl Into<Position>) {
+        self.state.desired_cursor = Some(pos.into());
+    }
+
+    /// Clear the staged cursor [resting position](Self::set_cursor_position),
+    /// leaving the cursor wherever each frame's cell diff ends.
+    pub fn clear_cursor_position(&mut self) {
+        self.state.desired_cursor = None;
     }
 
     /// Clamp a buffer-relative position to the managed area's edges.

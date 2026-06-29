@@ -15,7 +15,6 @@
 
 use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton};
-use uncurses::layout::Position;
 use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -69,7 +68,7 @@ impl App {
         redraw(&mut self.screen)?;
         // Stage the caret position so render() leaves the cursor here, applied
         // atomically inside the frame's hide/sync bracket.
-        self.screen.set_cursor_position(Position::new(self.cx, self.cy));
+        self.screen.set_cursor_position((self.cx, self.cy));
         self.screen.render()
     }
 
