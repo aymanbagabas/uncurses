@@ -84,7 +84,7 @@ on which flags you turn on with `set_kitty_keyboard`. Pass `Some(flags)` to
 enable the bits you want, or `None` to switch every enhancement back off.
 
 ```rust
-use uncurses::ansi::KittyKeyboardFlags;
+use uncurses::ansi::kitty::KittyKeyboardFlags;
 
 screen.set_kitty_keyboard(Some(
     KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
