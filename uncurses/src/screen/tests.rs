@@ -744,6 +744,46 @@ fn restore_coalesces_equal_titles_into_single_osc_0() {
 }
 
 #[test]
+fn empty_title_clears_state_and_is_not_restored() {
+    let mut setup: Vec<u8> = Vec::new();
+    let mut restore_buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut setup, (80, 24));
+        screen.set_title("App").unwrap();
+        // An empty string clears the override (state -> None) while still
+        // emitting the clearing OSC 0.
+        screen.set_title("").unwrap();
+        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
+        screen.restore().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&restore_buf);
+    assert!(!out.contains("\x1b]0;"), "title should not be restored: {out:?}");
+    assert!(!out.contains("\x1b]1;"), "icon should not be restored: {out:?}");
+    assert!(!out.contains("\x1b]2;"), "window should not be restored: {out:?}");
+}
+
+#[test]
+fn empty_window_title_clears_only_window_state() {
+    let mut setup: Vec<u8> = Vec::new();
+    let mut restore_buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut setup, (80, 24));
+        screen.set_window_title("Win").unwrap();
+        screen.set_icon_title("Icon").unwrap();
+        // Clearing only the window title leaves the icon name intact.
+        screen.set_window_title("").unwrap();
+        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
+        screen.restore().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&restore_buf);
+    assert!(out.contains("\x1b]1;Icon\x1b\\"), "icon should be restored: {out:?}");
+    assert!(!out.contains("\x1b]2;"), "window should not be restored: {out:?}");
+    assert!(!out.contains("\x1b]0;"), "no OSC 0 expected: {out:?}");
+}
+
+#[test]
 fn sync_frame_omits_cursor_hide_show() {
     let mut buf: Vec<u8> = Vec::new();
     {

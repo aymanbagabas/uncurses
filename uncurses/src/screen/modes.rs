@@ -210,32 +210,38 @@ impl<I: Input, O: Write> Screen<I, O> {
 
     /// Set both the window title and icon name (`OSC 0`) and flush.
     ///
-    /// To set just one, use [`set_window_title`](Self::set_window_title)
-    /// (`OSC 2`) or [`set_icon_title`](Self::set_icon_title) (`OSC 1`).
+    /// An empty `title` clears both overrides, restoring the terminal's
+    /// defaults; the state is recorded as unset so teardown and resume skip
+    /// them. To set just one, use
+    /// [`set_window_title`](Self::set_window_title) (`OSC 2`) or
+    /// [`set_icon_title`](Self::set_icon_title) (`OSC 1`).
     pub fn set_title(&mut self, title: &str) -> io::Result<()> {
         ansi::title::write_window_title_and_icon(&mut self.out_buf, title)?;
-        self.state.window_title = Some(title.to_string());
-        self.state.icon_name = Some(title.to_string());
+        let stored = (!title.is_empty()).then(|| title.to_string());
+        self.state.window_title = stored.clone();
+        self.state.icon_name = stored;
         self.flush()
     }
 
     /// Set the window title only (`OSC 2`) and flush.
     ///
-    /// Unlike [`set_title`](Self::set_title) (`OSC 0`), this leaves the icon
-    /// name untouched.
+    /// An empty `title` clears the override, restoring the terminal's default
+    /// window title. Unlike [`set_title`](Self::set_title) (`OSC 0`), this
+    /// leaves the icon name untouched.
     pub fn set_window_title(&mut self, title: &str) -> io::Result<()> {
         ansi::title::write_window_title(&mut self.out_buf, title)?;
-        self.state.window_title = Some(title.to_string());
+        self.state.window_title = (!title.is_empty()).then(|| title.to_string());
         self.flush()
     }
 
     /// Set the icon name only (`OSC 1`) and flush.
     ///
-    /// Unlike [`set_title`](Self::set_title) (`OSC 0`), this leaves the window
-    /// title untouched.
+    /// An empty `title` clears the override, restoring the terminal's default
+    /// icon name. Unlike [`set_title`](Self::set_title) (`OSC 0`), this leaves
+    /// the window title untouched.
     pub fn set_icon_title(&mut self, title: &str) -> io::Result<()> {
         ansi::title::write_icon_name(&mut self.out_buf, title)?;
-        self.state.icon_name = Some(title.to_string());
+        self.state.icon_name = (!title.is_empty()).then(|| title.to_string());
         self.flush()
     }
 
