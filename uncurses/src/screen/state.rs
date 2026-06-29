@@ -39,9 +39,22 @@ pub(super) struct State {
     ///
     /// [`Event::Resize`]: crate::event::Event::Resize
     pub in_band_resize: bool,
-    /// Title (window title set via OSC 0/2). `None` when no title
-    /// override has been set.
-    pub title: Option<String>,
+    /// Window title set via [`OSC 2`] (or [`OSC 0`], which sets both this and
+    /// [`icon_name`](Self::icon_name)). `None` when no
+    /// [`set_window_title`](super::Screen::set_window_title) or
+    /// [`set_title`](super::Screen::set_title) override has been set.
+    ///
+    /// [`OSC 2`]: crate::ansi::title::write_window_title
+    /// [`OSC 0`]: crate::ansi::title::write_window_title_and_icon
+    pub window_title: Option<String>,
+    /// Icon name set via [`OSC 1`] (or [`OSC 0`], which sets both this and
+    /// [`window_title`](Self::window_title)). `None` when no
+    /// [`set_icon_title`](super::Screen::set_icon_title) or
+    /// [`set_title`](super::Screen::set_title) override has been set.
+    ///
+    /// [`OSC 1`]: crate::ansi::title::write_icon_name
+    /// [`OSC 0`]: crate::ansi::title::write_window_title_and_icon
+    pub icon_name: Option<String>,
     /// Default foreground color override. `Some(c)` when the facade has
     /// emitted `OSC 10` to install `c`; `None` when the terminal is
     /// using its built-in default. Drives `OSC 110` on reset and
@@ -98,7 +111,8 @@ impl Default for State {
             focus_events: false,
             color_scheme_updates: false,
             in_band_resize: false,
-            title: None,
+            window_title: None,
+            icon_name: None,
             foreground_color: None,
             background_color: None,
             cursor_color: None,

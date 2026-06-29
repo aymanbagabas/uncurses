@@ -39,6 +39,7 @@ fn main() -> std::io::Result<()> {
 fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     let glyphs: Vec<char> = TEXT.chars().collect();
     let mut offset: usize = 0;
+    screen.set_title("Marquee Hello")?;
 
     loop {
         let cursor_row = draw(screen, &glyphs, offset);
@@ -80,7 +81,9 @@ fn draw(screen: &mut Screen<Stdin, Stdout>, glyphs: &[char], offset: usize) -> u
     let window_w = (n as u16).min(w) as usize;
     let row = h / 2;
 
-    let line: String = (0..window_w).map(|col| glyphs[(offset + col) % n]).collect();
+    let line: String = (0..window_w)
+        .map(|col| glyphs[(offset + col) % n])
+        .collect();
 
     let style = Style::default().fg(Color::BrightCyan).bold();
     screen.set_str((0, row), &line, style);

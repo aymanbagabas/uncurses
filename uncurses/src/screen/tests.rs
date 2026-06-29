@@ -670,6 +670,80 @@ fn set_cursor_position_accepts_bare_tuple() {
 }
 
 #[test]
+fn set_title_emits_osc_0() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_title("hi").unwrap();
+    assert_eq!(s(screen.writer()), "\x1b]0;hi\x1b\\");
+}
+
+#[test]
+fn set_window_title_emits_osc_2() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_window_title("hi").unwrap();
+    assert_eq!(s(screen.writer()), "\x1b]2;hi\x1b\\");
+}
+
+#[test]
+fn set_icon_title_emits_osc_1() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_icon_title("hi").unwrap();
+    assert_eq!(s(screen.writer()), "\x1b]1;hi\x1b\\");
+}
+
+#[test]
+fn reset_coalesces_equal_titles_into_single_osc_0() {
+    let mut setup: Vec<u8> = Vec::new();
+    let mut reset_buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut setup, (80, 24));
+        screen.set_title("App").unwrap();
+        // Swap writers so only reset-side bytes land in reset_buf.
+        let _ = std::mem::replace(screen.terminal.output_mut(), &mut reset_buf);
+        screen.reset().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&reset_buf);
+    assert!(out.contains("\x1b]0;\x1b\\"), "missing OSC 0 reset: {out:?}");
+    assert!(!out.contains("\x1b]2;\x1b\\"), "unexpected OSC 2 reset: {out:?}");
+    assert!(!out.contains("\x1b]1;\x1b\\"), "unexpected OSC 1 reset: {out:?}");
+}
+
+#[test]
+fn reset_uses_separate_osc_for_differing_titles() {
+    let mut setup: Vec<u8> = Vec::new();
+    let mut reset_buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut setup, (80, 24));
+        screen.set_window_title("Win").unwrap();
+        screen.set_icon_title("Icon").unwrap();
+        let _ = std::mem::replace(screen.terminal.output_mut(), &mut reset_buf);
+        screen.reset().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&reset_buf);
+    assert!(out.contains("\x1b]2;\x1b\\"), "missing OSC 2 reset: {out:?}");
+    assert!(out.contains("\x1b]1;\x1b\\"), "missing OSC 1 reset: {out:?}");
+    assert!(!out.contains("\x1b]0;\x1b\\"), "unexpected OSC 0 reset: {out:?}");
+}
+
+#[test]
+fn restore_coalesces_equal_titles_into_single_osc_0() {
+    let mut setup: Vec<u8> = Vec::new();
+    let mut restore_buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut setup, (80, 24));
+        screen.set_title("App").unwrap();
+        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
+        screen.restore().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&restore_buf);
+    assert!(out.contains("\x1b]0;App\x1b\\"), "missing OSC 0 restore: {out:?}");
+    assert!(!out.contains("\x1b]2;App"), "unexpected OSC 2 restore: {out:?}");
+    assert!(!out.contains("\x1b]1;App"), "unexpected OSC 1 restore: {out:?}");
+}
+
+#[test]
 fn sync_frame_omits_cursor_hide_show() {
     let mut buf: Vec<u8> = Vec::new();
     {

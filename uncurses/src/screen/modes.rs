@@ -208,10 +208,34 @@ impl<I: Input, O: Write> Screen<I, O> {
         self.flush()
     }
 
-    /// Set the window title (`OSC 2`) and flush.
+    /// Set both the window title and icon name (`OSC 0`) and flush.
+    ///
+    /// To set just one, use [`set_window_title`](Self::set_window_title)
+    /// (`OSC 2`) or [`set_icon_title`](Self::set_icon_title) (`OSC 1`).
     pub fn set_title(&mut self, title: &str) -> io::Result<()> {
+        ansi::title::write_window_title_and_icon(&mut self.out_buf, title)?;
+        self.state.window_title = Some(title.to_string());
+        self.state.icon_name = Some(title.to_string());
+        self.flush()
+    }
+
+    /// Set the window title only (`OSC 2`) and flush.
+    ///
+    /// Unlike [`set_title`](Self::set_title) (`OSC 0`), this leaves the icon
+    /// name untouched.
+    pub fn set_window_title(&mut self, title: &str) -> io::Result<()> {
         ansi::title::write_window_title(&mut self.out_buf, title)?;
-        self.state.title = Some(title.to_string());
+        self.state.window_title = Some(title.to_string());
+        self.flush()
+    }
+
+    /// Set the icon name only (`OSC 1`) and flush.
+    ///
+    /// Unlike [`set_title`](Self::set_title) (`OSC 0`), this leaves the window
+    /// title untouched.
+    pub fn set_icon_title(&mut self, title: &str) -> io::Result<()> {
+        ansi::title::write_icon_name(&mut self.out_buf, title)?;
+        self.state.icon_name = Some(title.to_string());
         self.flush()
     }
 
@@ -361,8 +385,20 @@ impl<I: Input, O: Write> Screen<I, O> {
         if !self.state.palette.is_empty() {
             self.out_buf.write_all(color::RESET_PALETTE_COLORS)?;
         }
-        if self.state.title.is_some() {
-            ansi::title::write_window_title(&mut self.out_buf, "")?;
+        match (&self.state.window_title, &self.state.icon_name) {
+            // Both set to the same string (e.g. via `set_title`): clear both
+            // with a single `OSC 0`.
+            (Some(w), Some(i)) if w == i => {
+                ansi::title::write_window_title_and_icon(&mut self.out_buf, "")?;
+            }
+            (window_title, icon_name) => {
+                if window_title.is_some() {
+                    ansi::title::write_window_title(&mut self.out_buf, "")?;
+                }
+                if icon_name.is_some() {
+                    ansi::title::write_icon_name(&mut self.out_buf, "")?;
+                }
+            }
         }
         if self.state.pointer_shape.is_some() {
             cursor::write_set_pointer_shape(&mut self.out_buf, "")?;
@@ -497,8 +533,20 @@ impl<I: Input, O: Write> Screen<I, O> {
             let (r, g, b) = c.to_rgb();
             color::write_set_palette_color(&mut self.out_buf, index, &color::xparse_rgb(r, g, b))?;
         }
-        if let Some(title) = self.state.title.clone() {
-            ansi::title::write_window_title(&mut self.out_buf, &title)?;
+        match (self.state.window_title.clone(), self.state.icon_name.clone()) {
+            // Both set to the same string (e.g. via `set_title`): restore both
+            // with a single `OSC 0`.
+            (Some(w), Some(i)) if w == i => {
+                ansi::title::write_window_title_and_icon(&mut self.out_buf, &w)?;
+            }
+            (window_title, icon_name) => {
+                if let Some(title) = window_title {
+                    ansi::title::write_window_title(&mut self.out_buf, &title)?;
+                }
+                if let Some(name) = icon_name {
+                    ansi::title::write_icon_name(&mut self.out_buf, &name)?;
+                }
+            }
         }
         if let Some(shape) = self.state.pointer_shape.clone() {
             cursor::write_set_pointer_shape(&mut self.out_buf, &shape)?;
