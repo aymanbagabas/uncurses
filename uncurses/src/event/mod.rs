@@ -61,7 +61,7 @@
 //!
 //! ## Async
 //!
-//! With the `async` feature, [`EventStream`] reads the same events through a
+//! With the `async` feature, `EventStream` reads the same events through a
 //! [`futures_core::Stream`], so the loop becomes `while let Some(ev) =
 //! stream.next().await`.
 //!

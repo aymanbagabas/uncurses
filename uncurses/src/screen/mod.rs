@@ -160,7 +160,7 @@ where
     /// are measured as 2 cells instead of 1. See [`crate::text::char_width`].
     eaw_wide: bool,
     /// Input source, shared so the synchronous read path ([`Self::read`]
-    /// and friends) and the async [`EventStream`](Self::events) can both
+    /// and friends) and the async `EventStream` can both
     /// drive it. The lock is uncontended in the sync-only case.
     source: Arc<Mutex<EventSource<I>>>,
     /// Thread-backed event stream, created lazily on the first
@@ -1475,7 +1475,7 @@ where
     /// [`Self::finish`] but keeps the screen so the session can continue.
     /// Any running async event stream is stopped first, so its reader thread
     /// does not compete with the child for input; the next
-    /// [`events`](Self::events) call after [`resume`](Self::resume) starts a
+    /// `events` call after [`resume`](Self::resume) starts a
     /// fresh one.
     pub fn pause(&mut self) -> io::Result<()> {
         // Stop the async reader thread before handing off the terminal. The
@@ -1617,7 +1617,7 @@ where
     /// [`Self::finish`] but keeps the screen so the session can continue.
     /// Any running async event stream is stopped first, so its reader thread
     /// does not compete with the child for input; the next
-    /// [`events`](Self::events) call after [`resume`](Self::resume) starts a
+    /// `events` call after [`resume`](Self::resume) starts a
     /// fresh one.
     pub fn pause(&mut self) -> io::Result<()> {
         // Stop the async reader thread before handing off the terminal. The
