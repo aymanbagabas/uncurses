@@ -94,5 +94,6 @@ Input is one half of an interactive program; drawing into a
 [surface]({{< relref "surfaces.md" >}}) is the other. The
 [Screen]({{< relref "screen.md" >}}) owns an event source and a drawing
 surface together, so most apps use `read_event`, `poll_event`, and
-`try_read_event` on `Screen`. With the `async` feature, `Screen::events()`
-returns the stream.
+`try_read_event` on `Screen`. `Screen` has no async API right now; the `async`
+feature exposes only a low-level [`EventStream`]({{< relref
+"../guides/async-events.md" >}}) over an `EventSource`.

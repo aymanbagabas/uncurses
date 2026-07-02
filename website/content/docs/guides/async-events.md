@@ -3,122 +3,76 @@ title: "Async event loops"
 weight: 7
 ---
 
-`Screen::read_event` is perfect when input is all your loop does.
-But if you also have timers, network I/O, or other tasks to interleave, you want
-to `.await` the next event instead of blocking a thread on it. With the `async`
-feature, uncurses hands you the event stream as a `futures_core::Stream`.
+Most apps read input synchronously with [`Screen::read_event`]({{< relref
+"../concepts/events.md" >}}), which blocks until the next event and runs terminal
+capability detection for you. That is the recommended path today.
 
-## Enabling the async feature
+{{< callout type="warning" >}}
+`Screen` does not currently expose an async API. An earlier `Screen::events()` /
+`event_reader()` surface was removed while the async story is redesigned. The
+low-level `EventStream` below is still available, but it does not integrate with
+`Screen` rendering or capability detection. Expect this area to change.
+{{< /callout >}}
 
-Add the feature in `Cargo.toml`:
+## The low-level `EventStream`
+
+With the `async` feature, the blocking `EventSource` can be turned into a
+`futures_core::Stream` of `io::Result<Event>` with `EventSource::into_stream()`.
+A helper thread waits for input readiness and wakes the polling task, so no
+blocking call ever lands on your async runtime.
+
+Enable the feature in `Cargo.toml`:
 
 ```toml
 [dependencies]
 uncurses = { git = "https://github.com/aymanbagabas/uncurses", features = ["async"] }
 ```
 
-The `async` feature is runtime-agnostic: it pulls in only `futures-core`, so it
-runs under tokio, async-std, smol, or your own executor. The stream is backed by
-a reader thread, so no blocking call ever lands on your async runtime.
+The feature is runtime-agnostic: it pulls in only `futures-core`, so it runs
+under tokio, async-std, smol, or your own executor.
 
 ## Awaiting events
 
-`Screen::events()` returns an `Events` stream adapter. Drive it with
-`next().await` from your `StreamExt` of choice, and the body is the same
-decode-and-react loop you would write with `Screen::read_event`.
+This is the by-hand path, without the `Screen` facade: put the terminal in raw
+mode yourself, build an `EventSource` over its input, and turn it into a stream.
 
 ```rust
 use futures_lite::StreamExt; // or tokio_stream::StreamExt
-use uncurses::event::{Event, Key};
-use uncurses::screen::Screen;
-use uncurses::terminal::{Stdin, Stdout};
+use uncurses::event::{Event, EventSource, Key};
+use uncurses::terminal::Terminal;
 
-async fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+async fn run() -> std::io::Result<()> {
+    let mut term = Terminal::stdio();
+    term.make_raw()?;
+
     let quit: Key = "ctrl+c".parse().unwrap();
+    let mut events = EventSource::new(term.input())?.into_stream();
 
-    while let Some(event) = screen.events().next().await {
+    while let Some(event) = events.next().await {
         match event? {
             Event::KeyPress(ref k) if *k == quit => break,
-            Event::Resize(ws) => screen.resize((ws.col, ws.row)),
             _ => {}
         }
-        // redraw after reacting to the event
-        screen.render()?;
+        // ...react and repaint through your own output half...
     }
-    Ok(())
+
+    drop(events); // stop the helper thread before restoring the terminal
+    term.restore()
 }
 ```
 
-Each stream item is an `io::Result<Event>`, so `?` surfaces read errors the same
-way the blocking API does.
+Each item is an `io::Result<Event>`, so `?` surfaces read errors the same way the
+blocking API does. Because it is a plain `Stream`, you can race it against timers
+and channels with your runtime's `select!`.
 
 {{< callout type="info" >}}
-`Screen::read_event` and `Screen::events()` are `Screen` methods. One layer
-down, `EventSource::read()` blocks, `try_read()` returns a queued event without
-blocking, `poll()` waits with an optional timeout, and `into_stream()` yields an
-`EventStream`. This guide stays at the `Screen` level, but use the
-`EventSource` names when you work below it.
+Wiring the terminal by hand means no [capability detection]({{< relref
+"querying-the-terminal.md" >}}) and no cell diffing: those live on `Screen`.
+See the `low_level` example for the full manual setup and teardown.
 {{< /callout >}}
 
-## Why `events()` is called in the loop header
+## Cleaning up
 
-`screen.events()` borrows the screen, but only for the single `next().await`. On
-edition 2024 that temporary is dropped before the loop body runs, which is why
-the body is free to call `screen.render()` and `screen.resize(..)` again. Call
-`events()` right in the `while let` header rather than binding the stream to a
-variable, and the borrow checker stays happy. The underlying stream and reader
-thread stay on `Screen`, so this does not drop or lose queued events.
-
-## Racing input against timers and channels
-
-This is where async earns its keep. Because the events are a plain `Stream`, you
-can wait on the keyboard and on other work at the same time with your runtime's
-`select!`. The classic case is an animation or a clock: a spinner that has to
-keep moving even while nobody is typing. With the blocking `Screen::read_event`,
-the loop would be parked on input and the spinner would freeze between
-keystrokes; a `select!` lets a timer fire on its own.
-
-```rust
-use std::time::Duration;
-use tokio_stream::StreamExt;
-use uncurses::event::{Event, Key};
-use uncurses::screen::Screen;
-use uncurses::terminal::{Stdin, Stdout};
-
-async fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
-    let quit: Key = "ctrl+c".parse().unwrap();
-    let mut tick = tokio::time::interval(Duration::from_millis(100));
-    let mut frame = 0usize;
-
-    loop {
-        tokio::select! {
-            // input arrived: a key, a resize, a paste...
-            event = screen.events().next() => match event {
-                Some(event) => match event? {
-                    Event::KeyPress(ref k) if *k == quit => break,
-                    Event::Resize(ws) => screen.resize((ws.col, ws.row)),
-                    _ => {}
-                },
-                None => break, // the stream ended
-            },
-            // 100 ms passed with no input: advance the spinner
-            _ = tick.tick() => frame = frame.wrapping_add(1),
-        }
-        draw_spinner(screen, frame);
-        screen.render()?;
-    }
-    Ok(())
-}
-```
-
-Calling `screen.events().next()` inside the `select!` arm keeps the borrow
-scoped to that one `select!` iteration, the same trick as the `while let` header,
-so the body is still free to draw through `screen`. Add more arms as your app
-grows: an `mpsc` receiver for messages from background tasks, a socket, a
-shutdown signal. The terminal becomes one source among several in your loop.
-
-Pair this with [pause and resume]({{< relref "pause-and-resume.md" >}}) to shell
-out from an async app: the stream's reader thread is stopped on `pause` and a
-fresh one starts on the next `events()` after `resume`.
-
-See the `async_input` example for a complete tokio-driven loop.
+An `EventStream` owns a helper thread. Drop it before you restore the terminal
+(or before [pause and resume]({{< relref "pause-and-resume.md" >}}) if you are
+sharing the source) so the thread does not compete for input.

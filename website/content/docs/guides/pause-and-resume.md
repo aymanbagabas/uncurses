@@ -80,9 +80,9 @@ inherits raw mode.
 
 ## Async note
 
-If you are driving input through the [async stream]({{< relref "async-events.md"
->}}), `pause` stops the stream's reader thread first so it does not fight the
-child for input. The next `events()` after `resume` starts a fresh stream.
+If you are driving input through the low-level [async stream]({{< relref
+"async-events.md" >}}), drop your `EventStream` before `pause` so its helper
+thread does not fight the child for input, then build a fresh one after `resume`.
 
 See the `screen_toggle` example for a live inline/alt-screen toggle that also
 suspends and resumes on `Ctrl-Z`.

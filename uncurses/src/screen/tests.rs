@@ -55,8 +55,6 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
             height: 0,
             eaw_wide: false,
             source,
-            #[cfg(feature = "async")]
-            stream: None,
             state: super::state::State::default(),
             caps: Capabilities::default(),
             options: ScreenOptions::default(),
