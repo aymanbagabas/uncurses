@@ -415,6 +415,14 @@ pub enum KeyCode {
     Enter,
     // Whitespace
     /// Space key.
+    ///
+    /// The space bar decodes to this variant, **not** [`KeyCode::Char(' ')`]
+    /// — match on `KeyCode::Space` (a `Char(' ')` arm never fires). It still
+    /// reports `text` of `" "`, so text entry via [`Key::text`] is unaffected.
+    /// Rust has no variant aliases; to treat both alike by character, use
+    /// [`Key::char`], which returns `Some(' ')` for `Space` and `Char(' ')`.
+    ///
+    /// [`KeyCode::Char(' ')`]: KeyCode::Char
     Space,
     // Special
     /// Escape key.

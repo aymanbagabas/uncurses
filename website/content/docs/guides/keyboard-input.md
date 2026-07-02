@@ -58,6 +58,19 @@ match screen.read_event()? {
 }
 ```
 
+{{< callout type="warning" >}}
+Space is its own variant, `KeyCode::Space`, not `KeyCode::Char(' ')`. Match on
+`KeyCode::Space` (it still reports `text` of `" "`); a `Char(' ')` arm never
+fires. The other printable-but-named keys follow the same rule: `Enter`, `Tab`,
+and `Backspace` are `KeyCode::Enter` / `Tab` / `Backspace`, not `Char('\n')` /
+`Char('\t')` / `Char('\x7f')`.
+
+Rust has no variant aliases, so you cannot make one arm match both. When you
+care about the typed character rather than the physical key, use `key.char()`,
+which returns `Some(' ')` for both `Space` and `Char(' ')`, or check
+`key.text`.
+{{< /callout >}}
+
 The modifier flags are `SHIFT`, `ALT`, `CTRL`, `META`, `HYPER`, `SUPER`,
 `CAPS_LOCK`, and `NUM_LOCK`.
 
