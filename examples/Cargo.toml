@@ -8,15 +8,16 @@ repository.workspace = true
 publish = false
 
 [features]
-default = ["unicode-rs"]
+default = ["unicode-rs", "async"]
 unicode-rs = ["uncurses/unicode-rs", "uncurses-ratatui/unicode-rs"]
 icu = ["uncurses/icu", "uncurses-ratatui/icu"]
+async = ["uncurses/async"]
 
 [dependencies]
-uncurses = { path = "../uncurses", default-features = false, features = ["async"] }
+uncurses = { path = "../uncurses", default-features = false }
 uncurses-ratatui = { path = "../uncurses-ratatui", default-features = false }
 ratatui = { version = "0.30", features = ["underline-color"] }
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
 
 [target.'cfg(unix)'.dependencies]
