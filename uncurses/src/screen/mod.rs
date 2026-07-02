@@ -83,17 +83,8 @@
 //! discovery-driven defaults are applied once the terminal answers the
 //! capability queries (see [`capabilities`](Screen::capabilities)).
 //!
-//! # Async events
-//!
-//! With the `async` feature, `events` returns a
-//! [`futures_core::Stream`] adapter that yields the same decoded events as
-//! [`read_event`](Screen::read_event) (including the capability-detection side effect),
-//! driven by a `next().await` loop. The stream borrows the screen only for
-//! the duration of one poll, so the loop body is free to draw.
-//!
 //! [`Terminal`]: crate::terminal::Terminal
 //! [`EventSource`]: crate::event::EventSource
-//! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 
 mod cursor;
 mod modes;
@@ -120,8 +111,6 @@ use crate::ansi::{kitty, mode};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::color::Profile;
-#[cfg(feature = "async")]
-use crate::event::EventStream;
 use crate::event::Input;
 use crate::event::{Event, EventSource};
 use crate::layout::{Position, Rect, Size};
@@ -159,14 +148,10 @@ where
     /// `true`, code points whose East-Asian-Width property is `Ambiguous`
     /// are measured as 2 cells instead of 1. See [`crate::text::char_width`].
     eaw_wide: bool,
-    /// Input source, shared so the synchronous read path ([`Self::read`]
-    /// and friends) and the async `EventStream` can both
-    /// drive it. The lock is uncontended in the sync-only case.
+    /// Input source behind the synchronous read path ([`Self::read_event`]
+    /// and friends). Held in an `Arc<Mutex<_>>`; the lock is uncontended in
+    /// the common single-reader case.
     source: Arc<Mutex<EventSource<I>>>,
-    /// Thread-backed event stream, created lazily on the first
-    /// [`events`](Self::events) call and reused thereafter.
-    #[cfg(feature = "async")]
-    stream: Option<EventStream<I>>,
     state: state::State,
     /// Terminal capabilities detected by intercepting the replies to the
     /// queries [`Self::init`] fires. Capability-report events are absorbed
@@ -1243,88 +1228,6 @@ where
     }
 }
 
-#[cfg(feature = "async")]
-impl<I, O> Screen<I, O>
-where
-    I: Input + 'static,
-    O: Write,
-{
-    /// An async event stream that yields decoded events and runs the same
-    /// capability detection ([`observe`](Self::read_event)) as the synchronous
-    /// [`read_event`](Self::read_event) path.
-    ///
-    /// The thread-backed stream is created on the first call and reused
-    /// thereafter; the helper thread waits for input readiness and wakes the
-    /// polling task. Drive it with a `Stream` extension trait's `next`:
-    ///
-    /// ```ignore
-    /// while let Some(ev) = screen.events().next().await {
-    ///     let ev = ev?;
-    ///     // draw with `screen` here — the events() borrow has ended
-    /// }
-    /// ```
-    ///
-    /// The returned [`Events`] borrows the screen for the duration of one
-    /// `next().await`, so it cannot be bound across the loop; call
-    /// `screen.events().next()` each iteration (the underlying stream and
-    /// its thread persist on the screen).
-    pub fn events(&mut self) -> Events<'_, I, O> {
-        if self.stream.is_none() {
-            self.stream = Some(EventStream::from_shared(Arc::clone(&self.source)));
-        }
-        Events { screen: self }
-    }
-}
-
-/// Async event stream adapter returned by [`Screen::events`].
-///
-/// Implements [`futures_core::Stream`], yielding `io::Result<Event>` and
-/// running [`Screen`] capability detection on each event before yielding it.
-/// Borrows the screen for the duration of a single poll.
-#[cfg(feature = "async")]
-pub struct Events<'a, I, O>
-where
-    I: Input + 'static,
-    O: Write,
-{
-    screen: &'a mut Screen<I, O>,
-}
-
-#[cfg(feature = "async")]
-impl<I, O> futures_core::Stream for Events<'_, I, O>
-where
-    I: Input + 'static,
-    O: Write,
-{
-    type Item = io::Result<Event>;
-
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        use std::task::Poll;
-
-        let screen = &mut self.get_mut().screen;
-        // Scope the stream-field borrow so it ends before `observe` borrows
-        // the whole screen. The yielded `Poll` owns its event, holding no
-        // borrow of the stream.
-        let polled = {
-            let stream = screen
-                .stream
-                .as_mut()
-                .expect("stream is created in events()");
-            std::pin::Pin::new(stream).poll_next(cx)
-        };
-        match polled {
-            Poll::Ready(Some(Ok(ev))) => match screen.observe(&ev) {
-                Ok(()) => Poll::Ready(Some(Ok(ev))),
-                Err(e) => Poll::Ready(Some(Err(e))),
-            },
-            other => other,
-        }
-    }
-}
-
 impl<I, O> Screen<I, O>
 where
     I: Input + Copy,
@@ -1358,8 +1261,6 @@ where
             height: 0,
             eaw_wide: false,
             source,
-            #[cfg(feature = "async")]
-            stream: None,
             state: state::State::default(),
             caps: Capabilities::default(),
             options: ScreenOptions::default(),
@@ -1456,16 +1357,10 @@ where
         Ok(())
     }
 
-    /// Consume the screen and hand the terminal back to the shell: stop the
-    /// async event stream if one is running, tear down every staged mode,
-    /// reset the managed area, flush, and restore the terminal's prior state.
+    /// Consume the screen and hand the terminal back to the shell: tear down
+    /// every staged mode, reset the managed area, flush, and restore the
+    /// terminal's prior state.
     pub fn finish(mut self) -> io::Result<()> {
-        // Stop the async event stream's helper thread, if one was started.
-        // Consuming `self` would drop it anyway, but doing it explicitly here
-        // marks the difference from `pause`, which keeps the stream alive for
-        // `resume`.
-        #[cfg(feature = "async")]
-        drop(self.stream.take());
         self.teardown()?;
         self.terminal.restore()
     }
@@ -1473,17 +1368,7 @@ where
     /// Hand the terminal back to the shell without consuming the screen,
     /// e.g. to run a child process. Re-enter with [`Self::resume`]. Like
     /// [`Self::finish`] but keeps the screen so the session can continue.
-    /// Any running async event stream is stopped first, so its reader thread
-    /// does not compete with the child for input; the next
-    /// `events` call after [`resume`](Self::resume) starts a
-    /// fresh one.
     pub fn pause(&mut self) -> io::Result<()> {
-        // Stop the async reader thread before handing off the terminal. The
-        // stream is recreated lazily by the next `events()` call.
-        #[cfg(feature = "async")]
-        {
-            self.stream = None;
-        }
         self.teardown()?;
         self.terminal.restore()
     }
@@ -1598,16 +1483,10 @@ where
         Ok(())
     }
 
-    /// Consume the screen and hand the terminal back to the shell: stop the
-    /// async event stream if one is running, tear down every staged mode,
-    /// reset the managed area, flush, and restore the terminal's prior state.
+    /// Consume the screen and hand the terminal back to the shell: tear down
+    /// every staged mode, reset the managed area, flush, and restore the
+    /// terminal's prior state.
     pub fn finish(mut self) -> io::Result<()> {
-        // Stop the async event stream's helper thread, if one was started.
-        // Consuming `self` would drop it anyway, but doing it explicitly here
-        // marks the difference from `pause`, which keeps the stream alive for
-        // `resume`.
-        #[cfg(feature = "async")]
-        drop(self.stream.take());
         self.teardown()?;
         self.terminal.restore()
     }
@@ -1615,17 +1494,7 @@ where
     /// Hand the terminal back to the shell without consuming the screen,
     /// e.g. to run a child process. Re-enter with [`Self::resume`]. Like
     /// [`Self::finish`] but keeps the screen so the session can continue.
-    /// Any running async event stream is stopped first, so its reader thread
-    /// does not compete with the child for input; the next
-    /// `events` call after [`resume`](Self::resume) starts a
-    /// fresh one.
     pub fn pause(&mut self) -> io::Result<()> {
-        // Stop the async reader thread before handing off the terminal. The
-        // stream is recreated lazily by the next `events()` call.
-        #[cfg(feature = "async")]
-        {
-            self.stream = None;
-        }
         self.teardown()?;
         self.terminal.restore()
     }

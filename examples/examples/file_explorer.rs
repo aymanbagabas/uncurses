@@ -10,11 +10,8 @@
 //! - handles keyboard navigation, mouse clicks, mouse-wheel scrolling,
 //!   and terminal resize events.
 //!
-//! Input is read asynchronously: the blocking [`EventSource`] is turned
-//! into an [`EventStream`](uncurses::event::EventStream) with
-//! [`into_stream`](EventSource::into_stream) and driven with a small
-//! `tokio` current-thread runtime. The stream owns its reader thread and
-//! stops it on drop, so no manual channel or [`Waker`] plumbing is needed.
+//! Input is read synchronously with [`Screen::read_event`], which blocks
+//! until the next event and runs terminal capability detection for you.
 //!
 //! Run with `cargo run --example file_explorer [directory]`. If no
 //! directory is given the current working directory is used.
@@ -33,7 +30,6 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use tokio_stream::StreamExt;
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
@@ -462,14 +458,11 @@ impl App {
         self.screen.render()
     }
 
-    async fn run(&mut self) -> io::Result<()> {
+    fn run(&mut self) -> io::Result<()> {
         self.render()?;
 
-        // `events()` borrows the screen only for the duration of one
-        // `next().await`; in edition 2024 the temporary drops before the
-        // loop body, so the body is free to draw through `self.screen`.
-        while let Some(ev) = self.screen.events().next().await {
-            let ev = ev?;
+        loop {
+            let ev = self.screen.read_event()?;
             let mut dirty = true;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -554,10 +547,9 @@ impl App {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
     let mut app = App::start()?;
-    let result = app.run().await;
+    let result = app.run();
     app.stop()?;
     result
 }
