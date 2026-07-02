@@ -1,73 +1,68 @@
-//! Async input: drive the event loop with `.await` instead of blocking.
+//! Truly async terminal input via [`EventStream`], no [`Screen`] in sight.
 //!
-//! With the `async` feature, [`Screen::events`] hands back a
-//! [`futures_core::Stream`] of events. This is the same decode-and-react
-//! loop as the blocking examples, but it `await`s the next event, so it
-//! drops into any async runtime (tokio here) and leaves room for other
-//! tasks, timers, or I/O between keystrokes.
+//! This is the low-level async path: build an [`EventStream`] over stdin and
+//! await events on a tokio runtime, concurrently with a timer via
+//! `tokio::select!`. `poll_next` never blocks the reactor, a helper thread
+//! does the blocking readiness wait and wakes the task, so the stream is
+//! genuinely async on any executor. We skip `Screen` entirely and just print
+//! each decoded event (and each timer tick) to stderr.
 //!
-//! Run with `cargo run --example async_input`. Type to echo keys; press
-//! `q` or `Ctrl-C` to quit.
+//! Raw mode is handled directly with [`Terminal::make_raw`] / [`restore`] so
+//! keys arrive unbuffered and `Ctrl-C` reaches us as an event instead of
+//! killing the process.
+//!
+//! Requires the `async` feature (on by default for the examples crate):
+//! `cargo run --example async_input`. Press `q`, `Esc`, or `Ctrl-C` to quit.
+//!
+//! [`restore`]: uncurses::terminal::Terminal::restore
 
 use tokio_stream::StreamExt;
 
-use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::color::Color;
-use uncurses::event::{Event, Key};
-use uncurses::screen::{Screen, ScreenOptions};
-use uncurses::style::Style;
-use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::TextSurface;
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::terminal::{Stdin, Terminal};
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init_with(ScreenOptions::default())?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    let mut term = Terminal::stdio();
+    term.make_raw()?;
 
-    let result = run(&mut screen).await;
-    screen.finish()?;
+    // Raw mode is on; make sure we always put the terminal back.
+    let result = run(term.input()).await;
+
+    term.restore()?;
     result
 }
 
-async fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
-    let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
-    let mut typed = String::new();
-    render(screen, &typed);
+async fn run(input: Stdin) -> std::io::Result<()> {
+    let mut stream = EventSource::new(input)?.into_stream();
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
+    let mut ticks = 0u64;
+    eprint!("async input via EventStream + a 1s timer. press q, Esc, or Ctrl-C to quit.\r\n");
 
-    // `events()` borrows the screen only for one `next().await`; in edition
-    // 2024 the temporary drops before the loop body, so the body is free to
-    // draw through `screen` again.
-    while let Some(event) = screen.events().next().await {
-        match event? {
-            Event::KeyPress(ref k) if quit.contains(k) => break,
-            Event::KeyPress(Key {
-                code: uncurses::event::KeyCode::Char(c),
-                ..
-            }) => typed.push(c),
-            Event::KeyPress(Key {
-                code: uncurses::event::KeyCode::Backspace,
-                ..
-            }) => {
-                typed.pop();
+    loop {
+        tokio::select! {
+            // Branch 1: the terminal. `next()` is truly async, no reactor block.
+            maybe = stream.next() => {
+                let Some(ev) = maybe else { break };
+                let ev = ev?;
+                eprint!("event: {ev:?}\r\n");
+                if let Event::KeyPress(ref k) = ev
+                    && is_quit(k)
+                {
+                    break;
+                }
             }
-            Event::Resize(ws) => screen.resize((ws.col, ws.row)),
-            _ => continue,
+            // Branch 2: a timer, ticking concurrently with input.
+            _ = ticker.tick() => {
+                ticks += 1;
+                eprint!("tick #{ticks}\r\n");
+            }
         }
-        render(screen, &typed);
     }
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdin, Stdout>, typed: &str) {
-    screen.clear();
-    let dim = Style::default().fg(Color::BrightBlack);
-    screen.set_str((0, 0), "Async echo. Type away; q quits.", dim);
-
-    let text = Style::default().fg(Color::BrightGreen);
-    let h = screen.height();
-    screen.set_str((0, h / 2), typed, text);
-
-    let _ = screen.render();
+fn is_quit(k: &Key) -> bool {
+    matches!(k.code, KeyCode::Char('q') | KeyCode::Escape)
+        || (matches!(k.code, KeyCode::Char('c')) && k.modifiers.contains(KeyModifiers::CTRL))
 }
