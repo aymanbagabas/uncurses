@@ -1,14 +1,15 @@
 # uncurses
 
-A terminal toolkit library for Rust that hands you the building blocks and
-gets out of the way. No terminfo, no widget tree, no hidden global state, no
-framework, just a modern VT100/xterm-style terminal, talked to directly.
+A terminal toolkit library for Rust. It hands you the building blocks for a
+terminal UI and gets out of the way: no terminfo, no widget tree, no hidden
+global state, no framework. Just a modern VT100/xterm-style terminal, talked to
+directly.
 
 ## Docs
 
-Guides, concepts, examples, and the full API reference live on the website:
+Guides, concepts, examples, and the full API reference live on the website.
 
-### [uncurses-website.pages.dev](https://uncurses-website.pages.dev/)
+### [uncurses.org](https://uncurses.org)
 
 ## A taste
 
@@ -41,17 +42,31 @@ fn main() -> std::io::Result<()> {
 
 ## Install
 
+Not on crates.io yet, so depend on it straight from git:
+
 ```toml
 [dependencies]
 uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
 
-Runs on Linux, macOS, Windows, and the BSDs; tracks the latest stable Rust on
-the 2024 edition.
+Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
+the latest stable Rust (currently 1.88 or newer).
 
-Features: `unicode-rs` *(default)* width/segmentation, `icu` for ICU4X-backed
-correctness, and `async` for a runtime-agnostic `futures_core::Stream` of
-events.
+Features: `unicode-rs` *(default)* for width and segmentation, `icu` for
+ICU4X-backed correctness, and `async` for a runtime-agnostic
+`futures_core::Stream` of events (a low-level `EventStream` over an
+`EventSource`).
+
+## Credits
+
+- [ncurses](https://invisible-island.net/ncurses/): the original the name winks
+  at, minus the terminfo baggage.
+- [ultraviolet](https://github.com/charmbracelet/ultraviolet): Charm's
+  low-level terminal library, the inspiration for the cell and screen model.
+- [colorprofile](https://github.com/charmbracelet/colorprofile): Charm's color
+  degradation library, the model behind uncurses color profiles.
+- [ratatui](https://ratatui.rs): the Rust TUI framework, wired up through
+  [`uncurses-ratatui`](../uncurses-ratatui/).
 
 ## License
 
