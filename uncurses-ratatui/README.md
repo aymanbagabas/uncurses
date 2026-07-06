@@ -1,16 +1,15 @@
 # uncurses-ratatui
 
-A [`ratatui`](https://docs.rs/ratatui) `Backend` that renders through
-[uncurses](../uncurses/). Write your UI with ratatui widgets; let uncurses diff
-frames and ship the minimal bytes. A single `UncursesBackend` wraps a `Screen`
-and drives rendering, input, and the raw-mode lifecycle.
+A [ratatui](https://ratatui.rs) `Backend` that renders through
+[uncurses](../uncurses/). Write your UI with ratatui widgets and let uncurses
+diff frames and ship the minimal bytes. A single `UncursesBackend` wraps a
+`Screen` and drives rendering, input, and the raw-mode lifecycle.
 
 ## Docs
 
-Viewports, async input, manual setup, and the full API reference live on the
-website:
+Viewports, input, manual setup, and the full API reference live on the website.
 
-### [uncurses-website.pages.dev](https://uncurses-website.pages.dev/)
+### [uncurses.org](https://uncurses.org)
 
 ## A taste
 
@@ -42,6 +41,8 @@ fn main() -> std::io::Result<()> {
 
 ## Install
 
+Not on crates.io yet, so depend on it straight from git:
+
 ```toml
 [dependencies]
 uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses" }
@@ -49,6 +50,13 @@ ratatui = "0.30"
 ```
 
 Features mirror the core crate: `unicode-rs` *(default)*, `icu`, and `async`.
+
+## Credits
+
+Built on [ratatui](https://ratatui.rs) and [uncurses](../uncurses/), which in
+turn tips its hat to [ncurses](https://invisible-island.net/ncurses/),
+[ultraviolet](https://github.com/charmbracelet/ultraviolet), and
+[colorprofile](https://github.com/charmbracelet/colorprofile).
 
 ## License
 
