@@ -579,6 +579,23 @@ impl KeyCode {
     }
 }
 
+/// Formats the key as its canonical binding spelling: a modifier prefix
+/// (`ctrl+`, `alt+`, `shift+`, `super+`, `hyper+`, `meta+`) followed by the
+/// [`KeyCode`] name, for example `"ctrl+c"`, `"shift+f1"`, or `"space"`.
+///
+/// This is the inverse of [`FromStr`](std::str::FromStr): every string it
+/// produces parses back to an equal `Key`. It renders the structural key
+/// identity only and intentionally ignores the informational
+/// [`text`](Self::text), [`shifted_key`](Self::shifted_key), and
+/// [`base_key`](Self::base_key) fields, along with lock state
+/// (`CapsLock`/`NumLock`/`ScrollLock`). It therefore always spells the space
+/// bar as `"space"` (never `" "`), and composed or IME input is shown by its
+/// `code`, not its produced glyph.
+///
+/// For the user-perceived character that was typed, use
+/// [`char`](Self::char) or read [`text`](Self::text) directly; for
+/// layout-aware string matching that consults `text`, use
+/// [`matches`](Self::matches).
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mods = self.modifiers;
