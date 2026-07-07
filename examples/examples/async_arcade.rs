@@ -1,39 +1,37 @@
-//! NEON ARCADE, a tokio <-> uncurses bridge you can actually watch.
+//! NEON ARCADE, tokio and uncurses sharing one task through an async event
+//! stream.
 //!
-//! `Screen` is synchronous and owns the terminal, so it never touches the
-//! async runtime. Instead it lives on its own OS thread (the "UI actor") and
-//! talks to a normal tokio app through two `tokio::sync::mpsc` channels:
+//! [`Screen::event_stream`] hands you a real `futures_core::Stream` over the
+//! screen's own decoder, so terminal input, a frame timer, and the game's
+//! async tasks all merge in a single `tokio::select!`, and that same task
+//! renders. No UI thread, no event channel: the `Screen` lives right here in
+//! the async runtime.
 //!
-//! ```text
-//!   tokio tasks  --UiMsg-->  UI thread (owns Screen, renders)
-//!   UI thread    --Event-->  tokio tasks (react to input)
-//! ```
-//!
-//! `unbounded_channel` is the bridge because `send` and `try_recv` are usable
-//! from sync code with no `.await`, so the UI thread speaks to async land
-//! synchronously while the async side uses `.send()` / `.recv().await`.
-//!
-//! What the async side drives:
+//! What the async side drives (each a `tokio::spawn` feeding one `UiMsg`
+//! channel):
 //! - a spawner task lobbing new bouncing orbs into the arena every so often,
 //! - a sparkle task anointing a random menu item "special" for a while,
-//! - a frenzy task that periodically speeds every orb up and rainbows them,
-//! - an input task that reacts to your keys and fires effects back.
+//! - a frenzy task that periodically speeds every orb up and rainbows them.
 //!
-//! What the UI thread owns: the render loop, the orb physics (bouncing orbs
-//! that detonate when they collide), the starfield, and the glow/pulse
-//! selection effects. Terminal input is read here and forwarded to async, so
-//! `observe` (capability/resize side effects) still runs automatically through
-//! `try_read_event`.
+//! The render task owns the orb physics (bouncing orbs that detonate when they
+//! collide), the starfield, and the glow/pulse selection effects.
+//!
+//! The stream is pure: reading an event does not touch capability tracking.
+//! Feed each event back through [`Screen::observe_event`] so resize handling
+//! and the discovery-driven defaults (mouse, keyboard, in-band resize) still
+//! apply. That one line is the whole contract.
 //!
 //! Controls: up/down (or k/j) move the selector, Enter fires a burst on the
 //! current item, Space drops an orb, q / Esc / Ctrl-C quit.
 //!
-//! Run with `cargo run --example async_arcade`.
+//! Requires the `async` feature (on by default for the examples crate):
+//! `cargo run --example async_arcade`.
 
 use std::io;
 use std::time::Duration;
 
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio_stream::StreamExt;
 
 use uncurses::buffer::SurfaceMut;
 use uncurses::cell::Cell;
@@ -45,19 +43,13 @@ use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
 
-/// Async world -> UI thread.
+/// Async tasks -> the render task.
 enum UiMsg {
-    /// Player-spawned orb (Space); always lands, up to the hard cap.
-    SpawnOrb(u8),
     /// Auto-spawned orb from the spawner task; only lands below the auto
     /// threshold so the runtime never crowds out your own orbs.
     AutoOrb(u8),
     /// Anoint a menu item special until it decays (index, lifetime frames).
     Sparkle(usize, u16),
-    /// Fire a radial burst centered on a menu row.
-    Burst(usize),
-    /// Move the selector by a signed step.
-    MoveSel(i16),
     /// Kick off a frenzy: orbs speed up and rainbow-cycle for N frames.
     Frenzy(u16),
 }
@@ -84,10 +76,6 @@ const MAX_ORBS: usize = 24;
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> io::Result<()> {
     let (ui_tx, ui_rx) = unbounded_channel::<UiMsg>();
-    let (ev_tx, ev_rx) = unbounded_channel::<Event>();
-
-    // The UI actor: owns Screen, runs entirely off the tokio runtime.
-    let ui = std::thread::spawn(move || ui_thread(ui_rx, ev_tx));
 
     // Async task 1: lob a fresh orb into the arena on a jittery cadence.
     let spawner = ui_tx.clone();
@@ -116,11 +104,7 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    // Async task 3: react to forwarded terminal input.
-    let reactor = ui_tx.clone();
-    tokio::spawn(input_reactor(ev_rx, reactor));
-
-    // Async task 4: every few seconds the runtime declares a FRENZY, proof the
+    // Async task 3: every few seconds the runtime declares a FRENZY, proof the
     // async side can drive gameplay, not just scenery.
     let frenzy = ui_tx.clone();
     tokio::spawn(async move {
@@ -132,93 +116,70 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    // Drop our spare handle so the channel closes once every task is gone.
+    // Drop our spare handle so the render loop's channel closes if every task
+    // dies.
     drop(ui_tx);
 
-    ui.join().expect("ui thread panicked")
-}
-
-/// Turns raw terminal events into game intents and sends them back to the UI.
-async fn input_reactor(mut ev_rx: UnboundedReceiver<Event>, ui: UnboundedSender<UiMsg>) {
-    let mut selected: usize = 0;
-    while let Some(ev) = ev_rx.recv().await {
-        let Event::KeyPress(key) = ev else { continue };
-        let msg = match key.code {
-            KeyCode::Up => {
-                selected = selected.saturating_sub(1);
-                UiMsg::MoveSel(-1)
-            }
-            KeyCode::Down => {
-                selected = (selected + 1).min(ITEMS.len() - 1);
-                UiMsg::MoveSel(1)
-            }
-            KeyCode::Char('k') => UiMsg::MoveSel(-1),
-            KeyCode::Char('j') => UiMsg::MoveSel(1),
-            KeyCode::Space => UiMsg::SpawnOrb(selected as u8 * 40),
-            KeyCode::Enter => UiMsg::Burst(selected),
-            _ => continue,
-        };
-        if ui.send(msg).is_err() {
-            break;
-        }
-    }
-}
-
-/// The UI actor. Owns Screen, merges async messages with terminal input, and
-/// renders every frame. Blocking terminal I/O happens only on this thread.
-fn ui_thread(mut ui_rx: UnboundedReceiver<UiMsg>, ev_tx: UnboundedSender<Event>) -> io::Result<()> {
     let mut screen = Screen::stdio()?;
     screen.init_with(ScreenOptions::default())?;
     screen.enter_alt_screen()?;
     screen.hide_cursor()?;
 
-    let result = render_loop(&mut screen, &mut ui_rx, &ev_tx);
-    screen.finish()?;
-    result
+    let result = render_loop(&mut screen, ui_rx).await;
+    let finish = screen.finish();
+    result.and(finish)
 }
 
-fn render_loop(
+/// Owns `Screen`, merges terminal input, async world messages, and the frame
+/// timer in one `select!`, and renders every tick.
+async fn render_loop(
     screen: &mut Screen<Stdin, Stdout>,
-    ui_rx: &mut UnboundedReceiver<UiMsg>,
-    ev_tx: &UnboundedSender<Event>,
+    mut ui_rx: UnboundedReceiver<UiMsg>,
 ) -> io::Result<()> {
     let mut world = World::new(screen.size().width, screen.size().height);
 
+    // The async input stream over the screen's own decoder. Owned, so it does
+    // not borrow the screen: render and observe freely while it is live.
+    let mut events = screen.event_stream();
+    let mut ticker = tokio::time::interval(FRAME);
+
     loop {
-        // Source A: terminal input. Block up to one frame, then forward all
-        // decoded events to the async side. `try_read_event` runs `observe`,
-        // so resize/capability side effects still land on Screen.
-        if screen.poll_event(Some(FRAME))? {
-            while let Some(ev) = screen.try_read_event() {
-                if let Event::KeyPress(ref k) = ev
-                    && world.quit_key(k)
-                {
-                    return Ok(());
+        tokio::select! {
+            // Source A: terminal input, genuinely async. Reads are pure, so
+            // `observe_event` runs on each so resize/capability side effects
+            // still land on Screen.
+            maybe = events.next() => {
+                let Some(ev) = maybe else { break };
+                let ev = ev?;
+                screen.observe_event(&ev)?;
+                match ev {
+                    Event::KeyPress(ref k) if world.quit_key(k) => break,
+                    Event::KeyPress(key) => world.on_key(&key),
+                    Event::Resize(ws) => {
+                        screen.resize((ws.col, ws.row));
+                        world.resize(ws.col, ws.row);
+                    }
+                    _ => {}
                 }
-                if let Event::Resize(ws) = ev {
-                    screen.resize((ws.col, ws.row));
-                    world.resize(ws.col, ws.row);
+            }
+            // Source B: async world messages.
+            msg = ui_rx.recv() => {
+                let Some(msg) = msg else { break };
+                match msg {
+                    UiMsg::AutoOrb(hue) => world.spawn_orb(hue, true),
+                    UiMsg::Sparkle(i, life) => world.sparkle(i, life),
+                    UiMsg::Frenzy(life) => world.start_frenzy(life),
                 }
-                let _ = ev_tx.send(ev);
+            }
+            // Source C: the frame timer. Steps physics and renders on cadence.
+            _ = ticker.tick() => {
+                world.step();
+                world.draw(screen);
+                screen.render()?;
             }
         }
-
-        // Source B: async world messages. Drain without blocking.
-        while let Ok(msg) = ui_rx.try_recv() {
-            match msg {
-                UiMsg::SpawnOrb(hue) => world.spawn_orb(hue, false),
-                UiMsg::AutoOrb(hue) => world.spawn_orb(hue, true),
-                UiMsg::Sparkle(i, life) => world.sparkle(i, life),
-                UiMsg::Burst(i) => world.burst(i),
-                UiMsg::MoveSel(d) => world.move_sel(d),
-                UiMsg::Frenzy(life) => world.start_frenzy(life),
-            }
-        }
-
-        world.step();
-        world.draw(screen);
-        let _ = screen.render();
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +305,18 @@ impl World {
     fn move_sel(&mut self, d: i16) {
         let n = ITEMS.len() as i16;
         self.selected = ((self.selected as i16 + d).rem_euclid(n)) as usize;
+    }
+
+    /// Map a keypress to a game action. Selector moves, Space drops a player
+    /// orb, Enter fires a burst on the current row.
+    fn on_key(&mut self, key: &Key) {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
+            KeyCode::Space => self.spawn_orb(self.selected as u8 * 40, false),
+            KeyCode::Enter => self.burst(self.selected),
+            _ => {}
+        }
     }
 
     fn sparkle(&mut self, i: usize, life: u16) {

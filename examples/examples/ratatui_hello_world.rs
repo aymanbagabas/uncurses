@@ -26,10 +26,14 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         })?;
         let events = terminal.backend_mut();
         if events.poll_event(Some(Duration::from_millis(250)))?
-            && let Some(Event::KeyPress(k)) = events.try_read_event()
-            && k.code == KeyCode::Char('q')
+            && let Some(ev) = events.try_read_event()
         {
-            break;
+            events.observe_event(&ev)?;
+            if let Event::KeyPress(k) = ev
+                && k.code == KeyCode::Char('q')
+            {
+                break;
+            }
         }
     }
 

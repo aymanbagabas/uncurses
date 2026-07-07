@@ -77,7 +77,9 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     render(screen, &state);
 
     loop {
-        match screen.read_event()? {
+        let ev = screen.read_event()?;
+        screen.observe_event(&ev)?;
+        match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::KeyPress(ref k) if *k == space => state.show_box = !state.show_box,
             Event::MouseMove(m) => state.pointer = Some(m),

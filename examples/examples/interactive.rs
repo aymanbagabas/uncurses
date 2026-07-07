@@ -55,6 +55,7 @@ impl App {
 
             if got {
                 while let Some(ev) = self.screen.try_read_event() {
+                    self.screen.observe_event(&ev)?;
                     match &ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),

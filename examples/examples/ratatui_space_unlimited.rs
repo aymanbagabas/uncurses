@@ -184,20 +184,23 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         // Drain input without blocking so the render loop runs flat out.
         let events = terminal.backend_mut();
         while events.poll_event(Some(Duration::ZERO))? {
-            match events.try_read_event() {
-                Some(Event::KeyPress(Key {
+            let Some(ev) = events.try_read_event() else {
+                break;
+            };
+            events.observe_event(&ev)?;
+            match ev {
+                Event::KeyPress(Key {
                     code: KeyCode::Char('q'),
                     modifiers,
                     ..
-                })) if modifiers.is_empty() => quit = true,
-                Some(Event::KeyPress(Key {
+                }) if modifiers.is_empty() => quit = true,
+                Event::KeyPress(Key {
                     code: KeyCode::Char('c'),
                     modifiers,
                     ..
-                })) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-                Some(Event::Resize(_)) => field = Field::new(),
-                Some(_) => {}
-                None => break,
+                }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
+                Event::Resize(_) => field = Field::new(),
+                _ => {}
             }
         }
         if quit {

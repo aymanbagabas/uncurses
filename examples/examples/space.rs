@@ -163,6 +163,7 @@ impl App {
 
             if !remaining.is_zero() && self.screen.poll_event(Some(remaining))? {
                 while let Some(ev) = self.screen.try_read_event() {
+                    self.screen.observe_event(&ev)?;
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),

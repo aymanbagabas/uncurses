@@ -77,6 +77,7 @@ impl App {
 
         loop {
             let ev = self.screen.read_event()?;
+            self.screen.observe_event(&ev)?;
             match ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('c'),
