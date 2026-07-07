@@ -9,14 +9,15 @@
 //!
 //! ```text
 //! async task poll_next ─┬─ try lock + drain ready events ──▶ Poll::Ready
-//!                       └─ arm helper thread ──▶ source.poll(None) ──▶ wake task
+//!                       └─ arm helper thread ─┬─ brief lock: read decode deadline
+//!                                             └─ block lock-free on cloned poller ──▶ wake task
 //! drop stream ──▶ source Waker ──▶ helper exits
 //! ```
 //!
 //! ## Key types
 //!
-//! * [`EventStream`] owns or shares an `Arc<Mutex<EventSource<_>>>`, a source
-//!   [`Waker`], and a helper thread channel.
+//! * [`EventStream`] owns or shares an `Arc<Mutex<EventSource<_>>>`, a cloned
+//!   `Arc<dyn Poller>`, a source [`Waker`], and a helper thread channel.
 //! * A private `Wait` value tells the helper whether a wait is in flight and
 //!   whether stream drop requested shutdown.
 //!
@@ -30,10 +31,14 @@
 //! ## Coexistence caveats
 //!
 //! Sharing one source between a live stream and synchronous readers is
-//! supported but best-effort. The helper holds the source lock while parked in
-//! readiness wait, events go to whichever consumer drains first, and events are
-//! not broadcast. Read errors surface once as `Some(Err(_))`; after that the
-//! stream fuses to `None`.
+//! supported but best-effort. The helper waits **lock-free** on a cloned poller
+//! (it locks the source only briefly to read the decode deadline, then releases
+//! it), so a synchronous reader, [`Screen::render`], or teardown can take the
+//! source lock while the stream is parked. Events go to whichever consumer
+//! drains first and are not broadcast. Read errors surface once as
+//! `Some(Err(_))`; after that the stream fuses to `None`.
+//!
+//! [`Screen::render`]: crate::screen::Screen::render
 //!
 //! [`futures_core::Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 use std::io;
@@ -45,7 +50,8 @@ use std::task::{Context, Poll, Waker as TaskWaker};
 use std::time::Duration;
 
 use super::Event;
-use super::source::{EventSource, Input, Waker};
+use super::poll::Poller;
+use super::source::{EventSource, Input, READY_SLOTS, Waker};
 
 /// A readiness wait requested by the polling task: block until the source
 /// signals input (or a decode deadline elapses), then wake the task's
@@ -115,14 +121,17 @@ where
     /// synchronously while the stream is live (see the coexistence caveats
     /// on this module).
     pub fn from_shared(source: Arc<Mutex<EventSource<I>>>) -> Self {
-        let waker = source.lock().unwrap().waker();
+        let (waker, poller) = {
+            let src = source.lock().unwrap();
+            (src.waker(), src.poller())
+        };
         let (waits, rx) = mpsc::sync_channel::<Wait>(1);
         let task_waker: Arc<Mutex<Option<TaskWaker>>> = Arc::new(Mutex::new(None));
         let wait_source = Arc::clone(&source);
         let wait_waker = Arc::clone(&task_waker);
         std::thread::Builder::new()
             .name("uncurses-event-waiter".to_string())
-            .spawn(move || waiter_loop(wait_source, wait_waker, rx))
+            .spawn(move || waiter_loop(wait_source, poller, wait_waker, rx))
             .expect("spawn event waiter thread");
         Self {
             source,
@@ -182,26 +191,36 @@ impl<I: Input> futures_core::Stream for EventStream<I> {
             return Poll::Ready(None);
         }
         // Try to decode on this task without blocking. If the helper holds
-        // the lock (parked in its blocking wait), fall through to arm a wait
-        // and stay pending rather than block here.
+        // the lock (parked in its brief deadline peek), fall through to arm a
+        // wait and stay pending rather than block here.
         match this.source.try_lock() {
             Ok(mut src) => {
                 if let Some(ev) = src.try_read() {
                     return Poll::Ready(Some(Ok(ev)));
                 }
-                match src.poll(Some(Duration::ZERO)) {
-                    Ok(_) => {
-                        if let Some(ev) = src.try_read() {
-                            return Poll::Ready(Some(Ok(ev)));
+                // Only drive I/O when no waiter is in flight. A dispatched
+                // waiter owns the next readiness wait and already captured the
+                // decode deadline; draining here could consume input (and set
+                // a fresh ESC/paste deadline) that the parked waiter's timeout
+                // won't honor, hanging a lone Esc until unrelated input. When
+                // a waiter is in flight the input stays level-ready, so the
+                // waiter wakes on it and the next poll (with `dispatched`
+                // cleared) drains and re-arms with the new deadline.
+                if !this.dispatched.load(Ordering::SeqCst) {
+                    match src.poll(Some(Duration::ZERO)) {
+                        Ok(_) => {
+                            if let Some(ev) = src.try_read() {
+                                return Poll::Ready(Some(Ok(ev)));
+                            }
                         }
-                    }
-                    // A stray wake is not an error; just stay pending.
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                    // A read error (including end-of-input) surfaces once,
-                    // then the stream fuses.
-                    Err(e) => {
-                        this.done = true;
-                        return Poll::Ready(Some(Err(e)));
+                        // A stray wake is not an error; just stay pending.
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                        // A read error (including end-of-input) surfaces once,
+                        // then the stream fuses.
+                        Err(e) => {
+                            this.done = true;
+                            return Poll::Ready(Some(Err(e)));
+                        }
                     }
                 }
             }
@@ -218,31 +237,31 @@ impl<I: Input> futures_core::Stream for EventStream<I> {
 
 fn waiter_loop<I: Input>(
     source: Arc<Mutex<EventSource<I>>>,
+    poller: Arc<dyn Poller>,
     task_waker: Arc<Mutex<Option<TaskWaker>>>,
     waits: Receiver<Wait>,
 ) {
     while let Ok(wait) = waits.recv() {
-        // Block (holding the source lock only while waiting, as a blocking
-        // read would) until input is ready, a decode deadline elapses, or a
-        // wake fires. Loop past spurious wakes unless asked to shut down.
-        loop {
-            // Re-check shutdown before each blocking wait so a drop that
-            // raced the wait is observed promptly.
-            if wait.shutdown.load(Ordering::SeqCst) {
-                break;
-            }
-            let outcome = source.lock().unwrap().poll(None);
-            match outcome {
-                // Input ready / deadline produced an event: wake the task.
-                Ok(true) => break,
-                // A read error: let the task observe it on its next poll.
-                Err(_) => break,
-                // A wake with nothing to show: stop only if shutting down.
-                Ok(false) => {
-                    if wait.shutdown.load(Ordering::SeqCst) {
-                        break;
-                    }
-                }
+        // Wait for readiness WITHOUT holding the source mutex, so the owner
+        // (render, teardown, capability application) can lock the source
+        // freely while this thread is parked. The poller is level-triggered
+        // and `poll` takes `&self`, so a concurrent readiness check here and a
+        // later drain by the task both observe the same readiness. One wait
+        // per dispatched request; the task re-arms for the next.
+        if !wait.shutdown.load(Ordering::SeqCst) {
+            // Briefly lock only to read the nearest ESC/paste decode deadline.
+            // The guard is dropped at the end of this `map`, before the
+            // blocking wait below, so the source stays lockable while parked.
+            // Without honoring the deadline, a buffered partial escape with no
+            // further input would never wake the task and a lone Esc would
+            // hang. On a poisoned lock, skip the wait and let the task surface
+            // the poison on its next poll.
+            if let Ok(timeout) = source.lock().map(|src| src.effective_timeout(None)) {
+                let mut ready = [false; READY_SLOTS];
+                // Any return (readiness, elapsed deadline, wake, or error)
+                // hands back to the task, which drains and decodes under its
+                // own `try_lock`; stray wakes are harmless.
+                let _ = poller.poll(&mut ready, timeout);
             }
         }
         wait.dispatched.store(false, Ordering::SeqCst);
@@ -375,6 +394,53 @@ mod tests {
         write_bytes(&tx, b"b");
         let b = next_blocking(&mut stream).unwrap().unwrap();
         assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
+    }
+
+    #[test]
+    fn source_lockable_while_stream_parked() {
+        // Path 2: the waiter must not hold the source lock while parked, so
+        // the owner (render, teardown, capability application) can lock the
+        // source even with no input pending. Under the old lock-while-parked
+        // design this would block until input arrived.
+        let (rx, tx) = make_pipe();
+        let shared = Arc::new(Mutex::new(EventSource::new(rx).unwrap()));
+        let mut stream = EventStream::from_shared(Arc::clone(&shared));
+
+        // Poll once with no input: the stream parks and the waiter thread
+        // enters its blocking, lock-free readiness wait.
+        let flag = Arc::new(FlagWaker(AtomicBool::new(false)));
+        let waker = Waker::from(Arc::clone(&flag));
+        let mut cx = Context::from_waker(&waker);
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut cx),
+            Poll::Pending
+        ));
+        // Give the waiter time to pass its brief deadline peek and reach the
+        // blocking poll.
+        std::thread::sleep(Duration::from_millis(20));
+
+        assert!(
+            shared.try_lock().is_ok(),
+            "source lock is held by the parked waiter (deadlock risk)"
+        );
+
+        // The stream still delivers input afterwards.
+        write_bytes(&tx, b"q");
+        let q = next_blocking(&mut stream).unwrap().unwrap();
+        assert!(matches!(q, Event::KeyPress(k) if k.code == KeyCode::Char('q')));
+    }
+
+    #[test]
+    fn lone_esc_resolves_through_the_stream() {
+        // A bare Esc has no follow-up bytes, so it only resolves once its
+        // decode deadline elapses. The stream must honor that deadline: the
+        // waiter wakes on the elapsed timeout and the next poll drains the
+        // resolved key. Guards the `dispatched`-gated drain path.
+        let (rx, tx) = make_pipe();
+        let mut stream = EventSource::new(rx).unwrap().into_stream();
+        write_bytes(&tx, b"\x1b");
+        let esc = next_blocking(&mut stream).unwrap().unwrap();
+        assert!(matches!(esc, Event::KeyPress(k) if k.code == KeyCode::Escape));
     }
 
     fn _assert_send_sync<T: Send + Sync>() {}
