@@ -27,7 +27,7 @@ fn edit(screen: &mut Screen<Stdin, Stdout>, path: &str) -> std::io::Result<()> {
         .arg(path)
         .status()?; // child owns the terminal here
 
-    screen.resume()?; // re-enter raw mode and refit; arms the next full repaint
+    screen.resume()?; // re-enter raw mode and refit; next render repaints
 
     redraw(screen); // you lay out the new frame...
     screen.render() // ...and paint it; resume does not redraw for you
@@ -38,7 +38,7 @@ While paused, the child has the terminal to itself: uncurses restores the saved
 pre-init state, so the child can draw and read normally while your `Screen` stays
 alive. `resume` restores raw mode, re-applies your staged modes (alternate
 screen, hidden cursor, mouse, and so on), refits the managed area to the current
-window, and arms a full clear-and-repaint for your next `render`.
+window, and marks the next `render` as a full repaint.
 
 {{< callout type="warning" >}}
 `resume` does not redraw the previous frame for you. The window may have been
@@ -78,11 +78,17 @@ your app on its own; it just arrives as a key event. `suspend` opts into that
 stop, restoring the terminal before it stops the process so the shell never
 inherits raw mode.
 
-## Async note
+## Input note
 
-If you are driving input through the low-level [async stream]({{< relref
-"async-events.md" >}}), drop your `EventStream` before `pause` so its helper
-thread does not fight the child for input, then build a fresh one after `resume`.
+{{< callout type="info" >}}
+If you drive input through the [async stream]({{< relref "async-events.md" >}}),
+you can keep the `EventStream` live across `pause`, `resume`, and `finish`; you
+do not have to drop and rebuild it. Reads are pure: call `observe_event` for
+events you consume if you want uncurses to update capability and size tracking.
+The ratatui backend follows the same rule. Events go to whichever consumer
+drains first, so avoid polling app input while the child program owns the
+terminal.
+{{< /callout >}}
 
 See the `screen_toggle` example for a live inline/alt-screen toggle that also
 suspends and resumes on `Ctrl-Z`.

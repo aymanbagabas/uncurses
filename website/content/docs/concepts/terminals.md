@@ -100,9 +100,10 @@ fn main() -> std::io::Result<()> {
 ```
 
 Most apps never touch this directly. [Screen]({{< relref "screen.md" >}})
-manages this lifecycle for you: `init` borrows raw mode, while `finish`,
-`pause`, and `resume` restore or re-enter it. Reach for `Terminal::stdio` or
-`Terminal::open` when you want the raw connection yourself.
+manages this lifecycle for you: `init` borrows raw mode, and `finish()` restores
+the terminal in one call. `pause` and `resume` temporarily leave and re-enter raw
+mode. Reach for `Terminal::stdio` or `Terminal::open` when you want the raw
+connection yourself.
 
 ## Going deeper
 

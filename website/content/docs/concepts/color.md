@@ -49,13 +49,17 @@ flowchart TB
 drops styling entirely. That is the difference between a frame that is monochrome
 but still has structure, and one that is plain text.
 
-## Detection is automatic
+## Detection follows your reads
 
-A `Screen` picks its profile for you when you call `init`. It starts from the
-environment, the same way other CLI tools decide whether to emit color, then
-probes the terminal once for direct-color support and upgrades to `TrueColor` if
-it gets a confirmation (you can suppress that probe with
-`query_capabilities: false`). The environment conventions it reads:
+A `Screen` picks an initial profile when you call `init`. It starts from the
+environment, the same way other CLI tools decide whether to emit color. With
+[`ScreenOptions::query_capabilities`](/api/uncurses/screen/struct.ScreenOptions.html#structfield.query_capabilities)
+left `true`, it also probes the terminal once for direct-color support. The
+upgrade to `TrueColor` happens when your read loop feeds the terminal's
+XTGETTCAP reply through
+[`screen.observe_event(&ev)?`](/api/uncurses/screen/struct.Screen.html#method.observe_event).
+You can suppress that probe by setting the field to `false`. The environment
+conventions it reads:
 
 - Output that is not a TTY is `Disabled`, unless `TTY_FORCE` makes it follow TTY
   rules or `CLICOLOR_FORCE` forces color.
@@ -70,6 +74,12 @@ it gets a confirmation (you can suppress that probe with
 Read the result with `screen.color_profile()`, and override it with
 `screen.set_color_profile(..)` when you want to force a level regardless of the
 environment.
+
+{{< callout type="info" >}}
+Raw `Screen` reads are pure. Calling `screen.observe_event(&ev)?` on each event
+is optional; it keeps capability tracking alive, and skipping it still reads
+fine. The ratatui `UncursesBackend` follows the same pure-read contract.
+{{< /callout >}}
 
 ## Choosing a profile yourself
 

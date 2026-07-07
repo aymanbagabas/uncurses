@@ -3,7 +3,9 @@
 A [ratatui](https://ratatui.rs) `Backend` that renders through
 [uncurses](../uncurses/). Write your UI with ratatui widgets and let uncurses
 diff frames and ship the minimal bytes. A single `UncursesBackend` wraps a
-`Screen` and drives rendering, input, and the raw-mode lifecycle.
+`Screen` and drives rendering, input, and the raw-mode lifecycle. Backend event
+reads are pure, like raw `Screen` reads: call `observe_event` to keep
+capability tracking alive, or skip it and reads still work.
 
 ## Docs
 
@@ -15,11 +17,12 @@ Viewports, input, manual setup, and the full API reference live on the website.
 
 ```rust,ignore
 use ratatui::widgets::Paragraph;
-use uncurses::event::Event;
+use uncurses::event::{Event, Key};
 
 fn main() -> std::io::Result<()> {
     let mut terminal = uncurses_ratatui::try_init()?;
 
+    let q: Key = "q".parse().unwrap();
     loop {
         terminal.draw(|frame| {
             frame.render_widget(
@@ -29,7 +32,9 @@ fn main() -> std::io::Result<()> {
         })?;
 
         let backend = terminal.backend_mut();
-        if backend.poll_event(None)? && matches!(backend.try_read_event(), Some(Event::KeyPress(_))) {
+        let ev = backend.read_event()?;
+        backend.observe_event(&ev)?;
+        if matches!(ev, Event::KeyPress(k) if k == q) {
             break;
         }
     }
@@ -49,7 +54,8 @@ uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses" }
 ratatui = "0.30"
 ```
 
-Features mirror the core crate: `unicode-rs` *(default)*, `icu`, and `async`.
+Features mirror the core crate: `unicode-rs` *(default)*, `icu`, and runtime-agnostic
+`async` for `event_stream()` with no tokio dependency.
 
 ## Credits
 

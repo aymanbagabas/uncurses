@@ -14,7 +14,13 @@ one cell. A few are *wide* and take two cells, like CJK characters. Some take
 *zero*: a combining accent stacks onto the glyph before it rather than claiming
 a column of its own.
 
-<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(4, 2.2rem);"><span class="lbl">col:</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">4</span><span class="lbl">row 1</span><span>a</span><span>世</span><span class="cont">cont</span><span>e&#x0301;</span></div><figcaption>One row, four columns: narrow <code>a</code> (width 1), wide <code>世</code> (width 2, with its continuation cell), and <code>e&#x0301;</code> (the letter <code>e</code> plus a combining accent, still one cell).</figcaption></figure>
+| row / col | 1 | 2 | 3 | 4 |
+| --- | --- | --- | --- | --- |
+| row 1 | a | 世 | cont | é |
+
+One row, four columns: narrow `a` (width 1), wide `世` (width 2, with its
+continuation cell), and `é` (the letter `e` plus a combining accent, still one
+cell).
 
 ## Graphemes, not bytes or code points
 

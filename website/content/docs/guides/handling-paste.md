@@ -11,10 +11,10 @@ enabled by default.
 
 ## The paste events
 
-A paste arrives as a stream: one `PasteStart`, zero or more `PasteChunk`
-payloads, then one `PasteEnd`. The chunks are raw bytes, because a paste can be
-large and a chunk might not be valid UTF-8 on its own: a multibyte character can
-be split across a chunk boundary.
+A paste arrives as a stream: one `Event::PasteStart`, zero or more
+`Event::PasteChunk` payloads, then one `Event::PasteEnd`. The chunks are raw
+bytes, because a paste can be large and a chunk might not be valid UTF-8 on its
+own: a multibyte character can be split across a chunk boundary.
 
 ```mermaid
 flowchart TB
@@ -32,24 +32,26 @@ The common case: accumulate the chunks into a buffer, then decode once at
 ```rust
 use uncurses::event::Event;
 
-let mut paste: Option<Vec<u8>> = None;
-
-match screen.read_event()? {
-    Event::PasteStart => paste = Some(Vec::new()),
-    Event::PasteChunk(bytes) => {
-        if let Some(buf) = paste.as_mut() {
-            buf.extend_from_slice(&bytes);
+fn collect_paste(ev: Event, paste: &mut Option<Vec<u8>>) -> Option<String> {
+    match ev {
+        Event::PasteStart => {
+            *paste = Some(Vec::new());
+            None
         }
-    }
-    Event::PasteEnd => {
-        if let Some(buf) = paste.take() {
-            let text = String::from_utf8_lossy(&buf).into_owned();
-            insert_at_cursor(&text);
+        Event::PasteChunk(bytes) => {
+            paste.as_mut()?.extend_from_slice(&bytes);
+            None
         }
+        Event::PasteEnd => paste
+            .take()
+            .map(|buf| String::from_utf8_lossy(&buf).into_owned()),
+        _ => None,
     }
-    _ => {}
 }
 ```
+
+If your loop tracks terminal capabilities, call `screen.observe_event(&ev)?`
+after reading. Paste decoding does not depend on it.
 
 {{< callout type="warning" >}}
 Decode at the end, not per chunk: a multibyte character can be split across
@@ -62,23 +64,34 @@ buffer has a line model.
 
 Holding a paste in memory is fine until someone pastes a megabyte of logs. For
 that, feed chunks into a sink that keeps bytes in memory up to a threshold, then
-opens a temp file and streams the rest straight to disk.
+opens a spill file and streams the rest straight to disk.
 
 ```rust
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::Path;
+
 const THRESHOLD: usize = 64 * 1024;
 
-fn push(&mut self, chunk: &[u8]) -> std::io::Result<()> {
-    if let Some(file) = self.spill.as_mut() {
-        return file.write_all(chunk); // already spilling
+struct PasteSink {
+    mem: Vec<u8>,
+    spill: Option<File>,
+}
+
+impl PasteSink {
+    fn push(&mut self, chunk: &[u8], spill_path: &Path) -> io::Result<()> {
+        if let Some(file) = self.spill.as_mut() {
+            return file.write_all(chunk);
+        }
+        self.mem.extend_from_slice(chunk);
+        if self.mem.len() > THRESHOLD {
+            let mut file = File::create(spill_path)?;
+            file.write_all(&self.mem)?;
+            self.mem.clear();
+            self.spill = Some(file);
+        }
+        Ok(())
     }
-    self.mem.extend_from_slice(chunk);
-    if self.mem.len() > THRESHOLD {
-        let mut file = open_temp_file()?;
-        file.write_all(&self.mem)?;     // flush what we have
-        self.mem = Vec::new();
-        self.spill = Some(file);        // stream the rest to disk
-    }
-    Ok(())
 }
 ```
 

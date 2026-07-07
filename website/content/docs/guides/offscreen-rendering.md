@@ -23,8 +23,8 @@ let mut frame = TextBuffer::new(40, 3);
 frame.set_str((0, 0), "rendered with no terminal", Style::new());
 ```
 
-There is no renderer and no diffing here. Every serialization produces a
-complete, standalone frame, not a delta against a previous one.
+No terminal state is tracked here. Every serialization produces a complete,
+standalone frame, not a delta against a previous one.
 
 ## Serializing to bytes
 
@@ -33,10 +33,15 @@ escape bytes. `encode` writes into any `Write`; `display` gives you a `Display`
 value when a string is more convenient.
 
 ```rust
-use uncurses::text::Encode;
+use uncurses::buffer::TextBuffer;
+use uncurses::style::Style;
+use uncurses::text::{Encode, TextSurface};
+
+let mut frame = TextBuffer::new(40, 3);
+frame.set_str((0, 0), "rendered with no terminal", Style::new());
 
 let mut bytes = Vec::new();
-frame.encode(&mut bytes)?;        // into a Vec<u8>
+frame.encode(&mut bytes).unwrap(); // into a Vec<u8>
 
 let string = frame.display().to_string(); // or straight to a String
 ```
@@ -53,7 +58,13 @@ with the `*_with` variants: `Profile::Disabled` drops all styling and gives you
 plain text, while `Profile::Ascii` keeps attributes but strips color.
 
 ```rust
+use uncurses::buffer::TextBuffer;
 use uncurses::color::Profile;
+use uncurses::style::Style;
+use uncurses::text::{Encode, TextSurface};
+
+let mut frame = TextBuffer::new(40, 3);
+frame.set_str((0, 0), "rendered with no terminal", Style::new());
 
 let plain = frame.display_with(Profile::Disabled).to_string();
 assert_eq!(plain.trim_end(), "rendered with no terminal");
@@ -69,9 +80,14 @@ The grid is also queryable. Walk it cell by cell to extract the text directly,
 which is handy for transcripts or diffing two frames yourself.
 
 ```rust
-use uncurses::buffer::{Bounded, Surface};
+use uncurses::buffer::{Surface, TextBuffer};
 use uncurses::cell::Cell;
 use uncurses::layout::Position;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
+
+let mut frame = TextBuffer::new(40, 3);
+frame.set_str((0, 0), "rendered with no terminal", Style::new());
 
 for y in 0..frame.height() {
     let mut line = String::new();

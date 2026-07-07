@@ -71,7 +71,7 @@ fn main() -> io::Result<()> {
 
 `terminal.draw` is plain ratatui. Render any widget into the frame; uncurses
 turns the resulting buffer into the smallest possible update. Input comes from
-uncurses through the backend's `Screen`.
+uncurses through the backend.
 
 ```rust
 use uncurses::event::Event;
@@ -84,10 +84,15 @@ fn run(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         })?;
 
         let backend = terminal.backend_mut();
-        if backend.poll_event(None)? {
-            if let Some(Event::KeyPress(_)) = backend.try_read_event() {
-                break;
-            }
+        if !backend.poll_event(None)? {
+            continue;
+        }
+        let Some(ev) = backend.try_read_event() else {
+            continue;
+        };
+        backend.observe_event(&ev)?;
+        if let Event::KeyPress(_) = ev {
+            break;
         }
     }
     Ok(())
@@ -99,7 +104,49 @@ you use on a bare `Screen`, producing uncurses `Event` values. So your render
 layer is ratatui and your input layer is uncurses, each doing what it is best
 at. Features covered in the other guides, including [mouse input]({{< relref "mouse-input.md" >}}),
 [paste]({{< relref "handling-paste.md" >}}), [async events]({{< relref "async-events.md" >}}),
-and [terminal queries]({{< relref "querying-the-terminal.md" >}}), work through the backend's `Screen`.
+and [terminal queries]({{< relref "querying-the-terminal.md" >}}), work through the backend.
+
+{{< callout type="info" >}}
+Backend reads are pure, exactly like a raw `Screen`'s. Pass each event to
+`backend.observe_event(&ev)?` to keep capability tracking alive (mouse, kitty
+keyboard, in-band resize, truecolor, grapheme); skip it and reads still work. The
+`ratatui_*` examples show the pattern.
+{{< /callout >}}
+
+## Async input
+
+With the `async` feature, the backend exposes its own `event_stream()` for a
+`tokio::select!` loop. Like the sync reads it yields events without observing
+them, so pair it with `observe_event` to keep capability tracking alive:
+
+```rust
+use std::time::Duration;
+
+use tokio_stream::StreamExt;
+
+let mut events = terminal.backend_mut().event_stream();
+let mut tick = tokio::time::interval(Duration::from_millis(16));
+
+loop {
+    tokio::select! {
+        maybe = events.next() => {
+            let Some(ev) = maybe else { break };
+            let ev = ev?;
+            terminal.backend_mut().observe_event(&ev)?;
+            // handle input
+        }
+        _ = tick.tick() => {
+            terminal.draw(|frame| {
+                frame.render_widget("async ratatui", frame.area());
+            })?;
+        }
+    }
+}
+```
+
+The stream shares the screen's decoder by handle, so you can hold it and still
+call mutable backend methods in the same loop. See the [async events guide]({{<
+relref "async-events.md" >}}) for the full pattern.
 
 See the `ratatui_minimal` example for the smallest complete program, and browse
 the other `ratatui_*` examples for more, such as `ratatui_popup`,

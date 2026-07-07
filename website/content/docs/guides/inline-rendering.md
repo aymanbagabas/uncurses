@@ -25,9 +25,8 @@ use uncurses::text::TextSurface;
 fn main() -> std::io::Result<()> {
     let mut screen = Screen::stdio()?;
     screen.init()?; // inline, cursor visible, no alternate screen
-    screen.hide_cursor()?;
 
-    // Claim two rows right here at the cursor.
+    // Claim one content row plus one trailing blank row right here at the cursor.
     let w = screen.width();
     screen.resize((w, 2));
 
@@ -38,8 +37,8 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-There is no `enter_alt_screen` here. That single omission is the whole
-difference between an inline tool and a fullscreen one.
+There is no `enter_alt_screen` or `hide_cursor` here. Those are opt-in,
+fullscreen-style choices.
 
 ## Growing the region
 
@@ -61,7 +60,8 @@ the managed area instead of taking over the whole terminal.
 An inline prompt keeps the cursor visible, and you usually want it sitting on the
 character the user is editing, not wherever the last cell write happened to land.
 Stage it with `set_cursor_position` and every `render` parks the cursor there at
-the end of the frame:
+the end of the frame. Drawing and cursor coordinates are `(x, y)`, zero-based;
+terminal row and column reports are one-based.
 
 ```rust
 screen.set_str((0, 0), &line, Style::new());

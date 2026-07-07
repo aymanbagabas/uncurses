@@ -33,7 +33,12 @@ models that as a *wide* primary cell followed by a *continuation* placeholder
 for the second column. The continuation has no content of its own and reports
 width zero, because its column belongs to the wide cell on its left.
 
-<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(3, 2.2rem);"><span class="lbl">col:</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">row 1</span><span>世</span><span class="cont">cont</span><span>A</span></div><figcaption>One terminal row. The wide glyph <code>世</code> is a primary cell in column 1 with a zero-width continuation cell in column 2, and the narrow <code>A</code> sits in column 3.</figcaption></figure>
+| row / col | 1 | 2 | 3 |
+| --- | --- | --- | --- |
+| row 1 | 世 | cont | A |
+
+One terminal row. The wide glyph `世` is a primary cell in column 1 with a
+zero-width continuation cell in column 2, and the narrow `A` sits in column 3.
 
 The grid keeps the wide `世` and its *continuation* side by side as two cells.
 You almost never create a continuation by hand: writing a wide grapheme into a

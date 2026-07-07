@@ -9,7 +9,7 @@ maps those roles and shows when to reach for each one.
 
 ```mermaid
 flowchart TB
-  Screen["Screen<br/>managed session + diffing renderer"]
+  Screen["Screen<br/>managed session + diffed drawing"]
   Screen --> Terminal["Terminal<br/>raw mode, window size, I/O handles"]
   Screen --> EventSource["EventSource<br/>typed input decoder"]
   TextBuffer["TextBuffer<br/>off-screen cell grid"] --> Encode["Encode<br/>surface to escape bytes"]
@@ -18,13 +18,13 @@ flowchart TB
 uncurses gives you two common routes. `Screen` manages a terminal session: it
 owns the terminal, decodes input, and diffs frames so only changed cells hit the
 wire. `TextBuffer` is for off-screen output: you paint whole frames and serialize
-them to bytes yourself, with no session and no renderer involved. `Terminal` and
+them to bytes yourself, with no session involved. `Terminal` and
 `EventSource` are the pieces `Screen` uses for raw-mode terminal access and
 input decoding, and you can use them directly when that is the right fit.
 
 ## Screen
 
-The managed terminal session and home of the diffing renderer. `Screen` owns a
+The managed terminal session and home of diffed drawing. `Screen` owns a
 `Terminal` and an `EventSource`, tracks what is currently on the terminal across
 frames, and emits only the cells that changed. It also handles raw mode,
 capability detection, a sensible set of default modes, and teardown. Drive it
@@ -47,8 +47,8 @@ not sure which layer you want, it is this one.
 An off-screen frame buffer. A `TextBuffer`, or any [surface]({{< relref
 "../concepts/surfaces.md" >}}) grid, is a structured grid of cells you paint
 complete frames into and compose before sending them anywhere. There is no
-renderer, no diffing, and no terminal session; it owns neither input nor output,
-so it never touches raw mode. When a frame is ready, the
+diffing and no terminal session; it owns neither input nor output, so it never
+touches raw mode. When a frame is ready, the
 [`Encode`](/api/uncurses/text/trait.Encode.html) trait serializes it to bytes you
 write wherever you like: a terminal, a pipe, a file, or a string.
 
@@ -99,9 +99,12 @@ Three ways to pull events: `read()` blocks until one arrives, `poll(timeout)`
 waits until one is queued or the timeout expires, and `try_read()` returns the
 next queued event without blocking. With the `async` feature, `into_stream()`
 turns the source into an `EventStream`. On `Screen`, these are spelled
-`read_event`, `poll_event`, and `try_read_event`. Reach for a bare `EventSource`
-when you need decoded terminal input on its own, separate from the renderer and
-session that `Screen` bundles around it.
+`read_event`, `poll_event`, and `try_read_event`, with `event_stream()` for async
+loops over the screen's own decoder. Screen event reads are pure: feeding each
+one to `screen.observe_event(&ev)?` is optional and keeps capability detection,
+resize handling, and discovery defaults alive, and skipping it still reads fine.
+Reach for a bare `EventSource` when you need decoded terminal input on its own,
+separate from the drawing and session that `Screen` bundles around it.
 
 ## Terminal
 
