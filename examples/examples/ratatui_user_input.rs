@@ -95,7 +95,11 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         if !events.poll_event(None)? {
             continue;
         }
-        let Some(Event::KeyPress(key)) = events.try_read_event() else {
+        let Some(ev) = events.try_read_event() else {
+            continue;
+        };
+        events.observe_event(&ev)?;
+        let Event::KeyPress(key) = ev else {
             continue;
         };
         match app.input_mode {

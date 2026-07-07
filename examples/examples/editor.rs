@@ -40,7 +40,9 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     render(screen, &text, &status);
 
     loop {
-        match screen.read_event()? {
+        let ev = screen.read_event()?;
+        screen.observe_event(&ev)?;
+        match ev {
             Event::KeyPress(Key {
                 code: KeyCode::Char('q'),
                 ..

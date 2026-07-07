@@ -76,6 +76,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
         // everything decoded so far as `AppEvent::Term`.
         if screen.poll_event(Some(POLL))? {
             while let Some(ev) = screen.try_read_event() {
+                screen.observe_event(&ev)?;
                 if let Event::KeyPress(ref k) = ev
                     && quit.contains(k)
                 {

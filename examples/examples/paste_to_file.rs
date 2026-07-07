@@ -108,7 +108,9 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     render(screen, last.as_ref());
 
     loop {
-        match screen.read_event()? {
+        let ev = screen.read_event()?;
+        screen.observe_event(&ev)?;
+        match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::PasteStart => sink = Some(PasteSink::new()),
             Event::PasteChunk(bytes) => {

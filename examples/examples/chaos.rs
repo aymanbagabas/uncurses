@@ -126,6 +126,7 @@ impl App {
                     None
                 }
             } {
+                self.screen.observe_event(&ev)?;
                 match ev {
                     Event::KeyPress(Key {
                         code: KeyCode::Escape,
