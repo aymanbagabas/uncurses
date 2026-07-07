@@ -335,6 +335,17 @@ where
         self.waker.clone()
     }
 
+    /// Return a clone of the shared [`Poller`] handle.
+    ///
+    /// The poller is `Arc`-wrapped so a waiter thread can block on readiness
+    /// without holding the source mutex. Both the underlying epoll and kqueue
+    /// registrations are level-triggered, so a concurrent poll from a waiter
+    /// and a subsequent drain from the owner both observe the same readiness.
+    #[cfg(feature = "async")]
+    pub(super) fn poller(&self) -> Arc<dyn Poller> {
+        Arc::clone(&self.poller)
+    }
+
     /// Return whether out-of-band resize handling is enabled.
     ///
     /// On Unix, `true` means a readable SIGWINCH pipe can produce

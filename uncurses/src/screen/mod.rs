@@ -33,7 +33,8 @@
 //! screen.enter_alt_screen()?;
 //! screen.set_str((0, 0), "hello", Style::default());
 //! screen.render()?;
-//! let _event = screen.read_event()?;
+//! let event = screen.read_event()?;
+//! screen.observe_event(&event)?; // keep capability tracking alive
 //! screen.finish()?; // restore the terminal
 //! # Ok(())
 //! # }
@@ -154,9 +155,9 @@ where
     source: Arc<Mutex<EventSource<I>>>,
     state: state::State,
     /// Terminal capabilities detected by intercepting the replies to the
-    /// queries [`Self::init`] fires. Capability-report events are absorbed
-    /// by the event delegates and applied as side effects rather than
-    /// surfaced to the caller.
+    /// queries [`Self::init`] fires. Reads are pure; capability-report events
+    /// are recorded here only when the caller feeds them back through
+    /// [`Self::observe_event`].
     caps: Capabilities,
     /// Desired default behaviors, set by [`Self::init_with`].
     options: ScreenOptions,
@@ -789,37 +790,76 @@ where
     }
 
     // --- Event delegates -------------------------------------------------
+    //
+    // These are pure input reads: they lock the shared source, move bytes,
+    // and hand back events. They do NOT track capabilities. Feed every event
+    // you take back through [`observe_event`](Self::observe_event) so resize
+    // handling and the discovery-driven defaults still apply — the sync and
+    // async ([`event_stream`](Self::event_stream)) paths follow the same rule.
 
     /// Drive the input source for up to `timeout`, returning whether any
-    /// event became available. See [`EventSource::poll`].
-    pub fn poll_event(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+    /// event became available. A pure readiness wait: no capability tracking.
+    /// See [`EventSource::poll`].
+    pub fn poll_event(&self, timeout: Option<Duration>) -> io::Result<bool> {
         self.source.lock().unwrap().poll(timeout)
     }
 
-    /// Take the next queued event without doing I/O. Capability reports are
-    /// recorded as a side effect but still returned. See
-    /// [`EventSource::try_read`].
-    pub fn try_read_event(&mut self) -> Option<Event> {
-        let ev = self.source.lock().unwrap().try_read()?;
-        // A failed flush while applying discovery-driven defaults is
-        // best-effort here; it resurfaces on the next explicit flush.
-        let _ = self.observe(&ev);
-        Some(ev)
+    /// Take the next queued event without doing I/O. A pure read: pass the
+    /// event to [`observe_event`](Self::observe_event) to keep capability
+    /// tracking alive. See [`EventSource::try_read`].
+    pub fn try_read_event(&self) -> Option<Event> {
+        self.source.lock().unwrap().try_read()
     }
 
-    /// Block until the next event. Capability reports are recorded as a
-    /// side effect but still returned. See [`EventSource::read`].
-    pub fn read_event(&mut self) -> io::Result<Event> {
-        let ev = self.source.lock().unwrap().read()?;
-        self.observe(&ev)?;
-        Ok(ev)
+    /// Block until the next event. A pure read: pass the event to
+    /// [`observe_event`](Self::observe_event) to keep capability tracking
+    /// alive. See [`EventSource::read`].
+    pub fn read_event(&self) -> io::Result<Event> {
+        self.source.lock().unwrap().read()
     }
 
     /// Return an event to the front of the input queue, so the next
     /// [`read_event`](Self::read_event) / [`try_read_event`](Self::try_read_event)
     /// yields it before anything already queued. See [`EventSource::unread`].
-    pub fn unread_event(&mut self, event: Event) {
+    pub fn unread_event(&self, event: Event) {
         self.source.lock().unwrap().unread(event);
+    }
+
+    /// A shared handle to the input source behind
+    /// [`read_event`](Self::read_event) and friends, for driving input from a
+    /// separate reader over the same decoder rather than a second one racing
+    /// the same file descriptor.
+    ///
+    /// The main use is async input: build an
+    /// [`EventStream`](crate::event::EventStream) with
+    /// [`EventStream::from_shared`](crate::event::EventStream::from_shared) from
+    /// this handle and poll it on your executor. Like every read path, it is
+    /// pure — feed each event back through [`observe_event`](Self::observe_event)
+    /// to keep capability tracking alive.
+    ///
+    /// Sharing one source between a live reader and the screen's own
+    /// [`read_event`](Self::read_event) is best-effort: an event goes to
+    /// whichever consumer drains it first, so pick one reader in steady state.
+    pub fn event_source(&self) -> Arc<Mutex<EventSource<I>>> {
+        Arc::clone(&self.source)
+    }
+
+    /// Build an async [`EventStream`](crate::event::EventStream) over this
+    /// screen's input, for reading events with `events.next().await` inside a
+    /// `select!` on any executor. The stream shares the screen's decoder, so it
+    /// does not race a second reader on the same file descriptor.
+    ///
+    /// Reads are pure: feed each event to [`observe_event`](Self::observe_event)
+    /// to keep capability tracking alive, exactly as the sync path does. Read
+    /// through the stream *or* through [`read_event`](Self::read_event) in
+    /// steady state, not both at once: a shared source hands each event to
+    /// whichever consumer drains it first.
+    #[cfg(feature = "async")]
+    pub fn event_stream(&self) -> crate::event::EventStream<I>
+    where
+        I: 'static,
+    {
+        crate::event::EventStream::from_shared(Arc::clone(&self.source))
     }
 
     /// Consume any still-pending replies to the capability queries
@@ -849,13 +889,14 @@ where
                 break;
             }
             // Wait up to the remaining budget for input, then decode whatever
-            // arrived. `try_read_event` runs `observe`, which flips
-            // `defaults_applied` on the Primary DA reply that terminates the
-            // capability-reply stream.
+            // arrived. Reads are pure now, so observe each event explicitly;
+            // `observe_event` flips `defaults_applied` on the Primary DA reply
+            // that terminates the capability-reply stream.
             if !self.poll_event(Some(remaining))? {
                 break;
             }
-            while self.try_read_event().is_some() {
+            while let Some(ev) = self.try_read_event() {
+                let _ = self.observe_event(&ev);
                 if self.defaults_applied {
                     break;
                 }
@@ -910,12 +951,47 @@ where
         ))
     }
 
-    /// Observe an event as it passes to the caller. Capability-report
-    /// replies to the queries [`Self::init`] fires are recorded, and the
-    /// render-affecting ones applied; the event is never consumed. On the
-    /// terminating Primary DA reply, the discovery-driven defaults from the
-    /// active [`ScreenOptions`] are applied (once).
-    fn observe(&mut self, event: &Event) -> io::Result<()> {
+    /// Apply an event to the screen's capability tracking. The event is
+    /// inspected, never consumed.
+    ///
+    /// Reads are pure: [`read_event`](Self::read_event),
+    /// [`try_read_event`](Self::try_read_event), and the async
+    /// [`event_stream`](Self::event_stream) all hand back events *without*
+    /// tracking capabilities. Pass every event you receive here — on both the
+    /// sync and async paths — so capability detection stays alive.
+    ///
+    /// Capability-report replies to the queries [`init`](Self::init) fires are
+    /// recorded into [`capabilities`](Self::capabilities), window-size reports
+    /// update [`window_cells`](Self::window_cells) /
+    /// [`window_pixels`](Self::window_pixels), and the render-affecting reports
+    /// are applied. On the terminating Primary DA reply, the discovery-driven
+    /// defaults from the active [`ScreenOptions`] are applied once (enabling
+    /// mouse, keyboard enhancements, and in-band resize as configured), which
+    /// may emit escapes to the terminal.
+    ///
+    /// ```ignore
+    /// // Sync loop: read, observe, handle, render.
+    /// loop {
+    ///     let ev = screen.read_event()?;
+    ///     screen.observe_event(&ev)?; // keep capability tracking alive
+    ///     // ... handle ev ...
+    ///     screen.render()?;
+    /// }
+    /// ```
+    ///
+    /// ```ignore
+    /// // Async loop: same contract over an EventStream.
+    /// use tokio_stream::StreamExt;
+    ///
+    /// let mut events = screen.event_stream();
+    /// while let Some(ev) = events.next().await {
+    ///     let ev = ev?;
+    ///     screen.observe_event(&ev)?; // keep capability tracking alive
+    ///     // ... handle ev ...
+    ///     screen.render()?;
+    /// }
+    /// ```
+    pub fn observe_event(&mut self, event: &Event) -> io::Result<()> {
         use crate::ansi::mode::Mode;
         match *event {
             Event::ModeReport { mode, setting } if setting.is_available() => match mode {
