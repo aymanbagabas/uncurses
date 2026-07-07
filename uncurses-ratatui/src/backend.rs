@@ -112,9 +112,10 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 ///
 /// Use [`poll_event`](Self::poll_event),
 /// [`try_read_event`](Self::try_read_event), and [`read_event`](Self::read_event)
-/// for synchronous loops. They delegate to the screen, whose event path also
-/// observes terminal capability reports. With the `async` feature, borrow the
-/// screen with [`screen_mut`](Self::screen_mut) and use its `events()` stream.
+/// for synchronous loops, or [`event_stream`](Self::event_stream) with the
+/// `async` feature. Every read is pure, exactly like [`Screen`]'s: call
+/// [`observe_event`](Self::observe_event) on each event to keep capability
+/// tracking alive, or skip it and reads still work.
 ///
 /// ## Setup
 ///
@@ -321,8 +322,9 @@ where
     ///
     /// Use this for screen operations not surfaced by the backend: setting
     /// screen modes, using the alternate screen directly, configuring renderer
-    /// options, manual rendering, or accessing the async `events()` stream when
-    /// the feature is enabled.
+    /// options, or manual rendering. For the async event stream, prefer the
+    /// backend's own [`event_stream`](Self::event_stream) paired with
+    /// [`observe_event`](Self::observe_event).
     ///
     /// ## Returns
     ///
@@ -374,9 +376,9 @@ where
 
     /// Try to read the next queued event without blocking.
     ///
-    /// This delegates to [`Screen::try_read_event`]. If an event is queued, the
-    /// screen observes it for capability-tracking side effects before returning
-    /// it to the caller.
+    /// This delegates to the wrapped [`Screen`]'s pure read. Feed the returned
+    /// event to [`observe_event`](Self::observe_event) if you want capability
+    /// tracking; skipping it still reads fine.
     ///
     /// ## Returns
     ///
@@ -396,8 +398,9 @@ where
 
     /// Block until the next event is available.
     ///
-    /// This delegates to [`Screen::read_event`]. The screen observes the event
-    /// for capability-tracking side effects before returning it.
+    /// This delegates to the wrapped [`Screen`]'s pure read. Feed the returned
+    /// event to [`observe_event`](Self::observe_event) if you want capability
+    /// tracking; skipping it still reads fine.
     ///
     /// ## Returns
     ///
@@ -405,8 +408,7 @@ where
     ///
     /// ## Errors
     ///
-    /// Returns I/O errors from the input source or from applying
-    /// discovery-driven screen defaults triggered by capability replies.
+    /// Returns I/O errors from the input source.
     ///
     /// ## Panics
     ///
@@ -414,11 +416,50 @@ where
     ///
     /// ## Usage note
     ///
-    /// Use this for simple blocking event loops. Use the screen's async event
-    /// stream instead when the `async` feature is enabled and the application is
-    /// already asynchronous.
+    /// Use this for simple blocking event loops. Use
+    /// [`event_stream`](Self::event_stream) instead when the `async` feature is
+    /// enabled and the application is already asynchronous.
     pub fn read_event(&mut self) -> io::Result<Event> {
         self.screen.read_event()
+    }
+
+    /// Feed an event back through the wrapped [`Screen`] for capability
+    /// tracking.
+    ///
+    /// Reads on this backend are pure, exactly like [`Screen`]'s. Call this once
+    /// per event, on both the sync ([`read_event`](Self::read_event),
+    /// [`try_read_event`](Self::try_read_event)) and async
+    /// ([`event_stream`](Self::event_stream)) paths, to keep capability
+    /// detection, resize handling, and discovery-driven defaults alive. Skip it
+    /// and reads still work, you just forgo those upgrades.
+    ///
+    /// ## Errors
+    ///
+    /// Returns I/O errors from applying discovery-driven screen defaults
+    /// triggered by capability replies.
+    pub fn observe_event(&mut self, event: &Event) -> io::Result<()> {
+        self.screen.observe_event(event)
+    }
+
+    /// Build an async [`EventStream`](uncurses::event::EventStream) over the
+    /// wrapped screen's input.
+    ///
+    /// The stream shares the screen's decoder, so it does not race the sync read
+    /// methods on the same file descriptor. Like every read on this backend it
+    /// yields events without observing them; pair it with
+    /// [`observe_event`](Self::observe_event) in your `select!` loop to keep
+    /// capability tracking alive.
+    ///
+    /// ## Returns
+    ///
+    /// An owned `EventStream` you can hold alongside `&mut self` (it shares the
+    /// source by handle rather than borrowing the backend).
+    #[cfg(feature = "async")]
+    pub fn event_stream(&self) -> uncurses::event::EventStream<I>
+    where
+        I: 'static,
+    {
+        self.screen.event_stream()
     }
 }
 
@@ -487,11 +528,10 @@ where
 
     /// Restore terminal state after a backend-managed session.
     ///
-    /// This delegates to [`Screen::pause`]. The screen stops any async event
-    /// stream, tears down staged modes, resets buffer-controlled state such as
-    /// alternate screen and cursor visibility, flushes pending output, and
-    /// restores the terminal mode while keeping the screen available for future
-    /// use.
+    /// This delegates to [`Screen::pause`]. It tears down staged modes, resets
+    /// buffer-controlled state such as alternate screen and cursor visibility,
+    /// flushes pending output, and restores the terminal mode while keeping the
+    /// screen available for future use.
     ///
     /// ## Returns
     ///

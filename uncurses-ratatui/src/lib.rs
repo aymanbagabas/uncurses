@@ -77,11 +77,13 @@
 //! The backend owns the same input source as the wrapped screen. Synchronous
 //! event loops can call [`UncursesBackend::poll_event`],
 //! [`UncursesBackend::try_read_event`], or [`UncursesBackend::read_event`] on
-//! `terminal.backend_mut()`. These methods also let the screen observe
-//! capability replies that arrive on the input stream.
+//! `terminal.backend_mut()`. These reads are pure, like
+//! [`Screen`](uncurses::screen::Screen)'s: pass each event to
+//! [`UncursesBackend::observe_event`] to keep capability tracking alive.
 //!
-//! With the `async` feature, use [`UncursesBackend::screen_mut`] and the
-//! screen's `events()` stream when an asynchronous loop is more convenient.
+//! With the `async` feature, use [`UncursesBackend::event_stream`] with
+//! [`UncursesBackend::observe_event`] when an asynchronous loop is more
+//! convenient.
 //!
 //! ## Manual setup
 //!
