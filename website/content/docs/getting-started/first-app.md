@@ -26,12 +26,11 @@ We will hang those four beats off a single `App` struct.
 ## Setting up
 
 `start` opens the screen, takes over the full terminal, and seeds the counter at
-zero. It also parses the quit keys once, up front, so the loop can compare
-against them cheaply.
+zero.
 
 ```rust
 use uncurses::color::Color;
-use uncurses::event::{Event, Key};
+use uncurses::event::Event;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -41,7 +40,6 @@ use uncurses::text::TextSurface;
 struct App {
     screen: Screen<Stdin, Stdout>,
     count: i64,
-    quit: [Key; 2],
 }
 
 impl App {
@@ -53,14 +51,13 @@ impl App {
         Ok(Self {
             screen,
             count: 0,
-            quit: ["q", "ctrl+c"].map(|s| s.parse().unwrap()),
         })
     }
 }
 ```
 
-`Key` parses from strings, so `"q"` and `"ctrl+c"` become real chords with no
-ceremony. We hold them in an array and ask `contains` later.
+Key matching accepts strings, so the loop can ask whether a key matches `"q"` or
+`"ctrl+c"` directly.
 
 ## Drawing a frame
 
@@ -101,16 +98,15 @@ impl App {
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
-        let up: Key = "up".parse().unwrap();
-        let down: Key = "down".parse().unwrap();
-        let reset: Key = "r".parse().unwrap();
-
         loop {
-            match self.screen.read_event()? {
-                Event::KeyPress(ref k) if self.quit.contains(k) => break,
-                Event::KeyPress(ref k) if *k == up => self.count += 1,
-                Event::KeyPress(ref k) if *k == down => self.count -= 1,
-                Event::KeyPress(ref k) if *k == reset => self.count = 0,
+            let ev = self.screen.read_event()?;
+            self.screen.observe_event(&ev)?;
+
+            match ev {
+                Event::KeyPress(ref k) if k.matches_any(["q", "ctrl+c"]) => break,
+                Event::KeyPress(ref k) if k.matches("up") => self.count += 1,
+                Event::KeyPress(ref k) if k.matches("down") => self.count -= 1,
+                Event::KeyPress(ref k) if k.matches("r") => self.count = 0,
                 Event::Resize(ws) => self.screen.resize((ws.col, ws.row)),
                 _ => continue,
             }
@@ -120,6 +116,13 @@ impl App {
     }
 }
 ```
+
+{{< callout type="info" >}}
+Raw `Screen` reads are pure. After `read_event`, `try_read_event`, or `poll_event`,
+feeding the event to [`screen.observe_event(&ev)?`](/api/uncurses/screen/struct.Screen.html#method.observe_event)
+is optional; it keeps capability detection, resize handling, and discovery
+defaults alive, and skipping it still reads fine.
+{{< /callout >}}
 
 The `continue` on the catch-all arm skips the redraw for events we ignore, so the
 terminal only repaints when the frame would actually differ.

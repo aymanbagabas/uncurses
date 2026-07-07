@@ -18,5 +18,5 @@ reasoning behind the model, and use **Guides** when you have a specific task.
   {{< card link="getting-started/" title="Getting Started" subtitle="Install uncurses, write hello world, and learn the layers." >}}
   {{< card link="concepts/" title="Concepts" subtitle="Terminals, cells, buffers, width, surfaces, events, and the screen." >}}
   {{< card link="guides/" title="Guides" subtitle="How-to walkthroughs for inline rendering, mouse input, paste handling, async events, and more." >}}
-  {{< card link="/api/" title="API reference" subtitle="Generated rustdoc for all public modules and types." >}}
+  {{< card link="/api/uncurses/" title="API reference" subtitle="Generated rustdoc for all public modules and types." >}}
 {{< /cards >}}

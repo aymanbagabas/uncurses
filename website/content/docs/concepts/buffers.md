@@ -14,7 +14,14 @@ the top-left corner. `x` grows to the right, `y` grows downward. A brand-new
 buffer is full of [blank cells]({{< relref "cells.md" >}}), ready to paint
 over.
 
-<figure class="term-fig"><div class="term-grid" style="grid-template-columns: auto repeat(6, 2.2rem);"><span class="lbl">col:</span><span class="lbl">1</span><span class="lbl">2</span><span class="lbl">3</span><span class="lbl">4</span><span class="lbl">5</span><span class="lbl">6</span><span class="lbl">row 1 (y=0)</span><span>H</span><span>i</span><span></span><span></span><span></span><span></span><span class="lbl">row 2 (y=1)</span><span></span><span></span><span></span><span></span><span></span><span></span><span class="lbl">row 3 (y=2)</span><span></span><span></span><span></span><span></span><span></span><span></span></div><figcaption>A six-by-three cell buffer with <code>Hi</code> painted at the top-left; every other slot is a blank cell.</figcaption></figure>
+| row / col | 1 | 2 | 3 | 4 | 5 | 6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| row 1 (y=0) | H | i |  |  |  |  |
+| row 2 (y=1) |  |  |  |  |  |  |
+| row 3 (y=2) |  |  |  |  |  |  |
+
+A six-by-three cell buffer with `Hi` painted at the top-left; every other slot
+is a blank cell.
 
 This is exactly how a terminal emulator thinks of its own screen: not a bag of
 pixels, but a grid of character cells it repaints as text arrives. A buffer is

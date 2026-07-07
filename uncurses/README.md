@@ -2,7 +2,7 @@
 
 A terminal toolkit library for Rust. It hands you the building blocks for a
 terminal UI and gets out of the way: no terminfo, no widget tree, no hidden
-global state, no framework. Just a modern VT100/xterm-style terminal, talked to
+global state, no framework. Just a modern VT100/xterm-compatible terminal, talked to
 directly.
 
 ## Docs
@@ -34,11 +34,21 @@ fn main() -> std::io::Result<()> {
     screen.render()?;
 
     let q: Key = "q".parse().unwrap();
-    while !matches!(screen.read_event()?, Event::KeyPress(k) if k == q) {}
+    loop {
+        let ev = screen.read_event()?;
+        screen.observe_event(&ev)?;
+        if matches!(ev, Event::KeyPress(k) if k == q) {
+            break;
+        }
+    }
 
     screen.finish() // restore the terminal, always, one call
 }
 ```
+
+`observe_event` is opt-in. Skip it and reads still work; you only forgo
+capability tracking for mouse, kitty keyboard, in-band resize, truecolor, and
+grapheme support.
 
 ## Install
 
@@ -53,16 +63,16 @@ Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
 the latest stable Rust (currently 1.88 or newer).
 
 Features: `unicode-rs` *(default)* for width and segmentation, `icu` for
-ICU4X-backed correctness, and `async` for a runtime-agnostic
-`futures_core::Stream` of events (a low-level `EventStream` over an
-`EventSource`).
+ICU4X-backed correctness, and `async` for runtime-agnostic `event_stream()`,
+an owned `futures_core::Stream` over the screen's own decoder with no executor
+dependency.
 
 ## Credits
 
 - [ncurses](https://invisible-island.net/ncurses/): the original the name winks
   at, minus the terminfo baggage.
 - [ultraviolet](https://github.com/charmbracelet/ultraviolet): Charm's
-  low-level terminal library, the inspiration for the cell and screen model.
+  terminal library, the inspiration for the cell and screen model.
 - [colorprofile](https://github.com/charmbracelet/colorprofile): Charm's color
   degradation library, the model behind uncurses color profiles.
 - [ratatui](https://ratatui.rs): the Rust TUI framework, wired up through

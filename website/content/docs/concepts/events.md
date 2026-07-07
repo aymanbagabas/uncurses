@@ -21,10 +21,8 @@ flowchart TB
   event --> loop["Your event loop"]
 ```
 
-The decoder is the clever part. Escape sequences can straddle reads, so it
-buffers partial input, and it uses a short timeout to tell a lone `Esc` key
-apart from the start of a longer sequence like an arrow key. You never see the
-half-parsed middle; you get whole events.
+Escape sequences can straddle reads, so the decoder buffers partial input and
+returns whole events. You never see the half-parsed middle.
 
 ## What an event can be
 
@@ -94,6 +92,19 @@ Input is one half of an interactive program; drawing into a
 [surface]({{< relref "surfaces.md" >}}) is the other. The
 [Screen]({{< relref "screen.md" >}}) owns an event source and a drawing
 surface together, so most apps use `read_event`, `poll_event`, and
-`try_read_event` on `Screen`. `Screen` has no async API right now; the `async`
-feature exposes only a low-level [`EventStream`]({{< relref
-"../guides/async-events.md" >}}) over an `EventSource`.
+`try_read_event` on `Screen`.
+
+{{< callout type="info" >}}
+`Screen` reads are pure. Passing each event to `screen.observe_event(&ev)?` is
+optional; it keeps runtime capability tracking for mouse defaults, kitty
+keyboard, in-band resize, truecolor, and grapheme handling. Skipping it still
+reads fine. The ratatui backend follows the same pure-read contract: read
+events, then call `backend.observe_event(&ev)?` yourself if you want tracking.
+{{< /callout >}}
+
+With the `async` feature, `Screen::event_stream()` returns a
+`futures_core::Stream` over the screen's own decoder, so it works with any
+executor. `Screen::event_source()` returns `Arc<Mutex<EventSource<_>>>` when you
+want the lower-level shared source. See the
+[`EventStream` guide]({{< relref "../guides/async-events.md" >}}) for the full
+async pattern.

@@ -9,31 +9,42 @@ Keyboard input arrives as key events. A press is `Event::KeyPress` carrying a
 `code` (which key), `modifiers` (Ctrl, Alt, Shift, and friends), and the optional
 `text` it would produce.
 
+{{< callout type="info" >}}
+Raw `Screen` reads are pure. Passing each event to `screen.observe_event(&ev)?`
+after `read_event`, `try_read_event`, or an async event stream is optional; it
+keeps capability detection, resize tracking, and discovery defaults alive, and
+skipping it still reads fine. The ratatui `UncursesBackend` follows the same contract.
+{{< /callout >}}
+
 ## Matching keys the easy way
 
-`Key` parses from strings, so the readable way to check a shortcut is to
-parse it once and compare. Equality compares the canonical chord, so this is
-exactly right for keybindings.
+For keybindings, check the shortcut text directly with `matches` or
+`matches_any`.
 
 ```rust
-use uncurses::event::{Event, Key};
+use uncurses::event::Event;
 
-let quit: Key = "ctrl+c".parse().unwrap();
-let help: Key = "f1".parse().unwrap();
+let ev = screen.read_event()?;
+screen.observe_event(&ev)?;
 
-match screen.read_event()? {
-    Event::KeyPress(ref k) if *k == quit => return Ok(()),
-    Event::KeyPress(ref k) if *k == help => show_help(),
+match ev {
+    Event::KeyPress(ref k) if k.matches("ctrl+c") => return Ok(()),
+    Event::KeyPress(ref k) if k.matches("f1") => show_help(),
     _ => {}
 }
 ```
 
 The grammar covers plain characters (`"q"`), named keys (`"enter"`, `"esc"`,
-`"up"`, `"f1"`), and modifier chords (`"ctrl+c"`, `"alt+shift+left"`). For quick
-checks against string patterns, use `matches` or `matches_any`:
+`"up"`, `"f1"`), and modifier chords (`"ctrl+c"`, `"alt+shift+left"`). Do not
+compare `k.to_string()` to binding strings; display is structural. Under the
+kitty keyboard protocol, a shifted glyph like `}` may display as `shift+]`, while
+`k.matches("}")` still matches the produced text.
 
 ```rust
-match screen.read_event()? {
+let ev = screen.read_event()?;
+screen.observe_event(&ev)?;
+
+match ev {
     Event::KeyPress(ref k) if k.matches_any(["q", "esc", "ctrl+c"]) => break,
     _ => {}
 }
@@ -48,7 +59,10 @@ When you want to branch on the key itself, match on `KeyCode` and inspect
 ```rust
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 
-match screen.read_event()? {
+let ev = screen.read_event()?;
+screen.observe_event(&ev)?;
+
+match ev {
     Event::KeyPress(Key { code: KeyCode::Char('q'), modifiers, .. })
         if modifiers.is_empty() => break,
     Event::KeyPress(Key { code: KeyCode::Char('c'), modifiers, .. })
@@ -82,7 +96,10 @@ means the key would type something, already in the right layout (`"!"` for
 `code`.
 
 ```rust
-if let Event::KeyPress(k) = screen.read_event()? {
+let ev = screen.read_event()?;
+screen.observe_event(&ev)?;
+
+if let Event::KeyPress(k) = ev {
     if let Some(text) = &k.text {
         buffer.push_str(text); // a printable key: insert what it typed
     }

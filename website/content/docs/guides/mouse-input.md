@@ -37,9 +37,10 @@ screen.enable_mouse(MouseTracking::MOTION)?; // motion on, pixels off
 screen.disable_mouse()?;
 ```
 
-Either way, the screen handles the terminal differences for you: it emits the
-requested mouse modes, and a terminal that cannot report pixels keeps reporting
-cells.
+Either way, the screen does not gate mouse setup on detected capabilities. It
+always requests 1000 + 1002 tracking and 1006 SGR encoding; `MOTION` also asks
+for 1003, and `PIXELS` also asks for 1016. Terminals ignore unsupported modes,
+so a terminal that cannot report pixels keeps reporting cells.
 
 ## Reading mouse events
 
@@ -51,7 +52,10 @@ and modifiers. A mouse event's `x` and `y` are plain `u16`, so build a
 use uncurses::event::{Event, MouseButton};
 use uncurses::layout::Position;
 
-match screen.read_event()? {
+let ev = screen.read_event()?;
+screen.observe_event(&ev)?;
+
+match ev {
     Event::MouseClick(m) => {
         let at = Position::new(m.x, m.y); // use m.button to inspect the button
     }
@@ -74,6 +78,15 @@ match screen.read_event()? {
 
 Positions are 0-based: `(0, 0)` is the top-left cell, `x` is the column and `y`
 is the row.
+
+{{< callout type="info" >}}
+Raw `Screen` reads are pure. After `read_event` or `try_read_event` gives you an
+event, passing it to `screen.observe_event(&ev)?` is optional; it keeps
+capability detection, resize tracking, and discovery defaults alive, and skipping
+it still reads fine. `query_capabilities` is the `ScreenOptions` field that
+controls whether init sends those probes. The ratatui backend follows the same
+pure-read contract.
+{{< /callout >}}
 
 ## Hit testing
 
@@ -105,7 +118,8 @@ like dragging a graphic. Two things change, and the screen helps with both.
 
 First, find out whether you are actually getting pixels. The terminal may not
 support the request, in which case you quietly keep getting cells.
-`screen.capabilities()` tells you which you got:
+After the capability replies have been observed, `screen.capabilities()` tells
+you which you got:
 
 ```rust
 let pixel_mode = screen.capabilities().mouse_sgr_pixel;

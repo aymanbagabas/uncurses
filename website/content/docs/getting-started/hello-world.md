@@ -24,7 +24,13 @@ fn main() -> std::io::Result<()> {
     screen.render()?;
 
     let q: Key = "q".parse().unwrap();
-    while !matches!(screen.read_event()?, Event::KeyPress(k) if k == q) {}
+    loop {
+        let ev = screen.read_event()?;
+        screen.observe_event(&ev)?;
+        if matches!(ev, Event::KeyPress(k) if k == q) {
+            break;
+        }
+    }
 
     screen.finish()
 }
@@ -70,7 +76,7 @@ screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
 screen.render()?;
 ```
 
-`set_str` paints text at a column and row into an in-memory frame. Nothing
+`set_str` paints text at an x/y position into an in-memory frame. Nothing
 reaches the terminal until `render()`, which diffs the new frame against what is
 already on screen and writes only the difference. Painting cannot fail; only
 `render()` talks to the terminal, so only `render()` returns a `Result`.
@@ -79,12 +85,20 @@ already on screen and writes only the difference. Painting cannot fail; only
 
 ```rust
 let q: Key = "q".parse().unwrap();
-while !matches!(screen.read_event()?, Event::KeyPress(k) if k == q) {}
+loop {
+    let ev = screen.read_event()?;
+    screen.observe_event(&ev)?;
+    if matches!(ev, Event::KeyPress(k) if k == q) {
+        break;
+    }
+}
 ```
 
 `read_event()` blocks until something happens: a keypress, a resize, a paste.
-Here we loop until that something is the `q` key. Keys parse from strings, so
-`"q"`, `"ctrl+c"`, and `"f1"` all just work.
+Passing each event to `observe_event()` is optional; it lets the screen keep
+terminal discovery and resize state current, and skipping it still reads fine.
+Here we loop until that event is the `q` key. Keys parse from strings, so `"q"`,
+`"ctrl+c"`, and `"f1"` all just work.
 
 **Put the terminal back.**
 
@@ -119,7 +133,13 @@ fn main() -> std::io::Result<()> {
     screen.render()?;
 
     let q: Key = "q".parse().unwrap();
-    while !matches!(screen.read_event()?, Event::KeyPress(k) if k == q) {}
+    loop {
+        let ev = screen.read_event()?;
+        screen.observe_event(&ev)?;
+        if matches!(ev, Event::KeyPress(k) if k == q) {
+            break;
+        }
+    }
 
     screen.finish()
 }

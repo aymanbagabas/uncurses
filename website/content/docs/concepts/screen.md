@@ -47,7 +47,9 @@ fn main() -> std::io::Result<()> {
     loop {
         screen.set_str((0, 0), "Press q to quit", Style::default());
         screen.render()?;                              // diff against the terminal, flush
-        if let Event::KeyPress(key) = screen.read_event()? {
+        let ev = screen.read_event()?;                  // pure read, no capability tracking
+        screen.observe_event(&ev)?;                     // optional capability tracking
+        if let Event::KeyPress(key) = ev {
             if key.code == KeyCode::Char('q') {
                 break;
             }
@@ -61,6 +63,19 @@ fn main() -> std::io::Result<()> {
 query replies, resets modes and the managed area, then restores the terminal.
 Bracket every session with `init` and `finish` so the user's shell is handed
 back cleanly.
+
+{{< callout type="info" >}}
+[`Screen::read_event`](/api/uncurses/screen/struct.Screen.html#method.read_event),
+[`Screen::try_read_event`](/api/uncurses/screen/struct.Screen.html#method.try_read_event),
+[`Screen::poll_event`](/api/uncurses/screen/struct.Screen.html#method.poll_event),
+and [`Screen::event_stream`](/api/uncurses/screen/struct.Screen.html#method.event_stream)
+are pure reads: they do not update capabilities, resize state, or discovery
+defaults. Feeding each event through
+[`screen.observe_event(&ev)?`](/api/uncurses/screen/struct.Screen.html#method.observe_event)
+is optional; it keeps runtime tracking for mouse, kitty keyboard, in-band
+resize, truecolor, and grapheme support alive. Skipping it still reads fine.
+ratatui's backend follows the same pure-read contract.
+{{< /callout >}}
 
 ## Drawing is a diff
 

@@ -98,16 +98,13 @@ the inline state, so the cells after it fall back to your base rather than to
 the terminal default. Had you passed `Style::new().fg(Color::Blue)` above,
 "back to plain" would return blue, not colorless.
 
-The painter keeps no style of its own between calls: every `set_str` starts
-fresh from the base you hand it, so calls never bleed into each other. It owns
-no cells and has no side effects when dropped, so a one-shot
-`Painter::new(&mut surface).set_str(..)` is perfectly idiomatic.
+The painter keeps no style between calls: every `set_str` starts fresh from the
+base you hand it, so calls never bleed into each other.
 
 ## Hyperlinks
 
 A `Style` can carry an OSC 8 hyperlink with `Style::link`. Any rendered cell
-whose style has a link opens the hyperlink automatically, and the diffing
-renderer closes or changes the OSC 8 span as the link changes from cell to cell.
+whose style has a link becomes clickable in terminals that support OSC 8.
 
 ```rust
 let docs = Style::new()
@@ -127,7 +124,7 @@ lines; the exact presentation is terminal-dependent.
 
 Off the grid, a `Style` also implements `Display`: formatting it writes the
 opener, which is any SGR sequence plus an OSC 8 start if the style carries a
-link. The alternate form `{style:#}` writes the matching closer, so styled
+link. The alternate form `{style:#}` writes that style's closer, so styled
 `println!` follows an open/close pattern with a single value:
 
 ```rust
@@ -142,8 +139,8 @@ the opener to the closer, so `{bold:#}` means "close this style".
 
 The opener is additive, so an empty style writes nothing. The closer only emits
 what it needs: an SGR-only style closes with `CSI m`, while a linked style also
-writes the OSC 8 terminator. The closer resets to defaults rather than restoring
-a previously active style, so wrap each span with its own style.
+writes the OSC 8 terminator. The closer resets that span to defaults; it does
+not restore an outer style or the terminal's previous state.
 
 This works with any `io::Write` too, since `write!` forwards `Display`:
 
