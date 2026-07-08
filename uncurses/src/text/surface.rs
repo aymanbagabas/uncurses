@@ -28,7 +28,7 @@ use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 use crate::style::Style;
 
-use super::{WidthMode, WrapMode, grapheme_widths};
+use super::{WidthMode, WrapMode, grapheme_cells};
 
 /// A [`SurfaceMut`] with a text-measurement policy and string-painting helpers.
 ///
@@ -336,7 +336,7 @@ pub trait TextSurface: SurfaceMut {
     ///
     /// This method does not fail or intentionally panic.
     fn str_width(&self, s: &str) -> u16 {
-        self.grapheme_widths(s)
+        self.grapheme_cells(s)
             .fold(0u16, |acc, (_, w)| acc.saturating_add(u16::from(w)))
     }
 
@@ -372,8 +372,8 @@ pub trait TextSurface: SurfaceMut {
     /// # Errors and panics
     ///
     /// This method does not fail or intentionally panic.
-    fn grapheme_widths<'a>(&self, s: &'a str) -> impl Iterator<Item = (&'a str, u8)> {
-        grapheme_widths(s, self.width_mode(), self.eaw_wide())
+    fn grapheme_cells<'a>(&self, s: &'a str) -> impl Iterator<Item = (&'a str, u8)> {
+        grapheme_cells(s, self.width_mode(), self.eaw_wide())
     }
 }
 
@@ -422,7 +422,7 @@ fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
     if clip.is_empty() {
         return start;
     }
-    let tail_w = grapheme_widths(tail_text, mode, eaw_wide)
+    let tail_w = grapheme_cells(tail_text, mode, eaw_wide)
         .fold(0u16, |acc, (_, w)| acc.saturating_add(u16::from(w)));
     let tail = if tail_w == 0 || tail_w > clip.width {
         None
@@ -464,7 +464,7 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
     let mut x = start.x;
     let mut y = start.y;
 
-    for (cluster, w) in grapheme_widths(s, mode, eaw_wide) {
+    for (cluster, w) in grapheme_cells(s, mode, eaw_wide) {
         if cluster == "\n" {
             y = y.saturating_add(1);
             x = clip.left();
