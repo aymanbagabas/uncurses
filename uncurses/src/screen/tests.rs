@@ -204,7 +204,7 @@ fn grapheme_width_and_cells_use_screen_policy() {
     // Grapheme mode honours VS15 → text presentation, one column.
     assert_eq!(screen.grapheme_width("\u{270b}\u{fe0e}"), 1);
 
-    let cells: Vec<_> = screen.grapheme_cells("Ae\u{0301}中").collect();
+    let cells: Vec<_> = screen.grapheme_widths("Ae\u{0301}中").collect();
     assert_eq!(cells, vec![("A", 1), ("e\u{0301}", 1), ("中", 2)]);
 }
 

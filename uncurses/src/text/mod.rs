@@ -11,7 +11,7 @@
 //! Terminal layout is expressed in cells, not bytes or scalar values. The
 //! width API therefore separates **segmentation** from **measurement**:
 //!
-//! * [`grapheme_cells`] always walks a string as extended grapheme clusters.
+//! * [`grapheme_widths`] always walks a string as extended grapheme clusters.
 //! * [`WidthMode::Wc`] measures each cluster by its first code point.
 //! * [`WidthMode::Grapheme`] measures the whole cluster with
 //!   [`grapheme_width`], including variation selectors, regional indicators,
@@ -76,7 +76,7 @@ mod surface;
 mod width;
 
 pub use display::{Encode, SurfaceDisplay};
-pub use mode::{WidthMode, WrapMode, grapheme_cells};
+pub use mode::{WidthMode, WrapMode, grapheme_widths};
 pub use painter::Painter;
 pub use surface::TextSurface;
 pub use width::{char_width, grapheme_width};

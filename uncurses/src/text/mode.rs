@@ -1,7 +1,7 @@
 //! Width-measurement and wrapping policy, plus grapheme-cell iteration.
 //!
 //! Strings are always segmented into extended grapheme clusters by
-//! [`grapheme_cells`]. [`WidthMode`] changes only how each cluster's cell width
+//! [`grapheme_widths`]. [`WidthMode`] changes only how each cluster's cell width
 //! is computed: by the first code point (`Wc`) or by cluster-aware Unicode
 //! presentation rules (`Grapheme`). [`WrapMode`] controls what happens when a
 //! cluster would run past the right edge of a clip rectangle.
@@ -12,7 +12,7 @@ use super::width::{char_width, grapheme_width};
 
 /// How grapheme clusters are measured for terminal-cell layout.
 ///
-/// This enum does not control segmentation: [`grapheme_cells`] always
+/// This enum does not control segmentation: [`grapheme_widths`] always
 /// segments by extended grapheme cluster. It controls only width calculation
 /// for each cluster. The East-Asian Ambiguous policy is orthogonal and is
 /// passed as a separate `eaw_wide` boolean to [`char_width`] and
@@ -86,7 +86,7 @@ impl WidthMode {
 /// # Errors and panics
 ///
 /// This function does not fail or intentionally panic.
-pub fn grapheme_cells(
+pub fn grapheme_widths(
     s: &str,
     mode: WidthMode,
     eaw_wide: bool,
@@ -148,13 +148,13 @@ mod tests {
     }
 
     #[test]
-    fn grapheme_cells_segments_both_modes_by_cluster() {
-        let g: Vec<_> = grapheme_cells("Aé中", WidthMode::Grapheme, false).collect();
+    fn grapheme_widths_segments_both_modes_by_cluster() {
+        let g: Vec<_> = grapheme_widths("Aé中", WidthMode::Grapheme, false).collect();
         assert_eq!(g.len(), 3);
         assert_eq!(g[2], ("中", 2));
 
         // Wc mode also segments by cluster; widths come from first char.
-        let w: Vec<_> = grapheme_cells("e\u{0301}A", WidthMode::Wc, false).collect();
+        let w: Vec<_> = grapheme_widths("e\u{0301}A", WidthMode::Wc, false).collect();
         assert_eq!(w.len(), 2);
         assert_eq!(w[0], ("e\u{0301}", 1));
         assert_eq!(w[1], ("A", 1));
