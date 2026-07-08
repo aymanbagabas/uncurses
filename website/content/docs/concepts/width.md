@@ -84,3 +84,21 @@ fn main() {
     assert_eq!(grapheme_width("e\u{0301}", false), 1);   // "é" = e + combining accent
 }
 ```
+
+More often you want to measure the way a specific surface will paint, without
+threading its mode and `eaw_wide` flag by hand. Every `TextSurface` measures
+with its own policy: `str_width` totals a string, `grapheme_width` sizes one
+cluster, and `grapheme_cells` walks a string as `(cluster, width)` pairs.
+
+```rust
+use uncurses::text::TextSurface;
+use uncurses::buffer::TextBuffer;
+
+fn main() {
+    let buf = TextBuffer::new(10, 1);
+    assert_eq!(buf.str_width("a世"), 3);      // 1 + 2 cells
+    assert_eq!(buf.grapheme_width("世"), 2);
+    let cells: Vec<_> = buf.grapheme_cells("a世").collect();
+    assert_eq!(cells, vec![("a", 1), ("世", 2)]);
+}
+```
