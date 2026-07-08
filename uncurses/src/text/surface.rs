@@ -336,8 +336,44 @@ pub trait TextSurface: SurfaceMut {
     ///
     /// This method does not fail or intentionally panic.
     fn str_width(&self, s: &str) -> u16 {
-        grapheme_cells(s, self.width_mode(), self.eaw_wide())
+        self.grapheme_cells(s)
             .fold(0u16, |acc, (_, w)| acc.saturating_add(u16::from(w)))
+    }
+
+    /// Measure one extended grapheme cluster in cells under this surface's
+    /// width mode and East-Asian Ambiguous policy.
+    ///
+    /// # Parameters
+    ///
+    /// * `g` — a single grapheme cluster.
+    ///
+    /// # Returns
+    ///
+    /// The cluster width in cells, normally `0`, `1`, or `2`.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
+    fn grapheme_width(&self, g: &str) -> u8 {
+        self.width_mode().grapheme_width(g, self.eaw_wide())
+    }
+
+    /// Iterate `s` as `(cluster, width)` pairs under this surface's width mode
+    /// and East-Asian Ambiguous policy.
+    ///
+    /// # Parameters
+    ///
+    /// * `s` — UTF-8 string to segment and measure.
+    ///
+    /// # Returns
+    ///
+    /// An iterator yielding borrowed cluster slices and their cell widths.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
+    fn grapheme_cells<'a>(&self, s: &'a str) -> impl Iterator<Item = (&'a str, u8)> {
+        grapheme_cells(s, self.width_mode(), self.eaw_wide())
     }
 }
 

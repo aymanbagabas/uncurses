@@ -647,21 +647,6 @@ where
         self.state.grapheme_clusters
     }
 
-    /// Measure one extended grapheme cluster in terminal cells under the
-    /// screen's current width mode and East-Asian Ambiguous policy.
-    pub fn grapheme_width(&self, g: &str) -> u8 {
-        TextSurface::width_mode(self).grapheme_width(g, self.eaw_wide)
-    }
-
-    /// Iterate a string as `(cluster, width)` pairs under the screen's
-    /// current width mode and East-Asian Ambiguous policy.
-    pub fn grapheme_cells<'a>(
-        &self,
-        s: &'a str,
-    ) -> impl Iterator<Item = (&'a str, u8)> + use<'a, I, O> {
-        crate::text::grapheme_cells(s, TextSurface::width_mode(self), self.eaw_wide)
-    }
-
     // --- Render staging internals ---------------------------------------
 
     /// Stage a single rendered frame into [`out_buf`](Self::out_buf):
