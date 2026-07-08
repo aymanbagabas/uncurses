@@ -123,6 +123,10 @@ use crate::text::{TextSurface, WidthMode};
 /// a cell-diff renderer, and an [`EventSource`] with the non-render terminal and
 /// input modes. See the [module documentation](self) for the lifecycle.
 ///
+/// `Screen` is [`Send`] and [`Sync`] whenever its input and output handles are,
+/// so it can be moved onto another thread or held across an `.await` point in a
+/// multi-threaded async runtime.
+///
 /// [`Terminal`]: crate::terminal::Terminal
 /// [`EventSource`]: crate::event::EventSource
 pub struct Screen<I, O>
