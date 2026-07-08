@@ -10,7 +10,6 @@
 //! speak [`Profile`] directly.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use rustc_hash::FxBuildHasher;
@@ -22,20 +21,19 @@ use crate::style::Style;
 #[derive(Debug, Default)]
 pub(super) struct ColorCache {
     profile: Profile,
-    /// Interior-mutable so `convert` only needs `&self`, mirroring
-    /// [`Profile::convert`]'s by-value signature. Uses a fast
+    /// Per-instance memo of nearest-palette conversions. Uses a fast
     /// non-cryptographic hasher — the 3-byte RGB key doesn't need
     /// cryptographic strength and the conversion lookup is hot
     /// enough during styled output that the per-hit hash cost
     /// matters.
-    cache: RefCell<HashMap<(u8, u8, u8), Color, FxBuildHasher>>,
+    cache: HashMap<(u8, u8, u8), Color, FxBuildHasher>,
 }
 
 impl ColorCache {
     pub(super) fn new(profile: Profile) -> Self {
         Self {
             profile,
-            cache: RefCell::new(HashMap::default()),
+            cache: HashMap::default(),
         }
     }
 
@@ -49,22 +47,22 @@ impl ColorCache {
     pub(super) fn set_profile(&mut self, profile: Profile) {
         if self.profile != profile {
             self.profile = profile;
-            self.cache.get_mut().clear();
+            self.cache.clear();
         }
     }
 
     /// Memoized counterpart to [`Profile::convert`].
-    pub(super) fn convert(&self, color: Color) -> Option<Color> {
+    pub(super) fn convert(&mut self, color: Color) -> Option<Color> {
         match self.profile {
             Profile::Disabled | Profile::Ascii => None,
             Profile::TrueColor => Some(color),
             Profile::Ansi | Profile::Ansi256 => {
                 let rgb = color.to_rgb();
-                if let Some(c) = self.cache.borrow().get(&rgb) {
+                if let Some(c) = self.cache.get(&rgb) {
                     return Some(*c);
                 }
                 let out = self.profile.convert(color)?;
-                self.cache.borrow_mut().insert(rgb, out);
+                self.cache.insert(rgb, out);
                 Some(out)
             }
         }
@@ -81,7 +79,7 @@ impl ColorCache {
     /// - `TrueColor`: pass-through (no downsampling needed).
     /// - `Disabled`: owned empty style (no SGR, no link).
     /// - `Ascii` / `Ansi` / `Ansi256`: build an owned, converted copy.
-    pub(super) fn convert_style<'a>(&self, style: &'a Style) -> Cow<'a, Style> {
+    pub(super) fn convert_style<'a>(&mut self, style: &'a Style) -> Cow<'a, Style> {
         match self.profile {
             Profile::TrueColor => Cow::Borrowed(style),
             Profile::Disabled => Cow::Owned(Style::default()),
@@ -106,7 +104,7 @@ impl ColorCache {
 #[cfg(test)]
 impl ColorCache {
     pub(super) fn cache_len(&self) -> usize {
-        self.cache.borrow().len()
+        self.cache.len()
     }
 }
 
@@ -116,7 +114,7 @@ mod tests {
 
     #[test]
     fn truecolor_is_passthrough_uncached() {
-        let c = ColorCache::new(Profile::TrueColor);
+        let mut c = ColorCache::new(Profile::TrueColor);
         let red = Color::Rgb(255, 0, 0);
         assert_eq!(c.convert(red), Some(red));
         assert_eq!(c.cache_len(), 0);
@@ -125,7 +123,7 @@ mod tests {
     #[test]
     fn disabled_and_ascii_return_none() {
         for p in [Profile::Disabled, Profile::Ascii] {
-            let c = ColorCache::new(p);
+            let mut c = ColorCache::new(p);
             assert_eq!(c.convert(Color::Rgb(1, 2, 3)), None);
             assert_eq!(c.cache_len(), 0);
         }
@@ -133,7 +131,7 @@ mod tests {
 
     #[test]
     fn ansi256_results_match_uncached_and_are_memoized() {
-        let c = ColorCache::new(Profile::Ansi256);
+        let mut c = ColorCache::new(Profile::Ansi256);
         let red = Color::Rgb(255, 0, 0);
         let want = Profile::Ansi256.convert(red);
         assert_eq!(c.convert(red), want);
@@ -144,7 +142,7 @@ mod tests {
 
     #[test]
     fn cache_keyed_by_rgb_not_color_variant() {
-        let c = ColorCache::new(Profile::Ansi);
+        let mut c = ColorCache::new(Profile::Ansi);
         let idx = Color::Indexed(9);
         let (r, g, b) = idx.to_rgb();
         let rgb = Color::Rgb(r, g, b);

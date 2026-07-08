@@ -11,6 +11,15 @@ use super::*;
 use crate::renderer::{RenderBuffer, Renderer};
 use crate::text::{TextSurface, WidthMode, WrapMode};
 
+#[test]
+fn screen_is_send_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    // Concrete stdio handles are Send + Sync, so this fails to compile only if
+    // an internal field regresses (e.g. the renderer color cache going back to
+    // RefCell would drop Sync).
+    assert_send_sync::<Screen<crate::terminal::Stdin, crate::terminal::Stdout>>();
+}
+
 #[cfg(unix)]
 fn null_input() -> std::io::PipeReader {
     // A pipe read end is epoll/kqueue-registerable (unlike /dev/null), which
