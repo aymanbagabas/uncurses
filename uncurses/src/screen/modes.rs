@@ -62,9 +62,12 @@ impl<I: Input, O: Write> Screen<I, O> {
     }
 
     /// Reset the pointer (mouse cursor) shape to the terminal default
-    /// (`OSC 22` with an empty shape name) and flush.
+    /// (`OSC 22 ; default`) and flush.
+    ///
+    /// Uses the explicit `"default"` shape name rather than an empty one: some
+    /// terminals don't treat an empty `OSC 22` as a reset.
     pub fn reset_pointer_shape(&mut self) -> io::Result<()> {
-        cursor::write_set_pointer_shape(&mut self.out_buf, "")?;
+        cursor::write_set_pointer_shape(&mut self.out_buf, "default")?;
         self.state.pointer_shape = None;
         self.flush()
     }
@@ -407,7 +410,7 @@ impl<I: Input, O: Write> Screen<I, O> {
             }
         }
         if self.state.pointer_shape.is_some() {
-            cursor::write_set_pointer_shape(&mut self.out_buf, "")?;
+            cursor::write_set_pointer_shape(&mut self.out_buf, "default")?;
         }
 
         // --- Render-coupled modes ---
