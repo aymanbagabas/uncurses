@@ -335,7 +335,11 @@ impl Buffer {
             if line[pc].is_wide() {
                 let pw = line[pc].width() as usize;
                 let end = (pc + pw).min(width);
-                line[pc..end].fill(Cell::BLANK);
+                // Preserve the broken wide cell's bg/attributes on the
+                // blanks so clearing it doesn't punch a hole in a colored
+                // background.
+                let blank = Cell::BLANK.style(line[pc].style.clone());
+                line[pc..end].fill(blank);
             } else if line[pc].is_continuation() {
                 // Buffer is corrupted — just blank the single cell
                 line[x] = Cell::BLANK;
@@ -346,7 +350,8 @@ impl Buffer {
         if line[x].is_wide() {
             let w = line[x].width() as usize;
             let end = (x + w).min(width);
-            line[x + 1..end].fill(Cell::BLANK);
+            let blank = Cell::BLANK.style(line[x].style.clone());
+            line[x + 1..end].fill(blank);
         }
 
         let cell_width = cell.width() as usize;
@@ -359,15 +364,19 @@ impl Buffer {
                     if line[i].is_wide() {
                         let w = line[i].width() as usize;
                         let end = (i + w).min(width);
-                        line[i + 1..end].fill(Cell::BLANK);
+                        let blank = Cell::BLANK.style(line[i].style.clone());
+                        line[i + 1..end].fill(blank);
                     }
-                    line[i] = Cell::continuation();
+                    // Continuations inherit the wide primary's style so the
+                    // cell's bg/attributes are coherent across both columns.
+                    line[i] = Cell::continuation().style(cell.style.clone());
                 }
             }
 
-            // Truncate at end of line: if wide cell doesn't fit, replace with blank
+            // Truncate at end of line: if wide cell doesn't fit, replace with
+            // a blank that keeps the wide cell's bg/attributes.
             if x + cell_width > width {
-                line[x] = Cell::BLANK;
+                line[x] = Cell::BLANK.style(cell.style.clone());
                 return;
             }
         }
