@@ -48,6 +48,39 @@ fn test_overwrite_wide_char() {
 }
 
 #[test]
+fn test_broken_wide_cell_keeps_bg() {
+    use crate::color::Color;
+    let styled = Style::EMPTY.bg(Color::Red);
+
+    // Overwriting a wide cell's continuation blanks the primary; the blank
+    // must keep the wide cell's background instead of resetting to default.
+    let mut buf = Buffer::new(10, 1);
+    buf.set((3, 0), &Cell::wide("中").style(styled.clone()));
+    buf.set((4, 0), &Cell::narrow("A"));
+    let primary = buf.cell(Position::new(3, 0)).unwrap();
+    assert!(primary.is_blank());
+    assert_eq!(primary.style.bg, Some(Color::Red));
+
+    // Overwriting the primary blanks the trailing continuation; that blank
+    // keeps the wide cell's background too.
+    let mut buf = Buffer::new(10, 1);
+    buf.set((3, 0), &Cell::wide("中").style(styled.clone()));
+    buf.set((3, 0), &Cell::narrow("A"));
+    assert_eq!(
+        buf.cell(Position::new(4, 0)).unwrap().style.bg,
+        Some(Color::Red)
+    );
+
+    // A wide cell that doesn't fit at the right edge is stored as a blank
+    // that still carries its background.
+    let mut buf = Buffer::new(4, 1);
+    buf.set((3, 0), &Cell::wide("中").style(styled.clone()));
+    let edge = buf.cell(Position::new(3, 0)).unwrap();
+    assert!(edge.is_blank());
+    assert_eq!(edge.style.bg, Some(Color::Red));
+}
+
+#[test]
 fn test_overwrite_continuation_with_continuation_keeps_primary() {
     // When a render buffer mirrors a model buffer cell-by-cell, the
     // primary wide cell is written first and the continuation marker is
