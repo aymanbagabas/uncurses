@@ -16,6 +16,8 @@ The `un-` is deliberate. uncurses is not `curses` or `ncurses`: no terminfo
 database, no compatibility matrix for terminals that stopped shipping decades
 ago, just a modern VT100/xterm-compatible terminal, talked to straight.
 
+Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
+
 ## Usage
 
 `Screen` is the core: it owns raw mode, a diffed back buffer, and input. Draw
