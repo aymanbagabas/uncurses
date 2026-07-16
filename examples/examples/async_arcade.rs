@@ -720,7 +720,8 @@ fn put(screen: &mut Screen<Stdin, Stdout>, x: u16, y: u16, glyph: &str, style: S
 }
 
 /// A rainbow color wheel over a u8 so hue animations are one add away.
-fn wheel(h: u8) -> Color {    let h = h as u16 * 6;
+fn wheel(h: u8) -> Color {
+    let h = h as u16 * 6;
     let seg = (h / 256) % 6;
     let t = (h % 256) as u8;
     let (r, g, b) = match seg {
