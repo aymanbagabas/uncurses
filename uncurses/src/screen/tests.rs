@@ -640,7 +640,10 @@ fn cursor_only_frame_emits_move_without_cell_changes() {
         screen.render().unwrap();
         assert_eq!(screen.tracked_cursor(), Some(Position::new(4, 2)));
     }
-    assert!(!buf.is_empty(), "cursor-only frame must emit a move: {buf:?}");
+    assert!(
+        !buf.is_empty(),
+        "cursor-only frame must emit a move: {buf:?}"
+    );
 }
 
 #[test]
@@ -710,9 +713,18 @@ fn reset_coalesces_equal_titles_into_single_osc_0() {
         screen.flush().unwrap();
     }
     let out = s(&reset_buf);
-    assert!(out.contains("\x1b]0;\x1b\\"), "missing OSC 0 reset: {out:?}");
-    assert!(!out.contains("\x1b]2;\x1b\\"), "unexpected OSC 2 reset: {out:?}");
-    assert!(!out.contains("\x1b]1;\x1b\\"), "unexpected OSC 1 reset: {out:?}");
+    assert!(
+        out.contains("\x1b]0;\x1b\\"),
+        "missing OSC 0 reset: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]2;\x1b\\"),
+        "unexpected OSC 2 reset: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]1;\x1b\\"),
+        "unexpected OSC 1 reset: {out:?}"
+    );
 }
 
 #[test]
@@ -728,9 +740,18 @@ fn reset_uses_separate_osc_for_differing_titles() {
         screen.flush().unwrap();
     }
     let out = s(&reset_buf);
-    assert!(out.contains("\x1b]2;\x1b\\"), "missing OSC 2 reset: {out:?}");
-    assert!(out.contains("\x1b]1;\x1b\\"), "missing OSC 1 reset: {out:?}");
-    assert!(!out.contains("\x1b]0;\x1b\\"), "unexpected OSC 0 reset: {out:?}");
+    assert!(
+        out.contains("\x1b]2;\x1b\\"),
+        "missing OSC 2 reset: {out:?}"
+    );
+    assert!(
+        out.contains("\x1b]1;\x1b\\"),
+        "missing OSC 1 reset: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]0;\x1b\\"),
+        "unexpected OSC 0 reset: {out:?}"
+    );
 }
 
 #[test]
@@ -745,9 +766,18 @@ fn restore_coalesces_equal_titles_into_single_osc_0() {
         screen.flush().unwrap();
     }
     let out = s(&restore_buf);
-    assert!(out.contains("\x1b]0;App\x1b\\"), "missing OSC 0 restore: {out:?}");
-    assert!(!out.contains("\x1b]2;App"), "unexpected OSC 2 restore: {out:?}");
-    assert!(!out.contains("\x1b]1;App"), "unexpected OSC 1 restore: {out:?}");
+    assert!(
+        out.contains("\x1b]0;App\x1b\\"),
+        "missing OSC 0 restore: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]2;App"),
+        "unexpected OSC 2 restore: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]1;App"),
+        "unexpected OSC 1 restore: {out:?}"
+    );
 }
 
 #[test]
@@ -765,9 +795,18 @@ fn empty_title_clears_state_and_is_not_restored() {
         screen.flush().unwrap();
     }
     let out = s(&restore_buf);
-    assert!(!out.contains("\x1b]0;"), "title should not be restored: {out:?}");
-    assert!(!out.contains("\x1b]1;"), "icon should not be restored: {out:?}");
-    assert!(!out.contains("\x1b]2;"), "window should not be restored: {out:?}");
+    assert!(
+        !out.contains("\x1b]0;"),
+        "title should not be restored: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]1;"),
+        "icon should not be restored: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]2;"),
+        "window should not be restored: {out:?}"
+    );
 }
 
 #[test]
@@ -785,8 +824,14 @@ fn empty_window_title_clears_only_window_state() {
         screen.flush().unwrap();
     }
     let out = s(&restore_buf);
-    assert!(out.contains("\x1b]1;Icon\x1b\\"), "icon should be restored: {out:?}");
-    assert!(!out.contains("\x1b]2;"), "window should not be restored: {out:?}");
+    assert!(
+        out.contains("\x1b]1;Icon\x1b\\"),
+        "icon should be restored: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b]2;"),
+        "window should not be restored: {out:?}"
+    );
     assert!(!out.contains("\x1b]0;"), "no OSC 0 expected: {out:?}");
 }
 
@@ -808,8 +853,14 @@ fn sync_frame_omits_cursor_hide_show() {
     assert!(out.contains("\x1b[?2026l"), "missing ESU: {out:?}");
     // ... and the per-frame DECTCEM toggle is dropped, so the cursor's blink
     // phase is never reset.
-    assert!(!out.contains("\x1b[?25l"), "unexpected cursor hide: {out:?}");
-    assert!(!out.contains("\x1b[?25h"), "unexpected cursor show: {out:?}");
+    assert!(
+        !out.contains("\x1b[?25l"),
+        "unexpected cursor hide: {out:?}"
+    );
+    assert!(
+        !out.contains("\x1b[?25h"),
+        "unexpected cursor show: {out:?}"
+    );
 }
 
 #[test]

@@ -542,7 +542,10 @@ impl<I: Input, O: Write> Screen<I, O> {
             let (r, g, b) = c.to_rgb();
             color::write_set_palette_color(&mut self.out_buf, index, &color::xparse_rgb(r, g, b))?;
         }
-        match (self.state.window_title.clone(), self.state.icon_name.clone()) {
+        match (
+            self.state.window_title.clone(),
+            self.state.icon_name.clone(),
+        ) {
             // Both set to the same string (e.g. via `set_title`): restore both
             // with a single `OSC 0`.
             (Some(w), Some(i)) if w == i => {

@@ -26,9 +26,18 @@ use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
 
 const LINKS: [(&str, &str); 3] = [
-    ("uncurses on GitHub", "https://github.com/aymanbagabas/uncurses"),
-    ("What are OSC 8 hyperlinks?", "https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda"),
-    ("kitty pointer shapes", "https://sw.kovidgoyal.net/kitty/pointer-shapes/"),
+    (
+        "uncurses on GitHub",
+        "https://github.com/aymanbagabas/uncurses",
+    ),
+    (
+        "What are OSC 8 hyperlinks?",
+        "https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda",
+    ),
+    (
+        "kitty pointer shapes",
+        "https://sw.kovidgoyal.net/kitty/pointer-shapes/",
+    ),
 ];
 
 /// A placed, measured hyperlink and the cell row it occupies.
@@ -95,8 +104,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> io::Result<()> {
             _ => continue,
         }
 
-        let now_hovering =
-            pointer.is_some_and(|(x, y)| links.iter().any(|l| l.contains(x, y)));
+        let now_hovering = pointer.is_some_and(|(x, y)| links.iter().any(|l| l.contains(x, y)));
         if now_hovering != hovering {
             hovering = now_hovering;
             if hovering {
@@ -115,7 +123,11 @@ fn render(screen: &mut Screen<Stdin, Stdout>, links: &[Link]) {
     screen.clear();
 
     let dim = Style::default().fg(Color::BrightBlack);
-    screen.set_str((0, 0), "Hover a link: the mouse becomes a hand. q quits.", dim);
+    screen.set_str(
+        (0, 0),
+        "Hover a link: the mouse becomes a hand. q quits.",
+        dim,
+    );
 
     let link_style = Style::default().fg(Color::BrightBlue).underline();
     for l in links {

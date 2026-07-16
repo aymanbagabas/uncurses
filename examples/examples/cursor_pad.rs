@@ -12,7 +12,6 @@
 //! - Enter: move to column 0 of the next row.
 //! - Ctrl-C: quit.
 
-
 use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers, MouseButton};
 use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
