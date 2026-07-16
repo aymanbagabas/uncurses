@@ -348,7 +348,7 @@ fn test_screen_clears_stale_chars_after_navigating() {
     assert!(
         has_clear,
         "frame 2 did not clear stale chars on row 2: {:02x?}",
-        &frame2
+        frame2
     );
 }
 
