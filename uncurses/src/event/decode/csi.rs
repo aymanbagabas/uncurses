@@ -417,10 +417,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
             0x1b => KeyCode::Escape,
             0x20 => KeyCode::Space,
             0x7f => KeyCode::Backspace,
-            _ => match char::from_u32(r) {
-                Some(c) => KeyCode::Char(c),
-                None => return None,
-            },
+            _ => KeyCode::Char(char::from_u32(r)?),
         };
         let key = Key::new(key_code, mods).normalized();
         return Some(Event::KeyPress(key));

@@ -41,7 +41,7 @@ extern "C" fn handler(_sig: libc::c_int) {
     for slot in SUBSCRIBERS.iter() {
         let fd = slot.load(Ordering::Relaxed);
         if fd >= 0 {
-            let buf = [b'w'];
+            let buf = b"w";
             // SAFETY: fd was registered by a live Subscription whose Drop
             // unregisters before closing the descriptor.
             unsafe {

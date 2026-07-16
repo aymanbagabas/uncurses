@@ -51,7 +51,7 @@ pub(super) struct UnixWakerInner {
 
 impl UnixWakerInner {
     pub(super) fn wake(&self) -> io::Result<()> {
-        let buf = [b'w'];
+        let buf = b"w";
         loop {
             let n = unsafe { libc::write(self.tx.as_raw_fd(), buf.as_ptr() as *const _, 1) };
             if n < 0 {
