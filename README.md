@@ -1,6 +1,10 @@
-# uncurses
-
-<img width="480" height="294" alt="uncurses" src="https://github.com/user-attachments/assets/3e9d7066-f435-40aa-9000-fe80185e6966" />
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" height="120" srcset="https://github.com/user-attachments/assets/6ad669a1-d6c4-4a1d-b4a1-26e0288c1797">
+    <source media="(prefers-color-scheme: light)" height="120" srcset="https://github.com/user-attachments/assets/1e5b0ca9-1e9a-4a91-8896-d49287365ec7">
+    <img alt="uncurses" height="120" src="https://github.com/user-attachments/assets/1e5b0ca9-1e9a-4a91-8896-d49287365ec7">
+  </picture>
+</p>
 
 A terminal toolkit library for Rust. It hands you the building blocks for a
 terminal UI and then gets out of the way: you own the event loop, you decide
