@@ -61,6 +61,9 @@ fn main() -> std::io::Result<()> {
 capability tracking for mouse, kitty keyboard, in-band resize, truecolor, and
 grapheme support.
 
+That's the shape of it; the full API and guides live at
+[uncurses.org](https://uncurses.org).
+
 ## Install
 
 Not on crates.io yet, so depend on it straight from git:
