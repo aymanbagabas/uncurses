@@ -7,13 +7,11 @@ diff frames and ship the minimal bytes. A single `UncursesBackend` wraps a
 reads are pure, like raw `Screen` reads: call `observe_event` to keep
 capability tracking alive, or skip it and reads still work.
 
-## Docs
+## Usage
 
-Viewports, input, manual setup, and the full API reference live on the website.
-
-### [uncurses.org](https://uncurses.org)
-
-## A taste
+`try_init()` gives you a ratatui terminal wired to uncurses; `restore()` puts
+the terminal back. In between, `draw()` renders widgets and
+`backend_mut().read_event()` pulls input.
 
 ```rust,ignore
 use ratatui::widgets::Paragraph;
@@ -43,6 +41,9 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 ```
+
+Backend event reads are pure, like raw `Screen` reads: call `observe_event` to
+keep capability tracking alive, or skip it and reads still work.
 
 ## Install
 

@@ -5,17 +5,28 @@ terminal UI and gets out of the way: no terminfo, no widget tree, no hidden
 global state, no framework. Just a modern VT100/xterm-compatible terminal, talked to
 directly.
 
-## Docs
+## Usage
 
-Guides, concepts, examples, and the full API reference live on the website.
+The whole lifecycle is three calls: `init()` claims the terminal, `render()`
+ships changed cells, `finish()` restores it.
 
-### [uncurses.org](https://uncurses.org)
+```rust,no_run
+use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
 
-## A taste
+fn main() -> std::io::Result<()> {
+    let mut screen = Screen::stdio()?;
+    screen.init()?;
+    screen.set_str((0, 0), "hello, uncurses", Style::new());
+    screen.render()?;
+    screen.finish()
+}
+```
 
-A `Screen` session is bracketed by `init()` and `finish()`. It starts inline
-(drawing in the normal buffer) with the cursor visible; the alternate screen
-and a hidden cursor are opt-in.
+Add an event loop to react to input. A `Screen` session starts inline (drawing
+in the normal buffer) with the cursor visible; the alternate screen and a
+hidden cursor are opt-in.
 
 ```rust,no_run
 use uncurses::buffer::Bounded;

@@ -1,9 +1,9 @@
 <br>
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" height="120" srcset="https://github.com/user-attachments/assets/6ad669a1-d6c4-4a1d-b4a1-26e0288c1797">
-    <source media="(prefers-color-scheme: light)" height="120" srcset="https://github.com/user-attachments/assets/1e5b0ca9-1e9a-4a91-8896-d49287365ec7">
-    <img alt="uncurses" height="120" src="https://github.com/user-attachments/assets/1e5b0ca9-1e9a-4a91-8896-d49287365ec7">
+    <source media="(prefers-color-scheme: dark)" width="320" srcset="https://github.com/user-attachments/assets/6ad669a1-d6c4-4a1d-b4a1-26e0288c1797">
+    <source media="(prefers-color-scheme: light)" width="320" srcset="https://github.com/user-attachments/assets/1e5b0ca9-1e9a-4a91-8896-d49287365ec7">
+    <img alt="uncurses" width="320" src="https://github.com/user-attachments/assets/1e5b0ca9-1e9a-4a91-8896-d49287365ec7">
   </picture>
 </p>
 
@@ -17,11 +17,30 @@ No terminfo database, no compatibility matrix for terminals that stopped
 shipping decades ago. uncurses assumes a modern, VT100/xterm-compatible
 terminal and talks to it straight.
 
-## Docs
+## Usage
 
-Guides, concepts, examples, and the full API reference live on the website.
+`Screen` is the core: it owns raw mode, a diffed back buffer, and input. Draw
+into it, call `render()` to ship only the changed cells, and `finish()` to
+restore the terminal.
 
-### [uncurses.org](https://uncurses.org)
+```rust,no_run
+use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
+
+fn main() -> std::io::Result<()> {
+    let mut screen = Screen::stdio()?;
+    screen.init()?;
+    screen.set_str((0, 0), "hello, uncurses", Style::new());
+    screen.render()?;
+    screen.finish()
+}
+```
+
+Per-crate guides and more examples:
+
+- [`uncurses`](uncurses/) — screen, rendering, input, and the event loop.
+- [`uncurses-ratatui`](uncurses-ratatui/) — drive ratatui widgets through uncurses.
 
 ## Crates
 
