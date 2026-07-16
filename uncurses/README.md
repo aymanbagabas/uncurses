@@ -80,8 +80,8 @@ dependency.
 
 ## Credits
 
-- [ncurses](https://invisible-island.net/ncurses/): the original the name winks
-  at, minus the terminfo baggage.
+- [ncurses](https://invisible-island.net/ncurses/): the original the name nods
+  to, minus the terminfo baggage.
 - [ultraviolet](https://github.com/charmbracelet/ultraviolet): Charm's
   terminal library, the inspiration for the cell and screen model.
 - [colorprofile](https://github.com/charmbracelet/colorprofile): Charm's color

@@ -12,10 +12,9 @@ terminal UI and then gets out of the way: you own the event loop, you decide
 when bytes hit the wire, and there is no widget tree or hidden global state to
 fight.
 
-The name winks at `curses` and `ncurses`, then walks away from their baggage.
-No terminfo database, no compatibility matrix for terminals that stopped
-shipping decades ago. uncurses assumes a modern, VT100/xterm-compatible
-terminal and talks to it straight.
+The `un-` is deliberate. uncurses is not `curses` or `ncurses`: no terminfo
+database, no compatibility matrix for terminals that stopped shipping decades
+ago, just a modern VT100/xterm-compatible terminal, talked to straight.
 
 ## Usage
 
@@ -39,8 +38,8 @@ fn main() -> std::io::Result<()> {
 
 Per-crate guides and more examples:
 
-- [`uncurses`](uncurses/) — screen, rendering, input, and the event loop.
-- [`uncurses-ratatui`](uncurses-ratatui/) — drive ratatui widgets through uncurses.
+- [`uncurses`](uncurses/): screen, rendering, input, and the event loop.
+- [`uncurses-ratatui`](uncurses-ratatui/): drive ratatui widgets through uncurses.
 
 ## Crates
 
@@ -66,7 +65,7 @@ the latest stable Rust (currently 1.88 or newer).
 uncurses stands on the shoulders of projects worth naming:
 
 - [ncurses](https://invisible-island.net/ncurses/): the original. The name
-  winks at it, even as uncurses leaves terminfo behind.
+  nods to it, even as uncurses leaves terminfo behind.
 - [ultraviolet](https://github.com/charmbracelet/ultraviolet): Charm's
   low-level terminal library, and the inspiration for how uncurses models cells
   and screens.
