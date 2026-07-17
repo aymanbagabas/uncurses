@@ -160,3 +160,33 @@ conversion starts working when the reply arrives.
 
 See `examples/examples/mouse.rs` for a live readout of motion, buttons, and
 wheel ticks.
+
+## Clicks in inline mode
+
+When you render [inline]({{< relref "inline-rendering.md" >}}) rather than on the alternate
+screen, the surface starts partway down the terminal, but the terminal still
+reports clicks in whole-screen coordinates. To hit test against your surface
+you need to know where its top-left cell physically sits.
+
+Enabling the mouse inline turns this on automatically: the screen asks the
+terminal for the cursor position, records it as the surface origin, and re-asks
+on resize. Read it with `screen.origin()`, or map a whole-screen `Mouse`
+straight into surface-local coordinates with `screen.mouse_to_origin`, the
+origin analogue of `mouse_pixels_to_cells`:
+
+```rust
+use uncurses::event::Event;
+
+if let Event::MouseClick(m) = event {
+    let local = screen.mouse_to_origin(m); // relative to the surface's top-left
+    // hit test `local.x` / `local.y` against your layout
+}
+```
+
+On the alternate screen the origin is always `(0, 0)`, so `mouse_to_origin` is a
+no-op there and the same hit-testing code works in both modes. Origin tracking
+is on by default; opt out with `ScreenOptions { track_origin: false, .. }` or
+toggle it at runtime with `screen.set_origin_tracking(false)?`.
+
+See `examples/examples/calculator.rs` for a mouse-driven, inline calculator that
+maps clicks onto its keypad this way.
