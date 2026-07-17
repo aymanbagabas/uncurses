@@ -182,6 +182,17 @@ where
     /// to bound the teardown drain that consumes their replies. `None`
     /// when no queries were sent (or once the drain has run).
     queries_sent_at: Option<Instant>,
+    /// Physical screen coordinate (0-based, from the terminal's top-left) of
+    /// the managed area's top-left cell, tracked for inline sessions. Only
+    /// meaningful inline; alt-screen [`origin`](Self::origin) is always
+    /// `(0, 0)`. Refreshed by a `CSI 6n` request whose reply is captured in
+    /// [`observe_event`](Self::observe_event), when the mouse is on and
+    /// [`ScreenOptions::track_origin`] is set.
+    origin: Position,
+    /// Set while an origin `CSI 6n` request is outstanding, so
+    /// [`observe_event`](Self::observe_event) knows the next
+    /// [`CursorPosition`](Event::CursorPosition) reply is ours to capture.
+    origin_query_pending: bool,
 }
 
 /// Desired default behaviors applied by [`Screen::init_with`].
@@ -253,6 +264,17 @@ pub struct ScreenOptions {
     /// tears down before the replies were consumed waits here. Defaults to
     /// 300ms.
     pub query_drain_timeout: Duration,
+    /// Track the inline physical cursor origin: the screen coordinate of the
+    /// managed area's top-left cell.
+    ///
+    /// When `true` (the default) and mouse tracking is on in inline mode, the
+    /// screen queries the terminal (`CSI 6n`) for its physical origin at
+    /// startup and refreshes it on resize, so mouse coordinates can be mapped
+    /// into the managed area with [`mouse_to_origin`](Screen::mouse_to_origin).
+    /// Read the tracked value with [`origin`](Screen::origin). Set to `false`
+    /// to opt out; the origin then stays at `(0, 0)`. Has no effect in the
+    /// alternate screen, where the origin is always `(0, 0)`.
+    pub track_origin: bool,
 }
 
 bitflags! {
@@ -288,6 +310,7 @@ impl Default for ScreenOptions {
             mouse: None,
             query_capabilities: true,
             query_drain_timeout: Duration::from_millis(300),
+            track_origin: true,
         }
     }
 }
@@ -346,11 +369,19 @@ where
     /// and the absence of in-band resize. The pixel reply arrives later as a
     /// [`WindowPixelSize`](crate::event::Event::WindowPixelSize) event.
     fn cache_window_size(&mut self, ws: crate::terminal::Winsize) -> io::Result<()> {
-        self.window_cells = Some(Size::new(ws.col, ws.row));
+        let cells = Size::new(ws.col, ws.row);
+        let size_changed = self.window_cells != Some(cells);
+        self.window_cells = Some(cells);
         if ws.xpixel > 0 && ws.ypixel > 0 {
             self.window_pixels = Some(Size::new(ws.xpixel, ws.ypixel));
         } else if self.options.request_pixel_size_on_resize && !self.state.in_band_resize {
             self.request_window_pixel_size()?;
+        }
+        // A terminal-size change may move the inline origin; re-request it
+        // (the reply is captured in observe_event).
+        if size_changed {
+            self.write_request_origin()?;
+            self.flush()?;
         }
         Ok(())
     }
@@ -940,6 +971,105 @@ where
         ))
     }
 
+    /// The physical screen coordinate (0-based, from the terminal's top-left)
+    /// of the managed area's top-left cell.
+    ///
+    /// Inline, this is tracked automatically while origin tracking is active
+    /// (mouse on, [`ScreenOptions::track_origin`] set): the screen requests
+    /// it (`CSI 6n`) when the mouse is turned on and again on resize, and
+    /// captures the reply in [`observe_event`](Self::observe_event). Use it
+    /// with [`mouse_to_origin`](Self::mouse_to_origin) to map whole-screen
+    /// mouse coordinates into the managed area. Returns [`Position::ORIGIN`]
+    /// in the alternate screen (and whenever tracking is off), where the
+    /// managed area already begins at the terminal's top-left.
+    pub fn origin(&self) -> Position {
+        if self.state.alt_screen {
+            Position::ORIGIN
+        } else {
+            self.origin
+        }
+    }
+
+    /// Whether inline origin tracking is enabled. See
+    /// [`ScreenOptions::track_origin`].
+    pub fn origin_tracking(&self) -> bool {
+        self.options.track_origin
+    }
+
+    /// Enable or disable inline origin tracking at runtime. Enabling it while
+    /// the mouse is on inline requests a fresh origin immediately (the reply
+    /// is captured in [`observe_event`](Self::observe_event)); disabling it
+    /// stops tracking and leaves [`origin`](Self::origin) at its last value.
+    pub fn set_origin_tracking(&mut self, enabled: bool) -> io::Result<()> {
+        self.options.track_origin = enabled;
+        if enabled {
+            self.write_request_origin()?;
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Translate a [`Mouse`](crate::event::Mouse) event from physical screen
+    /// cell coordinates into managed-area-relative coordinates by subtracting
+    /// the tracked [`origin`](Self::origin).
+    ///
+    /// The mouse-origin analogue of
+    /// [`mouse_pixels_to_cells`](Self::mouse_pixels_to_cells): where that
+    /// maps SGR-pixel offsets to cells, this maps whole-screen cell
+    /// coordinates into the inline managed area, so `(origin.x, origin.y)`
+    /// becomes `(0, 0)`. In the alternate screen the origin is `(0, 0)`, so
+    /// coordinates pass through unchanged. Coordinates above or left of the
+    /// origin saturate at zero.
+    ///
+    /// For SGR-pixel mouse reports, convert to cells with
+    /// [`mouse_pixels_to_cells`](Self::mouse_pixels_to_cells) first, then map
+    /// with this.
+    pub fn mouse_to_origin(&self, mouse: crate::event::Mouse) -> crate::event::Mouse {
+        let origin = self.origin();
+        crate::event::Mouse::new(
+            mouse.x.saturating_sub(origin.x),
+            mouse.y.saturating_sub(origin.y),
+            mouse.button,
+            mouse.modifiers,
+        )
+    }
+
+    /// Stage (without flushing) a request for the inline physical origin:
+    /// park the cursor at the managed area's top-left and ask the terminal
+    /// (`CSI 6n`) where that is. The reply arrives asynchronously as a
+    /// [`CursorPosition`](Event::CursorPosition) event and is captured (and
+    /// clipped) by [`observe_event`](Self::observe_event). Staging (not
+    /// flushing) lets callers that already emit bytes flush once. Returns
+    /// whether anything was staged: `false` (a no-op) in the alternate
+    /// screen, when tracking is off, or when the mouse is off.
+    fn write_request_origin(&mut self) -> io::Result<bool> {
+        if self.state.alt_screen || !self.options.track_origin || self.state.mouse.is_none() {
+            return Ok(false);
+        }
+        // Park the cursor at the surface top-left; in relative-cursor inline
+        // mode that is the physical origin, so the reply *is* the origin.
+        // Stage the move rather than using move_cursor_to, which would flush.
+        let target = Position::ORIGIN;
+        if !(self.renderer.cursor_known() && self.renderer.cursor_position() == target) {
+            self.renderer
+                .move_to(&mut self.out_buf, &self.front_buf, target.y, target.x)
+                .unwrap();
+        }
+        self.out_buf
+            .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
+        self.origin_query_pending = true;
+        Ok(true)
+    }
+
+    /// Clip a queried origin so the whole managed area stays on screen: when
+    /// the area is shorter than the terminal, its top row sits no lower than
+    /// `terminal_height - area_height`.
+    fn clip_origin(&self, pos: Position) -> Position {
+        let terminal_height = self.window_cells.map_or(self.height, |s| s.height);
+        let max_y = terminal_height.saturating_sub(self.height);
+        Position::new(pos.x, pos.y.min(max_y))
+    }
+
     /// Apply an event to the screen's capability tracking. The event is
     /// inspected, never consumed.
     ///
@@ -1035,6 +1165,13 @@ where
             }
             Event::WindowPixelSize { width, height } => {
                 self.window_pixels = Some(Size::new(width, height));
+            }
+            // Capture the reply to our own origin request (see
+            // `request_origin`). Observing never consumes, so an application
+            // that also queries the cursor still sees this event.
+            Event::CursorPosition(pos) if self.origin_query_pending => {
+                self.origin_query_pending = false;
+                self.origin = self.clip_origin(pos);
             }
             // A successful XTGETTCAP reply for a truecolor capability
             // confirms direct-color support: record and upgrade the
@@ -1334,6 +1471,8 @@ where
             window_pixels: None,
             terminal_name: None,
             queries_sent_at: None,
+            origin: Position::ORIGIN,
+            origin_query_pending: false,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {

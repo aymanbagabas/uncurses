@@ -72,6 +72,8 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
             window_pixels: None,
             terminal_name: None,
             queries_sent_at: None,
+            origin: Position::ORIGIN,
+            origin_query_pending: false,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
@@ -2188,4 +2190,82 @@ fn drain_gives_up_after_timeout_when_no_reply_arrives() {
         elapsed < std::time::Duration::from_millis(800),
         "drain must not wait far beyond the budget: {elapsed:?}"
     );
+}
+
+#[test]
+fn origin_defaults_to_zero_and_maps_mouse() {
+    use crate::event::{KeyModifiers, Mouse, MouseButton};
+
+    let mut buf = Vec::new();
+    let screen = Screen::for_test(&mut buf, (10, 3));
+    // No query has run, so the origin is the terminal top-left and mapping is
+    // a pass-through.
+    assert_eq!(screen.origin(), Position::ORIGIN);
+    let m = Mouse::new(5, 7, MouseButton::Left, KeyModifiers::empty());
+    let mapped = screen.mouse_to_origin(m);
+    assert_eq!((mapped.x, mapped.y), (5, 7));
+}
+
+#[test]
+fn origin_maps_mouse_relative_to_stored_origin() {
+    use crate::event::{KeyModifiers, Mouse, MouseButton};
+
+    let mut buf = Vec::new();
+    let mut screen = Screen::for_test(&mut buf, (10, 3));
+    // Simulate a tracked inline origin three rows down.
+    screen.origin = Position::new(2, 3);
+    let m = Mouse::new(6, 5, MouseButton::Left, KeyModifiers::empty());
+    let mapped = screen.mouse_to_origin(m);
+    assert_eq!((mapped.x, mapped.y), (4, 2));
+    // Clicks above/left of the origin saturate at zero.
+    let above = Mouse::new(1, 1, MouseButton::Left, KeyModifiers::empty());
+    let mapped = screen.mouse_to_origin(above);
+    assert_eq!((mapped.x, mapped.y), (0, 0));
+}
+
+#[test]
+fn alt_screen_origin_is_zero() {
+    let mut buf = Vec::new();
+    let mut screen = Screen::for_test(&mut buf, (10, 3));
+    screen.origin = Position::new(4, 9);
+    screen.state.alt_screen = true;
+    // In the alternate screen the managed area starts at the top-left,
+    // regardless of any stored inline origin.
+    assert_eq!(screen.origin(), Position::ORIGIN);
+}
+
+#[test]
+fn origin_captured_from_cursor_position_reply() {
+    let mut buf = Vec::new();
+    let mut screen = Screen::for_test(&mut buf, (10, 3));
+    screen.window_cells = Some(Size::new(10, 8));
+    // Simulate an outstanding `CSI 6n` origin request.
+    screen.origin_query_pending = true;
+    // The reply is observed (never consumed) and captured as the origin,
+    // clipped so the 3-row area stays on screen in an 8-row terminal.
+    screen
+        .observe_event(&Event::CursorPosition(Position::new(2, 7)))
+        .unwrap();
+    assert!(!screen.origin_query_pending);
+    assert_eq!(screen.origin(), Position::new(2, 5));
+
+    // A later stray CursorPosition (no request pending) is ignored.
+    screen
+        .observe_event(&Event::CursorPosition(Position::new(0, 0)))
+        .unwrap();
+    assert_eq!(screen.origin(), Position::new(2, 5));
+}
+
+#[test]
+fn clip_origin_keeps_area_on_screen() {
+    let mut buf = Vec::new();
+    let mut screen = Screen::for_test(&mut buf, (10, 3));
+    screen.window_cells = Some(Size::new(10, 8));
+    // A 3-row area in an 8-row terminal can start no lower than row 5.
+    assert_eq!(screen.clip_origin(Position::new(2, 7)), Position::new(2, 5));
+    // Within bounds is left untouched.
+    assert_eq!(screen.clip_origin(Position::new(2, 4)), Position::new(2, 4));
+    // An area at least as tall as the terminal pins to the top.
+    screen.window_cells = Some(Size::new(10, 3));
+    assert_eq!(screen.clip_origin(Position::new(0, 6)), Position::new(0, 0));
 }
