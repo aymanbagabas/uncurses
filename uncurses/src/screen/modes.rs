@@ -106,6 +106,10 @@ impl<I: Input, O: Write> Screen<I, O> {
         mode::write_reset_mode(&mut self.out_buf, MOUSE_MODES)?;
         self.write_mouse_modes(tracking, true)?;
         self.state.mouse = Some(tracking);
+        // Turning the mouse on inline activates origin tracking: stage the
+        // physical-origin request alongside the mode set so it all flushes
+        // once. No-op in the alternate screen or when tracking is disabled.
+        self.write_request_origin()?;
         self.flush()
     }
 
