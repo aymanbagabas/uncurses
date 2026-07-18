@@ -1,9 +1,23 @@
 # uncurses
 
-A terminal toolkit library for Rust. It hands you the building blocks for a
-terminal UI and gets out of the way: no terminfo, no widget tree, no hidden
-global state, no framework. Just a modern VT100/xterm-compatible terminal, talked to
-directly.
+[![CI](https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml/badge.svg)](https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
+![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)
+[![Website](https://img.shields.io/badge/website-uncurses.org-blue.svg)](https://uncurses.org)
+
+A Rust library for building terminal user interfaces. It provides a direct,
+framework-free way to draw to the terminal and read input, giving you control
+over every cell and your own event loop, whether you run inline, take over the
+full screen, mix the two, or leave the console unmanaged and just shape your
+output. It includes a diffing renderer that redraws only what changed,
+Unicode-aware width, truecolor styling with automatic downsampling, hyperlinks,
+and typed keyboard, mouse, and paste input. Rather than a terminfo database, it
+detects capabilities through terminal queries and runs across Linux, macOS, and
+Windows.
+
+<p align="center">
+  <a href="https://github.com/aymanbagabas/uncurses/blob/main/examples/examples/tour.rs"><img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/tour.gif" width="440" alt="tour example"></a>
+</p>
 
 ## Usage
 
@@ -11,6 +25,7 @@ The whole lifecycle is three calls: `init()` claims the terminal, `render()`
 ships changed cells, `finish()` restores it.
 
 ```rust,no_run
+use uncurses::buffer::Bounded;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
@@ -18,6 +33,10 @@ use uncurses::text::TextSurface;
 fn main() -> std::io::Result<()> {
     let mut screen = Screen::stdio()?;
     screen.init()?;
+    // Inline mode draws in the normal buffer: size the frame to what you
+    // draw so it doesn't reserve the whole terminal: one text row plus a trailing blank line.
+    let w = screen.width();
+    screen.resize((w, 2));
     screen.set_str((0, 0), "hello, uncurses", Style::new());
     screen.render()?;
     screen.finish()

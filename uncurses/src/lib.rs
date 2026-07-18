@@ -1,9 +1,11 @@
-//! `uncurses` is a terminal toolkit library for building terminal user
-//! interfaces. It hands you the pieces (a cell grid with a diffing
-//! renderer, a typed input decoder, ANSI escape helpers, and a raw-mode
-//! terminal handle) and stays out of the way: you own the event loop and
-//! decide when bytes hit the wire. There is no terminfo database and no
-//! widget tree.
+//! `uncurses` is a Rust library for building terminal user interfaces. It
+//! provides a direct, framework-free way to draw to the terminal and read
+//! input, giving you control over every cell and your own event loop, whether
+//! you run inline, take over the full screen, mix the two, or leave the
+//! console unmanaged and just shape your output. It hands you the pieces (a
+//! cell grid with a diffing renderer, a typed input decoder, ANSI escape
+//! helpers, and a raw-mode terminal handle) and decides nothing for you.
+//! There is no terminfo database and no widget tree.
 //!
 //! # Where to start
 //!

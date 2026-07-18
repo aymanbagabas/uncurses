@@ -5,19 +5,19 @@ layout: hextra-home
 
 {{< hextra/hero-badge >}}
   <div class="hx:w-2 hx:h-2 hx:rounded-full hx:bg-primary-400"></div>
-  A terminal toolkit library for Rust
+  A Rust library for building terminal user interfaces
 {{< /hextra/hero-badge >}}
 
 <div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
-  Build terminal UIs,&nbsp;<br class="hx:sm:block hx:hidden" />without the curses
+  Build terminal user interfaces&nbsp;<br class="hx:sm:block hx:hidden" />in Rust
 {{< /hextra/hero-headline >}}
 </div>
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  A modern, VT100/xterm-compatible terminal toolkit library.&nbsp;<br class="hx:sm:block hx:hidden" />
-  You own the event loop; uncurses keeps the bytes correct and minimal.
+  A direct, framework-free way to draw to the terminal and read input.&nbsp;<br class="hx:sm:block hx:hidden" />
+  You control every cell and own the event loop; uncurses keeps the bytes correct and minimal.
 {{< /hextra/hero-subtitle >}}
 </div>
 

@@ -5,10 +5,11 @@ sidebar:
   open: true
 ---
 
-uncurses is a terminal toolkit library for Rust. It gives you the building
-blocks for terminal UIs, then gets out of the way: you own the event loop and
-decide when bytes are written. No terminfo, no widget tree, no hidden global
-state.
+uncurses is a Rust library for building terminal user interfaces. It provides a
+direct, framework-free way to draw to the terminal and read input, giving you
+control over every cell and your own event loop, whether you run inline, take
+over the full screen, mix the two, or leave the console unmanaged and just
+shape your output. No terminfo, no widget tree, no hidden global state.
 
 These docs are organized into three parts. If you are new, read **Getting
 Started** from top to bottom. Come back to **Concepts** when you want the
