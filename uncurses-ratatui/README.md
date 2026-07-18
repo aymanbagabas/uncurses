@@ -1,11 +1,20 @@
 # uncurses-ratatui
 
+[![CI](https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml/badge.svg)](https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
+![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)
+[![Website](https://img.shields.io/badge/website-uncurses.org-blue.svg)](https://uncurses.org)
+
 A [ratatui](https://ratatui.rs) `Backend` that renders through
 [uncurses](../uncurses/). Write your UI with ratatui widgets and let uncurses
 diff frames and ship the minimal bytes. A single `UncursesBackend` wraps a
 `Screen` and drives rendering, input, and the raw-mode lifecycle. Backend event
 reads are pure, like raw `Screen` reads: call `observe_event` to keep
 capability tracking alive, or skip it and reads still work.
+
+<p align="center">
+  <a href="https://github.com/aymanbagabas/uncurses/blob/main/examples/examples/ratatui_popup.rs"><img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/ratatui_popup.gif" width="440" alt="ratatui popup example"></a>
+</p>
 
 ## Usage
 
