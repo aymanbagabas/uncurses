@@ -2123,6 +2123,38 @@ fn drain_consumes_pending_da_reply_and_marks_done() {
     );
 }
 
+// Enabling in-band resize (DEC 2048) as a discovery-driven default makes the
+// terminal echo one `CSI 48 ; ... t` size report *after* the Primary DA
+// terminator. The drain must consume that echo too, or it leaks to the shell
+// once cooked mode is restored. Unix-only for the same pipe-polling reason.
+#[cfg(unix)]
+#[test]
+fn drain_consumes_in_band_resize_echo_from_enabling_default() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    // DA1 terminates the query stream; enabling 2048 then echoes a resize.
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    writer.write_all(b"\x1b[48;24;80;768;1040t").unwrap();
+    drop(writer); // EOF so poll does not block once both replies are read
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    // Terminal reported 2048 support, so apply_defaults will enable it.
+    screen.caps.in_band_resize = true;
+    screen.queries_sent_at = Some(std::time::Instant::now());
+    screen.defaults_applied = false;
+
+    screen.drain_pending_queries().unwrap();
+
+    assert!(
+        screen.defaults_applied,
+        "DA reply should mark defaults applied"
+    );
+    assert!(
+        screen.try_read_event().is_none(),
+        "the in-band resize echo must be consumed, not left to leak"
+    );
+}
+
 #[test]
 fn drain_is_noop_when_defaults_already_applied() {
     let (reader, writer) = std::io::pipe().unwrap();
