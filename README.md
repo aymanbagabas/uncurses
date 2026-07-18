@@ -8,10 +8,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="CI" src="https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml/badge.svg">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
   <img alt="Rust 1.88+" src="https://img.shields.io/badge/rust-1.88%2B-orange.svg">
-  <a href="https://uncurses.org"><img alt="Website" src="https://img.shields.io/badge/website-uncurses.org-blue.svg"></a>
+  <img alt="Website" src="https://img.shields.io/badge/website-uncurses.org-blue.svg">
 </p>
 
 uncurses is a Rust library for building terminal user interfaces. It provides a
@@ -66,7 +66,7 @@ An animated showcase that cycles through sprinkles, nested colored panels, a
 styled banner, a marquee, and bouncing balls. The quickest way to see what the
 renderer can do.
 
-<a href="examples/examples/tour.rs"><img src="assets/tour.gif" width="440" alt="tour example"></a>
+<img src="assets/tour.gif" width="440" alt="tour example">
 
 **`gradient`**
 
@@ -74,21 +74,21 @@ A smooth truecolor field that packs two colors per cell with half-block
 sub-pixels, plus a mouse-driven inspector that reports the color under the
 pointer. Shows color handling and mouse input together.
 
-<a href="examples/examples/gradient.rs"><img src="assets/gradient.gif" width="440" alt="gradient example"></a>
+<img src="assets/gradient.gif" width="440" alt="gradient example">
 
 **`file_explorer`**
 
 A real two-pane file browser with a live preview that scrolls by column, so a
 side pane moves without disturbing the file list. A full end-to-end app.
 
-<a href="examples/examples/file_explorer.rs"><img src="assets/file_explorer.gif" width="440" alt="file explorer example"></a>
+<img src="assets/file_explorer.gif" width="440" alt="file explorer example">
 
 **`task_picker`**
 
 An inline picker (no alternate screen) that hands off to an animated progress
 bar, then exits cleanly. Shows how uncurses draws in the normal buffer.
 
-<a href="examples/examples/task_picker.rs"><img src="assets/task_picker.gif" width="440" alt="task picker example"></a>
+<img src="assets/task_picker.gif" width="440" alt="task picker example">
 
 For more, browse the [`examples/`](examples/examples) directory.
 
