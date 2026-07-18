@@ -35,6 +35,7 @@ into it, call `render()` to ship only the changed cells, and `finish()` to
 restore the terminal.
 
 ```rust,no_run
+use uncurses::event::Event;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
@@ -45,6 +46,7 @@ fn main() -> std::io::Result<()> {
     screen.enter_alt_screen()?; // take over the full screen
     screen.set_str((0, 0), "hello, uncurses!", Style::new());
     screen.render()?;
+    while !matches!(screen.read_event()?, Event::KeyPress(_)) {} // wait for a key
     screen.finish() // restores the main screen
 }
 ```
