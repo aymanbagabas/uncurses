@@ -922,6 +922,26 @@ where
                 }
             }
         }
+        // Applying defaults on the Primary DA reply can enable in-band resize
+        // (DEC mode 2048), and the terminal acknowledges that with an
+        // immediate `CSI 48 ; ... t` size report. That echo lands *after* the
+        // DA terminator the loop above stops on, so consume it here too or it
+        // leaks to the shell once cooked mode is restored.
+        if self.state.in_band_resize {
+            while let Some(remaining) = budget.checked_sub(sent_at.elapsed()) {
+                let mut saw_resize = false;
+                while let Some(ev) = self.try_read_event() {
+                    saw_resize |= matches!(ev, crate::event::Event::Resize(_));
+                    let _ = self.observe_event(&ev);
+                }
+                if saw_resize || remaining.is_zero() {
+                    break;
+                }
+                if !self.poll_event(Some(remaining.min(Duration::from_millis(50))))? {
+                    break;
+                }
+            }
+        }
         Ok(())
     }
 
