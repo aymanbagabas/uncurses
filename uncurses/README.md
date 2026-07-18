@@ -16,7 +16,7 @@ detects capabilities through terminal queries and runs across Linux, macOS, and
 Windows.
 
 <p align="center">
-  <a href="https://github.com/aymanbagabas/uncurses/blob/main/examples/examples/tour.rs"><img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/tour.gif" width="440" alt="tour example"></a>
+  <img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/tour.gif" width="440" alt="tour example">
 </p>
 
 ## Usage
