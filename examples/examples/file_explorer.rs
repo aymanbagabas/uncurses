@@ -24,6 +24,9 @@
 //!   r            refresh listing
 //!   g / G        jump preview to top / bottom
 //!   q / Esc      quit
+//!
+//! Mouse: wheel scrolls the preview vertically; a horizontal wheel (or
+//! trackpad sideways swipe) scrolls the preview left/right.
 
 use std::env;
 use std::fs;
@@ -56,6 +59,8 @@ struct ExplorerState {
     list_scroll: usize,
     /// First visible line index in the preview.
     preview_scroll: usize,
+    /// First visible column offset in the preview (horizontal scroll).
+    preview_hscroll: usize,
     preview_lines: Vec<String>,
     preview_label: String,
     status: String,
@@ -69,6 +74,7 @@ impl ExplorerState {
             selected: 0,
             list_scroll: 0,
             preview_scroll: 0,
+            preview_hscroll: 0,
             preview_lines: Vec::new(),
             preview_label: String::new(),
             status: String::new(),
@@ -112,6 +118,7 @@ impl ExplorerState {
     fn load_preview(&mut self) {
         self.preview_lines.clear();
         self.preview_scroll = 0;
+        self.preview_hscroll = 0;
         let Some(entry) = self.entries.get(self.selected) else {
             self.preview_label = String::from("(empty)");
             return;
@@ -331,7 +338,7 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdin, Stdout>) {
     for row in 0..preview_height {
         let idx = app.preview_scroll + row;
         if let Some(line) = app.preview_lines.get(idx) {
-            let s = clip_to(line, preview_w);
+            let s = slice_cols(line, app.preview_hscroll, preview_w);
             {
                 screen.set_str((preview_x, row as u16 + 1), &s, normal.clone());
             };
@@ -360,6 +367,27 @@ fn clip_to(s: &str, width: u16) -> String {
         }
         out.push(ch);
         w += cw;
+    }
+    out
+}
+
+/// Take up to `width` display columns from `s`, starting `start` columns
+/// in — i.e. the horizontal-scroll window `[start, start + width)`.
+fn slice_cols(s: &str, start: usize, width: u16) -> String {
+    let mut out = String::new();
+    let mut skipped = 0usize;
+    let mut taken = 0usize;
+    for ch in s.chars() {
+        let cw = unicode_char_width(ch);
+        if skipped < start {
+            skipped += cw;
+            continue;
+        }
+        if taken + cw > width as usize {
+            break;
+        }
+        out.push(ch);
+        taken += cw;
     }
     out
 }
@@ -522,6 +550,25 @@ impl App {
                         self.state.preview_scroll = (self.state.preview_scroll + 3)
                             .min(self.state.preview_lines.len().saturating_sub(1));
                     }
+                    MouseButton::WheelLeft => {
+                        self.state.preview_hscroll = self.state.preview_hscroll.saturating_sub(3);
+                    }
+                    MouseButton::WheelRight => {
+                        // Bound so the longest line's end can't scroll past
+                        // the right edge of the preview pane.
+                        let w = self.screen.width();
+                        let preview_w = w.saturating_sub(w / 3 + 1) as usize;
+                        let longest = self
+                            .state
+                            .preview_lines
+                            .iter()
+                            .map(|l| l.chars().map(unicode_char_width).sum::<usize>())
+                            .max()
+                            .unwrap_or(0);
+                        let max_hscroll = longest.saturating_sub(preview_w);
+                        self.state.preview_hscroll =
+                            (self.state.preview_hscroll + 3).min(max_hscroll);
+                    }
                     _ => dirty = false,
                 },
 
@@ -553,4 +600,18 @@ fn main() -> io::Result<()> {
     let result = app.run();
     app.stop()?;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slice_cols;
+
+    #[test]
+    fn slice_cols_window() {
+        assert_eq!(slice_cols("hello world", 0, 5), "hello");
+        assert_eq!(slice_cols("hello world", 6, 5), "world");
+        assert_eq!(slice_cols("hello", 2, 10), "llo");
+        assert_eq!(slice_cols("hi", 10, 5), "");
+        assert_eq!(slice_cols("", 0, 5), "");
+    }
 }
