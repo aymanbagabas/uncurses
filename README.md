@@ -35,7 +35,6 @@ into it, call `render()` to ship only the changed cells, and `finish()` to
 restore the terminal.
 
 ```rust,no_run
-use uncurses::buffer::Bounded;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
@@ -43,13 +42,10 @@ use uncurses::text::TextSurface;
 fn main() -> std::io::Result<()> {
     let mut screen = Screen::stdio()?;
     screen.init()?;
-    // Inline mode draws in the normal buffer: size the frame to what you
-    // draw so it doesn't reserve the whole terminal: one text row plus a trailing blank line.
-    let w = screen.width();
-    screen.resize((w, 2));
+    screen.enter_alt_screen()?; // take over the full screen
     screen.set_str((0, 0), "hello, uncurses!", Style::new());
     screen.render()?;
-    screen.finish()
+    screen.finish() // restores the main screen
 }
 ```
 
