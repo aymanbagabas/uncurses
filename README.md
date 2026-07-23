@@ -8,10 +8,10 @@
 </p>
 
 <p align="center">
-  <img alt="CI" src="https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml/badge.svg">
-  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
-  <img alt="Rust 1.88+" src="https://img.shields.io/badge/rust-1.88%2B-orange.svg">
-  <img alt="Website" src="https://img.shields.io/badge/website-uncurses.org-blue.svg">
+  <a href="https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <a href="https://www.rust-lang.org"><img alt="Rust 1.88+" src="https://img.shields.io/badge/rust-1.88%2B-orange.svg"></a>
+  <a href="https://uncurses.org"><img alt="Website" src="https://img.shields.io/badge/website-uncurses.org-blue.svg"></a>
 </p>
 
 uncurses is a Rust library for building terminal user interfaces. It provides a

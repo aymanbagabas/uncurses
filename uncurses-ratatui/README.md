@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml/badge.svg)](https://github.com/aymanbagabas/uncurses/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
-![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)
+[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 [![Website](https://img.shields.io/badge/website-uncurses.org-blue.svg)](https://uncurses.org)
 
 A [ratatui](https://ratatui.rs) `Backend` that renders through
