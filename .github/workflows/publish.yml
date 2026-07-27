@@ -36,7 +36,37 @@ jobs:
         with:
           args: --latest --strip header
 
+      # Intro first, then the generated changelog folded away — the full list is
+      # long enough to bury the description of what the thing actually is.
+      - name: Assemble release notes
+        env:
+          CHANGELOG: ${{ steps.cliff.outputs.changelog }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            cat <<EOF
+          **uncurses** is a Rust library for building terminal user interfaces. It gives you a direct, framework-free way to draw to the terminal and read input — you own every cell and your own event loop, whether you run inline, take over the full screen, or mix the two.
+
+          A diffing renderer that redraws only what changed, Unicode-aware width, truecolor styling with automatic downsampling, hyperlinks, and typed keyboard, mouse, and paste input. It asks the terminal what it supports instead of looking it up in a terminfo database, so the same code runs on Linux, macOS, and Windows.
+
+          \`\`\`toml
+          [dependencies]
+          uncurses = "$version"
+          \`\`\`
+
+          Using [ratatui](https://ratatui.rs)? \`uncurses-ratatui\` provides a backend.
+
+          Guides, concepts, and API reference: **[uncurses.org](https://uncurses.org)**
+
+          <details>
+          <summary><b>Changelog</b></summary>
+
+          EOF
+            cat "$CHANGELOG"
+            printf '\n\n</details>\n'
+          } > release-notes.md
+
       - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "${{ steps.cliff.outputs.changelog }}"
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
