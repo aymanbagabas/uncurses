@@ -66,7 +66,11 @@ An animated showcase that cycles through sprinkles, nested colored panels, a
 styled banner, a marquee, and bouncing balls. The quickest way to see what the
 renderer can do.
 
-<img width="440" alt="tour" src="https://github.com/user-attachments/assets/dca54e55-927a-4dab-ba09-a3bcaa706e88" />
+<p>
+  <picture>
+    <img width="440" alt="tour" src="https://github.com/user-attachments/assets/57a39054-306b-44a0-8851-988b084c1f6f" />
+  </picture>
+</p>
 
 **`gradient`**
 
@@ -74,21 +78,34 @@ A smooth truecolor field that packs two colors per cell with half-block
 sub-pixels, plus a mouse-driven inspector that reports the color under the
 pointer. Shows color handling and mouse input together.
 
-<img width="440" alt="gradient" src="https://github.com/user-attachments/assets/66261902-59ec-46da-bc39-dbb4da38e980" />
+<p>
+  <picture>
+    <img width="440" alt="gradient" src="https://github.com/user-attachments/assets/65f2ce3c-39a4-419b-9337-43b800814690" />
+  </picture>
+</p>
 
 **`file_explorer`**
 
 A real two-pane file browser with a live preview that scrolls by column, so a
 side pane moves without disturbing the file list. A full end-to-end app.
 
-<img width="440" alt="file_explorer" src="https://github.com/user-attachments/assets/8b448170-1e9a-44d7-9b77-a554e2f08929" />
+
+<p>
+  <picture>
+    <img width="440" alt="file_explorer" src="https://github.com/user-attachments/assets/65f3a526-c74e-4f48-9e1d-3da6112c75dc" />
+  </picture>
+</p>
 
 **`task_picker`**
 
 An inline picker (no alternate screen) that hands off to an animated progress
 bar, then exits cleanly. Shows how uncurses draws in the normal buffer.
 
-<img width="440" alt="task_picker" src="https://github.com/user-attachments/assets/cf12edf9-842a-42ba-878d-b2456aa8d30b" />
+<p>
+  <picture>
+    <img width="440" alt="task_picker" src="https://github.com/user-attachments/assets/7e822d76-36f9-40da-933b-698ae3bbfd8f" />
+  </picture>
+</p>
 
 For more, browse the [`examples/`](examples/examples) directory.
 
