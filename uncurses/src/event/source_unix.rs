@@ -16,9 +16,11 @@
 //!
 //! ## Key types
 //!
-//! `UnixWakerInner` owns the write end of a non-blocking self-pipe. The
-//! shared [`Waker`] wraps it so other threads can interrupt
-//! blocking reads without touching decoder state.
+//! `UnixWakerInner` owns *both* ends of a non-blocking self-pipe. The shared
+//! [`Waker`] wraps it so other threads can interrupt blocking reads without
+//! touching decoder state. Both ends live behind the same `Arc` because a
+//! `Waker` may outlive its source, and writing to a pipe whose reader has
+//! closed raises a synchronous `SIGPIPE`.
 //!
 //! ## Gotchas
 //!
@@ -47,9 +49,22 @@ use crate::terminal::get_window_size;
 pub(super) struct UnixWakerInner {
     /// Write end of the self-pipe. Non-blocking; closed on drop.
     tx: OwnedFd,
+    /// Read end, kept here rather than in [`EventSource`] so that it cannot be
+    /// closed while a `Waker` clone still holds `tx`. A write to a pipe whose
+    /// reader is gone raises a *synchronous* `SIGPIPE` on the calling thread,
+    /// which no error handling can intercept — invisible in a Rust binary
+    /// (std sets `SIG_IGN` at startup) but fatal inside a C or Go host.
+    /// `Waker` is public, `Clone` and `Send`, so it legitimately outlives the
+    /// source it came from; sharing both ends behind the same `Arc` makes that
+    /// safe instead of merely unlikely.
+    rx: OwnedFd,
 }
 
 impl UnixWakerInner {
+    pub(super) fn read_fd(&self) -> std::os::fd::RawFd {
+        self.rx.as_raw_fd()
+    }
+
     pub(super) fn wake(&self) -> io::Result<()> {
         let buf = b"w";
         loop {
@@ -90,13 +105,19 @@ where
     /// [`EventSource::with_esc_timeout`] and
     /// [`EventSource::with_paste_idle_timeout`].
     ///
+    /// Resize deduplication starts from the size `input` reports here, so a
+    /// `SIGWINCH` that does not actually change the size produces no
+    /// [`Event::Resize`].
+    ///
     /// Returns any OS error from pipe creation, fd configuration, SIGWINCH
     /// subscription, or poller construction. It does not read from `input`.
     pub fn new(input: I) -> io::Result<Self> {
         let (pipe_rx, pipe_tx) = make_self_pipe()?;
-        let (winch_rx, winch_tx) = make_self_pipe()?;
-        let winch_sub = winch::subscribe(winch_tx.as_raw_fd())?;
-        let waker = Waker::from_unix_inner(Arc::new(UnixWakerInner { tx: pipe_tx }));
+        let winch_sub = winch::subscribe()?;
+        let waker = Waker::from_unix_inner(Arc::new(UnixWakerInner {
+            tx: pipe_tx,
+            rx: pipe_rx,
+        }));
 
         // Watch input, wake pipe, and winch pipe — in the fixed index
         // order the pump/ingest path relies on. Detect a tty input fd up
@@ -104,7 +125,13 @@ where
         // on tty character devices).
         let input_fd = input.as_fd().as_raw_fd();
         let input_is_tty = unsafe { libc::isatty(input_fd) } == 1;
-        let fds: [PollFd; 3] = [input_fd, pipe_rx.as_raw_fd(), winch_rx.as_raw_fd()];
+        // Seed the resize dedupe with the size we start at, so the first wake
+        // reports a resize only if one actually happened. Without this any
+        // first wake emits, including one caused by a late handler write that
+        // landed in this slot's pooled pipe just after it was leased to us.
+        // `None` on a non-tty, where there is no size to compare against.
+        let last_size = get_window_size(input.as_fd()).ok();
+        let fds: [PollFd; 3] = [input_fd, waker.pipe_read_fd(), winch_sub.read_fd()];
         let poller = super::poll::new_poller(&fds, input_is_tty)?;
 
         Ok(Self {
@@ -119,11 +146,8 @@ where
             waker,
             handle_resize: true,
             poller,
-            pipe_rx,
-            winch_rx,
-            _winch_tx: winch_tx,
-            _winch_sub: winch_sub,
-            last_size: None,
+            winch_sub,
+            last_size,
         })
     }
 
@@ -132,7 +156,7 @@ where
     /// Platform hook for [`EventSource::fill`]. Multiple wake bytes may have
     /// coalesced; draining them all lets a subsequent poll block again.
     pub(super) fn drain_wake(&mut self) {
-        drain_pipe(self.pipe_rx.as_raw_fd());
+        drain_pipe(self.waker.pipe_read_fd());
     }
 
     /// Read ready input bytes and run them through the decoder.
@@ -176,7 +200,7 @@ where
     }
 
     pub(super) fn handle_winch(&mut self) {
-        drain_pipe(self.winch_rx.as_raw_fd());
+        drain_pipe(self.winch_sub.read_fd());
         // When in-band resize reporting is enabled the host disables
         // this path; the terminal delivers resizes through the decoder
         // instead, so emitting here too would duplicate every event.
@@ -195,7 +219,7 @@ where
     }
 }
 
-fn make_self_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+pub(super) fn make_self_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0i32; 2];
     let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
     if rc != 0 {
@@ -229,7 +253,7 @@ fn set_nonblock_cloexec(fd: i32) -> io::Result<()> {
     Ok(())
 }
 
-fn drain_pipe(fd: i32) {
+pub(super) fn drain_pipe(fd: i32) {
     let mut buf = [0u8; 32];
     loop {
         let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
@@ -550,6 +574,73 @@ mod tests {
         unsafe { libc::raise(libc::SIGWINCH) };
         // No event is produced; the poll runs to its (short) timeout.
         assert!(!src.poll(Some(Duration::from_millis(50))).unwrap());
+        assert!(src.try_read().is_none());
+    }
+
+    /// A pty master is a tty in every environment, including CI with captured
+    /// output — unlike stderr, which makes the neighbouring tests skip.
+    /// Returns the master and the slave; the slave must stay open, since
+    /// Darwin rejects `TIOCSWINSZ` on a master that has none.
+    ///
+    /// L4Re has no pty API in `libc`, so it opts out along with its test.
+    #[cfg(not(target_os = "l4re"))]
+    fn open_pty_master() -> Option<(File, File)> {
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            if master < 0 {
+                return None;
+            }
+            if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
+                libc::close(master);
+                return None;
+            }
+            let name = libc::ptsname(master);
+            if name.is_null() {
+                libc::close(master);
+                return None;
+            }
+            let slave = libc::open(name, libc::O_RDWR | libc::O_NOCTTY);
+            if slave < 0 {
+                libc::close(master);
+                return None;
+            }
+            Some((File::from_raw_fd(master), File::from_raw_fd(slave)))
+        }
+    }
+
+    /// The constructor seeds `last_size`, so a `SIGWINCH` that does not change
+    /// the size must not surface an event. That is what keeps a stray wake on a
+    /// recycled pool pipe from being mistaken for a resize.
+    #[cfg(not(target_os = "l4re"))]
+    #[test]
+    fn sigwinch_dedups_unchanged_size() {
+        let Some((master, _slave)) = open_pty_master() else {
+            return;
+        };
+        let ws = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws) },
+            0,
+            "could not set the pty size"
+        );
+
+        let mut src = new_reader(master);
+        assert_eq!(
+            src.last_size.map(|s| (s.row, s.col)),
+            Some((24, 80)),
+            "constructor did not seed the resize dedupe from the input fd"
+        );
+
+        unsafe { libc::raise(libc::SIGWINCH) };
+        assert!(
+            !src.poll(Some(Duration::from_millis(50))).unwrap(),
+            "an unchanged size surfaced a resize event"
+        );
         assert!(src.try_read().is_none());
     }
 
