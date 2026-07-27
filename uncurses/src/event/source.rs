@@ -45,8 +45,6 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::os::fd::AsFd;
-#[cfg(unix)]
-use std::os::fd::OwnedFd;
 #[cfg(windows)]
 use std::os::windows::io::AsHandle;
 
@@ -161,6 +159,13 @@ impl Waker {
         Self { inner }
     }
 
+    /// Read end of the wake self-pipe. Lives behind the same `Arc` as the
+    /// write end so it is never closed while a writer survives.
+    #[cfg(unix)]
+    pub(super) fn pipe_read_fd(&self) -> std::os::fd::RawFd {
+        self.inner.read_fd()
+    }
+
     /// Interrupt the [`EventSource`] this waker is bound to.
     ///
     /// A blocked [`EventSource::poll`] returns `Ok(false)` and a blocked
@@ -230,25 +235,18 @@ where
     pub(super) handle_resize: bool,
 
     // --- Unix-only state ---
-    /// Shared readiness poller watching `[input, pipe_rx, winch_rx]` (in
+    /// Shared readiness poller watching `[input, wake_rx, winch_rx]` (in
     /// that index order). Held behind `Arc` so an [`super::EventStream`]
     /// reader thread can wait on it lock-free while the source's decode
     /// state is mutated under a separate lock.
     #[cfg(unix)]
     pub(super) poller: Arc<dyn Poller>,
+    /// Active SIGWINCH subscription, and owner of the pipe the handler wakes.
+    /// The pipe is leased from a process-lifetime pool rather than owned here,
+    /// so no descriptor the handler may be about to write to can be closed —
+    /// see the `PIPES` pool in the sigwinch module.
     #[cfg(unix)]
-    pub(super) pipe_rx: OwnedFd,
-    #[cfg(unix)]
-    pub(super) winch_rx: OwnedFd,
-    /// Held to keep the SIGWINCH write fd alive for the handler.
-    /// Dropped after `_winch_sub` so the subscription is removed
-    /// before the handler can write into a closed fd.
-    #[cfg(unix)]
-    pub(super) _winch_tx: OwnedFd,
-    /// Active SIGWINCH subscription. Dropped before `_winch_tx` per
-    /// declaration order so the handler is unregistered first.
-    #[cfg(unix)]
-    pub(super) _winch_sub: winch::Subscription,
+    pub(super) winch_sub: winch::Subscription,
     #[cfg(unix)]
     pub(super) last_size: Option<Winsize>,
 
@@ -274,10 +272,9 @@ where
     pub(super) last_mouse_buttons: u32,
 }
 
-// Drop ordering note for Unix: Rust drops fields top-to-bottom, so
-// _winch_sub (declared before _winch_tx in the struct) is dropped
-// first, removing the SIGWINCH handler before the write end of the
-// pipe is closed.
+// Drop ordering note for Unix: the winch pipe is leased from a
+// process-lifetime pool and is never closed, so dropping the subscription
+// only frees the slot. Field drop order is therefore not load-bearing here.
 
 // ---------------------------------------------------------------------------
 // Shared methods (platform-agnostic)
