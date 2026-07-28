@@ -108,7 +108,7 @@ use std::time::{Duration, Instant};
 
 use bitflags::bitflags;
 
-use crate::ansi::{kitty, mode};
+use crate::ansi::{kitty, mode, progress};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::color::Profile;
@@ -296,6 +296,37 @@ bitflags! {
         /// Request pixel coordinates (SGR-pixel). Terminals that support it
         /// report pixels; the rest fall back to SGR cell coordinates.
         const PIXELS = 1 << 1;
+    }
+}
+
+/// A progress indication reported to the terminal with `OSC 9;4`, shown in
+/// the taskbar, tab, or window chrome by terminals that support it.
+///
+/// Set it with [`Screen::set_progress_state`] and take it down with
+/// [`Screen::reset_progress_state`]. Percentages are clamped to `0..=100`
+/// when emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProgressState {
+    /// Determinate progress at the given percentage.
+    Normal(u8),
+    /// A failed operation, at the given percentage. Usually red.
+    Error(u8),
+    /// An operation needing attention, at the given percentage. Usually
+    /// yellow. Named "paused" in ConEmu, which originated the sequence.
+    Warning(u8),
+    /// Work in progress of unknown duration. Usually a pulsing bar.
+    Indeterminate,
+}
+
+impl ProgressState {
+    /// Emit the `OSC 9;4` sequence for this state.
+    fn write<W: Write>(self, w: &mut W) -> io::Result<()> {
+        match self {
+            ProgressState::Normal(p) => progress::write_set_progress_bar(w, p.into()),
+            ProgressState::Error(p) => progress::write_set_error_progress_bar(w, p.into()),
+            ProgressState::Warning(p) => progress::write_set_warning_progress_bar(w, p.into()),
+            ProgressState::Indeterminate => w.write_all(progress::SET_INDETERMINATE_PROGRESS_BAR),
+        }
     }
 }
 
