@@ -22,8 +22,8 @@ shape your output.
 
 It includes a diffing renderer that redraws only what changed, Unicode-aware
 width, truecolor styling with automatic downsampling, hyperlinks, and typed
-keyboard, mouse, and paste input. Rather than a terminfo database, it detects
-capabilities through terminal queries and sets sane defaults, and runs across
+keyboard, mouse, and paste input. It asks the terminal what it supports
+instead of looking it up in a terminfo database, so the same code runs on
 Linux, macOS, and Windows.
 
 Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
