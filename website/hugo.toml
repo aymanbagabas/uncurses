@@ -25,7 +25,7 @@ pageRef = "/docs"
 weight = 1
 [[menu.main]]
 name = "Examples"
-pageRef = "/docs/examples"
+url = "https://github.com/aymanbagabas/uncurses/tree/main/examples/examples"
 weight = 2
 [[menu.main]]
 name = "API"
