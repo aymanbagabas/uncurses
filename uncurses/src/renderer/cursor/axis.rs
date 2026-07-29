@@ -563,6 +563,117 @@ mod tests {
         }
     }
 
+    /// Replay a planned horizontal move and report the column the
+    /// cursor actually lands on, so a plan can be checked against the
+    /// only thing that matters: where the terminal ends up.
+    fn replay_column(bytes: &[u8], start: u16, tabs: &TabStops) -> u16 {
+        let s = std::str::from_utf8(bytes).expect("emitter writes UTF-8");
+        let mut col = start;
+        let mut it = s.chars().peekable();
+        while let Some(ch) = it.next() {
+            match ch {
+                '\x1b' => {
+                    assert_eq!(it.next(), Some('['), "emitter only writes CSI");
+                    let mut param = String::new();
+                    let mut params = Vec::new();
+                    let final_byte = loop {
+                        let c = it.next().expect("unterminated CSI");
+                        match c {
+                            '0'..='9' => param.push(c),
+                            ';' => params.push(std::mem::take(&mut param)),
+                            _ => break c,
+                        }
+                    };
+                    params.push(param);
+                    let n = |i: usize| -> u16 {
+                        params.get(i).and_then(|p| p.parse().ok()).unwrap_or(1)
+                    };
+                    match final_byte {
+                        'C' => col += n(0),
+                        'D' => col = col.saturating_sub(n(0)),
+                        'G' => col = n(0) - 1,
+                        'H' | 'f' => col = n(1) - 1,
+                        'I' => (0..n(0)).for_each(|_| col = tabs.next(col)),
+                        'Z' => (0..n(0)).for_each(|_| col = tabs.prev(col)),
+                        other => panic!("unexpected CSI final byte {other:?}"),
+                    }
+                }
+                '\t' => col = tabs.next(col),
+                '\x08' => col = col.saturating_sub(1),
+                '\r' => col = 0,
+                // ponytail: this test's line is ASCII + `漢` only, so the
+                // caller controls every char the emitter can echo. Swap in
+                // real width lookup if the fixture grows combining marks.
+                c => col += if c.is_ascii() { 1 } else { 2 },
+            }
+        }
+        col
+    }
+
+    /// A horizontal move must leave the cursor on exactly `tx`.
+    ///
+    /// Regression test for the overwrite planner pricing a candidate in
+    /// *columns* while the emit pass wrote *bytes*: a wide cell's
+    /// continuation charged one column for zero bytes, so a residual
+    /// that began on a continuation was priced at 0 — beating every
+    /// real move — and then emitted nothing. The cursor stopped short
+    /// and the skipped column kept its previous background, leaving a
+    /// stray coloured block mid-line.
+    ///
+    /// Tab stops make this reachable in practice: `TabsThen` prices its
+    /// residual from a tab stop, so any wide glyph straddling one puts
+    /// a continuation at the residual's `from`.
+    #[test]
+    fn horizontal_move_lands_exactly_on_target_across_wide_cells() {
+        use crate::cell::Cell;
+        let r = renderer();
+        let style = r.cur.style().clone();
+        // Wide glyphs straddling columns 7/8 and 15/16 put a
+        // continuation directly on the 8-column tab stops.
+        let mut line: Vec<Cell> = Vec::new();
+        for i in 0..20u16 {
+            match i {
+                7 | 15 => {
+                    line.push(Cell::new("漢", 2).with_style(style.clone()));
+                    line.push(Cell::new("", 0));
+                }
+                8 | 16 => {}
+                _ => line.push(
+                    Cell::new(((b'a' + (i as u8 % 26)) as char).to_string(), 1)
+                        .with_style(style.clone()),
+                ),
+            }
+        }
+        assert_eq!(line.len(), 20);
+
+        for &use_tabs in &[false, true] {
+            for &use_bs in &[false, true] {
+                for fx in 0u16..20 {
+                    for tx in 0u16..20 {
+                        let plan = r.plan_horizontal_cost(fx, tx, Some(&line), use_tabs, use_bs);
+                        let mut bytes = Vec::new();
+                        r.emit_horizontal(&mut bytes, plan.shape, Some(&line))
+                            .unwrap();
+                        assert_eq!(
+                            replay_column(&bytes, fx, &r.tabs),
+                            tx,
+                            "fx={fx} tx={tx} tabs={use_tabs} bs={use_bs} \
+                             shape={:?} bytes={:?}",
+                            plan.shape,
+                            String::from_utf8_lossy(&bytes)
+                        );
+                        assert_eq!(
+                            plan.cost,
+                            bytes.len(),
+                            "cost mispredicted fx={fx} tx={tx} shape={:?}",
+                            plan.shape
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Inline / non-fullscreen downward moves use `\n` even when a
     /// shorter CUD or VPA exists, so the host scrolls correctly.
     #[test]

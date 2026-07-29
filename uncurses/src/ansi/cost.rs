@@ -229,22 +229,18 @@ pub const fn tab_cost(n: u16) -> usize {
 
 // ---------- Overwrite (re-emit row cells as a forward move) ----------------
 
-/// Approximate byte cost of re-emitting the cells in `line[from..to]`
+/// Exact byte cost of re-emitting the cells in `line[from..to]`
 /// as a forward-move candidate.
 ///
-/// Returns [`None`] when any `width > 0` cell in the range has a
-/// style or link that does not match the active pen — in that case
-/// the row cannot be re-emitted without an interleaved pen change
-/// and the candidate is not eligible.
+/// Returns [`None`] when the range is not eligible — see
+/// `overwrite_eligible`, which this shares with the emit pass so the
+/// two cannot disagree about which candidates are usable.
 ///
-/// The cost approximation is the sum of `cell.width()` over occupied
-/// cells in the range. For plain ASCII this equals the emitted byte
-/// length exactly. For wide CJK glyphs (`width == 2`, multi-byte
-/// content) and other multi-byte single-width glyphs (combining
-/// sequences, emoji selectors) the prediction underestimates the
-/// emitted length, so an overwrite candidate may be picked here that
-/// a strict byte minimisation would have rejected. Accepting this
-/// approximation keeps the predictor allocation-free.
+/// The cost is the sum of the emitted UTF-8 lengths, which is what the
+/// emit pass actually writes. Counting columns instead understated
+/// multi-byte glyphs — `漢` is 2 columns but 3 bytes, `▀` is 1 column
+/// but 3 — biasing the planner toward overwrite on exactly the rows
+/// built from them.
 pub fn overwrite_cost(
     line: &[crate::cell::Cell],
     style: &crate::style::Style,
@@ -253,24 +249,57 @@ pub fn overwrite_cost(
 ) -> Option<usize> {
     let from = from as usize;
     let to = to as usize;
-    if to > line.len() {
+    if !overwrite_eligible(line, style, from, to) {
         return None;
     }
     let mut i = from;
     let mut cost = 0usize;
     while i < to {
         let cell = &line[i];
-        if cell.width() > 0 {
-            if cell.style() != style {
-                return None;
-            }
-            cost += cell.width() as usize;
-            i += cell.width() as usize;
-            continue;
-        }
-        i += 1;
+        cost += cell.content().len();
+        // See `collect_overwrite_bytes`: eligibility rejects width-0
+        // cells, `max(1)` only guarantees the walk terminates.
+        i += cell.width().max(1) as usize;
     }
     Some(cost)
+}
+
+/// Whether re-emitting `line[from..to]` under `style` lands the cursor
+/// on exactly column `to`.
+///
+/// This is a cursor *move*: the bytes are only a cheap way to walk
+/// right, so the sole requirement is that they advance the cursor by
+/// exactly `to - from` columns. Shared by [`overwrite_cost`] and the
+/// emit pass, because a candidate the cost pass accepts but the emit
+/// pass cannot reproduce leaves the cursor short and strands a stale
+/// cell.
+pub(crate) fn overwrite_eligible(
+    line: &[crate::cell::Cell],
+    style: &crate::style::Style,
+    from: usize,
+    to: usize,
+) -> bool {
+    if to > line.len() {
+        return false;
+    }
+    let mut i = from;
+    while i < to {
+        let cell = &line[i];
+        // Blank cells carry a `" "`, so empty content means a
+        // continuation: the right half of a wide glyph, with no bytes
+        // of its own. Either way the cell emits nothing while occupying
+        // a column, so the run would silently fall short of `to`. Both
+        // tests are kept — the `is_continuation` one also guarantees
+        // the walk progresses, since a width-0 cell would spin forever.
+        if cell.is_continuation() || cell.content().is_empty() || cell.style() != style {
+            return false;
+        }
+        i += cell.width() as usize;
+    }
+    // A wide cell is re-emitted like any other, advancing two columns
+    // with one glyph; only one straddling `to` is unusable, since it
+    // would land the cursor a column past the target.
+    i == to
 }
 
 #[cfg(test)]
