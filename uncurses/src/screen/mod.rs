@@ -666,6 +666,11 @@ where
     }
 
     /// Set the renderer optimization flags.
+    ///
+    /// The [`Optimizations::LINE_DISCIPLINE`] flags are not honored here:
+    /// [`init`](Self::init) and [`resume`](Self::resume) re-derive them
+    /// from the live terminal state on every raw-mode entry, discarding
+    /// whatever was set before.
     pub fn set_optimizations(&mut self, optimizations: Optimizations) {
         self.renderer.set_optimizations(optimizations);
     }
@@ -1239,6 +1244,27 @@ where
         Ok(())
     }
 
+    /// Recompute the line-discipline optimizations from the host's output
+    /// processing: `TABS` and `BS` when `\t` and `\x08` reach the terminal
+    /// intact, and `ONLCR` when `\n` also returns the cursor to column 0.
+    /// The `$TERM` baselines describe the terminal rather than the line
+    /// discipline, so these are derived here instead of assumed.
+    ///
+    /// All three are *replaced*, not merely granted. A flag the host
+    /// withholds is a flag whose control byte the host will mangle, so
+    /// keeping a previously-set one would corrupt the frame rather than
+    /// merely waste bytes.
+    ///
+    /// Runs after every `make_raw`, including [`resume`](Self::resume),
+    /// since re-entering raw mode is what makes the answer true again.
+    fn apply_line_discipline(&mut self, state: &crate::terminal::State) {
+        let opts = self
+            .optimizations()
+            .difference(Optimizations::LINE_DISCIPLINE)
+            .union(Optimizations::from_host_state(state));
+        self.renderer.set_optimizations(opts);
+    }
+
     /// Whether the host is Apple's `Terminal.app`, which does not support
     /// most of the queried features and mishandles the queries themselves.
     fn is_apple_terminal(&self) -> bool {
@@ -1508,6 +1534,16 @@ where
     I: Input + Copy + std::os::fd::AsFd,
     O: Write + Copy + std::os::fd::AsFd,
 {
+    /// Read the terminal state left behind by `make_raw` and hand it to
+    /// [`apply_line_discipline`](Self::apply_line_discipline). Keeps the
+    /// baseline when the state cannot be read rather than failing init
+    /// over an optimization hint.
+    fn resolve_line_discipline(&mut self) {
+        if let Ok(state) = self.terminal.get_state() {
+            self.apply_line_discipline(&state);
+        }
+    }
+
     /// Construct a screen over `terminal` without touching the terminal:
     /// size the renderer to it and create an [`EventSource`] on its input
     /// half. The terminal is left as-is; call [`Self::init`] to enter raw
@@ -1532,6 +1568,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
+        self.resolve_line_discipline();
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped. Disable color
@@ -1600,9 +1637,15 @@ where
     /// Re-acquire the terminal after a [`Self::pause`] or [`Self::suspend`]:
     /// re-enter raw mode, refit the managed area to the current viewport, re-apply
     /// the saved render state and modes, and force a full repaint.
+    ///
+    /// Re-derives the [`Optimizations::LINE_DISCIPLINE`] flags and resets
+    /// the hardware tab stops, since whatever ran while paused may have
+    /// changed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        self.resolve_line_discipline();
         self.autoresize()?;
+        self.reset_tab_stops()?;
         self.restore()?;
         self.invalidate();
         self.flush()
@@ -1634,6 +1677,16 @@ where
     I: Input + Copy + std::os::windows::io::AsHandle,
     O: Write + Copy + std::os::windows::io::AsHandle,
 {
+    /// Read the terminal state left behind by `make_raw` and hand it to
+    /// [`apply_line_discipline`](Self::apply_line_discipline). Keeps the
+    /// baseline when the state cannot be read rather than failing init
+    /// over an optimization hint.
+    fn resolve_line_discipline(&mut self) {
+        if let Ok(state) = self.terminal.get_state() {
+            self.apply_line_discipline(&state);
+        }
+    }
+
     /// Construct a screen over `terminal` without touching the terminal:
     /// size the renderer to it and create an [`EventSource`] on its input
     /// half. The terminal is left as-is; call [`Self::init`] to enter raw
@@ -1658,6 +1711,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
+        self.resolve_line_discipline();
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped. Disable color
@@ -1726,9 +1780,15 @@ where
     /// Re-acquire the terminal after a [`Self::pause`]: re-enter raw mode,
     /// refit the managed area to the current viewport, re-apply the saved
     /// render state and modes, and force a full repaint.
+    ///
+    /// Re-derives the [`Optimizations::LINE_DISCIPLINE`] flags and resets
+    /// the hardware tab stops, since whatever ran while paused may have
+    /// changed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        self.resolve_line_discipline();
         self.autoresize()?;
+        self.reset_tab_stops()?;
         self.restore()?;
         self.invalidate();
         self.flush()
