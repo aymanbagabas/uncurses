@@ -2301,3 +2301,128 @@ fn clip_origin_keeps_area_on_screen() {
     screen.window_cells = Some(Size::new(10, 3));
     assert_eq!(screen.clip_origin(Position::new(0, 6)), Position::new(0, 0));
 }
+
+/// `init` must resolve the line-discipline optimizations from the state the
+/// terminal is in *after* `make_raw`, not the one it was in before. Raw mode
+/// clears `OPOST`, so tabs and backspace reach the terminal untouched and `\n`
+/// no longer carries a carriage return. Reading the pre-raw state instead
+/// would invert both answers, which is exactly what this pins down.
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn init_resolves_line_discipline_after_entering_raw_mode() {
+    use std::os::fd::AsRawFd;
+
+    // The master must outlive the slave, so bind it for the whole test.
+    let Some((_master, slave)) = open_pty_pair() else {
+        return;
+    };
+    // Put the slave in cooked mode with tab expansion and ONLCR: the exact
+    // opposite of what raw mode leaves behind. Everything past the pty probe
+    // is a hard failure -- a silent return here would let the whole test pass
+    // vacuously on a machine where ptys work fine.
+    let mut cooked: libc::termios = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut cooked) },
+        0,
+        "tcgetattr on a fresh pty slave: {}",
+        std::io::Error::last_os_error()
+    );
+    cooked.c_oflag |= libc::OPOST | libc::ONLCR | libc::TAB3 as libc::tcflag_t;
+    assert_eq!(
+        unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
+        0,
+        "tcsetattr on a fresh pty slave: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::Env::new());
+    let mut screen = Screen::new(term).expect("Screen::new over a pty slave");
+    // Start from the *opposite* of what raw mode implies: ONLCR on, and a
+    // baseline that carries neither TABS nor BS. All three assertions below
+    // are then load-bearing, since nothing but the init-time grant can
+    // explain their final values.
+    screen.set_optimizations(Optimizations::modern().with_onlcr(true));
+    screen
+        .init_with(ScreenOptions {
+            query_capabilities: false,
+            ..Default::default()
+        })
+        .expect("init over a pty slave");
+
+    assert_line_discipline_resolved(screen.optimizations(), "init");
+
+    // Resume re-enters raw mode, so it must resolve the line discipline too.
+    // Undo all three flags first -- otherwise the assertions would still hold
+    // if `resume` did nothing at all.
+    screen.pause().expect("pause");
+    assert_eq!(
+        unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
+        0,
+        "restoring cooked mode while paused: {}",
+        std::io::Error::last_os_error()
+    );
+    screen.set_optimizations(
+        Optimizations::modern()
+            .with_onlcr(true)
+            .with_tabs(false)
+            .with_bs(false),
+    );
+    screen.resume().expect("resume");
+    assert_line_discipline_resolved(screen.optimizations(), "resume");
+}
+
+/// The three line-discipline flags a raw pty implies, plus the invariant that
+/// resolving them leaves every other capability alone -- replacing the whole
+/// set with `from_host_state` would silently drop all 13 escape-sequence caps.
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[track_caller]
+fn assert_line_discipline_resolved(opts: Optimizations, after: &str) {
+    assert!(
+        opts.contains(Optimizations::TABS),
+        "{after}: raw mode clears OPOST, so \\t reaches the terminal: {opts:?}"
+    );
+    assert!(
+        opts.contains(Optimizations::BS),
+        "{after}: raw mode clears OPOST, so \\x08 reaches the terminal: {opts:?}"
+    );
+    assert!(
+        !opts.contains(Optimizations::ONLCR),
+        "{after}: raw mode clears OPOST, so \\n no longer implies a carriage \
+         return, and the pre-raw state said the opposite: {opts:?}"
+    );
+    assert_eq!(
+        opts.difference(Optimizations::LINE_DISCIPLINE),
+        Optimizations::modern().difference(Optimizations::LINE_DISCIPLINE),
+        "{after}: resolving the line discipline must not disturb the baseline"
+    );
+}
+
+/// A pty master/slave pair. The master must stay open for the slave to remain
+/// usable. Mirrors the helper in `event::source_unix`'s tests.
+#[cfg(all(unix, not(target_os = "l4re")))]
+fn open_pty_pair() -> Option<(std::fs::File, std::fs::File)> {
+    use std::fs::File;
+    use std::os::fd::FromRawFd;
+
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        if master < 0 {
+            return None;
+        }
+        if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
+            libc::close(master);
+            return None;
+        }
+        let name = libc::ptsname(master);
+        if name.is_null() {
+            libc::close(master);
+            return None;
+        }
+        let slave = libc::open(name, libc::O_RDWR | libc::O_NOCTTY);
+        if slave < 0 {
+            libc::close(master);
+            return None;
+        }
+        Some((File::from_raw_fd(master), File::from_raw_fd(slave)))
+    }
+}

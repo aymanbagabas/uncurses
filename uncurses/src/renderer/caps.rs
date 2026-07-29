@@ -18,9 +18,20 @@
 //! ## Line-discipline flags
 //!
 //! [`Optimizations::TABS`], [`Optimizations::BS`], and
-//! [`Optimizations::ONLCR`] describe behavior that often depends on
-//! terminal mode as much as terminal type. Override them when raw/cooked
-//! mode or output processing differs from the detector's assumptions.
+//! [`Optimizations::ONLCR`] describe the host's output processing, not
+//! the terminal's own abilities, so no baseline here carries them: a
+//! `\t` is only usable if the line discipline passes it through, which
+//! `$TERM` cannot tell you. A [`Screen`](crate::screen::Screen) therefore
+//! re-derives all three from the live terminal state on *every* raw-mode
+//! entry — [`init`](crate::screen::Screen::init) and
+//! [`resume`](crate::screen::Screen::resume) alike — via
+//! [`Optimizations::from_host_state`], discarding whatever they were set
+//! to before. Driving a [`Renderer`] yourself? Call
+//! [`Optimizations::from_host_state`] the same way, or set them by hand
+//! with [`Optimizations::with_tabs`], [`Optimizations::with_bs`], and
+//! [`Optimizations::with_onlcr`] if you already know the answer.
+//!
+//! [`Renderer`]: crate::renderer::Renderer
 
 use bitflags::bitflags;
 
@@ -39,6 +50,13 @@ bitflags! {
     /// Flag names follow the short capability names used by `infocmp`
     /// where they exist. `BS` and `ONLCR` are not terminfo caps; they
     /// describe control-character and output-processing behavior.
+    ///
+    /// [`TABS`](Self::TABS), [`BS`](Self::BS), and
+    /// [`ONLCR`](Self::ONLCR) — collectively
+    /// [`LINE_DISCIPLINE`](Self::LINE_DISCIPLINE) — are the odd ones
+    /// out: they describe the *host*, not the terminal, and a
+    /// [`Screen`](crate::screen::Screen) recomputes them on every
+    /// raw-mode entry. See the module docs.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct Optimizations: u32 {
         /// Terminal supports ECH (Erase Characters, `CSI Ps X`) for
@@ -101,18 +119,17 @@ impl Default for Optimizations {
 impl Optimizations {
     /// Return the most conservative useful capability set.
     ///
-    /// Every escape-sequence optimization is disabled; only literal
-    /// hardware tabs and backspace remain enabled. Use this for unknown
-    /// or genuinely capability-limited terminals when direct cell output
-    /// is safer than specialized control sequences.
+    /// Every escape-sequence optimization is disabled. Use this for
+    /// unknown or genuinely capability-limited terminals when direct
+    /// cell output is safer than specialized control sequences.
     pub const fn none() -> Self {
-        Self::TABS.union(Self::BS)
+        Self::empty()
     }
 
     /// Return the modern full-feature baseline.
     ///
-    /// Enables every renderer optimization except [`Self::ONLCR`], since
-    /// raw mode is the default assumption for terminal applications.
+    /// Enables every renderer optimization a terminal can advertise.
+    /// The line-discipline flags are absent: see the module docs.
     pub const fn modern() -> Self {
         Self::ECH
             .union(Self::REP)
@@ -125,10 +142,8 @@ impl Optimizations {
             .union(Self::CHA)
             .union(Self::HPA)
             .union(Self::VPA)
-            .union(Self::TABS)
             .union(Self::CBT)
             .union(Self::CHT)
-            .union(Self::BS)
     }
 
     /// Return the xterm-compatible conservative baseline.
@@ -150,23 +165,20 @@ impl Optimizations {
     ///
     /// Predates the xterm extensions for
     /// absolute positioning (CHA/HPA/VPA), ECH, REP, BCE, SU/SD, and
-    /// CBT, but supports DECSTBM, hardware tabs, BS, and on the
-    /// VT102 the ICH/DCH/IL/DL editing pairs.
+    /// CBT, but supports DECSTBM and, on the VT102, the ICH/DCH/IL/DL
+    /// editing pairs.
     pub const fn vt100() -> Self {
         Self::ICH
             .union(Self::DCH)
             .union(Self::CSR)
             .union(Self::IL_DL)
-            .union(Self::TABS)
-            .union(Self::BS)
     }
 
     /// Return the Linux console baseline.
     ///
     /// The kernel's terminal driver
     /// implements a narrow subset of ECMA-48 — only absolute
-    /// positioning (CHA/HPA/VPA), ECH, and ICH on top of the
-    /// hardware tab stops and BS handled by termios.
+    /// positioning (CHA/HPA/VPA), ECH, and ICH.
     /// See `console_codes(4)`.
     pub const fn linux() -> Self {
         Self::ECH
@@ -174,8 +186,6 @@ impl Optimizations {
             .union(Self::CHA)
             .union(Self::HPA)
             .union(Self::VPA)
-            .union(Self::TABS)
-            .union(Self::BS)
     }
 
     /// Return the GNU screen baseline, derived from
@@ -190,9 +200,125 @@ impl Optimizations {
             .union(Self::IL_DL)
             .union(Self::HPA)
             .union(Self::VPA)
-            .union(Self::TABS)
             .union(Self::CBT)
-            .union(Self::BS)
+    }
+
+    /// The flags that describe the host's output processing rather than
+    /// the terminal's abilities: [`TABS`](Self::TABS), [`BS`](Self::BS),
+    /// and [`ONLCR`](Self::ONLCR).
+    ///
+    /// No `$TERM` baseline carries these. Use
+    /// `opts.difference(Optimizations::LINE_DISCIPLINE).union(Optimizations::from_host_state(&state))`
+    /// to fold a fresh reading into an existing set — which is exactly
+    /// what a [`Screen`](crate::screen::Screen) does at every raw-mode
+    /// entry.
+    pub const LINE_DISCIPLINE: Self = Self::TABS.union(Self::BS).union(Self::ONLCR);
+
+    /// Derive the line-discipline flags from a live terminal state.
+    ///
+    /// Returns only the [`Self::LINE_DISCIPLINE`] flags; every other
+    /// flag is a terminal-type question this cannot answer.
+    ///
+    /// Pass a [`State`](crate::terminal::State) read *after* the
+    /// terminal is in its final mode, i.e. from
+    /// [`Terminal::get_state`](crate::terminal::Terminal::get_state).
+    /// [`Terminal::make_raw`](crate::terminal::Terminal::make_raw)
+    /// returns the state from *before* raw mode, which typically answers
+    /// every question here backwards.
+    ///
+    /// On Unix these come from the `termios` output flags. Clearing
+    /// `OPOST` disables output processing wholesale, so every byte
+    /// reaches the terminal untouched. With `OPOST` set, `TABS` and
+    /// `BS` require the *default* delays `TAB0` and `BS0`, and `ONLCR`
+    /// reports whether `\n` is being rewritten to `\r\n`.
+    ///
+    /// `OCRNL` or `ONOCR` withhold everything. The cursor planner emits
+    /// a bare `\r` as an ungated prefix, and those two flags rewrite it
+    /// to `\n` and drop it respectively — the latter keyed on the
+    /// kernel's own column counter, which escape-sequence output makes
+    /// meaningless. A cooked line that mangles `\r` cannot be driven
+    /// with literal control bytes at all.
+    ///
+    /// The delay check is stricter than the kernels require. Only
+    /// `TAB3` actually rewrites the byte (Linux `n_tty.c`
+    /// `do_output_char`, Darwin `tty.c` `ttyoutput`); `TAB1`/`TAB2` are
+    /// pauses and `BSDLY` is never consulted at all. But a non-default
+    /// delay means the line was configured for hardware that pads its
+    /// control characters, and declining the optimization there costs
+    /// only bytes while trusting it risks a corrupt frame.
+    ///
+    /// `ONLRET` is deliberately ignored for the same reason. It asserts
+    /// that the *terminal* returns the carriage on `\n`, which no
+    /// emulator actually does; believing it would drop a needed `\r`,
+    /// whereas ignoring it costs at most one redundant byte.
+    ///
+    /// On Windows they come from the console output mode.
+    /// `ENABLE_PROCESSED_OUTPUT` is the bit that corresponds to `OPOST`,
+    /// but the conclusion inverts: with `OPOST` *clear* every byte is
+    /// safe, whereas with `ENABLE_PROCESSED_OUTPUT` clear conhost writes
+    /// C0 bytes as glyphs instead of acting on them, so nothing is
+    /// available. A *clear* `DISABLE_NEWLINE_AUTO_RETURN` is the
+    /// analogue of `ONLCR`; conhost makes any LF behave like a CRLF
+    /// unless that flag is set, on both the legacy and the VT path.
+    ///
+    /// `TABS` additionally requires `ENABLE_VIRTUAL_TERMINAL_PROCESSING`.
+    /// Only with both flags does `DoWriteConsole` route through the VT
+    /// state machine, where `\t` becomes a `ForwardTab` that moves the
+    /// cursor. The legacy processed path instead space-fills to the next
+    /// stop, erasing whatever the tab skipped over.
+    ///
+    /// # Parameters
+    ///
+    /// - `state`: the terminal state to read, taken after the terminal
+    ///   reached the mode the renderer will write to.
+    ///
+    /// # Returns
+    ///
+    /// A subset of [`Self::LINE_DISCIPLINE`].
+    #[must_use]
+    #[cfg(unix)]
+    pub fn from_host_state(state: &crate::terminal::State) -> Self {
+        let oflag = state.termios.c_oflag;
+        if oflag & libc::OPOST == 0 {
+            return Self::TABS.union(Self::BS);
+        }
+        if oflag & (libc::OCRNL | libc::ONOCR) != 0 {
+            return Self::empty();
+        }
+        let mut opts = Self::empty();
+        if oflag & libc::TABDLY == libc::TAB0 as libc::tcflag_t {
+            opts = opts.union(Self::TABS);
+        }
+        if oflag & libc::BSDLY == libc::BS0 as libc::tcflag_t {
+            opts = opts.union(Self::BS);
+        }
+        if oflag & libc::ONLCR != 0 {
+            opts = opts.union(Self::ONLCR);
+        }
+        opts
+    }
+
+    /// See the Unix definition for the full contract.
+    #[must_use]
+    #[cfg(windows)]
+    pub fn from_host_state(state: &crate::terminal::State) -> Self {
+        use windows_sys::Win32::System::Console::{
+            DISABLE_NEWLINE_AUTO_RETURN, ENABLE_PROCESSED_OUTPUT,
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        };
+
+        let mode = state.output_mode;
+        if mode & ENABLE_PROCESSED_OUTPUT == 0 {
+            return Self::empty();
+        }
+        let mut opts = Self::BS;
+        if mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0 {
+            opts = opts.union(Self::TABS);
+        }
+        if mode & DISABLE_NEWLINE_AUTO_RETURN == 0 {
+            opts = opts.union(Self::ONLCR);
+        }
+        opts
     }
 
     /// Return `self` with hardware tab support (`TABS`) toggled.
@@ -200,6 +326,10 @@ impl Optimizations {
     /// Disable when the
     /// receiving terminal is in cooked mode without `TAB0` set on
     /// `c_oflag` and `\t` would otherwise be expanded to spaces.
+    ///
+    /// A [`Screen`](crate::screen::Screen) overwrites this from the live
+    /// terminal state on every raw-mode entry; see
+    /// [`Self::LINE_DISCIPLINE`].
     #[must_use]
     pub const fn with_tabs(self, enabled: bool) -> Self {
         self.with_flag(Self::TABS, enabled)
@@ -210,6 +340,10 @@ impl Optimizations {
     /// Disable when the
     /// receiving terminal does not interpret `\x08` as cursor-left
     /// by one cell.
+    ///
+    /// A [`Screen`](crate::screen::Screen) overwrites this from the live
+    /// terminal state on every raw-mode entry; see
+    /// [`Self::LINE_DISCIPLINE`].
     #[must_use]
     pub const fn with_bs(self, enabled: bool) -> Self {
         self.with_flag(Self::BS, enabled)
@@ -220,6 +354,10 @@ impl Optimizations {
     ///
     /// Enable when the terminal is in cooked mode with `ONLCR` set so a
     /// newline both advances a row and resets the column.
+    ///
+    /// A [`Screen`](crate::screen::Screen) overwrites this from the live
+    /// terminal state on every raw-mode entry; see
+    /// [`Self::LINE_DISCIPLINE`].
     #[must_use]
     pub const fn with_onlcr(self, enabled: bool) -> Self {
         self.with_flag(Self::ONLCR, enabled)
@@ -521,16 +659,16 @@ mod tests {
                 | Optimizations::CHT
                 | Optimizations::ONLCR,
         ));
-        // Termios-gated stays on.
-        assert!(o.contains(Optimizations::TABS));
-        assert!(o.contains(Optimizations::BS));
+        // The line discipline is not a $TERM question; `Screen::init`
+        // grants TABS and BS from the live terminal state instead.
+        assert!(o.is_empty());
     }
 
     #[test]
-    fn modern_enables_everything_except_onlcr() {
+    fn modern_enables_every_escape_cap() {
         let o = Optimizations::modern();
-        let everything_but_onlcr = Optimizations::all().difference(Optimizations::ONLCR);
-        assert_eq!(o, everything_but_onlcr);
+        let line_discipline = Optimizations::LINE_DISCIPLINE;
+        assert_eq!(o, Optimizations::all().difference(line_discipline));
     }
 
     #[test]
@@ -560,12 +698,8 @@ mod tests {
             | Optimizations::ONLCR;
         assert!(!o.intersects(missing));
         // VT100 era margins + VT102 editing pairs.
-        let present = Optimizations::CSR
-            | Optimizations::ICH
-            | Optimizations::DCH
-            | Optimizations::IL_DL
-            | Optimizations::TABS
-            | Optimizations::BS;
+        let present =
+            Optimizations::CSR | Optimizations::ICH | Optimizations::DCH | Optimizations::IL_DL;
         assert!(o.contains(present));
     }
 
@@ -576,9 +710,7 @@ mod tests {
             | Optimizations::ICH
             | Optimizations::CHA
             | Optimizations::HPA
-            | Optimizations::VPA
-            | Optimizations::TABS
-            | Optimizations::BS;
+            | Optimizations::VPA;
         assert_eq!(o, present);
     }
 
@@ -592,15 +724,253 @@ mod tests {
             | Optimizations::IL_DL
             | Optimizations::HPA
             | Optimizations::VPA
-            | Optimizations::TABS
-            | Optimizations::CBT
-            | Optimizations::BS;
+            | Optimizations::CBT;
         assert_eq!(o, present);
         assert!(!o.contains(Optimizations::BCE));
         assert!(!o.contains(Optimizations::ECH));
         assert!(!o.contains(Optimizations::REP));
         assert!(!o.contains(Optimizations::CHA));
         assert!(!o.contains(Optimizations::CHT));
+    }
+
+    #[cfg(unix)]
+    fn state_with_oflag(oflag: libc::tcflag_t) -> crate::terminal::State {
+        let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+        termios.c_oflag = oflag;
+        crate::terminal::State { termios }
+    }
+
+    /// Raw mode's answer: `OPOST` off means no output processing at all,
+    /// so `\t` and `\x08` pass through and `\n` gains no carriage return.
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_grants_tabs_and_bs_when_opost_is_clear() {
+        // TAB3/ONLCR are set but must not be read: `OPOST` gates them.
+        let o = Optimizations::from_host_state(&state_with_oflag(
+            libc::ONLCR | libc::TAB3 as libc::tcflag_t,
+        ));
+        assert_eq!(o, Optimizations::TABS | Optimizations::BS);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_reads_delays_when_opost_is_set() {
+        let o = Optimizations::from_host_state(&state_with_oflag(
+            libc::OPOST | libc::TAB0 as libc::tcflag_t | libc::BS0 as libc::tcflag_t,
+        ));
+        assert_eq!(o, Optimizations::TABS | Optimizations::BS);
+    }
+
+    /// `TAB3` expands tabs to spaces before they reach the terminal, so
+    /// the renderer cannot use `\t` to move the cursor.
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_withholds_tabs_under_tab3() {
+        let o = Optimizations::from_host_state(&state_with_oflag(
+            libc::OPOST | libc::TAB3 as libc::tcflag_t,
+        ));
+        assert!(!o.contains(Optimizations::TABS));
+        assert!(o.contains(Optimizations::BS));
+    }
+
+    /// A `BSDLY` other than `BS0` pads `\b` for hardware that needs the
+    /// pause. The kernels write the byte through regardless, so this is
+    /// stricter than strictly necessary and deliberately so: the
+    /// fallback costs bytes, a corrupt frame costs the screen.
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_withholds_bs_under_bs1() {
+        let o = Optimizations::from_host_state(&state_with_oflag(
+            libc::OPOST | libc::BS1 as libc::tcflag_t,
+        ));
+        assert!(!o.contains(Optimizations::BS));
+        assert!(o.contains(Optimizations::TABS));
+    }
+
+    /// `TAB1` and `TAB2` are pauses rather than rewrites, but they
+    /// still signal padding hardware, so the strict check declines
+    /// `TABS`.
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_withholds_tabs_under_tab1_and_tab2() {
+        for delay in [libc::TAB1, libc::TAB2] {
+            let o = Optimizations::from_host_state(&state_with_oflag(
+                libc::OPOST | delay as libc::tcflag_t,
+            ));
+            assert!(
+                !o.contains(Optimizations::TABS),
+                "delay {delay:#o} means the line pads its control characters"
+            );
+        }
+    }
+
+    /// `OCRNL` rewrites the planner's bare `\r` to `\n` and `ONOCR`
+    /// drops it outright, so neither cooked line can be driven with
+    /// literal control bytes at all.
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_withholds_everything_under_ocrnl_or_onocr() {
+        for flag in [libc::OCRNL, libc::ONOCR] {
+            let o =
+                Optimizations::from_host_state(&state_with_oflag(libc::OPOST | libc::ONLCR | flag));
+            assert!(
+                o.is_empty(),
+                "oflag {flag:#o} mangles the planner's CR: {o:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_reports_onlcr_only_under_opost() {
+        let cooked = Optimizations::from_host_state(&state_with_oflag(libc::OPOST | libc::ONLCR));
+        assert!(cooked.contains(Optimizations::ONLCR));
+        let raw = Optimizations::from_host_state(&state_with_oflag(0));
+        assert!(!raw.contains(Optimizations::ONLCR));
+    }
+
+    /// The detector answers only the line-discipline question; every
+    /// other flag is a terminal-type question it must not guess at.
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_never_reports_escape_caps() {
+        for oflag in [0, libc::OPOST, libc::OPOST | libc::ONLCR, !0] {
+            let o = Optimizations::from_host_state(&state_with_oflag(oflag));
+            assert!(
+                !o.intersects(Optimizations::all().difference(Optimizations::LINE_DISCIPLINE)),
+                "oflag {oflag:#x} leaked an escape-sequence cap: {o:?}"
+            );
+        }
+    }
+
+    /// No `$TERM` baseline may carry a line-discipline flag. `\t`,
+    /// `\x08`, and `\n` behave according to the host's output
+    /// processing, which `$TERM` cannot describe; `Screen::init` grants
+    /// them from the live terminal state via `from_host_state`.
+    #[test]
+    fn no_baseline_carries_line_discipline_flags() {
+        let line_discipline = Optimizations::LINE_DISCIPLINE;
+        let baselines = [
+            ("none", Optimizations::none()),
+            ("modern", Optimizations::modern()),
+            ("xterm", Optimizations::xterm()),
+            ("vt100", Optimizations::vt100()),
+            ("linux", Optimizations::linux()),
+            ("screen", Optimizations::screen()),
+            ("default", Optimizations::default()),
+        ];
+        for (name, o) in baselines {
+            assert!(
+                !o.intersects(line_discipline),
+                "{name} baseline must not assume the line discipline: {o:?}"
+            );
+        }
+    }
+
+    /// Every `$TERM` the detector recognizes routes to one of the
+    /// baselines above, so none of them may carry the flags either.
+    #[test]
+    fn no_term_carries_line_discipline_flags() {
+        let line_discipline = Optimizations::LINE_DISCIPLINE;
+        for term in [
+            "alacritty",
+            "contour",
+            "foot",
+            "ghostty",
+            "kitty",
+            "rio",
+            "st",
+            "tmux",
+            "tmux-256color",
+            "wezterm",
+            "xterm",
+            "xterm-256color",
+            "screen",
+            "screen-256color",
+            "linux",
+            "vt100",
+            "dumb",
+            "",
+        ] {
+            let o = Optimizations::from_term(term);
+            assert!(
+                !o.intersects(line_discipline),
+                "{term} must not assume the line discipline: {o:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    fn state_with_output_mode(output_mode: u32) -> crate::terminal::State {
+        crate::terminal::State {
+            input_mode: 0,
+            output_mode,
+        }
+    }
+
+    /// Without `ENABLE_PROCESSED_OUTPUT` conhost writes `\t`, `\x08`,
+    /// and `\n` as glyphs that each advance the cursor one column, so
+    /// none of them can be used to move it.
+    #[test]
+    #[cfg(windows)]
+    fn from_host_state_grants_nothing_without_processed_output() {
+        use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+
+        assert_eq!(
+            Optimizations::from_host_state(&state_with_output_mode(
+                ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            )),
+            Optimizations::empty()
+        );
+        assert_eq!(
+            Optimizations::from_host_state(&state_with_output_mode(0)),
+            Optimizations::empty()
+        );
+    }
+
+    /// The legacy processed path space-fills a tab to the next stop,
+    /// which erases the cells it skips. Only the VT path, which needs
+    /// `ENABLE_VIRTUAL_TERMINAL_PROCESSING` too, turns `\t` into a
+    /// cursor move. Backspace is a plain move on both paths.
+    #[test]
+    #[cfg(windows)]
+    fn from_host_state_requires_vt_processing_for_tabs() {
+        use windows_sys::Win32::System::Console::{
+            DISABLE_NEWLINE_AUTO_RETURN, ENABLE_PROCESSED_OUTPUT,
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        };
+
+        let legacy = Optimizations::from_host_state(&state_with_output_mode(
+            ENABLE_PROCESSED_OUTPUT | DISABLE_NEWLINE_AUTO_RETURN,
+        ));
+        assert!(!legacy.contains(Optimizations::TABS));
+        assert!(legacy.contains(Optimizations::BS));
+
+        let vt = Optimizations::from_host_state(&state_with_output_mode(
+            ENABLE_PROCESSED_OUTPUT
+                | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                | DISABLE_NEWLINE_AUTO_RETURN,
+        ));
+        assert_eq!(vt, Optimizations::TABS | Optimizations::BS);
+    }
+
+    /// `DISABLE_NEWLINE_AUTO_RETURN` set means a bare LF; clear means
+    /// conhost turns every LF into a CRLF.
+    #[test]
+    #[cfg(windows)]
+    fn from_host_state_reports_onlcr_from_newline_auto_return() {
+        use windows_sys::Win32::System::Console::{
+            DISABLE_NEWLINE_AUTO_RETURN, ENABLE_PROCESSED_OUTPUT,
+        };
+
+        let auto_return =
+            Optimizations::from_host_state(&state_with_output_mode(ENABLE_PROCESSED_OUTPUT));
+        assert!(auto_return.contains(Optimizations::ONLCR));
+
+        let disabled = Optimizations::from_host_state(&state_with_output_mode(
+            ENABLE_PROCESSED_OUTPUT | DISABLE_NEWLINE_AUTO_RETURN,
+        ));
+        assert!(!disabled.contains(Optimizations::ONLCR));
     }
 
     #[test]
