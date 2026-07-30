@@ -667,10 +667,10 @@ where
 
     /// Set the renderer optimization flags.
     ///
-    /// The [`Optimizations::LINE_DISCIPLINE`] flags are not honored here:
-    /// [`init`](Self::init) and [`resume`](Self::resume) re-derive them
-    /// from the live terminal state on every raw-mode entry, discarding
-    /// whatever was set before.
+    /// The [`Optimizations::LINE_DISCIPLINE`] flags take effect
+    /// immediately but do not persist: [`init`](Self::init) and
+    /// [`resume`](Self::resume) re-derive them from the live terminal
+    /// state on every raw-mode entry, discarding whatever was set here.
     pub fn set_optimizations(&mut self, optimizations: Optimizations) {
         self.renderer.set_optimizations(optimizations);
     }

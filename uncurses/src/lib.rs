@@ -121,5 +121,8 @@ pub mod unicode;
 
 pub(crate) mod renderer;
 
+#[cfg(all(test, unix, not(target_os = "l4re")))]
+mod testutil;
+
 #[cfg(debug_assertions)]
 mod trace;

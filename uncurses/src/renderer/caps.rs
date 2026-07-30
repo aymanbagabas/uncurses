@@ -37,6 +37,70 @@ use bitflags::bitflags;
 
 use crate::terminal::Env;
 
+/// The `termios` tab-delay mask, or `0` on platforms that have no tab
+/// delay at all. `TAB0`/`BS0` are `0` by definition, so
+/// `oflag & MASK == 0` means "default delay" — and a zero mask makes
+/// that read "always default", which is exactly what a platform without
+/// the feature means. The netbsdlike, solarish, and DragonFly families
+/// dropped output delays entirely and their `libc` bindings omit the
+/// masks; FreeBSD kept `TABDLY` but not `BSDLY`.
+///
+/// Listing the platforms that *lack* the mask rather than the ones that
+/// have it keeps the failure loud: a new target that also omits it fails
+/// to compile instead of silently skipping the check.
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "dragonfly",
+        target_os = "illumos",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "solaris",
+    ))
+))]
+pub(crate) const TAB_DELAY: libc::tcflag_t = libc::TABDLY as libc::tcflag_t;
+
+/// See [`TAB_DELAY`].
+#[cfg(all(
+    unix,
+    any(
+        target_os = "dragonfly",
+        target_os = "illumos",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "solaris",
+    )
+))]
+pub(crate) const TAB_DELAY: libc::tcflag_t = 0;
+
+/// The `termios` backspace-delay mask. See [`TAB_DELAY`].
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "illumos",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "solaris",
+    ))
+))]
+pub(crate) const BS_DELAY: libc::tcflag_t = libc::BSDLY as libc::tcflag_t;
+
+/// See [`TAB_DELAY`].
+#[cfg(all(
+    unix,
+    any(
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "illumos",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "solaris",
+    )
+))]
+pub(crate) const BS_DELAY: libc::tcflag_t = 0;
+
 bitflags! {
     /// Terminal capabilities the renderer may use for shorter output.
     ///
@@ -286,10 +350,10 @@ impl Optimizations {
             return Self::empty();
         }
         let mut opts = Self::empty();
-        if oflag & libc::TABDLY == libc::TAB0 as libc::tcflag_t {
+        if oflag & TAB_DELAY == 0 {
             opts = opts.union(Self::TABS);
         }
-        if oflag & libc::BSDLY == libc::BS0 as libc::tcflag_t {
+        if oflag & BS_DELAY == 0 {
             opts = opts.union(Self::BS);
         }
         if oflag & libc::ONLCR != 0 {
@@ -745,9 +809,10 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn from_host_state_grants_tabs_and_bs_when_opost_is_clear() {
-        // TAB3/ONLCR are set but must not be read: `OPOST` gates them.
+        // The delays and ONLCR are set but must not be read: `OPOST`
+        // gates them.
         let o = Optimizations::from_host_state(&state_with_oflag(
-            libc::ONLCR | libc::TAB3 as libc::tcflag_t,
+            libc::ONLCR | super::TAB_DELAY | super::BS_DELAY,
         ));
         assert_eq!(o, Optimizations::TABS | Optimizations::BS);
     }
@@ -755,45 +820,44 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn from_host_state_reads_delays_when_opost_is_set() {
-        let o = Optimizations::from_host_state(&state_with_oflag(
-            libc::OPOST | libc::TAB0 as libc::tcflag_t | libc::BS0 as libc::tcflag_t,
-        ));
+        let o = Optimizations::from_host_state(&state_with_oflag(libc::OPOST));
         assert_eq!(o, Optimizations::TABS | Optimizations::BS);
     }
 
-    /// `TAB3` expands tabs to spaces before they reach the terminal, so
-    /// the renderer cannot use `\t` to move the cursor.
+    /// A non-default tab delay expands or pads `\t` before it reaches the
+    /// terminal, so the renderer cannot use it to move the cursor. On the
+    /// platforms whose `termios` has no tab delay the mask is `0` and
+    /// there is nothing to decline -- assert that instead of skipping, so
+    /// the test stays load-bearing everywhere.
     #[test]
     #[cfg(unix)]
-    fn from_host_state_withholds_tabs_under_tab3() {
-        let o = Optimizations::from_host_state(&state_with_oflag(
-            libc::OPOST | libc::TAB3 as libc::tcflag_t,
-        ));
-        assert!(!o.contains(Optimizations::TABS));
+    fn from_host_state_withholds_tabs_under_a_tab_delay() {
+        let o = Optimizations::from_host_state(&state_with_oflag(libc::OPOST | super::TAB_DELAY));
+        assert_eq!(o.contains(Optimizations::TABS), super::TAB_DELAY == 0);
         assert!(o.contains(Optimizations::BS));
     }
 
-    /// A `BSDLY` other than `BS0` pads `\b` for hardware that needs the
-    /// pause. The kernels write the byte through regardless, so this is
-    /// stricter than strictly necessary and deliberately so: the
-    /// fallback costs bytes, a corrupt frame costs the screen.
+    /// A non-default `BSDLY` pads `\b` for hardware that needs the pause.
+    /// The kernels write the byte through regardless, so this is stricter
+    /// than strictly necessary and deliberately so: the fallback costs
+    /// bytes, a corrupt frame costs the screen.
     #[test]
     #[cfg(unix)]
-    fn from_host_state_withholds_bs_under_bs1() {
-        let o = Optimizations::from_host_state(&state_with_oflag(
-            libc::OPOST | libc::BS1 as libc::tcflag_t,
-        ));
-        assert!(!o.contains(Optimizations::BS));
+    fn from_host_state_withholds_bs_under_a_backspace_delay() {
+        let o = Optimizations::from_host_state(&state_with_oflag(libc::OPOST | super::BS_DELAY));
+        assert_eq!(o.contains(Optimizations::BS), super::BS_DELAY == 0);
         assert!(o.contains(Optimizations::TABS));
     }
 
-    /// `TAB1` and `TAB2` are pauses rather than rewrites, but they
-    /// still signal padding hardware, so the strict check declines
-    /// `TABS`.
+    /// `TAB1` and `TAB2` are pauses rather than rewrites, and `TAB3` is
+    /// the only one that actually expands the byte -- but all three
+    /// signal padding hardware, so the strict check declines `TABS` for
+    /// every one of them. Only the platforms that spell the individual
+    /// delays can check this.
     #[test]
-    #[cfg(unix)]
-    fn from_host_state_withholds_tabs_under_tab1_and_tab2() {
-        for delay in [libc::TAB1, libc::TAB2] {
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    fn from_host_state_withholds_tabs_under_every_tab_delay() {
+        for delay in [libc::TAB1, libc::TAB2, libc::TAB3] {
             let o = Optimizations::from_host_state(&state_with_oflag(
                 libc::OPOST | delay as libc::tcflag_t,
             ));

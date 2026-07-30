@@ -2313,7 +2313,7 @@ fn init_resolves_line_discipline_after_entering_raw_mode() {
     use std::os::fd::AsRawFd;
 
     // The master must outlive the slave, so bind it for the whole test.
-    let Some((_master, slave)) = open_pty_pair() else {
+    let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
         return;
     };
     // Put the slave in cooked mode with tab expansion and ONLCR: the exact
@@ -2327,7 +2327,7 @@ fn init_resolves_line_discipline_after_entering_raw_mode() {
         "tcgetattr on a fresh pty slave: {}",
         std::io::Error::last_os_error()
     );
-    cooked.c_oflag |= libc::OPOST | libc::ONLCR | libc::TAB3 as libc::tcflag_t;
+    cooked.c_oflag |= libc::OPOST | libc::ONLCR | crate::renderer::caps::TAB_DELAY;
     assert_eq!(
         unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
         0,
@@ -2395,34 +2395,4 @@ fn assert_line_discipline_resolved(opts: Optimizations, after: &str) {
         Optimizations::modern().difference(Optimizations::LINE_DISCIPLINE),
         "{after}: resolving the line discipline must not disturb the baseline"
     );
-}
-
-/// A pty master/slave pair. The master must stay open for the slave to remain
-/// usable. Mirrors the helper in `event::source_unix`'s tests.
-#[cfg(all(unix, not(target_os = "l4re")))]
-fn open_pty_pair() -> Option<(std::fs::File, std::fs::File)> {
-    use std::fs::File;
-    use std::os::fd::FromRawFd;
-
-    unsafe {
-        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
-        if master < 0 {
-            return None;
-        }
-        if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
-            libc::close(master);
-            return None;
-        }
-        let name = libc::ptsname(master);
-        if name.is_null() {
-            libc::close(master);
-            return None;
-        }
-        let slave = libc::open(name, libc::O_RDWR | libc::O_NOCTTY);
-        if slave < 0 {
-            libc::close(master);
-            return None;
-        }
-        Some((File::from_raw_fd(master), File::from_raw_fd(slave)))
-    }
 }
