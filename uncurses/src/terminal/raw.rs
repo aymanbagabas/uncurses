@@ -558,8 +558,8 @@ mod tests {
 
     /// A pipe read end is a descriptor that is definitely not a terminal, and
     /// unlike `/dev/null` it needs nothing from the filesystem. The write end is
-    /// dropped: nothing is ever read, and `tcgetattr`/`tcsetattr` answer
-    /// `ENOTTY` either way.
+    /// dropped: nothing is ever read, and `tcgetattr`/`tcsetattr` reject it
+    /// either way.
     fn not_a_terminal() -> std::io::PipeReader {
         std::io::pipe().expect("pipe").0
     }
@@ -697,7 +697,13 @@ mod tests {
         let Err(err) = make_raw_mode(&a, &output) else {
             panic!("a pipe cannot be rawified, so make_raw_mode must fail");
         };
-        assert_eq!(err.raw_os_error(), Some(libc::ENOTTY));
+        // Most systems report a non-terminal descriptor as `ENOTTY`; Solaris
+        // reports `EINVAL`. Either way the error has to come from the write to
+        // the pipe rather than from anywhere else.
+        assert!(
+            matches!(err.raw_os_error(), Some(libc::ENOTTY | libc::EINVAL)),
+            "expected a not-a-terminal error, got {err}"
+        );
         assert_restored(&before_a, &a, "input half");
         assert_restored(&before_b, &b, "output half");
     }
