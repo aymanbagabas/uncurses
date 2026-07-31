@@ -1257,6 +1257,7 @@ where
     ///
     /// Runs after every `make_raw`, including [`resume`](Self::resume),
     /// since re-entering raw mode is what makes the answer true again.
+    #[cfg(any(unix, windows))]
     fn apply_line_discipline(&mut self, state: &crate::terminal::State) {
         let opts = self
             .optimizations()
