@@ -309,6 +309,11 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     /// describe the given descriptors. Use [`Terminal::stdio`] or
     /// [`Terminal::open`] to snapshot the process environment automatically.
     ///
+    /// The two descriptors need not refer to the same device. Raw mode is
+    /// applied to and restored from each one independently, so pairing two
+    /// different terminals configures both, and pairing a terminal with a pipe
+    /// configures only the terminal half.
+    ///
     /// # Parameters
     ///
     /// * `input` — readable terminal descriptor.
@@ -358,7 +363,9 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     /// Restore the state cached by the most recent [`make_raw`](Self::make_raw).
     ///
     /// If a state is cached, it is applied with `set_state` and then
-    /// cleared. If no state is cached, this is a no-op.
+    /// cleared. If no state is cached, this is a no-op. The cache is kept when
+    /// applying fails, so a failed restore can be retried rather than losing
+    /// the only copy of the pre-raw state.
     ///
     /// # Returns
     ///
@@ -372,10 +379,11 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     ///
     /// This method does not intentionally panic.
     pub fn restore(&mut self) -> io::Result<()> {
-        match self.saved.take() {
-            Some(state) => raw::set_state(&self.input, &self.output, &state),
-            None => Ok(()),
+        if let Some(state) = self.saved.as_ref() {
+            raw::set_state(&self.input, &self.output, state)?;
+            self.saved = None;
         }
+        Ok(())
     }
 
     /// Snapshot the current terminal mode.
@@ -403,6 +411,8 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     /// This does not update or clear the state cached by
     /// [`make_raw`](Self::make_raw). Use it for manual state management; use
     /// [`restore`](Self::restore) for the terminal-owned raw-mode lifecycle.
+    /// `state` should have been read from this terminal's own descriptors, since
+    /// a [`State`] records each half separately.
     ///
     /// # Parameters
     ///
@@ -519,7 +529,9 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     /// Restore the state cached by the most recent [`make_raw`](Self::make_raw).
     ///
     /// If a state is cached, it is applied with `set_state` and then
-    /// cleared. If no state is cached, this is a no-op.
+    /// cleared. If no state is cached, this is a no-op. The cache is kept when
+    /// applying fails, so a failed restore can be retried rather than losing
+    /// the only copy of the pre-raw state.
     ///
     /// # Returns
     ///
@@ -533,10 +545,11 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     ///
     /// This method does not intentionally panic.
     pub fn restore(&mut self) -> io::Result<()> {
-        match self.saved.take() {
-            Some(state) => raw::set_state(&self.input, &self.output, &state),
-            None => Ok(()),
+        if let Some(state) = self.saved.as_ref() {
+            raw::set_state(&self.input, &self.output, state)?;
+            self.saved = None;
         }
+        Ok(())
     }
 
     /// Snapshot the current terminal mode.
@@ -564,6 +577,8 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     /// This does not update or clear the state cached by
     /// [`make_raw`](Self::make_raw). Use it for manual state management; use
     /// [`restore`](Self::restore) for the terminal-owned raw-mode lifecycle.
+    /// `state` should have been read from this terminal's own descriptors, since
+    /// a [`State`] records each half separately.
     ///
     /// # Parameters
     ///
@@ -638,5 +653,45 @@ mod tests {
         // The full snapshot is reachable for richer queries (e.g. bool).
         assert_eq!(term.env().get("NO_COLOR").as_deref(), Some("1"));
         assert!(term.env().is_truthy("NO_COLOR"));
+    }
+
+    /// A restore that fails must not consume the cached state: it is the only
+    /// copy of the pre-raw attributes, and dropping it turns a transient
+    /// failure into a terminal the caller can no longer put back.
+    #[cfg(all(unix, not(target_os = "l4re")))]
+    #[test]
+    fn a_failed_restore_keeps_the_saved_state_for_a_retry() {
+        use crate::testutil::{ScriptedFd, open_pty_pair};
+        use std::os::fd::{AsFd, AsRawFd};
+
+        let (Some((_ma, a)), Some((_mb, b))) = (open_pty_pair(), open_pty_pair()) else {
+            return;
+        };
+        fn opost(f: &dyn AsFd) -> bool {
+            let mut t: libc::termios = unsafe { std::mem::zeroed() };
+            assert_eq!(
+                unsafe { libc::tcgetattr(f.as_fd().as_raw_fd(), &mut t) },
+                0,
+                "tcgetattr failed: {}",
+                io::Error::last_os_error()
+            );
+            t.c_oflag & libc::OPOST != 0
+        }
+        assert!(opost(&b), "a fresh pty post-processes its output");
+
+        // The two `make_raw` borrows land on the pty, the first restore lands on
+        // a pipe and fails, and the retry lands on the pty again.
+        let pipe = std::io::pipe().expect("pipe").0;
+        let output = ScriptedFd::new(&[&b as &dyn AsFd, &b, &pipe, &b]);
+        let mut term = Terminal::new(&a, output, Env::from_pairs([("TERM", "dumb")]));
+
+        term.make_raw().expect("raw mode");
+        assert!(!opost(&b), "the output half must be raw");
+
+        term.restore()
+            .expect_err("a restore through a pipe cannot succeed");
+        // Without the cached state this is a silent no-op that reports success.
+        term.restore().expect("the retry restores");
+        assert!(opost(&b), "the retry must put the output half back");
     }
 }
