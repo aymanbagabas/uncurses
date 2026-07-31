@@ -47,22 +47,53 @@ use windows_sys::Win32::Foundation::HANDLE;
 /// or [`Terminal::make_raw`](crate::terminal::Terminal::make_raw) with
 /// [`Terminal::set_state`](crate::terminal::Terminal::set_state) to restore a
 /// terminal to a previous configuration.
-#[derive(Clone)]
+///
+/// The fields are readable so a caller can inspect what was saved — a snapshot
+/// taken before raw mode is otherwise unrecoverable, since re-reading the
+/// descriptor afterwards reports the raw state rather than this one. They are
+/// inherently platform-specific: a `termios` and a console mode are not the
+/// same concept, so there is no portable shape to offer instead and code that
+/// reads them is unix-only or Windows-only by nature. The unix types come from
+/// the [`libc`](crate::libc) re-export.
+///
+/// The struct is `non_exhaustive`: a `State` is only meaningful when it came
+/// from the terminal, so it is readable but not constructible from outside the
+/// crate.
+///
+/// # Examples
+///
+/// ```no_run
+/// # #[cfg(unix)] {
+/// use uncurses::libc;
+/// use uncurses::terminal::Terminal;
+///
+/// let mut term = Terminal::stdio();
+/// let saved = term.make_raw().unwrap();
+///
+/// // Reading the descriptor now would report the raw state, so this snapshot
+/// // is the only way to see what the terminal looked like beforehand.
+/// if let Some(input) = saved.input {
+///     println!("echo was on: {}", input.c_lflag & libc::ECHO != 0);
+/// }
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct State {
     #[cfg(unix)]
     /// Saved attributes of the input descriptor, or `None` when they could not
     /// be read — typically because it is not a terminal.
-    pub(crate) input: Option<libc::termios>,
+    pub input: Option<libc::termios>,
     #[cfg(unix)]
     /// Saved attributes of the output descriptor, or `None` when they could not
     /// be read — typically because it is not a terminal.
-    pub(crate) output: Option<libc::termios>,
+    pub output: Option<libc::termios>,
     #[cfg(windows)]
     /// Saved input console-mode bits.
-    pub(crate) input_mode: u32,
+    pub input_mode: u32,
     #[cfg(windows)]
     /// Saved output console-mode bits.
-    pub(crate) output_mode: u32,
+    pub output_mode: u32,
 }
 
 #[cfg(windows)]
