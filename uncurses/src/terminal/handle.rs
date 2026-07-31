@@ -661,23 +661,15 @@ mod tests {
     #[cfg(all(unix, not(target_os = "l4re")))]
     #[test]
     fn a_failed_restore_keeps_the_saved_state_for_a_retry() {
-        use crate::testutil::{ScriptedFd, open_pty_pair};
-        use std::os::fd::{AsFd, AsRawFd};
+        use crate::testutil::{ScriptedFd, open_pty_pair, opost, prime};
+        use std::os::fd::AsFd;
 
         let (Some((_ma, a)), Some((_mb, b))) = (open_pty_pair(), open_pty_pair()) else {
             return;
         };
-        fn opost(f: &dyn AsFd) -> bool {
-            let mut t: libc::termios = unsafe { std::mem::zeroed() };
-            assert_eq!(
-                unsafe { libc::tcgetattr(f.as_fd().as_raw_fd(), &mut t) },
-                0,
-                "tcgetattr failed: {}",
-                io::Error::last_os_error()
-            );
-            t.c_oflag & libc::OPOST != 0
-        }
-        assert!(opost(&b), "a fresh pty post-processes its output");
+        // A fresh pty's attributes are implementation-defined, so put `OPOST`
+        // where the assertions below need it rather than assuming it.
+        prime(&b, true);
 
         // The two `make_raw` borrows land on the pty, the first restore lands on
         // a pipe and fails, and the retry lands on the pty again.

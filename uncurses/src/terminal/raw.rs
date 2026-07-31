@@ -437,7 +437,7 @@ pub fn is_terminal<T>(_: T) -> bool {
 #[cfg(all(test, unix, not(target_os = "l4re")))]
 mod tests {
     use super::*;
-    use crate::testutil::{ScriptedFd, open_pty_pair};
+    use crate::testutil::{ScriptedFd, attrs, open_pty_pair, opost, prime};
     use std::fs::File;
 
     /// Every flag group `rawify` modifies. Restoration is checked against these
@@ -455,48 +455,6 @@ mod tests {
     const RAW_LFLAGS: libc::tcflag_t =
         libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN;
     const RAW_CFLAGS: libc::tcflag_t = libc::CSIZE | libc::PARENB;
-
-    /// Read a descriptor's attributes without going through [`get_state`], so
-    /// the assertions observe the device rather than the code under test.
-    fn attrs<F: AsFd>(f: &F) -> libc::termios {
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe { libc::tcgetattr(f.as_fd().as_raw_fd(), &mut t) },
-            0,
-            "tcgetattr failed: {}",
-            io::Error::last_os_error()
-        );
-        t
-    }
-
-    fn write_attrs(f: &File, t: &libc::termios) {
-        assert_eq!(
-            unsafe { libc::tcsetattr(f.as_fd().as_raw_fd(), libc::TCSANOW, t) },
-            0,
-            "tcsetattr failed: {}",
-            io::Error::last_os_error()
-        );
-    }
-
-    /// Force `OPOST` to a known value so the assertions do not depend on
-    /// whatever a fresh pty happens to default to, and stamp `VMIN`/`VTIME`
-    /// with values raw mode does not use. A pty defaults to `VMIN` 1, which is
-    /// also raw mode's value, so restoring it would otherwise be unobservable.
-    fn prime(f: &File, opost: bool) {
-        let mut t = attrs(f);
-        if opost {
-            t.c_oflag |= libc::OPOST;
-        } else {
-            t.c_oflag &= !libc::OPOST;
-        }
-        t.c_cc[libc::VMIN] = 4;
-        t.c_cc[libc::VTIME] = 7;
-        write_attrs(f, &t);
-    }
-
-    fn opost(f: &File) -> bool {
-        attrs(f).c_oflag & libc::OPOST != 0
-    }
 
     /// Raw mode is more than `OPOST`, so check every flag group `rawify`
     /// touches. A single sentinel bit would let most of it regress unnoticed.

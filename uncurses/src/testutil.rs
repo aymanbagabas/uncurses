@@ -95,3 +95,45 @@ impl std::os::fd::AsFd for ScriptedFd<'_> {
         self.fds[n.min(self.fds.len() - 1)]
     }
 }
+
+/// Read a descriptor's terminal attributes directly, so assertions observe the
+/// device rather than the code under test.
+pub(crate) fn attrs(f: &dyn std::os::fd::AsFd) -> libc::termios {
+    use std::os::fd::AsRawFd;
+    let mut t: libc::termios = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::tcgetattr(f.as_fd().as_raw_fd(), &mut t) },
+        0,
+        "tcgetattr failed: {}",
+        std::io::Error::last_os_error()
+    );
+    t
+}
+
+/// Whether the descriptor post-processes output.
+pub(crate) fn opost(f: &dyn std::os::fd::AsFd) -> bool {
+    attrs(f).c_oflag & libc::OPOST != 0
+}
+
+/// Force `OPOST` to a known value so assertions do not depend on whatever a
+/// fresh pty happens to default to -- POSIX leaves the initial attributes
+/// implementation-defined -- and stamp `VMIN`/`VTIME` with values raw mode does
+/// not use. A pty commonly defaults to `VMIN` 1, which is also raw mode's
+/// value, so restoring it would otherwise be unobservable.
+pub(crate) fn prime(f: &dyn std::os::fd::AsFd, opost: bool) {
+    use std::os::fd::AsRawFd;
+    let mut t = attrs(f);
+    if opost {
+        t.c_oflag |= libc::OPOST;
+    } else {
+        t.c_oflag &= !libc::OPOST;
+    }
+    t.c_cc[libc::VMIN] = 4;
+    t.c_cc[libc::VTIME] = 7;
+    assert_eq!(
+        unsafe { libc::tcsetattr(f.as_fd().as_raw_fd(), libc::TCSANOW, &t) },
+        0,
+        "tcsetattr failed: {}",
+        std::io::Error::last_os_error()
+    );
+}
