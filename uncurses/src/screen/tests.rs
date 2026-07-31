@@ -2310,10 +2310,10 @@ fn clip_origin_keeps_area_on_screen() {
 mod teardown_failure {
     use super::*;
     use crate::terminal::{Env, Terminal};
-    use crate::testutil::open_pty_pair;
+    use crate::testutil::{open_pty_pair, opost, prime};
     use std::cell::Cell;
     use std::fs::File;
-    use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+    use std::os::fd::{AsFd, BorrowedFd};
 
     /// A pty output half whose writes can be made to fail on demand, which is
     /// what a broken pipe or a hung-up terminal looks like to the renderer.
@@ -2347,26 +2347,15 @@ mod teardown_failure {
         }
     }
 
-    fn opost(f: &File) -> bool {
-        let mut t: libc::termios = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe { libc::tcgetattr(f.as_fd().as_raw_fd(), &mut t) },
-            0,
-            "tcgetattr failed: {}",
-            io::Error::last_os_error()
-        );
-        t.c_oflag & libc::OPOST != 0
-    }
-
     #[test]
     fn finish_restores_the_terminal_even_when_teardown_fails() {
         let (Some((_ma, input)), Some((_mb, out))) = (open_pty_pair(), open_pty_pair()) else {
             return;
         };
-        assert!(
-            opost(&input) && opost(&out),
-            "fresh ptys post-process output"
-        );
+        // A fresh pty's attributes are implementation-defined, so put `OPOST`
+        // where the assertions below need it rather than assuming it.
+        prime(&input, true);
+        prime(&out, true);
 
         let broken = Cell::new(false);
         let output = Breakable {
