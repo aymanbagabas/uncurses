@@ -16,7 +16,7 @@
 //! Wrapping does not interpret terminal modes. It treats mode-setting and
 //! mode-dependent sequences as bytes to preserve, not as state transitions.
 
-use super::text::{Token, WidthMode, tokenize};
+use super::text::{Token, WidthMode, string_width, tokenize};
 
 #[inline]
 fn bs(b: &[u8]) -> &str {
@@ -98,7 +98,21 @@ pub fn wordwrap_mode(
     if limit == 0 {
         return s.to_string();
     }
-    let bp: Vec<char> = breakpoints.chars().collect();
+    // A breakpoint test that is an array index, not a scan. `is_break` runs
+    // once per grapheme, and a linear search of the breakpoint list per
+    // character is the kind of constant that only shows up on a megabyte.
+    let mut ascii_bp = [false; 128];
+    let mut wide_bp: Vec<char> = Vec::new();
+    for c in breakpoints.chars() {
+        match u32::from(c) {
+            n if n < 128 => ascii_bp[n as usize] = true,
+            _ => wide_bp.push(c),
+        }
+    }
+    let is_bp = |c: char| match u32::from(c) {
+        n if n < 128 => ascii_bp[n as usize],
+        _ => wide_bp.contains(&c),
+    };
 
     // We build the output as: completed lines + current line state.
     // `line` is the bytes already committed to the current line.
@@ -166,7 +180,7 @@ pub fn wordwrap_mode(
             }
             Token::Text { text, width } => {
                 let w = width as usize;
-                let is_break = bs(text).chars().all(|c| bp.contains(&c));
+                let is_break = bs(text).chars().all(&is_bp);
                 let is_space = text == b" " || text == b"\t";
 
                 if is_space {
@@ -269,15 +283,37 @@ pub fn wrap_mode(
     if limit == 0 {
         return s.to_string();
     }
-    // First wordwrap, then hardwrap each resulting line in case any word is
-    // longer than `limit`.
+    // First wordwrap, then hardwrap - but only the lines that need it.
+    //
+    // Hard-wrapping exists for the one case word-wrapping cannot solve: a
+    // single word longer than the limit. Every other line is already inside
+    // it, and running the hard wrap over those lines is a second full pass
+    // that copies them to themselves. That pass is not cheap - measured, the
+    // wrap is exactly the sum of its two halves, so it costs as much as the
+    // wrapping did - while *asking* whether a line is too wide is only a
+    // width measurement, which runs several times faster than the wrap it
+    // avoids. On text whose words all fit, which is nearly all text, the
+    // second pass now disappears entirely.
     let wrapped = wordwrap_mode(s, limit, breakpoints, mode, eaw_wide);
+    let too_wide = |line: &str| string_width(line.as_bytes(), mode, eaw_wide) > limit;
+    if !wrapped.split('\n').any(too_wide) {
+        return wrapped;
+    }
     let mut out = String::with_capacity(wrapped.len());
     for (i, line) in wrapped.split('\n').enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        out.push_str(&hardwrap_mode(line, limit, false, mode, eaw_wide));
+        if too_wide(line) {
+            out.push_str(&hardwrap_mode(line, limit, false, mode, eaw_wide));
+        } else {
+            // Copied rather than re-emitted. A line that fits comes back from
+            // the hard wrap byte-identical in every case that can occur here,
+            // with one exception: it re-encodes a lone C1 control byte as the
+            // two-byte UTF-8 for that code point. Passing the line through
+            // keeps the caller's bytes, which is the more faithful of the two.
+            out.push_str(line);
+        }
     }
     out
 }

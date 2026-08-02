@@ -57,6 +57,7 @@ pub fn tokenize(bytes: &[u8], mode: WidthMode, eaw_wide: bool) -> Tokenizer<'_> 
         pos: 0,
         mode,
         eaw_wide,
+        valid_end: 0,
     }
 }
 
@@ -66,6 +67,16 @@ pub struct Tokenizer<'a> {
     pos: usize,
     mode: WidthMode,
     eaw_wide: bool,
+    /// How far past `pos` the current run of plain text has been scanned and
+    /// found to be valid UTF-8.
+    ///
+    /// The run is what makes this iterator linear. Finding where the plain
+    /// text ends, and validating it, is work proportional to the run's
+    /// length, and it is done once for the run rather than once for each
+    /// grapheme inside it. `pos` then walks the run a grapheme at a time and
+    /// only a run boundary - or a byte that is not valid UTF-8 - makes this
+    /// look again.
+    valid_end: usize,
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
@@ -93,48 +104,77 @@ impl<'a> Iterator for Tokenizer<'a> {
             return Some(Token::Control(b));
         }
 
-        // Plain text — walk forward one UTF-8 codepoint at a time, stopping at
-        // any byte that would start an escape or control token. Stepping per
-        // codepoint guarantees we never confuse a UTF-8 continuation byte
-        // (which can be in 0x80..=0xBF) with a C1 control.
-        let chunk_start = self.pos;
-        let mut chunk_end = self.pos;
-        while chunk_end < self.bytes.len() {
-            let bb = self.bytes[chunk_end];
-            if bb == 0x1b || bb < 0x20 || bb == 0x7f || (0x80..=0x9f).contains(&bb) {
-                break;
+        // Plain text — walk forward one grapheme at a time, stopping at any
+        // byte that would start an escape or control token. Stepping per
+        // codepoint when scanning guarantees we never confuse a UTF-8
+        // continuation byte (which can be in 0x80..=0xBF) with a C1 control.
+        //
+        // The scan runs once per *run* of plain text, not once per grapheme
+        // in it. Doing it per grapheme is O(run) work O(run) times, which
+        // made tokenizing a single long line quadratic in its length - a
+        // 32 KB line took 852 ms, and nothing about the tokens it produced
+        // changed, so only a timing test could see it.
+        if self.pos >= self.valid_end {
+            let mut end = self.pos;
+            while end < self.bytes.len() {
+                let bb = self.bytes[end];
+                if bb == 0x1b || bb < 0x20 || bb == 0x7f || (0x80..=0x9f).contains(&bb) {
+                    break;
+                }
+                let n = utf8_char_len(bb);
+                if n == 0 || end + n > self.bytes.len() {
+                    break;
+                }
+                end += n;
             }
-            let n = utf8_char_len(bb);
-            if n == 0 || chunk_end + n > self.bytes.len() {
-                break;
-            }
-            chunk_end += n;
+            self.valid_end = match std::str::from_utf8(&self.bytes[self.pos..end]) {
+                Ok(_) => end,
+                Err(e) => self.pos + e.valid_up_to(),
+            };
         }
-        if chunk_end == chunk_start {
-            // Invalid UTF-8 leading byte that wasn't a control — emit it
-            // verbatim as a Control byte to keep forward progress.
+        if self.valid_end <= self.pos {
+            // Nothing plain starts here, or what does is not valid UTF-8.
+            // Either way the byte is emitted verbatim to keep forward
+            // progress, exactly as an invalid leading byte always was.
             self.pos += 1;
             return Some(Token::Control(b));
         }
-        let raw = &self.bytes[chunk_start..chunk_end];
-        let valid = match std::str::from_utf8(raw) {
-            Ok(s) => s,
-            Err(e) => {
-                let up_to = e.valid_up_to();
-                if up_to == 0 {
-                    self.pos += 1;
-                    return Some(Token::Control(b));
-                }
-                // SAFETY: validated up to `up_to` by from_utf8.
-                unsafe { std::str::from_utf8_unchecked(&raw[..up_to]) }
+        // Printable ASCII, answered without asking Unicode anything.
+        //
+        // A cluster can only continue past an ASCII byte with a combining
+        // mark, a ZWJ, a variation selector or a regional indicator, and in
+        // UTF-8 every one of those starts at 0x80 or above. So an ASCII byte
+        // followed by another ASCII byte (or by the end of the text) *is* a
+        // whole grapheme cluster, one column wide, and the general path below
+        // - grapheme segmentation plus a width table lookup, per character -
+        // can only arrive at the same answer far more slowly. `\r\n` is the
+        // one multi-byte ASCII cluster and it cannot appear here: both bytes
+        // are controls, taken by the branch above.
+        //
+        // True in either width mode. `Wc` measures the cluster's first code
+        // point and `Grapheme` measures the whole cluster; for a lone
+        // printable ASCII character those are the same one column. The mode
+        // is deliberately not tested here - it was, once, and since `Wc` is
+        // the default the fast path then applied to nothing that mattered.
+        if b < 0x80 {
+            let next = self.bytes.get(self.pos + 1).copied();
+            if next.is_none_or(|n| n < 0x80) {
+                let start = self.pos;
+                self.pos += 1;
+                return Some(Token::Text {
+                    text: &self.bytes[start..self.pos],
+                    width: 1,
+                });
             }
-        };
+        }
+        // SAFETY: `pos .. valid_end` was validated as UTF-8 above.
+        let valid = unsafe { std::str::from_utf8_unchecked(&self.bytes[self.pos..self.valid_end]) };
         let g = graphemes(valid).next()?;
-        let g_bytes = g.as_bytes();
-        self.pos = chunk_start + g_bytes.len();
+        let start = self.pos;
+        self.pos += g.len();
         let width = self.mode.grapheme_width(g, self.eaw_wide) as u16;
         Some(Token::Text {
-            text: &self.bytes[chunk_start..chunk_start + g_bytes.len()],
+            text: &self.bytes[start..self.pos],
             width,
         })
     }
@@ -352,5 +392,110 @@ mod tests {
         let toks: Vec<_> = tokenize(b"a\x1b=b", WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 3);
         assert!(matches!(toks[1], Token::Escape(b"\x1b=")));
+    }
+}
+
+#[cfg(test)]
+mod fast_path {
+    use super::*;
+
+    fn text_tokens(s: &str, mode: WidthMode) -> Vec<(String, u16)> {
+        tokenize(s.as_bytes(), mode, false)
+            .filter_map(|t| match t {
+                Token::Text { text, width } => {
+                    Some((String::from_utf8_lossy(text).into_owned(), width))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The ASCII shortcut must agree with grapheme segmentation, cluster for
+    /// cluster, in both width modes.
+    ///
+    /// The shortcut answers "one ASCII byte, one column" without consulting
+    /// Unicode at all, which is only sound while nothing can join to an ASCII
+    /// base from the byte after it. Everything that can - a combining mark, a
+    /// zero-width joiner, a variation selector, a regional indicator - begins
+    /// at 0x80 or above in UTF-8, so the shortcut declines whenever the next
+    /// byte is not ASCII. These are the cases on either side of that line.
+    #[test]
+    fn the_ascii_shortcut_agrees_with_grapheme_segmentation() {
+        for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+            assert_eq!(
+                text_tokens("abc", mode),
+                vec![("a".into(), 1), ("b".into(), 1), ("c".into(), 1)],
+                "plain ASCII is one column per byte"
+            );
+            // A combining acute joins the `e` before it: one cluster, and the
+            // shortcut must not have claimed that `e` on its own.
+            assert_eq!(
+                text_tokens("e\u{301}f", mode),
+                vec![("e\u{301}".into(), 1), ("f".into(), 1)],
+                "a combining mark still joins the ASCII base before it"
+            );
+            assert_eq!(
+                text_tokens("a", mode),
+                vec![("a".into(), 1)],
+                "the last byte of the input takes the shortcut too"
+            );
+        }
+        // The shortcut never applies across a non-ASCII byte, so a wide
+        // character keeps its two columns and its neighbours keep one each.
+        assert_eq!(
+            text_tokens("a\u{4e00}b", WidthMode::Wc),
+            vec![("a".into(), 1), ("\u{4e00}".into(), 2), ("b".into(), 1)],
+            "a wide character between two ASCII ones is still wide"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scaling {
+    use super::*;
+
+    /// Tokenizing one long line must cost time proportional to its length.
+    ///
+    /// This is not a micro-optimisation guard, it is a complexity one. The
+    /// tokenizer used to find the end of the current run of text - and
+    /// validate it as UTF-8 - once **per grapheme**, so a line of `n`
+    /// characters did O(n) work `n` times. Nothing in the output changed, so
+    /// no correctness test could see it; what it produced was a renderer
+    /// whose frame time depended on the longest line in view. A 32 KB line
+    /// (one JSON blob, one base64 payload, one minified file in a tool
+    /// result) took 852 ms to wrap, which is a hundred dropped frames for
+    /// one entry scrolling past.
+    ///
+    /// Doubling the input must not much more than double the time. The bound
+    /// is generous - 2.8x against an ideal 2.0x - because this is timing on a
+    /// shared machine and the failure it guards against is 3.9x.
+    #[test]
+    fn tokenizing_one_long_line_is_linear_in_its_length() {
+        fn nanos(n: usize) -> u128 {
+            let line: String = std::iter::repeat_n('x', n).collect();
+            // Warm the allocator and the branch predictors, then take the
+            // best of three: a slow sample can only come from the machine,
+            // never from the code, so the minimum is the honest reading.
+            let mut best = u128::MAX;
+            for _ in 0..3 {
+                let started = std::time::Instant::now();
+                let width = string_width(line.as_bytes(), WidthMode::Grapheme, false);
+                let elapsed = started.elapsed().as_nanos();
+                assert_eq!(width, n, "the width is still the width");
+                best = best.min(elapsed);
+            }
+            best
+        }
+
+        // Big enough that the quadratic term dominates the constants, small
+        // enough that a red run is still quick.
+        let small = nanos(8_000);
+        let large = nanos(16_000);
+        let ratio = large as f64 / small.max(1) as f64;
+        assert!(
+            ratio < 2.8,
+            "tokenizing twice the line took {ratio:.2}x the time \
+             ({small} ns -> {large} ns): the cost is super-linear in line length"
+        );
     }
 }
