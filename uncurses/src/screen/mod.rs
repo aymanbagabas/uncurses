@@ -193,6 +193,43 @@ where
     /// [`observe_event`](Self::observe_event) knows the next
     /// [`CursorPosition`](Event::CursorPosition) reply is ours to capture.
     origin_query_pending: bool,
+    /// The terminal's own colors, accumulated from the OSC 10/11/4 replies to
+    /// the palette query [`init`](Self::init_with) fires when
+    /// [`ScreenOptions::query_terminal_palette`] is set. Folded by
+    /// [`observe_event`](Self::observe_event) (which never consumes) and read
+    /// through [`terminal_palette`](Self::terminal_palette). Stays empty when
+    /// the option is off or the terminal never answers.
+    terminal_palette: TerminalPalette,
+}
+
+/// The terminal's own default colors and indexed ANSI palette, as reported by
+/// the `OSC 10/11/4` replies to the query [`Screen::init_with`] fires when
+/// [`ScreenOptions::query_terminal_palette`] is enabled.
+///
+/// Each entry is `None` until its reply arrives (and stays `None` for a
+/// non-RGB answer the terminal declines to give in `rgb:` form). An
+/// application reads the accumulated palette through
+/// [`Screen::terminal_palette`] and decides for itself when it considers the
+/// set complete.
+#[derive(Debug, Clone)]
+pub struct TerminalPalette {
+    /// The default foreground color (`OSC 10`), once reported.
+    pub foreground: Option<crate::color::Color>,
+    /// The default background color (`OSC 11`), once reported.
+    pub background: Option<crate::color::Color>,
+    /// The indexed ANSI palette entries (`OSC 4`), each `None` until its
+    /// reply arrives. Indices 0..16 are the standard/bright ANSI set.
+    pub indexed: [Option<crate::color::Color>; 256],
+}
+
+impl Default for TerminalPalette {
+    fn default() -> Self {
+        Self {
+            foreground: None,
+            background: None,
+            indexed: [None; 256],
+        }
+    }
 }
 
 /// Desired default behaviors applied by [`Screen::init_with`].
@@ -275,6 +312,19 @@ pub struct ScreenOptions {
     /// to opt out; the origin then stays at `(0, 0)`. Has no effect in the
     /// alternate screen, where the origin is always `(0, 0)`.
     pub track_origin: bool,
+    /// Query the terminal's default foreground/background and its 16 indexed
+    /// ANSI palette entries during [`init`](Screen::init_with) (`OSC 10/11/4`),
+    /// so an application can adopt the terminal's own colors instead of an
+    /// assumed palette. Defaults to `false`.
+    ///
+    /// The requests ride in the same init batch as the capability queries,
+    /// *before* the terminating Primary DA, so their replies are covered by
+    /// that DA and by [`query_drain_timeout`](Self::query_drain_timeout) at
+    /// teardown exactly like every other capability reply - they cannot leak
+    /// to the shell. The replies are folded into [`terminal_palette`](Screen::terminal_palette)
+    /// as the event loop delivers them through [`observe_event`](Screen::observe_event),
+    /// which never consumes, so an application still sees the color events too.
+    pub query_terminal_palette: bool,
 }
 
 bitflags! {
@@ -311,6 +361,7 @@ impl Default for ScreenOptions {
             query_capabilities: true,
             query_drain_timeout: Duration::from_millis(300),
             track_origin: true,
+            query_terminal_palette: false,
         }
     }
 }
@@ -952,6 +1003,15 @@ where
         self.caps
     }
 
+    /// The terminal's own colors, accumulated from the `OSC 10/11/4` replies
+    /// to the palette query [`init`](Self::init_with) fires when
+    /// [`ScreenOptions::query_terminal_palette`] is enabled. Empty until the
+    /// replies arrive through [`observe_event`](Self::observe_event); an
+    /// application decides for itself when it treats the set as complete.
+    pub fn terminal_palette(&self) -> &TerminalPalette {
+        &self.terminal_palette
+    }
+
     /// Last observed full terminal size in cells, cached from resize and
     /// `WindowCellSize` reports as they flow through the event delegates.
     /// `None` until one has been observed.
@@ -1204,6 +1264,14 @@ where
                 self.renderer
                     .set_color_profile(crate::color::Profile::TrueColor);
             }
+            // Palette replies to the OSC 10/11/4 query init fires when
+            // `ScreenOptions::query_terminal_palette` is set. Recorded, never
+            // consumed - the application still sees the color events.
+            Event::ForegroundColor(color) => self.terminal_palette.foreground = Some(color),
+            Event::BackgroundColor(color) => self.terminal_palette.background = Some(color),
+            Event::PaletteColor { index, color } => {
+                self.terminal_palette.indexed[index as usize] = Some(color);
+            }
             _ => {}
         }
         Ok(())
@@ -1353,6 +1421,21 @@ where
             }
         }
 
+        // Palette query (opt-in): default fg/bg and the 16 indexed ANSI
+        // entries, in the same batch and *before* the DA terminator, so the
+        // replies are covered by that DA and by the teardown drain - they
+        // cannot outlive the session as stray input the shell would read.
+        if self.options.query_terminal_palette {
+            use crate::ansi::color::{
+                REQUEST_BACKGROUND_COLOR, REQUEST_FOREGROUND_COLOR, write_request_palette_color,
+            };
+            self.out_buf.write_all(REQUEST_FOREGROUND_COLOR)?;
+            self.out_buf.write_all(REQUEST_BACKGROUND_COLOR)?;
+            for index in 0..16u8 {
+                write_request_palette_color(&mut self.out_buf, index)?;
+            }
+        }
+
         self.out_buf.write_all(REQUEST_PRIMARY_DA)?;
         self.flush()
     }
@@ -1493,6 +1576,7 @@ where
             queries_sent_at: None,
             origin: Position::ORIGIN,
             origin_query_pending: false,
+            terminal_palette: TerminalPalette::default(),
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
