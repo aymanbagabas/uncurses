@@ -17,7 +17,10 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 icu_segmenter = { version = "2", default-features = false, features = ["compiled_data"] }
 icu_properties = { version = "2", default-features = false, features = ["compiled_data"] }
-libc = "0.2"
+# 0.2.176 is the first release to derive `Debug` unconditionally rather than
+# behind `extra_traits`. `terminal::State` exposes `libc::termios` and derives
+# `Debug`, so anything older fails to compile.
+libc = "0.2.176"
 futures-core = "0.3"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
