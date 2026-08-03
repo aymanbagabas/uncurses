@@ -1584,17 +1584,31 @@ where
     /// Consume the screen and hand the terminal back to the shell: tear down
     /// every staged mode, reset the managed area, flush, and restore the
     /// terminal's prior state.
+    ///
+    /// The terminal state is restored even when the teardown writes fail, so a
+    /// broken pipe cannot leave the terminal in raw mode. The teardown error is
+    /// still returned.
     pub fn finish(mut self) -> io::Result<()> {
-        self.teardown()?;
-        self.terminal.restore()
+        // Restore even when teardown fails. Teardown writes to the output
+        // half, so a broken pipe or a closed terminal fails it routinely, and
+        // returning early there would leave the terminal raw. `finish` consumes
+        // the screen, so there would be nothing left to retry with.
+        let teardown = self.teardown();
+        let restore = self.terminal.restore();
+        teardown.and(restore)
     }
 
     /// Hand the terminal back to the shell without consuming the screen,
     /// e.g. to run a child process. Re-enter with [`Self::resume`]. Like
-    /// [`Self::finish`] but keeps the screen so the session can continue.
+    /// [`Self::finish`] but keeps the screen so the session can continue, and
+    /// likewise restores the terminal even when the teardown writes fail.
     pub fn pause(&mut self) -> io::Result<()> {
-        self.teardown()?;
-        self.terminal.restore()
+        // Restore even when teardown fails, for the same reason as `finish`:
+        // the caller asked for the terminal back, and a failed write to it is
+        // not a reason to keep it raw.
+        let teardown = self.teardown();
+        let restore = self.terminal.restore();
+        teardown.and(restore)
     }
 
     /// Re-acquire the terminal after a [`Self::pause`] or [`Self::suspend`]:
@@ -1710,17 +1724,31 @@ where
     /// Consume the screen and hand the terminal back to the shell: tear down
     /// every staged mode, reset the managed area, flush, and restore the
     /// terminal's prior state.
+    ///
+    /// The terminal state is restored even when the teardown writes fail, so a
+    /// broken pipe cannot leave the terminal in raw mode. The teardown error is
+    /// still returned.
     pub fn finish(mut self) -> io::Result<()> {
-        self.teardown()?;
-        self.terminal.restore()
+        // Restore even when teardown fails. Teardown writes to the output
+        // half, so a broken pipe or a closed terminal fails it routinely, and
+        // returning early there would leave the terminal raw. `finish` consumes
+        // the screen, so there would be nothing left to retry with.
+        let teardown = self.teardown();
+        let restore = self.terminal.restore();
+        teardown.and(restore)
     }
 
     /// Hand the terminal back to the shell without consuming the screen,
     /// e.g. to run a child process. Re-enter with [`Self::resume`]. Like
-    /// [`Self::finish`] but keeps the screen so the session can continue.
+    /// [`Self::finish`] but keeps the screen so the session can continue, and
+    /// likewise restores the terminal even when the teardown writes fail.
     pub fn pause(&mut self) -> io::Result<()> {
-        self.teardown()?;
-        self.terminal.restore()
+        // Restore even when teardown fails, for the same reason as `finish`:
+        // the caller asked for the terminal back, and a failed write to it is
+        // not a reason to keep it raw.
+        let teardown = self.teardown();
+        let restore = self.terminal.restore();
+        teardown.and(restore)
     }
 
     /// Re-acquire the terminal after a [`Self::pause`]: re-enter raw mode,

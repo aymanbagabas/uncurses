@@ -2301,3 +2301,85 @@ fn clip_origin_keeps_area_on_screen() {
     screen.window_cells = Some(Size::new(10, 3));
     assert_eq!(screen.clip_origin(Position::new(0, 6)), Position::new(0, 0));
 }
+
+/// `finish` consumes the screen and there is no `Drop` impl, so if a teardown
+/// write failure skipped the restore the terminal would stay raw for good. A
+/// program piped into `head` hits exactly that: the reader goes away, the
+/// final flush fails with `EPIPE`, and the user is left with a broken shell.
+#[cfg(all(unix, not(target_os = "l4re")))]
+mod teardown_failure {
+    use super::*;
+    use crate::terminal::{Env, Terminal};
+    use crate::testutil::{open_pty_pair, opost, prime};
+    use std::cell::Cell;
+    use std::fs::File;
+    use std::os::fd::{AsFd, BorrowedFd};
+
+    /// A pty output half whose writes can be made to fail on demand, which is
+    /// what a broken pipe or a hung-up terminal looks like to the renderer.
+    /// `Screen` needs its output half to be `Copy`, hence the shared `Cell`
+    /// rather than a plain `bool`.
+    #[derive(Clone, Copy)]
+    struct Breakable<'a> {
+        tty: &'a File,
+        broken: &'a Cell<bool>,
+    }
+
+    impl io::Write for Breakable<'_> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.broken.get() {
+                return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+            }
+            (&*self.tty).write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.broken.get() {
+                return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+            }
+            (&*self.tty).flush()
+        }
+    }
+
+    impl AsFd for Breakable<'_> {
+        fn as_fd(&self) -> BorrowedFd<'_> {
+            self.tty.as_fd()
+        }
+    }
+
+    #[test]
+    fn finish_restores_the_terminal_even_when_teardown_fails() {
+        let (Some((_ma, input)), Some((_mb, out))) = (open_pty_pair(), open_pty_pair()) else {
+            return;
+        };
+        // A fresh pty's attributes are implementation-defined, so put `OPOST`
+        // where the assertions below need it rather than assuming it.
+        prime(&input, true);
+        prime(&out, true);
+
+        let broken = Cell::new(false);
+        let output = Breakable {
+            tty: &out,
+            broken: &broken,
+        };
+        let terminal = Terminal::new(&input, output, Env::from_pairs([("TERM", "xterm")]));
+        let mut screen = Screen::new(terminal).expect("screen over two ptys");
+        // Nothing is going to answer the capability queries, so do not sit in
+        // the teardown drain waiting for replies that cannot arrive.
+        screen
+            .init_with(ScreenOptions {
+                query_drain_timeout: Duration::ZERO,
+                ..ScreenOptions::default()
+            })
+            .expect("init");
+        assert!(!opost(&input) && !opost(&out), "both halves must be raw");
+
+        broken.set(true);
+        let err = screen.finish().expect_err("the teardown flush must fail");
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert!(
+            opost(&input) && opost(&out),
+            "finish must hand the terminal back even when teardown fails"
+        );
+    }
+}
