@@ -290,9 +290,17 @@ impl Optimizations {
     /// returns the state from *before* raw mode, which typically answers
     /// every question here backwards.
     ///
-    /// On Unix these come from the `termios` output flags. Clearing
-    /// `OPOST` disables output processing wholesale, so every byte
-    /// reaches the terminal untouched. With `OPOST` set, `TABS` and
+    /// On Unix these come from the `termios` output flags of the
+    /// *output* half. That half is the one whose line discipline
+    /// rewrites the bytes the renderer emits; the input half describes a
+    /// descriptor nothing is ever written to, and on a terminal built
+    /// from two devices it is not even the same line discipline, so it
+    /// is never consulted here. When the output half could not be read
+    /// its processing is unknown, and since every flag is *withheld*
+    /// rather than granted on doubt, nothing is returned.
+    ///
+    /// Clearing `OPOST` disables output processing wholesale, so every
+    /// byte reaches the terminal untouched. With `OPOST` set, `TABS` and
     /// `BS` require the *default* delays `TAB0` and `BS0`, and `ONLCR`
     /// reports whether `\n` is being rewritten to `\r\n`.
     ///
@@ -342,7 +350,10 @@ impl Optimizations {
     #[must_use]
     #[cfg(unix)]
     pub fn from_host_state(state: &crate::terminal::State) -> Self {
-        let oflag = state.termios.c_oflag;
+        let Some(termios) = state.output else {
+            return Self::empty();
+        };
+        let oflag = termios.c_oflag;
         if oflag & libc::OPOST == 0 {
             return Self::TABS.union(Self::BS);
         }
@@ -371,7 +382,7 @@ impl Optimizations {
             ENABLE_VIRTUAL_TERMINAL_PROCESSING,
         };
 
-        let mode = state.output_mode;
+        let mode = state.output;
         if mode & ENABLE_PROCESSED_OUTPUT == 0 {
             return Self::empty();
         }
@@ -801,7 +812,10 @@ mod tests {
     fn state_with_oflag(oflag: libc::tcflag_t) -> crate::terminal::State {
         let mut termios: libc::termios = unsafe { std::mem::zeroed() };
         termios.c_oflag = oflag;
-        crate::terminal::State { termios }
+        crate::terminal::State {
+            input: None,
+            output: Some(termios),
+        }
     }
 
     /// Raw mode's answer: `OPOST` off means no output processing at all,
@@ -907,6 +921,43 @@ mod tests {
         }
     }
 
+    /// The output half is the only one that may be read. A terminal can
+    /// be built from two different devices, and then the input half's
+    /// flags belong to a line discipline that never sees a byte the
+    /// renderer writes. Here the input half is set to the most
+    /// permissive state there is, which would grant everything if it
+    /// were consulted, while the output half is missing: the answer must
+    /// still be nothing.
+    #[test]
+    #[cfg(unix)]
+    fn from_host_state_ignores_the_input_half() {
+        let mut permissive: libc::termios = unsafe { std::mem::zeroed() };
+        permissive.c_oflag = libc::OPOST | libc::ONLCR;
+        let state = crate::terminal::State {
+            input: Some(permissive),
+            output: None,
+        };
+        assert_eq!(
+            Optimizations::from_host_state(&state),
+            Optimizations::empty(),
+            "an unreadable output half must withhold every flag"
+        );
+
+        // And the same input half alongside a readable output half must
+        // not change what that output half says on its own.
+        let mut cooked: libc::termios = unsafe { std::mem::zeroed() };
+        cooked.c_oflag = libc::OPOST;
+        let paired = crate::terminal::State {
+            input: Some(permissive),
+            output: Some(cooked),
+        };
+        assert_eq!(
+            Optimizations::from_host_state(&paired),
+            Optimizations::from_host_state(&state_with_oflag(libc::OPOST)),
+            "the input half must not influence the reading"
+        );
+    }
+
     /// No `$TERM` baseline may carry a line-discipline flag. `\t`,
     /// `\x08`, and `\n` behave according to the host's output
     /// processing, which `$TERM` cannot describe; `Screen::init` grants
@@ -967,8 +1018,8 @@ mod tests {
     #[cfg(windows)]
     fn state_with_output_mode(output_mode: u32) -> crate::terminal::State {
         crate::terminal::State {
-            input_mode: 0,
-            output_mode,
+            input: 0,
+            output: output_mode,
         }
     }
 

@@ -91,6 +91,10 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         id: deploy
+        # A pull request from a fork gets neither secrets nor a writable token,
+        # so there is nothing to deploy with and nowhere to comment. Everything
+        # above still runs, so a fork's changes are still built and checked.
+        if: ${{ !github.event.pull_request.head.repo.fork }}
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -102,7 +106,7 @@ jobs:
             --branch=${{ github.head_ref || github.ref_name }}
 
       - name: Comment preview URL
-        if: github.event_name == 'pull_request'
+        if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork }}
         uses: actions/github-script@v9
         with:
           script: |
