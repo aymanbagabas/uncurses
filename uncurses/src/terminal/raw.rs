@@ -50,7 +50,8 @@ use windows_sys::Win32::Foundation::HANDLE;
 ///
 /// The fields are readable so a caller can inspect what was saved — a snapshot
 /// taken before raw mode is otherwise unrecoverable, since re-reading the
-/// descriptor afterwards reports the raw state rather than this one. They are
+/// descriptor afterwards reports the raw state rather than this one. Both
+/// platforms name the halves `input` and `output`, but what they hold is
 /// inherently platform-specific: a `termios` and a console mode are not the
 /// same concept, so there is no portable shape to offer instead and code that
 /// reads them is unix-only or Windows-only by nature. The unix types come from
@@ -89,11 +90,11 @@ pub struct State {
     /// be read — typically because it is not a terminal.
     pub output: Option<libc::termios>,
     #[cfg(windows)]
-    /// Saved input console-mode bits.
-    pub input_mode: u32,
+    /// Saved console-mode bits of the input handle.
+    pub input: u32,
     #[cfg(windows)]
-    /// Saved output console-mode bits.
-    pub output_mode: u32,
+    /// Saved console-mode bits of the output handle.
+    pub output: u32,
 }
 
 #[cfg(windows)]
@@ -237,8 +238,8 @@ pub fn get_state<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<St
         return Err(io::Error::last_os_error());
     }
     Ok(State {
-        input_mode,
-        output_mode,
+        input: input_mode,
+        output: output_mode,
     })
 }
 
@@ -279,8 +280,8 @@ pub fn set_state<I: AsHandle, O: AsHandle>(input: I, output: O, state: &State) -
     let ih = input.as_handle().as_raw_handle() as HANDLE;
     let oh = output.as_handle().as_raw_handle() as HANDLE;
 
-    let applied_input = try_write(ih, state.input_mode);
-    let applied_output = try_write(oh, state.output_mode);
+    let applied_input = try_write(ih, state.input);
+    let applied_output = try_write(oh, state.output);
     applied_input.and(applied_output)
 }
 
@@ -389,7 +390,7 @@ pub fn make_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Resul
     let original = get_state(&input, &output)?;
     // Clearing quick-edit while setting extended-flags is how the console API
     // disables mouse selection, which would otherwise swallow mouse input.
-    let raw_input = (original.input_mode
+    let raw_input = (original.input
         & !(ENABLE_ECHO_INPUT
             | ENABLE_PROCESSED_INPUT
             | ENABLE_LINE_INPUT
@@ -398,14 +399,14 @@ pub fn make_raw_mode<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Resul
         | ENABLE_EXTENDED_FLAGS
         | ENABLE_WINDOW_INPUT;
     // Virtual-terminal processing requires processed output, so set it too.
-    let raw_output = original.output_mode
+    let raw_output = original.output
         | ENABLE_PROCESSED_OUTPUT
         | ENABLE_VIRTUAL_TERMINAL_PROCESSING
         | DISABLE_NEWLINE_AUTO_RETURN;
 
     let raw = State {
-        input_mode: raw_input,
-        output_mode: raw_output,
+        input: raw_input,
+        output: raw_output,
     };
     if let Err(e) = set_state(&input, &output, &raw) {
         // One handle may have been switched to raw mode before the other
