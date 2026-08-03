@@ -107,6 +107,13 @@ compile_error!(
     "uncurses requires one of the `icu` or `unicode-rs` features to be enabled (the default)"
 );
 
+/// The `libc` crate this was built against, re-exported so the platform types
+/// in the public API are nameable without depending on `libc` directly and
+/// matching its major version by hand. [`terminal::State`] exposes
+/// `libc::termios` values.
+#[cfg(unix)]
+pub use libc;
+
 pub mod ansi;
 pub mod buffer;
 pub mod cell;
@@ -120,6 +127,9 @@ pub mod text;
 pub mod unicode;
 
 pub(crate) mod renderer;
+
+#[cfg(all(test, unix, not(target_os = "l4re")))]
+mod testutil;
 
 #[cfg(debug_assertions)]
 mod trace;

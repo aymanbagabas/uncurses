@@ -577,44 +577,13 @@ mod tests {
         assert!(src.try_read().is_none());
     }
 
-    /// A pty master is a tty in every environment, including CI with captured
-    /// output — unlike stderr, which makes the neighbouring tests skip.
-    /// Returns the master and the slave; the slave must stay open, since
-    /// Darwin rejects `TIOCSWINSZ` on a master that has none.
-    ///
-    /// L4Re has no pty API in `libc`, so it opts out along with its test.
-    #[cfg(not(target_os = "l4re"))]
-    fn open_pty_master() -> Option<(File, File)> {
-        unsafe {
-            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
-            if master < 0 {
-                return None;
-            }
-            if libc::grantpt(master) != 0 || libc::unlockpt(master) != 0 {
-                libc::close(master);
-                return None;
-            }
-            let name = libc::ptsname(master);
-            if name.is_null() {
-                libc::close(master);
-                return None;
-            }
-            let slave = libc::open(name, libc::O_RDWR | libc::O_NOCTTY);
-            if slave < 0 {
-                libc::close(master);
-                return None;
-            }
-            Some((File::from_raw_fd(master), File::from_raw_fd(slave)))
-        }
-    }
-
     /// The constructor seeds `last_size`, so a `SIGWINCH` that does not change
     /// the size must not surface an event. That is what keeps a stray wake on a
     /// recycled pool pipe from being mistaken for a resize.
     #[cfg(not(target_os = "l4re"))]
     #[test]
     fn sigwinch_dedups_unchanged_size() {
-        let Some((master, _slave)) = open_pty_master() else {
+        let Some((master, _slave)) = crate::testutil::open_pty_pair() else {
             return;
         };
         // Probe independently of the code under test: illumos ptys are STREAMS
