@@ -4,6 +4,11 @@
 //! View 2: progress bar fills, then auto-exits after a 3-second countdown.
 //! `q`, `Esc`, or `Ctrl-C` exits at any time.
 //!
+//! The bar is also reported to the terminal with `OSC 9;4`
+//! ([`Screen::set_progress_state`]), so terminals that support it show the
+//! same progress in the taskbar or tab. [`Screen::finish`] takes it back
+//! down, so nothing is left behind on exit.
+//!
 //! Inline screen: each renderer paints into a [`Painter`] and reports
 //! the number of rows it wanted to use, and the screen is resized to
 //! match. The screen height is *always* the current frame's height —
@@ -14,7 +19,7 @@ use std::time::{Duration, Instant};
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
+use uncurses::screen::{ProgressState, Screen};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::{Painter, TextSurface};
@@ -115,6 +120,7 @@ impl App {
                             KeyCode::Enter => {
                                 self.state.chosen = true;
                                 self.state.progress = 0.0;
+                                self.screen.set_progress_state(ProgressState::Normal(0))?;
                                 next_frame = Instant::now() + FRAME;
                                 dirty = true;
                             }
@@ -136,6 +142,9 @@ impl App {
                     next_frame = now + FRAME;
                 }
                 self.state.progress = (self.state.progress + 0.01).min(1.0);
+                // Mirror the on-screen bar into the terminal's taskbar/tab.
+                let pct = (self.state.progress * 100.0).round() as u8;
+                self.screen.set_progress_state(ProgressState::Normal(pct))?;
                 if self.state.progress >= 1.0 {
                     self.state.loaded = true;
                     self.state.ticks = 3;
