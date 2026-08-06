@@ -667,10 +667,12 @@ where
 
     /// Set the renderer optimization flags.
     ///
-    /// The [`Optimizations::LINE_DISCIPLINE`] flags take effect
-    /// immediately but do not persist: [`init`](Self::init) and
-    /// [`resume`](Self::resume) re-derive them from the live terminal
-    /// state on every raw-mode entry, discarding whatever was set here.
+    /// [`TABS`](Optimizations::TABS) and [`BS`](Optimizations::BS) take
+    /// effect immediately but do not persist across a raw-mode entry:
+    /// [`init`](Self::init) and [`resume`](Self::resume) enable both,
+    /// since raw mode is what makes them safe. Every other flag —
+    /// including [`ONLCR`](Optimizations::ONLCR), which is opt-in and
+    /// never granted — is left exactly as set here.
     pub fn set_optimizations(&mut self, optimizations: Optimizations) {
         self.renderer.set_optimizations(optimizations);
     }
@@ -1244,25 +1246,29 @@ where
         Ok(())
     }
 
-    /// Recompute the line-discipline optimizations from the host's output
-    /// processing: `TABS` and `BS` when `\t` and `\x08` reach the terminal
-    /// intact, and `ONLCR` when `\n` also returns the cursor to column 0.
-    /// The `$TERM` baselines describe the terminal rather than the line
-    /// discipline, so these are derived here instead of assumed.
+    /// Enable [`TABS`](Optimizations::TABS) and [`BS`](Optimizations::BS),
+    /// the two optimizations raw mode makes safe: `\t` and `\x08` now
+    /// reach the terminal intact instead of being rewritten on the way.
     ///
-    /// All three are *replaced*, not merely granted. A flag the host
-    /// withholds is a flag whose control byte the host will mangle, so
-    /// keeping a previously-set one would corrupt the frame rather than
-    /// merely waste bytes.
+    /// On Unix raw mode clears `OPOST`, disabling output processing
+    /// wholesale, so the kernel can no longer expand `\t` into spaces. On
+    /// Windows it enables virtual-terminal processing, which is the same
+    /// bargain. So this reads no terminal state: `make_raw` returning
+    /// `Ok` *is* the answer, and no `$TERM` baseline carries either flag,
+    /// so a screen that never enters raw mode emits escape sequences
+    /// instead.
     ///
-    /// Runs after every `make_raw`, including [`resume`](Self::resume),
-    /// since re-entering raw mode is what makes the answer true again.
+    /// [`ONLCR`](Optimizations::ONLCR) is deliberately untouched. Raw
+    /// mode makes it false, but it is opt-in: a caller who set it knows
+    /// something about their output path that we do not, and clobbering
+    /// that is worse than the bytes it would save.
+    ///
+    /// Runs after every successful `make_raw`, including
+    /// [`resume`](Self::resume), since whatever ran while paused may have
+    /// put the terminal back into cooked mode.
     #[cfg(any(unix, windows))]
-    fn apply_line_discipline(&mut self, state: &crate::terminal::State) {
-        let opts = self
-            .optimizations()
-            .difference(Optimizations::LINE_DISCIPLINE)
-            .union(Optimizations::from_host_state(state));
+    fn enable_tabs_and_bs(&mut self) {
+        let opts = self.optimizations().with_tabs(true).with_bs(true);
         self.renderer.set_optimizations(opts);
     }
 
@@ -1301,18 +1307,17 @@ where
     }
 
     /// Reconcile the terminal's hardware tab stops with the every-eight
-    /// columns layout the renderer assumes whenever the `TABS`
-    /// optimization is on. A prior program may have left arbitrary stops
-    /// behind, which would make the `HT` (`\t`) moves the cursor planner
-    /// emits land on the wrong columns. Modern terminals reset in one
-    /// cursor-safe write via DECST8C; the rest get the portable
-    /// TBC-then-HTS fallback. Skipped entirely when `TABS` is off, since
-    /// the planner then never relies on tab stops. Staged and flushed so
-    /// it reaches the terminal even when capability queries are disabled.
+    /// columns layout the renderer assumes. A prior program may have left
+    /// arbitrary stops behind, which would make the `HT` (`\t`) moves the
+    /// cursor planner emits land on the wrong columns. Modern terminals
+    /// reset in one cursor-safe write via DECST8C; the rest get the
+    /// portable TBC-then-HTS fallback. Staged and flushed so it reaches
+    /// the terminal even when capability queries are disabled.
+    ///
+    /// Runs whether or not `TABS` is set: the stops belong to the
+    /// terminal, not to our willingness to use them, so turning `TABS` on
+    /// later must not find them unknown.
     fn reset_tab_stops(&mut self) -> io::Result<()> {
-        if !self.optimizations().contains(Optimizations::TABS) {
-            return Ok(());
-        }
         if Optimizations::supports_decst8c(self.terminal.env()) {
             self.out_buf
                 .write_all(crate::ansi::screen::SET_TAB_EVERY_8_COLUMNS)?;
@@ -1535,19 +1540,6 @@ where
     I: Input + Copy + std::os::fd::AsFd,
     O: Write + Copy + std::os::fd::AsFd,
 {
-    /// Read the terminal state left behind by `make_raw` and hand it to
-    /// [`apply_line_discipline`](Self::apply_line_discipline). Keeps the
-    /// baseline when no state can be read at all, rather than failing
-    /// init over an optimization hint. A state that describes only the
-    /// input half still resolves, and withholds all three flags: the
-    /// output half is the one that governs, and its absence is not an
-    /// answer.
-    fn resolve_line_discipline(&mut self) {
-        if let Ok(state) = self.terminal.get_state() {
-            self.apply_line_discipline(&state);
-        }
-    }
-
     /// Construct a screen over `terminal` without touching the terminal:
     /// size the renderer to it and create an [`EventSource`] on its input
     /// half. The terminal is left as-is; call [`Self::init`] to enter raw
@@ -1572,7 +1564,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
-        self.resolve_line_discipline();
+        self.enable_tabs_and_bs();
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped. Disable color
@@ -1656,12 +1648,12 @@ where
     /// re-enter raw mode, refit the managed area to the current viewport, re-apply
     /// the saved render state and modes, and force a full repaint.
     ///
-    /// Re-derives the [`Optimizations::LINE_DISCIPLINE`] flags and resets
-    /// the hardware tab stops, since whatever ran while paused may have
-    /// changed both.
+    /// Re-enables [`TABS`](Optimizations::TABS) and
+    /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
+    /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
-        self.resolve_line_discipline();
+        self.enable_tabs_and_bs();
         self.autoresize()?;
         self.reset_tab_stops()?;
         self.restore()?;
@@ -1695,19 +1687,6 @@ where
     I: Input + Copy + std::os::windows::io::AsHandle,
     O: Write + Copy + std::os::windows::io::AsHandle,
 {
-    /// Read the terminal state left behind by `make_raw` and hand it to
-    /// [`apply_line_discipline`](Self::apply_line_discipline). Keeps the
-    /// baseline when no state can be read at all, rather than failing
-    /// init over an optimization hint. A state that describes only the
-    /// input half still resolves, and withholds all three flags: the
-    /// output half is the one that governs, and its absence is not an
-    /// answer.
-    fn resolve_line_discipline(&mut self) {
-        if let Ok(state) = self.terminal.get_state() {
-            self.apply_line_discipline(&state);
-        }
-    }
-
     /// Construct a screen over `terminal` without touching the terminal:
     /// size the renderer to it and create an [`EventSource`] on its input
     /// half. The terminal is left as-is; call [`Self::init`] to enter raw
@@ -1732,7 +1711,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
-        self.resolve_line_discipline();
+        self.enable_tabs_and_bs();
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped. Disable color
@@ -1816,12 +1795,12 @@ where
     /// refit the managed area to the current viewport, re-apply the saved
     /// render state and modes, and force a full repaint.
     ///
-    /// Re-derives the [`Optimizations::LINE_DISCIPLINE`] flags and resets
-    /// the hardware tab stops, since whatever ran while paused may have
-    /// changed both.
+    /// Re-enables [`TABS`](Optimizations::TABS) and
+    /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
+    /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
-        self.resolve_line_discipline();
+        self.enable_tabs_and_bs();
         self.autoresize()?;
         self.reset_tab_stops()?;
         self.restore()?;

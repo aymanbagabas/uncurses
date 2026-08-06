@@ -1021,14 +1021,18 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
 }
 
 #[test]
-fn reset_tab_stops_noop_when_tabs_disabled() {
+fn reset_tab_stops_emits_even_when_tabs_disabled() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::TABS);
         let mut screen = Screen::for_test(&mut buf, (20, 1)).with_optimizations(opts);
         screen.reset_tab_stops().unwrap();
     }
-    assert!(buf.is_empty(), "tab reset leaked while TABS off: {buf:?}");
+    assert!(
+        !buf.is_empty(),
+        "tab stops belong to the terminal, not to our willingness to use them: \
+         turning TABS on later must not find them unknown"
+    );
 }
 
 #[test]
@@ -2302,14 +2306,14 @@ fn clip_origin_keeps_area_on_screen() {
     assert_eq!(screen.clip_origin(Position::new(0, 6)), Position::new(0, 0));
 }
 
-/// `init` must resolve the line-discipline optimizations from the state the
+/// `init` must grant the line-discipline optimizations from the state the
 /// terminal is in *after* `make_raw`, not the one it was in before. Raw mode
 /// clears `OPOST`, so tabs and backspace reach the terminal untouched and `\n`
-/// no longer carries a carriage return. Reading the pre-raw state instead
-/// would invert both answers, which is exactly what this pins down.
+/// no longer carries a carriage return. This drives a real pty to prove raw
+/// mode actually delivers that, rather than taking `cfmakeraw` on faith.
 #[cfg(all(unix, not(target_os = "l4re")))]
 #[test]
-fn init_resolves_line_discipline_after_entering_raw_mode() {
+fn init_grants_tabs_and_bs_after_entering_raw_mode() {
     use std::os::fd::AsRawFd;
 
     // The master must outlive the slave, so bind it for the whole test.
@@ -2327,7 +2331,7 @@ fn init_resolves_line_discipline_after_entering_raw_mode() {
         "tcgetattr on a fresh pty slave: {}",
         std::io::Error::last_os_error()
     );
-    cooked.c_oflag |= libc::OPOST | libc::ONLCR | crate::renderer::caps::TAB_DELAY;
+    cooked.c_oflag |= libc::OPOST | libc::ONLCR;
     assert_eq!(
         unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
         0,
@@ -2337,11 +2341,14 @@ fn init_resolves_line_discipline_after_entering_raw_mode() {
 
     let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::Env::new());
     let mut screen = Screen::new(term).expect("Screen::new over a pty slave");
-    // Start from the *opposite* of what raw mode implies: ONLCR on, and a
-    // baseline that carries neither TABS nor BS. All three assertions below
-    // are then load-bearing, since nothing but the init-time grant can
-    // explain their final values.
-    screen.set_optimizations(Optimizations::modern().with_onlcr(true));
+    // Start from the opposite of what raw mode implies: TABS and BS off, so
+    // only the init-time grant can explain their final values. ONLCR on, so
+    // the same assertion proves init leaves an opt-in flag alone.
+    let primed = Optimizations::modern()
+        .with_tabs(false)
+        .with_bs(false)
+        .with_onlcr(true);
+    screen.set_optimizations(primed);
     screen
         .init_with(ScreenOptions {
             query_capabilities: false,
@@ -2349,11 +2356,11 @@ fn init_resolves_line_discipline_after_entering_raw_mode() {
         })
         .expect("init over a pty slave");
 
-    assert_line_discipline_resolved(screen.optimizations(), "init");
+    assert_tabs_and_bs_granted(screen.optimizations(), primed, "init");
 
-    // Resume re-enters raw mode, so it must resolve the line discipline too.
-    // Undo all three flags first -- otherwise the assertions would still hold
-    // if `resume` did nothing at all.
+    // Resume re-enters raw mode, so it must re-grant too. Undo the flags
+    // first -- otherwise the assertion would still hold if `resume` did
+    // nothing at all.
     screen.pause().expect("pause");
     assert_eq!(
         unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
@@ -2361,39 +2368,22 @@ fn init_resolves_line_discipline_after_entering_raw_mode() {
         "restoring cooked mode while paused: {}",
         std::io::Error::last_os_error()
     );
-    screen.set_optimizations(
-        Optimizations::modern()
-            .with_onlcr(true)
-            .with_tabs(false)
-            .with_bs(false),
-    );
+    screen.set_optimizations(primed);
     screen.resume().expect("resume");
-    assert_line_discipline_resolved(screen.optimizations(), "resume");
+    assert_tabs_and_bs_granted(screen.optimizations(), primed, "resume");
 }
 
-/// The three line-discipline flags a raw pty implies, plus the invariant that
-/// resolving them leaves every other capability alone -- replacing the whole
-/// set with `from_host_state` would silently drop all 13 escape-sequence caps.
+/// Exactly what a raw-mode entry must leave behind: `TABS` and `BS` on, and
+/// every other capability -- including the opt-in `ONLCR` -- exactly as the
+/// caller left it. One equality pins the grant, the opt-in, and the baseline.
 #[cfg(all(unix, not(target_os = "l4re")))]
 #[track_caller]
-fn assert_line_discipline_resolved(opts: Optimizations, after: &str) {
-    assert!(
-        opts.contains(Optimizations::TABS),
-        "{after}: raw mode clears OPOST, so \\t reaches the terminal: {opts:?}"
-    );
-    assert!(
-        opts.contains(Optimizations::BS),
-        "{after}: raw mode clears OPOST, so \\x08 reaches the terminal: {opts:?}"
-    );
-    assert!(
-        !opts.contains(Optimizations::ONLCR),
-        "{after}: raw mode clears OPOST, so \\n no longer implies a carriage \
-         return, and the pre-raw state said the opposite: {opts:?}"
-    );
+fn assert_tabs_and_bs_granted(opts: Optimizations, primed: Optimizations, after: &str) {
     assert_eq!(
-        opts.difference(Optimizations::LINE_DISCIPLINE),
-        Optimizations::modern().difference(Optimizations::LINE_DISCIPLINE),
-        "{after}: resolving the line discipline must not disturb the baseline"
+        opts,
+        primed.with_tabs(true).with_bs(true),
+        "{after}: raw mode makes \\t and \\x08 safe, so both are granted; ONLCR \
+         is opt-in and every other cap must survive untouched"
     );
 }
 
