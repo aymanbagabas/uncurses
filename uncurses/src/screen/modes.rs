@@ -1,7 +1,7 @@
 //! Non-render terminal/input mode toggles for the [`Screen`] facade —
 //! cursor style, mouse tracking, bracketed paste, focus reporting,
 //! color-scheme update reports, in-band resize reports, window title,
-//! and the default foreground/background/cursor colors.
+//! progress reports, and the default foreground/background/cursor colors.
 //!
 //! Each setter emits its escape bytes through the owned renderer and
 //! flushes immediately, so the mode change takes effect on the terminal
@@ -12,11 +12,12 @@
 
 use std::io::{self, Write};
 
-use crate::ansi::{self, color, cursor, kitty, mode, xterm};
+use crate::ansi::{self, color, cursor, kitty, mode, progress, xterm};
 use crate::color::Color;
 use crate::event::Input;
 
 use super::MouseTracking;
+use super::ProgressState;
 use super::Screen;
 use super::cursor::CursorShape;
 
@@ -69,6 +70,30 @@ impl<I: Input, O: Write> Screen<I, O> {
     pub fn reset_pointer_shape(&mut self) -> io::Result<()> {
         cursor::write_set_pointer_shape(&mut self.out_buf, "default")?;
         self.state.pointer_shape = None;
+        self.flush()
+    }
+
+    /// Report progress to the terminal (`OSC 9;4`) and flush.
+    ///
+    /// Terminals that support it show the progress in the taskbar, tab, or
+    /// window chrome; the rest ignore the sequence. Percentages are clamped
+    /// to `0..=100`.
+    ///
+    /// The state is recorded for save/restore: it is removed on a shell
+    /// handoff ([`pause`](Self::pause), [`suspend`](Self::suspend),
+    /// [`finish`](Self::finish)) and re-reported by
+    /// [`resume`](Self::resume). Take it down with
+    /// [`reset_progress_state`](Self::reset_progress_state).
+    pub fn set_progress_state(&mut self, progress: ProgressState) -> io::Result<()> {
+        progress.write(&mut self.out_buf)?;
+        self.state.progress = Some(progress);
+        self.flush()
+    }
+
+    /// Remove the progress report (`OSC 9;4;0`) and flush.
+    pub fn reset_progress_state(&mut self) -> io::Result<()> {
+        self.out_buf.write_all(progress::RESET_PROGRESS_BAR)?;
+        self.state.progress = None;
         self.flush()
     }
 
@@ -416,6 +441,9 @@ impl<I: Input, O: Write> Screen<I, O> {
         if self.state.pointer_shape.is_some() {
             cursor::write_set_pointer_shape(&mut self.out_buf, "default")?;
         }
+        if self.state.progress.is_some() {
+            self.out_buf.write_all(progress::RESET_PROGRESS_BAR)?;
+        }
 
         // --- Render-coupled modes ---
         // Walk to the bottom of the *last rendered* surface before any mode
@@ -566,6 +594,9 @@ impl<I: Input, O: Write> Screen<I, O> {
         }
         if let Some(shape) = self.state.pointer_shape.clone() {
             cursor::write_set_pointer_shape(&mut self.out_buf, &shape)?;
+        }
+        if let Some(progress) = self.state.progress {
+            progress.write(&mut self.out_buf)?;
         }
         Ok(())
     }

@@ -16,6 +16,7 @@ use crate::event::ModifyOtherKeysMode;
 use crate::layout::Position;
 
 use super::MouseTracking;
+use super::ProgressState;
 
 /// Tracked non-render mode state for save/restore.
 #[derive(Debug, Clone)]
@@ -74,6 +75,10 @@ pub(super) struct State {
     /// using the terminal default. Drives the `OSC 22` reset on reset and
     /// re-emission on restore.
     pub pointer_shape: Option<String>,
+    /// Progress reported via `OSC 9;4`. `None` when no progress is being
+    /// reported. Drives the `OSC 9;4;0` removal on reset and re-emission on
+    /// restore.
+    pub progress: Option<ProgressState>,
     // --- Render-coupled state (formerly tracked by the renderer buffer) -----------
     /// Whether the alternate screen is currently active.
     pub alt_screen: bool,
@@ -119,6 +124,7 @@ impl Default for State {
             palette: BTreeMap::new(),
             modify_other_keys: ModifyOtherKeysMode::Disabled,
             pointer_shape: None,
+            progress: None,
             alt_screen: false,
             cursor_visible: true,
             sync_updates: false,
