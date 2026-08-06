@@ -812,6 +812,85 @@ fn empty_title_clears_state_and_is_not_restored() {
 }
 
 #[test]
+fn set_progress_state_emits_osc_9_4() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen
+        .set_progress_state(ProgressState::Normal(42))
+        .unwrap();
+    assert_eq!(s(screen.writer()), "\x1b]9;4;1;42\x07");
+}
+
+#[test]
+fn set_progress_state_clamps_and_maps_each_state() {
+    for (state, want) in [
+        (ProgressState::Normal(0), "\x1b]9;4;1;0\x07"),
+        (ProgressState::Normal(200), "\x1b]9;4;1;100\x07"),
+        (ProgressState::Error(7), "\x1b]9;4;2;7\x07"),
+        (ProgressState::Warning(99), "\x1b]9;4;4;99\x07"),
+        (ProgressState::Indeterminate, "\x1b]9;4;3\x07"),
+    ] {
+        let mut screen = Screen::for_test(Vec::new(), (80, 24));
+        screen.set_progress_state(state).unwrap();
+        assert_eq!(s(screen.writer()), want, "wrong bytes for {state:?}");
+    }
+}
+
+#[test]
+fn reset_progress_state_emits_removal() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen
+        .set_progress_state(ProgressState::Indeterminate)
+        .unwrap();
+    screen.reset_progress_state().unwrap();
+    assert!(s(screen.writer()).ends_with("\x1b]9;4;0\x07"));
+}
+
+#[test]
+fn reset_removes_progress_and_restore_reports_it_again() {
+    let mut setup: Vec<u8> = Vec::new();
+    let mut reset_buf: Vec<u8> = Vec::new();
+    let mut restore_buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut setup, (80, 24));
+        screen.set_progress_state(ProgressState::Error(64)).unwrap();
+        // Shell handoff: the progress report must come down...
+        let _ = std::mem::replace(screen.terminal.output_mut(), &mut reset_buf);
+        screen.reset().unwrap();
+        screen.flush().unwrap();
+        // ...and go back up on resume.
+        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
+        screen.restore().unwrap();
+        screen.flush().unwrap();
+    }
+    assert!(
+        s(&reset_buf).contains("\x1b]9;4;0\x07"),
+        "progress not removed on reset: {:?}",
+        s(&reset_buf)
+    );
+    assert!(
+        s(&restore_buf).contains("\x1b]9;4;2;64\x07"),
+        "progress not restored: {:?}",
+        s(&restore_buf)
+    );
+}
+
+#[test]
+fn untouched_progress_is_not_reset_or_restored() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (80, 24));
+        screen.reset().unwrap();
+        screen.restore().unwrap();
+        screen.flush().unwrap();
+    }
+    assert!(
+        !s(&buf).contains("\x1b]9;4"),
+        "unexpected progress sequence: {:?}",
+        s(&buf)
+    );
+}
+
+#[test]
 fn empty_window_title_clears_only_window_state() {
     let mut setup: Vec<u8> = Vec::new();
     let mut restore_buf: Vec<u8> = Vec::new();
