@@ -466,6 +466,10 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
     if clip.is_empty() {
         return start;
     }
+    // `y` only ever advances, so a start below the clip can never paint.
+    if start.y >= clip.bottom() {
+        return start;
+    }
     let mut x = start.x;
     let mut y = start.y;
     // Truncation is per row: once a row overflows, clusters are dropped until

@@ -167,6 +167,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         if clip.is_empty() {
             return start;
         }
+        // `y` only ever advances, so a start below the clip can never paint.
+        if start.y >= clip.bottom() {
+            return start;
+        }
         let mut x = start.x;
         let mut y = start.y;
         // `pen` accumulates the inline SGR/OSC 8 state, starting empty; an
@@ -867,6 +871,54 @@ mod tests {
         assert_eq!(z.content(), "z");
         assert!(z.style.attrs.contains(AttrFlags::BOLD));
         assert_eq!(link_of(&z.style), Some(("https://x", "")));
+    }
+
+    #[test]
+    fn start_below_clip_paints_nothing() {
+        let mut b = buf(3, 2);
+        let end = Painter::new(&mut b).set_str_wrap(
+            (0, 5),
+            "abcdef\nghi",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(end, Position::new(0, 5));
+        for y in 0..2 {
+            for x in 0..3 {
+                assert_eq!(cell_at(&b, x, y).content(), " ");
+            }
+        }
+    }
+
+    #[test]
+    fn literal_start_below_clip_paints_nothing() {
+        let mut b = buf(3, 2);
+        let end = b.set_str((0, 5), "abcdef\nghi", Style::default());
+        assert_eq!(end, Position::new(0, 5));
+        assert_eq!(cell_at(&b, 0, 0).content(), " ");
+        assert_eq!(cell_at(&b, 0, 1).content(), " ");
+    }
+
+    #[test]
+    fn wrap_breaks_on_crlf() {
+        // The CRLF fix is shared with WrapMode::Wrap: a joined cluster has to
+        // break the line there too, not read as zero-width filler.
+        let mut b = buf(4, 3);
+        Painter::new(&mut b).set_str_wrap((0, 0), "ab\r\ncd", WrapMode::Wrap, Style::default());
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+        assert_eq!(cell_at(&b, 0, 1).content(), "c");
+        assert_eq!(cell_at(&b, 1, 1).content(), "d");
+    }
+
+    #[test]
+    fn literal_wrap_breaks_on_crlf() {
+        let mut b = buf(4, 3);
+        b.set_str_wrap((0, 0), "ab\r\ncd", WrapMode::Wrap, Style::default());
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+        assert_eq!(cell_at(&b, 0, 1).content(), "c");
+        assert_eq!(cell_at(&b, 1, 1).content(), "d");
     }
 
     #[test]
