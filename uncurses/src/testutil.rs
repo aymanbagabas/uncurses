@@ -57,6 +57,33 @@ pub(crate) fn open_pty_pair() -> Option<(std::fs::File, std::fs::File)> {
     }
 }
 
+/// Read whatever a descriptor has buffered right now, without blocking.
+///
+/// A pty master holds what was written to its slave, so this is how a test
+/// observes the bytes a `Screen` actually put on the wire. The descriptor is
+/// switched to non-blocking first: there is no sentinel to read up to, so a
+/// blocking read would sit there once the buffered output ran out.
+pub(crate) fn drain(f: &dyn std::os::fd::AsFd) -> Vec<u8> {
+    use std::os::fd::AsRawFd;
+
+    let fd = f.as_fd().as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return Vec::new();
+        }
+    }
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+        if n <= 0 {
+            return out;
+        }
+        out.extend_from_slice(&chunk[..n as usize]);
+    }
+}
+
 /// An [`AsFd`](std::os::fd::AsFd) that hands out a different descriptor on each
 /// borrow, so a descriptor can be readable by `tcgetattr` and then rejected by
 /// a later `tcsetattr`.
