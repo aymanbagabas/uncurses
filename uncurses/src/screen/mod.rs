@@ -1326,6 +1326,30 @@ where
         self.flush()
     }
 
+    /// Reset LNM (ANSI mode 20) so a `\n` moves the cursor down without
+    /// touching the column.
+    ///
+    /// The cursor planner emits a bare `\n` for downward moves and, unless
+    /// [`Optimizations::ONLCR`] says the host's line discipline expands it,
+    /// carries the column across unchanged. A terminal left in LNM by a prior
+    /// program breaks that assumption on the terminal's side of the wire:
+    /// LNM makes a *received* LF return to column 1, so every horizontal leg
+    /// planned after a `\n` starts from a column the cursor is not in.
+    ///
+    /// No query first. LNM reset is the documented default — the VT510
+    /// manual asks that it be kept reset — so there is nothing to learn from
+    /// asking, and this follows [`reset_tab_stops`](Self::reset_tab_stops) in
+    /// imposing the state the planner assumes rather than trusting what it
+    /// inherited. Reset on every raw-mode entry, since a program run during a
+    /// [`pause`](Self::pause) can set it while we are not looking.
+    ///
+    /// Staged and flushed so it reaches the terminal even when capability
+    /// queries are disabled.
+    fn reset_lnm(&mut self) -> io::Result<()> {
+        crate::ansi::mode::Mode::LINE_FEED_NEW_LINE.reset(&mut self.out_buf)?;
+        self.flush()
+    }
+
     fn send_init_queries(&mut self) -> io::Result<()> {
         use crate::ansi::ctrl::{REQUEST_PRIMARY_DA, REQUEST_XTVERSION};
         use crate::ansi::kitty::REQUEST_KITTY_KEYBOARD;
@@ -1563,6 +1587,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
+        self.reset_lnm()?;
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped. Disable color
@@ -1647,6 +1672,7 @@ where
     /// the saved render state and modes, and force a full repaint.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        self.reset_lnm()?;
         self.autoresize()?;
         self.restore()?;
         self.invalidate();
@@ -1703,6 +1729,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
+        self.reset_lnm()?;
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
         // correctly even when capability queries are skipped. Disable color
@@ -1787,6 +1814,7 @@ where
     /// render state and modes, and force a full repaint.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        self.reset_lnm()?;
         self.autoresize()?;
         self.restore()?;
         self.invalidate();
