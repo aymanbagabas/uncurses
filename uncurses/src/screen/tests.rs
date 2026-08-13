@@ -1100,6 +1100,18 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
 }
 
 #[test]
+fn reset_lnm_emits_ansi_mode_20_reset() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (20, 1));
+        screen.reset_lnm().unwrap();
+    }
+    // ANSI mode, so no `?` private marker: a DEC-private `\x1b[?20l` is a
+    // different mode entirely.
+    assert_eq!(s(&buf), "\x1b[20l");
+}
+
+#[test]
 fn reset_tab_stops_noop_when_tabs_disabled() {
     let mut buf: Vec<u8> = Vec::new();
     {
@@ -2379,6 +2391,66 @@ fn clip_origin_keeps_area_on_screen() {
     // An area at least as tall as the terminal pins to the top.
     screen.window_cells = Some(Size::new(10, 3));
     assert_eq!(screen.clip_origin(Position::new(0, 6)), Position::new(0, 0));
+}
+
+/// LNM is terminal state, not termios: it survives whoever set it, so a
+/// terminal handed over in LNM makes every `\n` the cursor planner emits reset
+/// the column while the plan assumes it is carried. Raw mode cannot answer it,
+/// which is why this is checked over a real pty rather than a byte buffer.
+#[cfg(all(unix, not(target_os = "l4re")))]
+mod lnm {
+    use super::*;
+    use crate::terminal::{Env, Terminal};
+    use crate::testutil::{drain, open_pty_pair};
+
+    fn init_bytes_over_pty(f: impl FnOnce(&mut Screen<&std::fs::File, &std::fs::File>)) -> String {
+        let (Some((_ma, input)), Some((mb, out))) = (open_pty_pair(), open_pty_pair()) else {
+            return String::new();
+        };
+        let terminal = Terminal::new(&input, &out, Env::from_pairs([("TERM", "xterm")]));
+        let mut screen = Screen::new(terminal).expect("screen over two ptys");
+        f(&mut screen);
+        s(&drain(&mb))
+    }
+
+    fn quiet() -> ScreenOptions {
+        ScreenOptions {
+            query_capabilities: false,
+            query_drain_timeout: Duration::ZERO,
+            ..ScreenOptions::default()
+        }
+    }
+
+    #[test]
+    fn init_resets_lnm() {
+        let out = init_bytes_over_pty(|screen| {
+            screen.init_with(quiet()).expect("init");
+        });
+        if out.is_empty() {
+            return; // no usable pty here
+        }
+        assert!(out.contains("\x1b[20l"), "init must reset LNM: {out:?}");
+    }
+
+    #[test]
+    fn resume_resets_lnm() {
+        // A program run while we were paused can set LNM behind our back, so
+        // re-entering raw mode has to impose it again rather than assume the
+        // reset from init survived.
+        let out = init_bytes_over_pty(|screen| {
+            screen.init_with(quiet()).expect("init");
+            screen.pause().expect("pause");
+            screen.resume().expect("resume");
+        });
+        if out.is_empty() {
+            return; // no usable pty here
+        }
+        assert_eq!(
+            out.matches("\x1b[20l").count(),
+            2,
+            "init and resume must each reset LNM: {out:?}"
+        );
+    }
 }
 
 /// `finish` consumes the screen and there is no `Drop` impl, so if a teardown
