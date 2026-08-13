@@ -167,6 +167,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         if clip.is_empty() {
             return start;
         }
+        // `y` only ever advances, so a start below the clip can never paint.
+        if start.y >= clip.bottom() {
+            return start;
+        }
         let mut x = start.x;
         let mut y = start.y;
         // `pen` accumulates the inline SGR/OSC 8 state, starting empty; an
@@ -177,6 +181,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         // the next non-zero-width token finalizes it.
         let mut pen = Style::default();
         let mut pending: Option<(u16, u16, String, u8)> = None;
+        // Truncation is per row: once a row overflows, clusters are dropped
+        // until `\n` or `\r` puts the cursor back inside the clip. Escapes
+        // still run, so the pen carries over to the next row.
+        let mut truncated = false;
 
         for tok in tokenize(s.as_bytes(), self.mode, self.eaw_wide) {
             // A zero-width grapheme appends to the pending cell without
@@ -205,6 +213,9 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     }
                 }
                 Token::Text { text, width } => {
+                    if truncated {
+                        continue;
+                    }
                     let g = unsafe { std::str::from_utf8_unchecked(text) };
                     let cw = width as u8;
                     if x + cw as u16 > clip.right() {
@@ -212,9 +223,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                             WrapMode::Truncate => {
                                 if let Some(tail) = tail {
                                     self.paint_tail(tail, clip, y);
-                                    return Position::new(clip.right(), y);
+                                    x = clip.right();
                                 }
-                                return Position::new(x, y);
+                                truncated = true;
+                                continue;
                             }
                             WrapMode::Wrap => {
                                 y = y.saturating_add(1);
@@ -245,12 +257,14 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 Token::Control(0x0A) => {
                     y = y.saturating_add(1);
                     x = clip.left();
+                    truncated = false;
                     if y >= clip.bottom() {
                         return Position::new(x, y);
                     }
                 }
                 Token::Control(0x0D) => {
                     x = clip.left();
+                    truncated = false;
                 }
                 Token::Control(_) => {}
             }
@@ -363,7 +377,8 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     /// Paint `s` starting at `pos` with explicit wrapping behavior.
     ///
     /// The target bounds are the clipping rectangle. [`WrapMode::Truncate`]
-    /// stops at the right edge; [`WrapMode::Wrap`] continues on the next row
+    /// drops the rest of the row at the right edge and resumes on the next
+    /// row; [`WrapMode::Wrap`] continues on the next row
     /// at the bounds' left edge until the bottom edge is reached.
     ///
     /// # Parameters
@@ -459,10 +474,12 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     /// Paint `s` starting at `pos`, truncating with a `tail` indicator.
     ///
     /// Text is painted across the target bounds. When a non-zero-width cluster
-    /// would cross the right edge, painting stops and `tail` is stamped over
-    /// the trailing columns so it ends exactly at the right edge. The tail
-    /// appears only when the text actually overflows; text that fits is left
-    /// untouched.
+    /// would cross the right edge, the rest of that row is dropped and `tail`
+    /// is stamped over its trailing columns so it ends exactly at the right
+    /// edge. Painting resumes on the next row if the text continues past a
+    /// newline, so a multi-line `s` can stamp one tail per overflowing row.
+    /// The tail appears only on rows that actually overflow; a row that fits
+    /// is left untouched.
     ///
     /// `tail` is painted with `tail_style` as its starting style and may carry
     /// its own inline escape sequences, so it can be a single glyph (`"…"`), a
@@ -506,8 +523,8 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     ///
     /// This is the rectangular form of
     /// [`set_str_truncate`](Self::set_str_truncate): the clip rectangle is
-    /// `rect ∩ target.bounds()`, and the tail is stamped at `rect`'s right
-    /// edge when the text overflows it.
+    /// `rect ∩ target.bounds()`, and a tail is stamped at `rect`'s right
+    /// edge on each row that overflows it.
     ///
     /// # Parameters
     ///
@@ -747,6 +764,161 @@ mod tests {
         assert_eq!(end, Position::new(3, 0));
         assert_eq!(cell_at(&b, 0, 0).content(), "a");
         assert_eq!(cell_at(&b, 2, 0).content(), "c");
+    }
+
+    #[test]
+    fn truncate_resumes_on_next_row() {
+        let mut b = buf(3, 2);
+        let end = Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "abcdef\nxy",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 1).content(), "x");
+        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+        assert_eq!(end, Position::new(2, 1));
+    }
+
+    #[test]
+    fn truncate_tail_stamped_per_row() {
+        let mut b = buf(4, 2);
+        Painter::new(&mut b).set_str_truncate((0, 0), "abcdef\nghijkl", "…", Style::default());
+        assert_eq!(cell_at(&b, 3, 0).content(), "…");
+        assert_eq!(cell_at(&b, 0, 1).content(), "g");
+        assert_eq!(cell_at(&b, 3, 1).content(), "…");
+    }
+
+    #[test]
+    fn literal_truncate_resumes_on_next_row() {
+        let mut b = buf(3, 2);
+        b.set_str((0, 0), "abcdef\nxy", Style::default());
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 1).content(), "x");
+        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+    }
+
+    #[test]
+    fn cr_clears_truncation_for_the_row() {
+        let mut b = buf(3, 1);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "abcdef\rXY",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(cell_at(&b, 0, 0).content(), "X");
+        assert_eq!(cell_at(&b, 1, 0).content(), "Y");
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+    }
+
+    #[test]
+    fn overflow_drops_rest_of_row_without_backfill() {
+        let mut b = buf(3, 1);
+        let end = Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "ab中c",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+        // "中" needs two columns and only one is left; "c" must not slot into
+        // the gap ahead of it.
+        assert_eq!(cell_at(&b, 2, 0).content(), " ");
+        assert_eq!(end, Position::new(2, 0));
+    }
+
+    #[test]
+    fn literal_crlf_breaks_the_line() {
+        // Extended grapheme segmentation joins CR LF into one zero-width
+        // cluster, so it has to be matched explicitly to break the line.
+        let mut b = buf(3, 2);
+        b.set_str((0, 0), "abcdef\r\nxy", Style::default());
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 1).content(), "x");
+        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+    }
+
+    #[test]
+    fn crlf_breaks_the_line() {
+        let mut b = buf(3, 2);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "abcdef\r\nxy",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 1).content(), "x");
+        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+    }
+
+    #[test]
+    fn escapes_still_apply_across_a_truncated_row() {
+        // The pen keeps advancing through the dropped part of the row, so a
+        // style opened there lands on the next row.
+        let mut b = buf(2, 2);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "ab\x1b[1mcd\x1b]8;;https://x\x1b\\\nz",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        let z = cell_at(&b, 0, 1);
+        assert_eq!(z.content(), "z");
+        assert!(z.style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(link_of(&z.style), Some(("https://x", "")));
+    }
+
+    #[test]
+    fn start_below_clip_paints_nothing() {
+        let mut b = buf(3, 2);
+        let end = Painter::new(&mut b).set_str_wrap(
+            (0, 5),
+            "abcdef\nghi",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(end, Position::new(0, 5));
+        for y in 0..2 {
+            for x in 0..3 {
+                assert_eq!(cell_at(&b, x, y).content(), " ");
+            }
+        }
+    }
+
+    #[test]
+    fn literal_start_below_clip_paints_nothing() {
+        let mut b = buf(3, 2);
+        let end = b.set_str((0, 5), "abcdef\nghi", Style::default());
+        assert_eq!(end, Position::new(0, 5));
+        assert_eq!(cell_at(&b, 0, 0).content(), " ");
+        assert_eq!(cell_at(&b, 0, 1).content(), " ");
+    }
+
+    #[test]
+    fn wrap_breaks_on_crlf() {
+        // The CRLF fix is shared with WrapMode::Wrap: a joined cluster has to
+        // break the line there too, not read as zero-width filler.
+        let mut b = buf(4, 3);
+        Painter::new(&mut b).set_str_wrap((0, 0), "ab\r\ncd", WrapMode::Wrap, Style::default());
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+        assert_eq!(cell_at(&b, 0, 1).content(), "c");
+        assert_eq!(cell_at(&b, 1, 1).content(), "d");
+    }
+
+    #[test]
+    fn literal_wrap_breaks_on_crlf() {
+        let mut b = buf(4, 3);
+        b.set_str_wrap((0, 0), "ab\r\ncd", WrapMode::Wrap, Style::default());
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+        assert_eq!(cell_at(&b, 0, 1).content(), "c");
+        assert_eq!(cell_at(&b, 1, 1).content(), "d");
     }
 
     #[test]
