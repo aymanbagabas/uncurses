@@ -463,11 +463,15 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
     }
     let mut x = start.x;
     let mut y = start.y;
+    // Truncation is per row: once a row overflows, clusters are dropped until
+    // `\n` or `\r` puts the cursor back inside the clip.
+    let mut truncated = false;
 
     for (cluster, w) in grapheme_cells(s, mode, eaw_wide) {
         if cluster == "\n" {
             y = y.saturating_add(1);
             x = clip.left();
+            truncated = false;
             if y >= clip.bottom() {
                 return Position::new(x, y);
             }
@@ -475,9 +479,10 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
         }
         if cluster == "\r" {
             x = clip.left();
+            truncated = false;
             continue;
         }
-        if w == 0 {
+        if truncated || w == 0 {
             continue;
         }
         let w = w as u16;
@@ -486,9 +491,10 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
                 WrapMode::Truncate => {
                     if let Some(t) = &tail {
                         stamp_literal_tail(target, t, clip, y, mode, eaw_wide);
-                        return Position::new(clip.right(), y);
+                        x = clip.right();
                     }
-                    return Position::new(x, y);
+                    truncated = true;
+                    continue;
                 }
                 WrapMode::Wrap => {
                     y = y.saturating_add(1);
