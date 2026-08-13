@@ -53,6 +53,21 @@ mod tests {
         r
     }
 
+    /// `TABS` and `BS` are granted by `Screen::init` from the live
+    /// terminal state, never by a `$TERM` baseline, so every test that
+    /// exercises them has to ask for them and pair the result with the
+    /// fallback the planner picks when the host withholds them.
+    fn with_line_discipline(mut r: Renderer) -> Renderer {
+        r.opts = r.opts.with_tabs(true).with_bs(true);
+        r
+    }
+
+    fn moved(r: &mut Renderer, from: Position, to: Position) -> Vec<u8> {
+        let mut buf = Vec::new();
+        r.write_optimal_move(&mut buf, from, to, None).unwrap();
+        buf
+    }
+
     fn abs() -> Renderer {
         let mut r = renderer();
         r.relative_cursor = false;
@@ -147,31 +162,33 @@ mod tests {
 
     #[test]
     fn move_same_row_left_small_uses_backspace() {
-        let mut r = abs();
-        let mut buf = Vec::new();
-        r.write_optimal_move(
-            &mut buf,
-            Position { y: 5, x: 10 },
-            Position { y: 5, x: 8 },
-            None,
-        )
-        .unwrap();
-        assert_eq!(buf, b"\x08\x08");
+        let from = Position { y: 5, x: 10 };
+        let to = Position { y: 5, x: 8 };
+        assert_eq!(
+            moved(&mut with_line_discipline(abs()), from, to),
+            b"\x08\x08"
+        );
+        // Without BS the 2-column step ties with CHA on byte count and
+        // absolute positioning takes the tiebreak.
+        assert_eq!(moved(&mut abs(), from, to), b"\x1b[9G");
     }
 
     #[test]
     fn back_tab_wins_for_aligned_left_move() {
-        let mut r = rel();
-        r.tabs = TabStops::default_for(120);
-        let mut buf = Vec::new();
-        r.write_optimal_move(
-            &mut buf,
-            Position { y: 5, x: 100 },
-            Position { y: 5, x: 96 },
-            None,
-        )
-        .unwrap();
-        assert_eq!(buf, b"\x1b[Z");
+        let from = Position { y: 5, x: 100 };
+        let to = Position { y: 5, x: 96 };
+        let tabbed = |r: Renderer| {
+            let mut r = r;
+            r.tabs = TabStops::default_for(120);
+            r
+        };
+        assert_eq!(
+            moved(&mut tabbed(with_line_discipline(rel())), from, to),
+            b"\x1b[Z"
+        );
+        // CBT counts columns in tab stops, so the planner only trusts it
+        // when the host also lets a literal `\t` through: see `axis.rs`.
+        assert_eq!(moved(&mut tabbed(rel()), from, to), b"\x1b[4D");
     }
 
     #[test]
@@ -192,38 +209,40 @@ mod tests {
 
     #[test]
     fn tab_move_wins_over_cuf() {
-        let mut r = abs();
         // Width small enough that not_local short-circuits, so CUP
         // isn't forced and tab gets to compete on byte-count.
-        r.last_width = 16;
-        r.tabs = TabStops::default_for(16);
-        let mut buf = Vec::new();
-        r.write_optimal_move(
-            &mut buf,
-            Position { y: 0, x: 0 },
-            Position { y: 0, x: 8 },
-            None,
-        )
-        .unwrap();
-        assert_eq!(buf, b"\t");
+        let narrow = |r: Renderer| {
+            let mut r = r;
+            r.last_width = 16;
+            r.tabs = TabStops::default_for(16);
+            r
+        };
+        let from = Position { y: 0, x: 0 };
+        let to = Position { y: 0, x: 8 };
+        assert_eq!(
+            moved(&mut narrow(with_line_discipline(abs())), from, to),
+            b"\t"
+        );
+        assert_eq!(moved(&mut narrow(abs()), from, to), b"\x1b[9G");
     }
 
     #[test]
     fn custom_tab_stops_replace_default_eight() {
-        let mut r = abs();
-        let mut ts = TabStops::default_for(80);
-        ts.clear();
-        ts.set(4);
-        r.tabs = ts;
-        let mut buf = Vec::new();
-        r.write_optimal_move(
-            &mut buf,
-            Position { y: 0, x: 0 },
-            Position { y: 0, x: 4 },
-            None,
-        )
-        .unwrap();
-        assert_eq!(buf, b"\t");
+        let stop_at_4 = |r: Renderer| {
+            let mut r = r;
+            let mut ts = TabStops::default_for(80);
+            ts.clear();
+            ts.set(4);
+            r.tabs = ts;
+            r
+        };
+        let from = Position { y: 0, x: 0 };
+        let to = Position { y: 0, x: 4 };
+        assert_eq!(
+            moved(&mut stop_at_4(with_line_discipline(abs())), from, to),
+            b"\t"
+        );
+        assert_eq!(moved(&mut stop_at_4(abs()), from, to), b"\x1b[5G");
     }
 
     #[test]
