@@ -1112,14 +1112,18 @@ fn reset_lnm_emits_ansi_mode_20_reset() {
 }
 
 #[test]
-fn reset_tab_stops_noop_when_tabs_disabled() {
+fn reset_tab_stops_emits_even_when_tabs_disabled() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let opts = Optimizations::default().difference(Optimizations::TABS);
         let mut screen = Screen::for_test(&mut buf, (20, 1)).with_optimizations(opts);
         screen.reset_tab_stops().unwrap();
     }
-    assert!(buf.is_empty(), "tab reset leaked while TABS off: {buf:?}");
+    assert!(
+        !buf.is_empty(),
+        "tab stops belong to the terminal, not to our willingness to use them: \
+         turning TABS on later must not find them unknown"
+    );
 }
 
 #[test]
@@ -2391,6 +2395,87 @@ fn clip_origin_keeps_area_on_screen() {
     // An area at least as tall as the terminal pins to the top.
     screen.window_cells = Some(Size::new(10, 3));
     assert_eq!(screen.clip_origin(Position::new(0, 6)), Position::new(0, 0));
+}
+
+/// `init` must grant the line-discipline optimizations from the state the
+/// terminal is in *after* `make_raw`, not the one it was in before. Raw mode
+/// clears `OPOST`, so tabs and backspace reach the terminal untouched and `\n`
+/// no longer carries a carriage return. This drives a real pty to prove raw
+/// mode actually delivers that, rather than taking `cfmakeraw` on faith.
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn init_grants_tabs_and_bs_after_entering_raw_mode() {
+    use std::os::fd::AsRawFd;
+
+    // The master must outlive the slave, so bind it for the whole test.
+    let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    // Put the slave in cooked mode with tab expansion and ONLCR: the exact
+    // opposite of what raw mode leaves behind. Everything past the pty probe
+    // is a hard failure -- a silent return here would let the whole test pass
+    // vacuously on a machine where ptys work fine.
+    let mut cooked: libc::termios = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut cooked) },
+        0,
+        "tcgetattr on a fresh pty slave: {}",
+        std::io::Error::last_os_error()
+    );
+    cooked.c_oflag |= libc::OPOST | libc::ONLCR;
+    assert_eq!(
+        unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
+        0,
+        "tcsetattr on a fresh pty slave: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::Env::new());
+    let mut screen = Screen::new(term).expect("Screen::new over a pty slave");
+    // Start from the opposite of what raw mode implies: TABS and BS off, so
+    // only the init-time grant can explain their final values. ONLCR on, so
+    // the same assertion proves init leaves an opt-in flag alone.
+    let primed = Optimizations::modern()
+        .with_tabs(false)
+        .with_bs(false)
+        .with_onlcr(true);
+    screen.set_optimizations(primed);
+    screen
+        .init_with(ScreenOptions {
+            query_capabilities: false,
+            ..Default::default()
+        })
+        .expect("init over a pty slave");
+
+    assert_tabs_and_bs_granted(screen.optimizations(), primed, "init");
+
+    // Resume re-enters raw mode, so it must re-grant too. Undo the flags
+    // first -- otherwise the assertion would still hold if `resume` did
+    // nothing at all.
+    screen.pause().expect("pause");
+    assert_eq!(
+        unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
+        0,
+        "restoring cooked mode while paused: {}",
+        std::io::Error::last_os_error()
+    );
+    screen.set_optimizations(primed);
+    screen.resume().expect("resume");
+    assert_tabs_and_bs_granted(screen.optimizations(), primed, "resume");
+}
+
+/// Exactly what a raw-mode entry must leave behind: `TABS` and `BS` on, and
+/// every other capability -- including the opt-in `ONLCR` -- exactly as the
+/// caller left it. One equality pins the grant, the opt-in, and the baseline.
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[track_caller]
+fn assert_tabs_and_bs_granted(opts: Optimizations, primed: Optimizations, after: &str) {
+    assert_eq!(
+        opts,
+        primed.with_tabs(true).with_bs(true),
+        "{after}: raw mode makes \\t and \\x08 safe, so both are granted; ONLCR \
+         is opt-in and every other cap must survive untouched"
+    );
 }
 
 /// LNM is terminal state, not termios: it survives whoever set it, so a
