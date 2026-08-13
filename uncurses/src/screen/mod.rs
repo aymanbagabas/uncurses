@@ -697,6 +697,13 @@ where
     }
 
     /// Set the renderer optimization flags.
+    ///
+    /// [`TABS`](Optimizations::TABS) and [`BS`](Optimizations::BS) take
+    /// effect immediately but do not persist across a raw-mode entry:
+    /// [`init`](Self::init) and [`resume`](Self::resume) enable both,
+    /// since raw mode is what makes them safe. Every other flag —
+    /// including [`ONLCR`](Optimizations::ONLCR), which is opt-in and
+    /// never granted — is left exactly as set here.
     pub fn set_optimizations(&mut self, optimizations: Optimizations) {
         self.renderer.set_optimizations(optimizations);
     }
@@ -1270,6 +1277,32 @@ where
         Ok(())
     }
 
+    /// Enable [`TABS`](Optimizations::TABS) and [`BS`](Optimizations::BS),
+    /// the two optimizations raw mode makes safe: `\t` and `\x08` now
+    /// reach the terminal intact instead of being rewritten on the way.
+    ///
+    /// On Unix raw mode clears `OPOST`, disabling output processing
+    /// wholesale, so the kernel can no longer expand `\t` into spaces. On
+    /// Windows it enables virtual-terminal processing, which is the same
+    /// bargain. So this reads no terminal state: `make_raw` returning
+    /// `Ok` *is* the answer, and no `$TERM` baseline carries either flag,
+    /// so a screen that never enters raw mode emits escape sequences
+    /// instead.
+    ///
+    /// [`ONLCR`](Optimizations::ONLCR) is deliberately untouched. Raw
+    /// mode makes it false, but it is opt-in: a caller who set it knows
+    /// something about their output path that we do not, and clobbering
+    /// that is worse than the bytes it would save.
+    ///
+    /// Runs after every successful `make_raw`, including
+    /// [`resume`](Self::resume), since whatever ran while paused may have
+    /// put the terminal back into cooked mode.
+    #[cfg(any(unix, windows))]
+    fn enable_tabs_and_bs(&mut self) {
+        let opts = self.optimizations().with_tabs(true).with_bs(true);
+        self.renderer.set_optimizations(opts);
+    }
+
     /// Whether the host is Apple's `Terminal.app`, which does not support
     /// most of the queried features and mishandles the queries themselves.
     fn is_apple_terminal(&self) -> bool {
@@ -1305,18 +1338,17 @@ where
     }
 
     /// Reconcile the terminal's hardware tab stops with the every-eight
-    /// columns layout the renderer assumes whenever the `TABS`
-    /// optimization is on. A prior program may have left arbitrary stops
-    /// behind, which would make the `HT` (`\t`) moves the cursor planner
-    /// emits land on the wrong columns. Modern terminals reset in one
-    /// cursor-safe write via DECST8C; the rest get the portable
-    /// TBC-then-HTS fallback. Skipped entirely when `TABS` is off, since
-    /// the planner then never relies on tab stops. Staged and flushed so
-    /// it reaches the terminal even when capability queries are disabled.
+    /// columns layout the renderer assumes. A prior program may have left
+    /// arbitrary stops behind, which would make the `HT` (`\t`) moves the
+    /// cursor planner emits land on the wrong columns. Modern terminals
+    /// reset in one cursor-safe write via DECST8C; the rest get the
+    /// portable TBC-then-HTS fallback. Staged and flushed so it reaches
+    /// the terminal even when capability queries are disabled.
+    ///
+    /// Runs whether or not `TABS` is set: the stops belong to the
+    /// terminal, not to our willingness to use them, so turning `TABS` on
+    /// later must not find them unknown.
     fn reset_tab_stops(&mut self) -> io::Result<()> {
-        if !self.optimizations().contains(Optimizations::TABS) {
-            return Ok(());
-        }
         if Optimizations::supports_decst8c(self.terminal.env()) {
             self.out_buf
                 .write_all(crate::ansi::screen::SET_TAB_EVERY_8_COLUMNS)?;
@@ -1587,6 +1619,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
+        self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
@@ -1670,10 +1703,16 @@ where
     /// Re-acquire the terminal after a [`Self::pause`] or [`Self::suspend`]:
     /// re-enter raw mode, refit the managed area to the current viewport, re-apply
     /// the saved render state and modes, and force a full repaint.
+    ///
+    /// Re-enables [`TABS`](Optimizations::TABS) and
+    /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
+    /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
+        self.reset_tab_stops()?;
         self.restore()?;
         self.invalidate();
         self.flush()
@@ -1729,6 +1768,7 @@ where
     pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
+        self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
         // Apply the env color profile on every path so output downsamples
@@ -1812,10 +1852,16 @@ where
     /// Re-acquire the terminal after a [`Self::pause`]: re-enter raw mode,
     /// refit the managed area to the current viewport, re-apply the saved
     /// render state and modes, and force a full repaint.
+    ///
+    /// Re-enables [`TABS`](Optimizations::TABS) and
+    /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
+    /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
+        self.reset_tab_stops()?;
         self.restore()?;
         self.invalidate();
         self.flush()
