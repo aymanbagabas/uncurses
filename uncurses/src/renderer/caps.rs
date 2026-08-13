@@ -18,9 +18,27 @@
 //! ## Line-discipline flags
 //!
 //! [`Optimizations::TABS`], [`Optimizations::BS`], and
-//! [`Optimizations::ONLCR`] describe behavior that often depends on
-//! terminal mode as much as terminal type. Override them when raw/cooked
-//! mode or output processing differs from the detector's assumptions.
+//! [`Optimizations::ONLCR`] describe the host's output processing, not
+//! the terminal's own abilities, so no baseline here carries them: a
+//! `\t` is only usable if the line discipline passes it through, which
+//! `$TERM` cannot tell you. A [`Screen`](crate::screen::Screen) enables
+//! `TABS` and `BS` on *every* raw-mode entry —
+//! [`init`](crate::screen::Screen::init) and
+//! [`resume`](crate::screen::Screen::resume) alike — because raw mode
+//! turns the host's output processing off, which is exactly what makes
+//! `\t` and `\x08` safe to emit.
+//!
+//! `ONLCR` is never granted: raw mode is also what makes it false. It
+//! stays opt-in for callers who know their output crosses a layer that
+//! turns `\n` into `\r\n` anyway.
+//!
+//! Driving a [`Renderer`] yourself, or keeping the host in cooked mode?
+//! Then the answer is yours to supply: use [`Optimizations::with_tabs`],
+//! [`Optimizations::with_bs`], and [`Optimizations::with_onlcr`]. Leaving
+//! all three off is always safe — the renderer then emits escape
+//! sequences that no line discipline can rewrite.
+//!
+//! [`Renderer`]: crate::renderer::Renderer
 
 use bitflags::bitflags;
 
@@ -39,6 +57,12 @@ bitflags! {
     /// Flag names follow the short capability names used by `infocmp`
     /// where they exist. `BS` and `ONLCR` are not terminfo caps; they
     /// describe control-character and output-processing behavior.
+    ///
+    /// [`TABS`](Self::TABS), [`BS`](Self::BS), and
+    /// [`ONLCR`](Self::ONLCR) are the odd ones out: they describe the
+    /// *host*, not the terminal. A [`Screen`](crate::screen::Screen)
+    /// enables `TABS` and `BS` on every raw-mode entry and never touches
+    /// `ONLCR`. See the module docs.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct Optimizations: u32 {
         /// Terminal supports ECH (Erase Characters, `CSI Ps X`) for
@@ -101,18 +125,17 @@ impl Default for Optimizations {
 impl Optimizations {
     /// Return the most conservative useful capability set.
     ///
-    /// Every escape-sequence optimization is disabled; only literal
-    /// hardware tabs and backspace remain enabled. Use this for unknown
-    /// or genuinely capability-limited terminals when direct cell output
-    /// is safer than specialized control sequences.
+    /// Every escape-sequence optimization is disabled. Use this for
+    /// unknown or genuinely capability-limited terminals when direct
+    /// cell output is safer than specialized control sequences.
     pub const fn none() -> Self {
-        Self::TABS.union(Self::BS)
+        Self::empty()
     }
 
     /// Return the modern full-feature baseline.
     ///
-    /// Enables every renderer optimization except [`Self::ONLCR`], since
-    /// raw mode is the default assumption for terminal applications.
+    /// Enables every renderer optimization a terminal can advertise.
+    /// The line-discipline flags are absent: see the module docs.
     pub const fn modern() -> Self {
         Self::ECH
             .union(Self::REP)
@@ -125,10 +148,8 @@ impl Optimizations {
             .union(Self::CHA)
             .union(Self::HPA)
             .union(Self::VPA)
-            .union(Self::TABS)
             .union(Self::CBT)
             .union(Self::CHT)
-            .union(Self::BS)
     }
 
     /// Return the xterm-compatible conservative baseline.
@@ -150,23 +171,20 @@ impl Optimizations {
     ///
     /// Predates the xterm extensions for
     /// absolute positioning (CHA/HPA/VPA), ECH, REP, BCE, SU/SD, and
-    /// CBT, but supports DECSTBM, hardware tabs, BS, and on the
-    /// VT102 the ICH/DCH/IL/DL editing pairs.
+    /// CBT, but supports DECSTBM and, on the VT102, the ICH/DCH/IL/DL
+    /// editing pairs.
     pub const fn vt100() -> Self {
         Self::ICH
             .union(Self::DCH)
             .union(Self::CSR)
             .union(Self::IL_DL)
-            .union(Self::TABS)
-            .union(Self::BS)
     }
 
     /// Return the Linux console baseline.
     ///
     /// The kernel's terminal driver
     /// implements a narrow subset of ECMA-48 — only absolute
-    /// positioning (CHA/HPA/VPA), ECH, and ICH on top of the
-    /// hardware tab stops and BS handled by termios.
+    /// positioning (CHA/HPA/VPA), ECH, and ICH.
     /// See `console_codes(4)`.
     pub const fn linux() -> Self {
         Self::ECH
@@ -174,8 +192,6 @@ impl Optimizations {
             .union(Self::CHA)
             .union(Self::HPA)
             .union(Self::VPA)
-            .union(Self::TABS)
-            .union(Self::BS)
     }
 
     /// Return the GNU screen baseline, derived from
@@ -190,9 +206,7 @@ impl Optimizations {
             .union(Self::IL_DL)
             .union(Self::HPA)
             .union(Self::VPA)
-            .union(Self::TABS)
             .union(Self::CBT)
-            .union(Self::BS)
     }
 
     /// Return `self` with hardware tab support (`TABS`) toggled.
@@ -200,6 +214,10 @@ impl Optimizations {
     /// Disable when the
     /// receiving terminal is in cooked mode without `TAB0` set on
     /// `c_oflag` and `\t` would otherwise be expanded to spaces.
+    ///
+    /// A [`Screen`](crate::screen::Screen) enables this on every raw-mode
+    /// entry, since raw mode is what makes `\t` safe, so setting it here
+    /// matters only when driving a renderer directly.
     #[must_use]
     pub const fn with_tabs(self, enabled: bool) -> Self {
         self.with_flag(Self::TABS, enabled)
@@ -210,6 +228,10 @@ impl Optimizations {
     /// Disable when the
     /// receiving terminal does not interpret `\x08` as cursor-left
     /// by one cell.
+    ///
+    /// A [`Screen`](crate::screen::Screen) enables this on every raw-mode
+    /// entry, since raw mode is what makes `\x08` safe, so setting it here
+    /// matters only when driving a renderer directly.
     #[must_use]
     pub const fn with_bs(self, enabled: bool) -> Self {
         self.with_flag(Self::BS, enabled)
@@ -220,6 +242,10 @@ impl Optimizations {
     ///
     /// Enable when the terminal is in cooked mode with `ONLCR` set so a
     /// newline both advances a row and resets the column.
+    ///
+    /// A [`Screen`](crate::screen::Screen) never sets this — raw mode
+    /// clears `OPOST`, so `\n` carries no carriage return — but it never
+    /// clears it either. It is yours to opt into and yours to keep.
     #[must_use]
     pub const fn with_onlcr(self, enabled: bool) -> Self {
         self.with_flag(Self::ONLCR, enabled)
@@ -421,6 +447,13 @@ impl Optimizations {
 
 #[cfg(test)]
 mod tests {
+    /// The host-dependent flags, as a test-local group: the public API
+    /// deliberately has no name for them, since `Screen` grants `TABS`
+    /// and `BS` but leaves `ONLCR` alone.
+    const LINE_DISCIPLINE: Optimizations = Optimizations::TABS
+        .union(Optimizations::BS)
+        .union(Optimizations::ONLCR);
+
     use super::*;
 
     fn env_with(pairs: &[(&str, &str)]) -> Env {
@@ -521,16 +554,15 @@ mod tests {
                 | Optimizations::CHT
                 | Optimizations::ONLCR,
         ));
-        // Termios-gated stays on.
-        assert!(o.contains(Optimizations::TABS));
-        assert!(o.contains(Optimizations::BS));
+        // The line discipline is not a $TERM question; `Screen::init`
+        // grants TABS and BS once raw mode has settled it instead.
+        assert!(o.is_empty());
     }
 
     #[test]
-    fn modern_enables_everything_except_onlcr() {
+    fn modern_enables_every_escape_cap() {
         let o = Optimizations::modern();
-        let everything_but_onlcr = Optimizations::all().difference(Optimizations::ONLCR);
-        assert_eq!(o, everything_but_onlcr);
+        assert_eq!(o, Optimizations::all().difference(LINE_DISCIPLINE));
     }
 
     #[test]
@@ -560,12 +592,8 @@ mod tests {
             | Optimizations::ONLCR;
         assert!(!o.intersects(missing));
         // VT100 era margins + VT102 editing pairs.
-        let present = Optimizations::CSR
-            | Optimizations::ICH
-            | Optimizations::DCH
-            | Optimizations::IL_DL
-            | Optimizations::TABS
-            | Optimizations::BS;
+        let present =
+            Optimizations::CSR | Optimizations::ICH | Optimizations::DCH | Optimizations::IL_DL;
         assert!(o.contains(present));
     }
 
@@ -576,9 +604,7 @@ mod tests {
             | Optimizations::ICH
             | Optimizations::CHA
             | Optimizations::HPA
-            | Optimizations::VPA
-            | Optimizations::TABS
-            | Optimizations::BS;
+            | Optimizations::VPA;
         assert_eq!(o, present);
     }
 
@@ -592,15 +618,71 @@ mod tests {
             | Optimizations::IL_DL
             | Optimizations::HPA
             | Optimizations::VPA
-            | Optimizations::TABS
-            | Optimizations::CBT
-            | Optimizations::BS;
+            | Optimizations::CBT;
         assert_eq!(o, present);
         assert!(!o.contains(Optimizations::BCE));
         assert!(!o.contains(Optimizations::ECH));
         assert!(!o.contains(Optimizations::REP));
         assert!(!o.contains(Optimizations::CHA));
         assert!(!o.contains(Optimizations::CHT));
+    }
+
+    /// No `$TERM` baseline may carry a line-discipline flag. `\t`,
+    /// `\x08`, and `\n` behave according to the host's output
+    /// processing, which `$TERM` cannot describe; `Screen::init` enables
+    /// `TABS` and `BS` once raw mode has disabled that processing, and
+    /// leaves `ONLCR` to the caller.
+    #[test]
+    fn no_baseline_carries_line_discipline_flags() {
+        let line_discipline = LINE_DISCIPLINE;
+        let baselines = [
+            ("none", Optimizations::none()),
+            ("modern", Optimizations::modern()),
+            ("xterm", Optimizations::xterm()),
+            ("vt100", Optimizations::vt100()),
+            ("linux", Optimizations::linux()),
+            ("screen", Optimizations::screen()),
+            ("default", Optimizations::default()),
+        ];
+        for (name, o) in baselines {
+            assert!(
+                !o.intersects(line_discipline),
+                "{name} baseline must not assume the line discipline: {o:?}"
+            );
+        }
+    }
+
+    /// Every `$TERM` the detector recognizes routes to one of the
+    /// baselines above, so none of them may carry the flags either.
+    #[test]
+    fn no_term_carries_line_discipline_flags() {
+        let line_discipline = LINE_DISCIPLINE;
+        for term in [
+            "alacritty",
+            "contour",
+            "foot",
+            "ghostty",
+            "kitty",
+            "rio",
+            "st",
+            "tmux",
+            "tmux-256color",
+            "wezterm",
+            "xterm",
+            "xterm-256color",
+            "screen",
+            "screen-256color",
+            "linux",
+            "vt100",
+            "dumb",
+            "",
+        ] {
+            let o = Optimizations::from_term(term);
+            assert!(
+                !o.intersects(line_discipline),
+                "{term} must not assume the line discipline: {o:?}"
+            );
+        }
     }
 
     #[test]

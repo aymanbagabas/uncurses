@@ -43,6 +43,31 @@ fn assert_golden(actual: Vec<u8>, expected: &[u8]) {
     );
 }
 
+/// Run `scenario` against `opts` with the host's line discipline granted
+/// and withheld, pinning both. `TABS` and `BS` are never part of a
+/// `$TERM` baseline — `Screen::init` grants them from the live terminal
+/// state — so every preset has to render correctly either way.
+#[track_caller]
+fn assert_both(
+    opts: Optimizations,
+    scenario: fn(&mut Renderer) -> Vec<u8>,
+    with_line_discipline: &[u8],
+    without_line_discipline: &[u8],
+) {
+    let mut r = renderer_with(opts.with_tabs(true).with_bs(true));
+    assert_golden(scenario(&mut r), with_line_discipline);
+    let mut r = renderer_with(opts);
+    assert_golden(scenario(&mut r), without_line_discipline);
+}
+
+/// `scenario` whose bytes are identical either way: no candidate move in
+/// it is a viable tab or backspace. Still run both ways, so a change that
+/// makes one of them viable has to be looked at.
+#[track_caller]
+fn assert_both_same(opts: Optimizations, scenario: fn(&mut Renderer) -> Vec<u8>, expected: &[u8]) {
+    assert_both(opts, scenario, expected, expected);
+}
+
 fn set_text(buf: &mut RenderBuffer, y: u16, text: &str) {
     for (x, ch) in text.chars().enumerate() {
         buf.set_cell((x as u16, y), &Cell::narrow(ch.to_string()));
@@ -392,44 +417,56 @@ fn scenario_paragraph_edit(r: &mut Renderer) -> Vec<u8> {
 
 #[test]
 fn preset_modern_paragraph_edit() {
-    let mut r = renderer_with(Optimizations::modern());
-    let actual = scenario_paragraph_edit(&mut r);
-    assert_golden(actual, b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle");
+    assert_both_same(
+        Optimizations::modern(),
+        scenario_paragraph_edit,
+        b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle",
+    );
 }
 
 #[test]
 fn preset_xterm_paragraph_edit() {
-    let mut r = renderer_with(Optimizations::xterm());
-    let actual = scenario_paragraph_edit(&mut r);
-    assert_golden(actual, b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle");
+    assert_both_same(
+        Optimizations::xterm(),
+        scenario_paragraph_edit,
+        b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle",
+    );
 }
 
 #[test]
 fn preset_linux_paragraph_edit() {
-    let mut r = renderer_with(Optimizations::linux());
-    let actual = scenario_paragraph_edit(&mut r);
-    assert_golden(actual, b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle");
+    assert_both_same(
+        Optimizations::linux(),
+        scenario_paragraph_edit,
+        b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle",
+    );
 }
 
 #[test]
 fn preset_screen_paragraph_edit() {
-    let mut r = renderer_with(Optimizations::screen());
-    let actual = scenario_paragraph_edit(&mut r);
-    assert_golden(actual, b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle");
+    assert_both_same(
+        Optimizations::screen(),
+        scenario_paragraph_edit,
+        b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle",
+    );
 }
 
 #[test]
 fn preset_vt100_paragraph_edit() {
-    let mut r = renderer_with(Optimizations::vt100());
-    let actual = scenario_paragraph_edit(&mut r);
-    assert_golden(actual, b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle");
+    assert_both_same(
+        Optimizations::vt100(),
+        scenario_paragraph_edit,
+        b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle",
+    );
 }
 
 #[test]
 fn preset_none_paragraph_edit() {
-    let mut r = renderer_with(Optimizations::none());
-    let actual = scenario_paragraph_edit(&mut r);
-    assert_golden(actual, b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle");
+    assert_both_same(
+        Optimizations::none(),
+        scenario_paragraph_edit,
+        b"\x1b[5A\x1b[5C, world!\r\n\naa\x1b[K\r\n\nmiddle",
+    );
 }
 
 // ===========================================================================
@@ -449,40 +486,46 @@ fn scenario_long_run(r: &mut Renderer) -> Vec<u8> {
 
 #[test]
 fn preset_modern_long_run_uses_rep() {
-    let mut r = renderer_with(Optimizations::modern());
-    let actual = scenario_long_run(&mut r);
-    assert_golden(actual, b"\r=\x1b[29b\r");
+    assert_both_same(Optimizations::modern(), scenario_long_run, b"\r=\x1b[29b\r");
 }
 
 #[test]
 fn preset_xterm_long_run_falls_back_to_literal() {
     // xterm preset disables REP.
-    let mut r = renderer_with(Optimizations::xterm());
-    let actual = scenario_long_run(&mut r);
-    assert_golden(actual, b"\r==============================\r");
+    assert_both_same(
+        Optimizations::xterm(),
+        scenario_long_run,
+        b"\r==============================\r",
+    );
 }
 
 #[test]
 fn preset_linux_long_run_falls_back_to_literal() {
     // linux preset disables REP.
-    let mut r = renderer_with(Optimizations::linux());
-    let actual = scenario_long_run(&mut r);
-    assert_golden(actual, b"\r==============================\r");
+    assert_both_same(
+        Optimizations::linux(),
+        scenario_long_run,
+        b"\r==============================\r",
+    );
 }
 
 #[test]
 fn preset_screen_long_run_falls_back_to_literal() {
     // screen preset disables REP.
-    let mut r = renderer_with(Optimizations::screen());
-    let actual = scenario_long_run(&mut r);
-    assert_golden(actual, b"\r==============================\r");
+    assert_both_same(
+        Optimizations::screen(),
+        scenario_long_run,
+        b"\r==============================\r",
+    );
 }
 
 #[test]
 fn preset_vt100_long_run_falls_back_to_literal() {
-    let mut r = renderer_with(Optimizations::vt100());
-    let actual = scenario_long_run(&mut r);
-    assert_golden(actual, b"\r==============================\r");
+    assert_both_same(
+        Optimizations::vt100(),
+        scenario_long_run,
+        b"\r==============================\r",
+    );
 }
 
 /// Sparse-glyphs scenario: glyphs land on tab stops at columns 8, 16,
@@ -498,24 +541,33 @@ fn scenario_sparse_glyphs(r: &mut Renderer) -> Vec<u8> {
 }
 
 #[test]
-fn preset_modern_sparse_glyphs_uses_tabs() {
-    let mut r = renderer_with(Optimizations::modern());
-    let actual = scenario_sparse_glyphs(&mut r);
+fn preset_modern_sparse_glyphs() {
     // With same-run skipping, the 7-blank gaps between glyphs are
     // jumped over with a tab rather than repainted via REP.
-    assert_golden(actual, b"\r\tA\tB\tC\tD\r");
+    assert_both(
+        Optimizations::modern(),
+        scenario_sparse_glyphs,
+        b"\r\tA\tB\tC\tD\r",
+        b"\r\x1b[8CA\x1b[7CB\x1b[7CC\x1b[7CD\r",
+    );
 }
 
 #[test]
-fn preset_xterm_sparse_glyphs_uses_tabs() {
-    let mut r = renderer_with(Optimizations::xterm());
-    let actual = scenario_sparse_glyphs(&mut r);
-    assert_golden(actual, b"\r\tA\tB\tC\tD\r");
+fn preset_xterm_sparse_glyphs() {
+    assert_both(
+        Optimizations::xterm(),
+        scenario_sparse_glyphs,
+        b"\r\tA\tB\tC\tD\r",
+        b"\r\x1b[8CA\x1b[7CB\x1b[7CC\x1b[7CD\r",
+    );
 }
 
 #[test]
-fn preset_vt100_sparse_glyphs_uses_tabs() {
-    let mut r = renderer_with(Optimizations::vt100());
-    let actual = scenario_sparse_glyphs(&mut r);
-    assert_golden(actual, b"\r\tA\tB\tC\tD\r");
+fn preset_vt100_sparse_glyphs() {
+    assert_both(
+        Optimizations::vt100(),
+        scenario_sparse_glyphs,
+        b"\r\tA\tB\tC\tD\r",
+        b"\r\x1b[8CA\x1b[7CB\x1b[7CC\x1b[7CD\r",
+    );
 }
