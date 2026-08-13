@@ -373,7 +373,8 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     /// Paint `s` starting at `pos` with explicit wrapping behavior.
     ///
     /// The target bounds are the clipping rectangle. [`WrapMode::Truncate`]
-    /// stops at the right edge; [`WrapMode::Wrap`] continues on the next row
+    /// drops the rest of the row at the right edge and resumes on the next
+    /// row; [`WrapMode::Wrap`] continues on the next row
     /// at the bounds' left edge until the bottom edge is reached.
     ///
     /// # Parameters
@@ -469,10 +470,12 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     /// Paint `s` starting at `pos`, truncating with a `tail` indicator.
     ///
     /// Text is painted across the target bounds. When a non-zero-width cluster
-    /// would cross the right edge, painting stops and `tail` is stamped over
-    /// the trailing columns so it ends exactly at the right edge. The tail
-    /// appears only when the text actually overflows; text that fits is left
-    /// untouched.
+    /// would cross the right edge, the rest of that row is dropped and `tail`
+    /// is stamped over its trailing columns so it ends exactly at the right
+    /// edge. Painting resumes on the next row if the text continues past a
+    /// newline, so a multi-line `s` can stamp one tail per overflowing row.
+    /// The tail appears only on rows that actually overflow; a row that fits
+    /// is left untouched.
     ///
     /// `tail` is painted with `tail_style` as its starting style and may carry
     /// its own inline escape sequences, so it can be a single glyph (`"…"`), a
@@ -516,8 +519,8 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     ///
     /// This is the rectangular form of
     /// [`set_str_truncate`](Self::set_str_truncate): the clip rectangle is
-    /// `rect ∩ target.bounds()`, and the tail is stamped at `rect`'s right
-    /// edge when the text overflows it.
+    /// `rect ∩ target.bounds()`, and a tail is stamped at `rect`'s right
+    /// edge on each row that overflows it.
     ///
     /// # Parameters
     ///
@@ -821,6 +824,49 @@ mod tests {
         // the gap ahead of it.
         assert_eq!(cell_at(&b, 2, 0).content(), " ");
         assert_eq!(end, Position::new(2, 0));
+    }
+
+    #[test]
+    fn literal_crlf_breaks_the_line() {
+        // Extended grapheme segmentation joins CR LF into one zero-width
+        // cluster, so it has to be matched explicitly to break the line.
+        let mut b = buf(3, 2);
+        b.set_str((0, 0), "abcdef\r\nxy", Style::default());
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 1).content(), "x");
+        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+    }
+
+    #[test]
+    fn crlf_breaks_the_line() {
+        let mut b = buf(3, 2);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "abcdef\r\nxy",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 1).content(), "x");
+        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+    }
+
+    #[test]
+    fn escapes_still_apply_across_a_truncated_row() {
+        // The pen keeps advancing through the dropped part of the row, so a
+        // style opened there lands on the next row.
+        let mut b = buf(2, 2);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "ab\x1b[1mcd\x1b]8;;https://x\x1b\\\nz",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        let z = cell_at(&b, 0, 1);
+        assert_eq!(z.content(), "z");
+        assert!(z.style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(link_of(&z.style), Some(("https://x", "")));
     }
 
     #[test]
