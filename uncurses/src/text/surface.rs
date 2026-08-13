@@ -69,7 +69,8 @@ pub trait TextSurface: SurfaceMut {
     /// into styling, wrap the surface in a [`Painter`](super::Painter). Newline
     /// moves to the next row at the surface's left edge; carriage return moves
     /// to that left edge on the current row. If a non-zero-width grapheme
-    /// cluster would cross the right edge, painting stops.
+    /// cluster would cross the right edge, the rest of that row is dropped and
+    /// painting resumes on the next row.
     ///
     /// # Parameters
     ///
@@ -146,7 +147,8 @@ pub trait TextSurface: SurfaceMut {
     /// Painting starts at `rect`'s top-left corner and is clipped to
     /// `rect ∩ self.bounds()`. Newline and carriage return use `rect`'s left
     /// edge as the return column. If a non-zero-width grapheme cluster would
-    /// cross `rect`'s right edge, painting stops.
+    /// cross `rect`'s right edge, the rest of that row is dropped and painting
+    /// resumes on the next row.
     ///
     /// # Parameters
     ///
@@ -228,12 +230,15 @@ pub trait TextSurface: SurfaceMut {
 
     /// Paint `s` at `pos`, truncating with a `tail` indicator on overflow.
     ///
-    /// When a cluster would cross the surface's right edge, painting stops and
-    /// `tail` is stamped over the trailing columns, ending at the right edge.
-    /// The tail appears only when `s` actually overflows. `tail` is painted
-    /// with `tail_style` and may carry inline escape sequences, so it can be a
-    /// single glyph (`"…"`), a word (`" more"`), or a multi-style span. A tail
-    /// wider than the surface is dropped in favor of a hard truncate.
+    /// When a cluster would cross the surface's right edge, the rest of that
+    /// row is dropped and `tail` is stamped over its trailing columns, ending
+    /// at the right edge. Painting resumes on the next row if `s` continues
+    /// past a newline, so a multi-line `s` can stamp one tail per overflowing
+    /// row. The tail appears only on rows that actually overflow. `tail` is
+    /// painted with `tail_style` and may carry inline escape sequences, so it
+    /// can be a single glyph (`"…"`), a word (`" more"`), or a multi-style
+    /// span. A tail wider than the surface is dropped in favor of a hard
+    /// truncate.
     ///
     /// # Parameters
     ///
@@ -274,8 +279,8 @@ pub trait TextSurface: SurfaceMut {
     /// Paint `s` inside `rect`, truncating with a `tail` indicator on overflow.
     ///
     /// This is the rectangular form of [`set_str_truncate`](Self::set_str_truncate):
-    /// the clip rectangle is `rect ∩ self.bounds()`, and the tail is stamped at
-    /// `rect`'s right edge when the text overflows it.
+    /// the clip rectangle is `rect ∩ self.bounds()`, and a tail is stamped at
+    /// `rect`'s right edge on each row that overflows it.
     ///
     /// # Parameters
     ///
@@ -468,7 +473,10 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
     let mut truncated = false;
 
     for (cluster, w) in grapheme_cells(s, mode, eaw_wide) {
-        if cluster == "\n" {
+        // Extended grapheme segmentation joins CR LF into a single cluster, so
+        // it has to be matched alongside a lone `\n` or it reads as zero-width
+        // filler and never breaks the line.
+        if cluster == "\n" || cluster == "\r\n" {
             y = y.saturating_add(1);
             x = clip.left();
             truncated = false;
