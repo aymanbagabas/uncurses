@@ -3,8 +3,19 @@ use crate::cell::Cell;
 use crate::renderer::RenderBuffer;
 
 fn renderer() -> Renderer {
+    renderer_with(Optimizations::none())
+}
+
+/// `TABS` and `BS` come from the host's line discipline, granted by
+/// `Screen::init`, never by a `$TERM` baseline. Tests that exercise
+/// either one ask for it here and pin the fallback separately.
+fn renderer_with_line_discipline() -> Renderer {
+    renderer_with(Optimizations::none().with_tabs(true).with_bs(true))
+}
+
+fn renderer_with(opts: Optimizations) -> Renderer {
     let mut renderer = Renderer::new();
-    renderer.set_optimizations(Optimizations::none());
+    renderer.set_optimizations(opts);
     renderer
 }
 
@@ -77,12 +88,10 @@ fn golden_single_cell_change_at_middle() {
     );
 }
 
-#[test]
-fn golden_scroll_up_by_1_full_width() {
-    let mut renderer = renderer();
+fn scroll_up_by_1_full_width(renderer: &mut Renderer) -> Vec<u8> {
     let mut first = RenderBuffer::new(80, 24);
     fill_distinct_rows(&mut first);
-    let _ = render_to_vec(&mut renderer, &mut first);
+    let _ = render_to_vec(renderer, &mut first);
 
     let mut second = RenderBuffer::new(80, 24);
     for y in 0..23 {
@@ -90,12 +99,24 @@ fn golden_scroll_up_by_1_full_width() {
         set_text(&mut second, y, &text);
     }
 
-    let actual = render_to_vec(&mut renderer, &mut second);
+    render_to_vec(renderer, &mut second)
+}
 
+#[test]
+fn golden_scroll_up_by_1_full_width() {
+    let actual = scroll_up_by_1_full_width(&mut renderer_with_line_discipline());
     assert_golden(
         actual,
         b"\x1b[J\x1b[23A\x1b[5C1\n\x082\n\x083\n\x084\n\x085\n\x086\n\x087\n\x088\n\x089\n\x08\x0810\n\x081\n\x082\n\x083\n\x084\n\x085\n\x086\n\x087\n\x088\n\x089\n\x08\x0820\n\x081\n\x082\n\x083",
     );
+}
+
+/// Same frame with the host withholding `BS`: every one-column step back
+/// onto the changed digit has to become an escape sequence instead.
+#[test]
+fn golden_scroll_up_by_1_full_width_without_line_discipline() {
+    let actual = scroll_up_by_1_full_width(&mut renderer());
+    assert_golden(actual, b"\x1b[J\x1b[23A\x1b[5C1\n\x1b[D2\n\x1b[D3\n\x1b[D4\n\x1b[D5\n\x1b[D6\n\x1b[D7\n\x1b[D8\n\x1b[D9\n\x1b[2D10\n\x1b[D1\n\x1b[D2\n\x1b[D3\n\x1b[D4\n\x1b[D5\n\x1b[D6\n\x1b[D7\n\x1b[D8\n\x1b[D9\n\x1b[2D20\n\x1b[D1\n\x1b[D2\n\x1b[D3");
 }
 
 #[test]
