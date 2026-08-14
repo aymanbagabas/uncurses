@@ -2256,6 +2256,7 @@ fn drain_consumes_in_band_resize_echo_from_enabling_default() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn drain_waits_for_a_batch_sent_after_defaults_were_applied() {
     // A mid-session `query` batch is outstanding even though init already
@@ -2282,6 +2283,34 @@ fn drain_waits_for_a_batch_sent_after_defaults_were_applied() {
     assert!(
         matches!(screen.try_read_event(), Some(Event::BackgroundColor(_))),
         "the application's reply must be re-queued, not discarded"
+    );
+}
+
+/// The capability replies `apply_defaults` reads arrive in the drain window on
+/// a fast terminal. If the drain hands the terminator to `observe_event`
+/// without observing them first, defaults are applied from nothing and latched
+/// for the rest of the session — `pause`/`resume` then never re-enables them.
+#[cfg(unix)]
+#[test]
+fn drain_observes_capability_replies_before_the_terminator() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    writer.write_all(b"\x1b[?2048;1$y").unwrap();
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    screen.queries_sent_at = Some(std::time::Instant::now());
+
+    screen.drain_pending_queries().unwrap();
+
+    assert!(
+        screen.caps.in_band_resize,
+        "the mode report must be observed, not just deferred"
+    );
+    assert!(
+        screen.defaults_applied,
+        "the terminator still applies defaults"
     );
 }
 
