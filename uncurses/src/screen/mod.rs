@@ -267,6 +267,9 @@ pub struct ScreenOptions {
     ///
     /// * **No terminator of your own.** A Primary DA request here would end
     ///   the batch early, and the capability replies after it would be lost.
+    ///   [`probe::PrimaryDeviceAttributes`](crate::probe::PrimaryDeviceAttributes)
+    ///   sends one, so do not compose it into a probe destined for this field;
+    ///   its reply arrives here anyway, as the terminator.
     /// * **Queries only.** Bytes that change terminal state are not recorded
     ///   in the screen's mode state, so teardown cannot restore them.
     /// * **Nothing unterminated.** An unfinished OSC or DCS swallows the
@@ -998,11 +1001,13 @@ where
     /// is race-free and identical on every platform.
     ///
     /// Consuming the *bytes* is the whole job — once they are decoded they
-    /// can no longer reach the shell — so every event other than the
-    /// terminator is put back with [`unread_event`](Self::unread_event)
-    /// rather than dropped. A keystroke typed during teardown survives a
-    /// [`pause`](Self::pause), and so does a reply to an application's own
-    /// query that happened to arrive in this window.
+    /// can no longer reach the shell — so every event is observed, and every
+    /// one but the batch's own terminator is put back with
+    /// [`unread_event`](Self::unread_event) rather than dropped. A keystroke
+    /// typed during teardown survives a [`pause`](Self::pause), and so does a
+    /// reply to an application's own query that happened to arrive in this
+    /// window. Those events are therefore observed twice, once here and again
+    /// when the application feeds them back; every arm is idempotent.
     fn drain_pending_queries(&mut self) -> io::Result<()> {
         let Some(sent_at) = self.queries_sent_at else {
             return Ok(());
@@ -1029,8 +1034,16 @@ where
                 break;
             }
             while let Some(ev) = self.try_read_event() {
-                if matches!(ev, crate::event::Event::PrimaryDeviceAttributes(_)) {
-                    self.observe_event(&ev)?;
+                let terminator = matches!(ev, crate::event::Event::PrimaryDeviceAttributes(_));
+                // Observe *and* keep. The capability replies `apply_defaults`
+                // reads arrive in this window, so skipping observation here
+                // would let the terminator apply defaults from nothing and
+                // latch them. An error is dropped rather than propagated:
+                // teardown still has a terminal to hand back, and the caller
+                // must not lose their events to a failed flush.
+                let _ = self.observe_event(&ev);
+                if terminator {
+                    // The batch's own bookkeeping, not the application's.
                     break;
                 }
                 deferred.push(ev);
@@ -1046,6 +1059,7 @@ where
                 let mut saw_resize = false;
                 while let Some(ev) = self.try_read_event() {
                     saw_resize |= matches!(ev, crate::event::Event::Resize(_));
+                    let _ = self.observe_event(&ev);
                     deferred.push(ev);
                 }
                 if saw_resize || remaining.is_zero() {

@@ -138,9 +138,9 @@ use std::io::{self, Write};
 
 use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::ansi::mode::{Mode, ModeSetting};
-use crate::ansi::{clipboard, color, ctrl, kitty, mode, status, termcap, winop};
+use crate::ansi::{color, ctrl, kitty, mode, status, termcap, winop};
 use crate::color::Color;
-use crate::event::{ClipboardSelection, ColorScheme as Scheme, Event};
+use crate::event::{ColorScheme as Scheme, Event};
 use crate::layout::Size;
 
 /// Something that asks the terminal questions and understands the answers.
@@ -385,7 +385,9 @@ impl PrimaryDeviceAttributes {
         self.0.contains(&Some(4))
     }
 
-    /// Whether attribute 52, clipboard access, was advertised.
+    /// Whether attribute 52, clipboard access, was advertised. This says the
+    /// terminal speaks OSC 52; whether it will *answer* a read is a separate
+    /// policy question, and many terminals refuse or prompt.
     #[must_use]
     pub fn supports_clipboard(&self) -> bool {
         self.0.contains(&Some(52))
@@ -425,7 +427,12 @@ impl Probe for TerminalName {
 /// XTGETTCAP: terminfo capabilities by name.
 ///
 /// Each name is asked for in its own request: some terminals answer only the
-/// first capability of a batched one.
+/// first capability of a batched one, and a batched *reply* cannot be taken
+/// apart again — values are hex-decoded before they reach here and terminfo
+/// strings contain the same `;` that separates entries.
+///
+/// Only the names it asked about are recorded. Replies are broadcast, and a
+/// screen on the same terminal asks for capabilities of its own.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Termcap {
     wanted: Vec<String>,
@@ -479,16 +486,18 @@ impl Probe for Termcap {
         else {
             return Ok(());
         };
-        for entry in payload.split(';') {
-            if entry.is_empty() {
-                continue;
-            }
-            let (name, value) = entry.split_once('=').unwrap_or((entry, ""));
-            if *recognized {
-                self.entries.insert(name.to_owned(), value.to_owned());
-            } else {
-                self.unsupported.push(name.to_owned());
-            }
+        // One name per request, so a reply carries one entry. Deliberately not
+        // split on `;`: the payload is already hex-decoded, and terminfo string
+        // values contain semicolons of their own — `setaf` is `48;5;%p1%d` —
+        // so the entry boundaries a batched reply had are gone by now.
+        let (name, value) = payload.split_once('=').unwrap_or((payload.as_str(), ""));
+        if !self.wanted.iter().any(|w| w == name) {
+            return Ok(());
+        }
+        if *recognized {
+            self.entries.insert(name.to_owned(), value.to_owned());
+        } else if !self.unsupported.iter().any(|u| u == name) {
+            self.unsupported.push(name.to_owned());
         }
         Ok(())
     }
@@ -571,54 +580,6 @@ impl Probe for CellPixelSize {
     fn observe_event(&mut self, event: &Event) -> io::Result<()> {
         if let Event::CellPixelSize { width, height } = *event {
             self.0 = Some(Size::new(width, height));
-        }
-        Ok(())
-    }
-}
-
-/// OSC 52: the contents of a clipboard selection.
-///
-/// Not a capability — this reads data the user may consider private, and many
-/// terminals refuse or prompt. [`PrimaryDeviceAttributes::supports_clipboard`]
-/// says whether asking is likely to work.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Clipboard {
-    selection: ClipboardSelection,
-    content: Option<String>,
-}
-
-impl Clipboard {
-    /// Probe the given selection.
-    #[must_use]
-    pub fn new(selection: ClipboardSelection) -> Self {
-        Self {
-            selection,
-            content: None,
-        }
-    }
-
-    /// The reported contents, if the terminal answered.
-    #[must_use]
-    pub fn content(&self) -> Option<&str> {
-        self.content.as_deref()
-    }
-}
-
-impl Probe for Clipboard {
-    fn write_queries(&self, mut out: &mut dyn Write) -> io::Result<()> {
-        let pc = match self.selection {
-            ClipboardSelection::System => b'c',
-            ClipboardSelection::Primary => b'p',
-            ClipboardSelection::Other(c) => c as u8,
-        };
-        clipboard::write_request_clipboard(&mut out, pc)
-    }
-
-    fn observe_event(&mut self, event: &Event) -> io::Result<()> {
-        if let Event::Clipboard { selection, content } = event
-            && *selection == self.selection
-        {
-            self.content = Some(content.clone());
         }
         Ok(())
     }
@@ -768,12 +729,20 @@ mod tests {
         );
     }
 
+    /// Terminfo string values contain semicolons of their own, and the payload
+    /// reaching us is already decoded — so the value must be taken verbatim
+    /// after the first `=`, not re-split.
     #[test]
-    fn termcap_splits_values_and_records_failures() {
-        let mut p = Termcap::new(["TN", "RGB", "Su"]);
+    fn termcap_keeps_values_containing_semicolons() {
+        let mut p = Termcap::new(["setaf", "RGB", "Su"]);
         p.observe_event(&Event::Termcap {
             recognized: true,
-            payload: "TN=xterm-256color;RGB".into(),
+            payload: "setaf=48;5;%p1%d".into(),
+        })
+        .unwrap();
+        p.observe_event(&Event::Termcap {
+            recognized: true,
+            payload: "RGB".into(),
         })
         .unwrap();
         p.observe_event(&Event::Termcap {
@@ -782,11 +751,39 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(p.get("TN"), Some("xterm-256color"));
+        assert_eq!(p.get("setaf"), Some("48;5;%p1%d"));
         assert_eq!(p.get("RGB"), Some(""), "a flag has no value");
-        assert!(p.has("RGB"));
+        assert!(!p.has("5"), "value fragments are not capability names");
         assert!(!p.has("Su"));
         assert_eq!(p.unsupported().collect::<Vec<_>>(), ["Su"]);
+    }
+
+    /// The screen puts its own XTGETTCAP requests on the same wire.
+    #[test]
+    fn termcap_records_only_what_it_asked_about() {
+        let mut p = Termcap::new(["TN"]);
+        for payload in ["RGB", "TN=ghostty"] {
+            p.observe_event(&Event::Termcap {
+                recognized: true,
+                payload: payload.into(),
+            })
+            .unwrap();
+        }
+        assert_eq!(p.get("TN"), Some("ghostty"));
+        assert!(!p.has("RGB"), "not its question");
+    }
+
+    #[test]
+    fn termcap_does_not_repeat_an_unsupported_name() {
+        let mut p = Termcap::new(["Su"]);
+        for _ in 0..3 {
+            p.observe_event(&Event::Termcap {
+                recognized: false,
+                payload: "Su".into(),
+            })
+            .unwrap();
+        }
+        assert_eq!(p.unsupported().count(), 1);
     }
 
     #[test]
@@ -843,26 +840,6 @@ mod tests {
         }
         assert_eq!(window.0, Some(Size::new(800, 600)));
         assert_eq!(cell.0, Some(Size::new(8, 16)));
-    }
-
-    #[test]
-    fn clipboard_folds_only_its_own_selection() {
-        let mut p = Clipboard::new(ClipboardSelection::System);
-        assert_eq!(q(&p), "\x1b]52;c;?\x07");
-
-        p.observe_event(&Event::Clipboard {
-            selection: ClipboardSelection::Primary,
-            content: "other".into(),
-        })
-        .unwrap();
-        assert_eq!(p.content(), None, "a different selection is not ours");
-
-        p.observe_event(&Event::Clipboard {
-            selection: ClipboardSelection::System,
-            content: "ours".into(),
-        })
-        .unwrap();
-        assert_eq!(p.content(), Some("ours"));
     }
 
     /// The pattern the module docs recommend: hold the shipped probes as
