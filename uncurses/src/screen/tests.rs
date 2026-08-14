@@ -2244,28 +2244,63 @@ fn drain_consumes_in_band_resize_echo_from_enabling_default() {
         screen.defaults_applied,
         "DA reply should mark defaults applied"
     );
+    // Consuming the *bytes* is what stops them reaching the shell; the decoded
+    // echo is handed back so a `pause`/`resume` does not swallow it.
+    assert!(
+        matches!(screen.try_read_event(), Some(Event::Resize(_))),
+        "the in-band resize echo must be decoded and re-queued, not left to leak"
+    );
     assert!(
         screen.try_read_event().is_none(),
-        "the in-band resize echo must be consumed, not left to leak"
+        "nothing else should be left"
     );
 }
 
 #[test]
-fn drain_is_noop_when_defaults_already_applied() {
+fn drain_waits_for_a_batch_sent_after_defaults_were_applied() {
+    // A mid-session `query` batch is outstanding even though init already
+    // settled. Keying the drain on `defaults_applied` would skip it and let
+    // the replies leak to the shell.
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    writer
+        .write_all(b"\x1b]11;rgb:1122/3344/5566\x1b\\")
+        .unwrap();
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    screen.defaults_applied = true;
+    screen.query(b"\x1b]11;?\x07").unwrap();
+
+    screen.drain_pending_queries().unwrap();
+
+    assert!(
+        screen.queries_sent_at.is_none(),
+        "the terminator should close the batch"
+    );
+    assert!(
+        matches!(screen.try_read_event(), Some(Event::BackgroundColor(_))),
+        "the application's reply must be re-queued, not discarded"
+    );
+}
+
+#[test]
+fn drain_is_noop_when_no_batch_is_outstanding() {
     let (reader, writer) = std::io::pipe().unwrap();
     drop(writer);
     let mut buf: Vec<u8> = Vec::new();
     let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
-    // Already consumed: drain must not block or read.
+    // No batch outstanding: drain must not block or read.
     screen.defaults_applied = true;
-    screen.queries_sent_at = Some(std::time::Instant::now());
+    screen.queries_sent_at = None;
     screen.options.query_drain_timeout = std::time::Duration::from_secs(10);
 
     let start = std::time::Instant::now();
     screen.drain_pending_queries().unwrap();
     assert!(
         start.elapsed() < std::time::Duration::from_millis(500),
-        "drain must return immediately when defaults are already applied"
+        "drain must return immediately when no batch is outstanding"
     );
 }
 
@@ -2478,7 +2513,253 @@ fn assert_tabs_and_bs_granted(opts: Optimizations, primed: Optimizations, after:
     );
 }
 
-/// LNM is terminal state, not termios: it survives whoever set it, so a
+/// Application-supplied queries ride the capability batch, and the batch stays
+/// answerable: bounded by the terminator, drained at teardown, and unchanged in
+/// the order the built-in queries depend on.
+#[cfg(all(unix, not(target_os = "l4re")))]
+mod app_queries {
+    use super::*;
+    use crate::probe::Probe;
+    use crate::terminal::{Env, Terminal};
+    use crate::testutil::{drain, open_pty_pair};
+
+    const DA: &str = "\x1b[c";
+    const BG_QUERY: &[u8] = b"\x1b]11;?\x07";
+
+    fn init_bytes(options: ScreenOptions) -> String {
+        let (Some((_ma, input)), Some((mb, out))) = (open_pty_pair(), open_pty_pair()) else {
+            return String::new();
+        };
+        let terminal = Terminal::new(&input, &out, Env::from_pairs([("TERM", "xterm")]));
+        let mut screen = Screen::new(terminal).expect("screen over two ptys");
+        screen.init_with(options).expect("init");
+        s(&drain(&mb))
+    }
+
+    fn with_extra(extra: &[u8]) -> ScreenOptions {
+        ScreenOptions {
+            query_drain_timeout: Duration::ZERO,
+            extra_init_queries: extra.to_vec(),
+            ..ScreenOptions::default()
+        }
+    }
+
+    #[test]
+    fn extra_queries_ride_the_batch_ahead_of_the_terminator() {
+        let out = init_bytes(with_extra(BG_QUERY));
+        if out.is_empty() {
+            return; // no usable pty here
+        }
+        let extra = out.find("\x1b]11;?").expect("extra query must be sent");
+        let terminator = out.rfind(DA).expect("batch must be terminated");
+        assert!(
+            extra < terminator,
+            "extra queries must precede the terminator that bounds them: {out:?}"
+        );
+    }
+
+    #[test]
+    fn extra_queries_are_absent_by_default() {
+        let out = init_bytes(with_extra(b""));
+        if out.is_empty() {
+            return;
+        }
+        assert!(
+            !out.contains("\x1b]11;?"),
+            "nothing extra should ride: {out:?}"
+        );
+        assert!(out.contains(DA), "the built-in batch is still terminated");
+    }
+
+    /// The built-in order is load-bearing — XTGETTCAP is one key per request
+    /// because some terminals answer only the first in a batch, and DA is the
+    /// terminator — so extra queries must not be interleaved into it.
+    #[test]
+    fn extra_queries_do_not_disturb_the_built_in_order() {
+        let plain = init_bytes(with_extra(b""));
+        let with = init_bytes(with_extra(BG_QUERY));
+        if plain.is_empty() || with.is_empty() {
+            return;
+        }
+        assert_eq!(
+            with.replace("\x1b]11;?\x07", ""),
+            plain,
+            "the built-in batch must be byte-identical with and without extras"
+        );
+    }
+
+    #[test]
+    fn query_sends_its_own_terminated_batch() {
+        let (Some((_ma, input)), Some((mb, out))) = (open_pty_pair(), open_pty_pair()) else {
+            return;
+        };
+        let terminal = Terminal::new(&input, &out, Env::from_pairs([("TERM", "xterm")]));
+        let mut screen = Screen::new(terminal).expect("screen over two ptys");
+        screen
+            .init_with(ScreenOptions {
+                query_capabilities: false,
+                query_drain_timeout: Duration::ZERO,
+                ..ScreenOptions::default()
+            })
+            .expect("init");
+        let _ = drain(&mb);
+
+        screen.query(BG_QUERY).expect("query");
+
+        let sent = s(&drain(&mb));
+        assert!(sent.contains("\x1b]11;?"), "queries must be sent: {sent:?}");
+        assert!(
+            sent.ends_with(DA),
+            "batch must end with the terminator: {sent:?}"
+        );
+        assert!(
+            screen.queries_sent_at.is_some(),
+            "query must register the batch with the teardown drain"
+        );
+    }
+
+    #[derive(Default)]
+    struct Background(Option<crate::color::Color>);
+
+    impl Probe for Background {
+        fn write_queries(&self, out: &mut dyn std::io::Write) -> io::Result<()> {
+            out.write_all(BG_QUERY)
+        }
+        fn observe_event(&mut self, event: &Event) -> io::Result<()> {
+            if let Event::BackgroundColor(c) = *event {
+                self.0 = Some(c);
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_probe_asks_and_folds_its_own_reply() {
+        let mut bg = Background::default();
+        assert_eq!(
+            bg.queries().unwrap(),
+            BG_QUERY,
+            "provided queries() collects write_queries"
+        );
+
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer
+            .write_all(b"\x1b]11;rgb:1122/3344/5566\x1b\\")
+            .unwrap();
+        drop(writer);
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+        // `try_read_event` is a pure read, so pump the source first.
+        assert!(matches!(
+            screen.poll_event(Some(Duration::from_secs(1))),
+            Ok(true)
+        ));
+        while let Some(ev) = screen.try_read_event() {
+            screen.observe_event(&ev).unwrap();
+            bg.observe_event(&ev).unwrap();
+        }
+        assert!(bg.0.is_some(), "the probe must have folded its own reply");
+    }
+
+    /// What happens to queries still in flight when the program exits: the
+    /// replies are consumed so the shell does not read them as keystrokes, but
+    /// consuming is all teardown owes them.
+    #[test]
+    fn exit_with_an_in_flight_query_consumes_the_reply() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer
+            .write_all(b"\x1b]11;rgb:1122/3344/5566\x1b\\")
+            .unwrap();
+        writer.write_all(b"\x1b[?65;1c").unwrap();
+        drop(writer);
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+        screen.defaults_applied = true;
+        screen.query(BG_QUERY).unwrap();
+
+        screen.drain_pending_queries().unwrap();
+
+        assert!(
+            screen.queries_sent_at.is_none(),
+            "the batch must be closed once its terminator lands"
+        );
+        assert!(
+            matches!(screen.try_read_event(), Some(Event::BackgroundColor(_))),
+            "the reply is decoded — that is what keeps it from the shell"
+        );
+    }
+
+    /// A terminal that never answers must not hold the program open. The drain
+    /// gives up on its budget and teardown continues, because there is still a
+    /// terminal to hand back.
+    #[test]
+    fn exit_with_an_unanswered_query_gives_up_on_the_budget() {
+        // Writer stays open, so the input never reaches EOF and the drain has
+        // to time out rather than break on a closed pipe.
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+        screen.options.query_drain_timeout = Duration::from_millis(120);
+        screen.defaults_applied = true;
+        screen.query(BG_QUERY).unwrap();
+
+        let start = std::time::Instant::now();
+        screen.drain_pending_queries().unwrap();
+        let waited = start.elapsed();
+
+        assert!(
+            waited < Duration::from_secs(2),
+            "drain must give up, not hang: waited {waited:?}"
+        );
+        assert!(
+            screen.queries_sent_at.is_none(),
+            "a timed-out batch must not stay outstanding, or teardown pays the \
+             budget twice"
+        );
+        let start = std::time::Instant::now();
+        screen.drain_pending_queries().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "the second drain must be a no-op"
+        );
+    }
+
+    /// Teardown decodes whatever arrived, but a `pause` is not an exit — the
+    /// events belong to the application, which is still going to run.
+    #[test]
+    fn pause_defers_replies_instead_of_swallowing_them() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer
+            .write_all(b"\x1b]11;rgb:1122/3344/5566\x1b\\")
+            .unwrap();
+        writer.write_all(b"abc").unwrap();
+        writer.write_all(b"\x1b[?65;1c").unwrap();
+        drop(writer);
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+        screen.defaults_applied = true;
+        screen.query(BG_QUERY).unwrap();
+
+        screen.drain_pending_queries().unwrap();
+
+        let mut bg = Background::default();
+        let mut keys = 0;
+        while let Some(ev) = screen.try_read_event() {
+            bg.observe_event(&ev).unwrap();
+            if matches!(ev, Event::KeyPress(_)) {
+                keys += 1;
+            }
+        }
+        assert!(
+            bg.0.is_some(),
+            "an application's reply must survive teardown, not be discarded"
+        );
+        assert_eq!(keys, 3, "keystrokes typed during teardown survive too");
+    }
+}
 /// terminal handed over in LNM makes every `\n` the cursor planner emits reset
 /// the column while the plan assumes it is carried. Raw mode cannot answer it,
 /// which is why this is checked over a real pty rather than a byte buffer.

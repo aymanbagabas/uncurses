@@ -251,6 +251,31 @@ pub struct ScreenOptions {
     /// [`capabilities`](Screen::capabilities) stays at its env-derived
     /// defaults.
     pub query_capabilities: bool,
+    /// Extra terminal queries to send in the same batch as the capability
+    /// queries, staged just before the terminating Primary DA request.
+    ///
+    /// This is how an application asks the terminal its own questions without
+    /// having to invent a boundary for the replies: the batch is terminated by
+    /// the same DA request, so the answers arrive before it, and the teardown
+    /// drain that protects the capability replies protects these too. The
+    /// replies surface as ordinary events — fold them with a type of your own
+    /// (see [`Probe`](crate::probe::Probe)); `Screen` does not interpret them.
+    ///
+    /// Compose the bytes with the writers in [`ansi`](crate::ansi). Three
+    /// things are the caller's responsibility, because `Screen` cannot check
+    /// them:
+    ///
+    /// * **No terminator of your own.** A Primary DA request here would end
+    ///   the batch early, and the capability replies after it would be lost.
+    /// * **Queries only.** Bytes that change terminal state are not recorded
+    ///   in the screen's mode state, so teardown cannot restore them.
+    /// * **Nothing unterminated.** An unfinished OSC or DCS swallows the
+    ///   terminator as payload, and the batch never completes.
+    ///
+    /// Ignored when [`query_capabilities`](Self::query_capabilities) is
+    /// `false`, since there is then no batch to join; use
+    /// [`Screen::query`](Screen::query) instead. Empty by default.
+    pub extra_init_queries: Vec<u8>,
     /// How long teardown ([`finish`](Screen::finish) /
     /// [`pause`](Screen::pause)) will wait for the capability-query replies
     /// to arrive before restoring the terminal, so they cannot leak to the
@@ -340,6 +365,7 @@ impl Default for ScreenOptions {
             request_pixel_size_on_resize: cfg!(windows),
             mouse: None,
             query_capabilities: true,
+            extra_init_queries: Vec::new(),
             query_drain_timeout: Duration::from_millis(300),
             track_origin: true,
         }
@@ -920,26 +946,73 @@ where
         crate::event::EventStream::from_shared(Arc::clone(&self.source))
     }
 
+    /// Send `queries` to the terminal as one batch, terminated by a Primary
+    /// DA request.
+    ///
+    /// This is the mid-session form of
+    /// [`ScreenOptions::extra_init_queries`], for questions that only come up
+    /// later: re-reading the palette after a color-scheme change, or
+    /// re-probing after [`resume`](Self::resume), where a different terminal
+    /// may be on the other end.
+    ///
+    /// The terminating DA request is what makes the batch answerable: replies
+    /// arrive before it, so the [`PrimaryDeviceAttributes`] event that follows
+    /// means everything that is coming has come. It also registers the batch
+    /// with the teardown drain, so replies still in flight when the program
+    /// exits are consumed rather than left for the shell to read as input.
+    /// Writing the same bytes with [`Write`] would skip both.
+    ///
+    /// The replies surface as ordinary events for a [`Probe`](crate::probe::Probe)
+    /// of your own to fold; `Screen` does not interpret them. The caveats on
+    /// [`extra_init_queries`](ScreenOptions::extra_init_queries) apply here
+    /// too: no terminator of your own, queries only, nothing unterminated.
+    ///
+    /// Keep one batch outstanding at a time. A second batch sent before the
+    /// first is answered shares its terminator, so the first DA reply ends
+    /// both and later replies fall outside the drain.
+    ///
+    /// [`PrimaryDeviceAttributes`]: crate::event::Event::PrimaryDeviceAttributes
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from staging or flushing the batch.
+    pub fn query(&mut self, queries: &[u8]) -> io::Result<()> {
+        self.out_buf.write_all(queries)?;
+        self.out_buf
+            .write_all(crate::ansi::ctrl::REQUEST_PRIMARY_DA)?;
+        self.queries_sent_at = Some(Instant::now());
+        self.flush()
+    }
+
     /// Consume any still-pending replies to the capability queries
     /// [`init`](Self::init) fired, so they cannot leak to the shell (or a
     /// child after [`pause`](Self::pause)) as stray input once the terminal
     /// is restored to cooked mode.
     ///
-    /// No-op unless queries were sent and their terminating Primary DA reply
-    /// has not yet been observed. Otherwise it waits at most the time left in
+    /// No-op unless a query batch is outstanding — that is, one was sent and
+    /// its terminating Primary DA reply has not been observed. Otherwise it
+    /// waits at most the time left in
     /// [`ScreenOptions::query_drain_timeout`], measured from when the queries
     /// were sent, and returns as soon as that Primary DA reply lands. Reusing
     /// the normal decode path means replies are consumed (not flushed), which
     /// is race-free and identical on every platform.
+    ///
+    /// Consuming the *bytes* is the whole job — once they are decoded they
+    /// can no longer reach the shell — so every event other than the
+    /// terminator is put back with [`unread_event`](Self::unread_event)
+    /// rather than dropped. A keystroke typed during teardown survives a
+    /// [`pause`](Self::pause), and so does a reply to an application's own
+    /// query that happened to arrive in this window.
     fn drain_pending_queries(&mut self) -> io::Result<()> {
-        if self.defaults_applied {
-            return Ok(());
-        }
-        let Some(sent_at) = self.queries_sent_at.take() else {
+        let Some(sent_at) = self.queries_sent_at else {
             return Ok(());
         };
         let budget = self.options.query_drain_timeout;
-        while !self.defaults_applied {
+        // Held back rather than discarded, and re-queued in arrival order
+        // once the drain is done. Re-queueing inside the loop would make
+        // `try_read_event` hand the same event straight back.
+        let mut deferred: Vec<crate::event::Event> = Vec::new();
+        while self.queries_sent_at.is_some() {
             let Some(remaining) = budget.checked_sub(sent_at.elapsed()) else {
                 break;
             };
@@ -947,17 +1020,20 @@ where
                 break;
             }
             // Wait up to the remaining budget for input, then decode whatever
-            // arrived. Reads are pure now, so observe each event explicitly;
-            // `observe_event` flips `defaults_applied` on the Primary DA reply
-            // that terminates the capability-reply stream.
-            if !self.poll_event(Some(remaining))? {
+            // arrived. Only the terminator is observed here; the rest is the
+            // application's to see, and it will feed them back through
+            // `observe_event` itself. A read error — EOF on a closed input,
+            // say — ends the drain rather than failing teardown, which still
+            // has a terminal to hand back.
+            if !matches!(self.poll_event(Some(remaining)), Ok(true)) {
                 break;
             }
             while let Some(ev) = self.try_read_event() {
-                let _ = self.observe_event(&ev);
-                if self.defaults_applied {
+                if matches!(ev, crate::event::Event::PrimaryDeviceAttributes(_)) {
+                    self.observe_event(&ev)?;
                     break;
                 }
+                deferred.push(ev);
             }
         }
         // Applying defaults on the Primary DA reply can enable in-band resize
@@ -970,15 +1046,24 @@ where
                 let mut saw_resize = false;
                 while let Some(ev) = self.try_read_event() {
                     saw_resize |= matches!(ev, crate::event::Event::Resize(_));
-                    let _ = self.observe_event(&ev);
+                    deferred.push(ev);
                 }
                 if saw_resize || remaining.is_zero() {
                     break;
                 }
-                if !self.poll_event(Some(remaining.min(Duration::from_millis(50))))? {
+                if !matches!(
+                    self.poll_event(Some(remaining.min(Duration::from_millis(50)))),
+                    Ok(true)
+                ) {
                     break;
                 }
             }
+        }
+        // Whether the terminator arrived or the budget ran out, this batch is
+        // no longer outstanding: a second drain must not wait again.
+        self.queries_sent_at = None;
+        for ev in deferred.into_iter().rev() {
+            self.unread_event(ev);
         }
         Ok(())
     }
@@ -1203,8 +1288,11 @@ where
                 if attrs.contains(&Some(52)) {
                     self.caps.clipboard = true;
                 }
-                // Primary DA is the terminating reply: every capability is
-                // now known, so apply the discovery-driven defaults once.
+                // Primary DA is the terminating reply: the batch it closes has
+                // been answered, so the drain has nothing left to wait for.
+                self.queries_sent_at = None;
+                // Every capability is now known, so apply the
+                // discovery-driven defaults once.
                 if !self.defaults_applied {
                     self.defaults_applied = true;
                     self.apply_defaults()?;
@@ -1440,7 +1528,17 @@ where
             }
         }
 
+        // The application's own queries ride the same batch, staged last so
+        // they cannot perturb the order above — several of those queries care
+        // about it — but still ahead of the terminator that bounds them.
+        if !self.options.extra_init_queries.is_empty() {
+            let queries = std::mem::take(&mut self.options.extra_init_queries);
+            self.out_buf.write_all(&queries)?;
+            self.options.extra_init_queries = queries;
+        }
+
         self.out_buf.write_all(REQUEST_PRIMARY_DA)?;
+        self.queries_sent_at = Some(Instant::now());
         self.flush()
     }
 }
@@ -1632,8 +1730,8 @@ where
             self.enable_bracketed_paste()?;
         }
         if self.options.query_capabilities {
+            // `send_init_queries` arms the drain when it writes the terminator.
             self.send_init_queries()?;
-            self.queries_sent_at = Some(Instant::now());
         }
         Ok(())
     }
@@ -1781,8 +1879,8 @@ where
             self.enable_bracketed_paste()?;
         }
         if self.options.query_capabilities {
+            // `send_init_queries` arms the drain when it writes the terminator.
             self.send_init_queries()?;
-            self.queries_sent_at = Some(Instant::now());
         }
         Ok(())
     }

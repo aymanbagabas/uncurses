@@ -120,6 +120,7 @@ pub mod cell;
 pub mod color;
 pub mod event;
 pub mod layout;
+pub mod probe;
 pub mod screen;
 pub mod style;
 pub mod terminal;
