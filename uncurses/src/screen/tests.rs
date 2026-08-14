@@ -2647,34 +2647,6 @@ mod app_queries {
         );
     }
 
-    /// A resumed terminal may not be the one that answered before, so the
-    /// screen re-probes — and an application's queries ride that batch too,
-    /// which is what makes them worth putting in `extra_init_queries` rather
-    /// than sending once by hand.
-    #[test]
-    fn extra_queries_are_re_sent_on_resume() {
-        let (Some((_ma, input)), Some((mb, out))) = (open_pty_pair(), open_pty_pair()) else {
-            return;
-        };
-        let terminal = Terminal::new(&input, &out, Env::from_pairs([("TERM", "xterm")]));
-        let mut screen = Screen::new(terminal).expect("screen over two ptys");
-        screen.init_with(with_extra(BG_QUERY)).expect("init");
-        assert_eq!(
-            s(&drain(&mb)).matches("\x1b]11;?").count(),
-            1,
-            "sent once at init"
-        );
-
-        screen.pause().expect("pause");
-        screen.resume().expect("resume");
-
-        assert_eq!(
-            s(&drain(&mb)).matches("\x1b]11;?").count(),
-            1,
-            "and again on resume, with the screen's own re-probe"
-        );
-    }
-
     #[derive(Default)]
     struct Background(Option<crate::color::Color>);
 
@@ -2874,71 +2846,6 @@ mod lnm {
             "init and resume must each reset LNM: {out:?}"
         );
     }
-}
-
-/// Capability replies describe the terminal attached at the time they were
-/// received. After pause/resume that may be a different terminal (tmux/ssh
-/// reattach), so resume must forget the old reply-derived defaults, ask again,
-/// and avoid replaying modes the new terminal has not confirmed yet.
-#[cfg(all(unix, not(target_os = "l4re")))]
-#[test]
-fn resume_reprobes_without_replaying_stale_capability_defaults() {
-    use crate::ansi::kitty::KittyKeyboardFlags;
-    use crate::event::ModifyOtherKeysMode;
-    use crate::terminal::{Env, Terminal};
-    use crate::testutil::{drain, open_pty_pair};
-
-    let (Some((_ma, input)), Some((mb, out))) = (open_pty_pair(), open_pty_pair()) else {
-        return;
-    };
-    let terminal = Terminal::new(&input, &out, Env::from_pairs([("TERM", "xterm")]));
-    let mut screen = Screen::new(terminal).expect("screen over two ptys");
-    screen.options = ScreenOptions {
-        query_capabilities: true,
-        query_drain_timeout: Duration::ZERO,
-        ..ScreenOptions::default()
-    };
-
-    screen.defaults_applied = true;
-    screen.caps.synchronized_output = true;
-    screen.caps.grapheme_clusters = true;
-    screen.caps.in_band_resize = true;
-    screen.caps.kitty_keyboard = true;
-    screen.caps.modify_other_keys = true;
-    screen.state.sync_updates = true;
-    screen.state.grapheme_clusters = true;
-    screen.state.in_band_resize = true;
-    screen.state.kitty_keyboard = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
-    screen.state.modify_other_keys = ModifyOtherKeysMode::Mode2;
-
-    screen.resume().expect("resume");
-    let out = s(&drain(&mb));
-    if out.is_empty() {
-        return; // no usable pty here
-    }
-
-    assert!(
-        out.as_bytes()
-            .windows(crate::ansi::kitty::REQUEST_KITTY_KEYBOARD.len())
-            .any(|w| w == crate::ansi::kitty::REQUEST_KITTY_KEYBOARD),
-        "resume must restart capability queries: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b[?2027h"),
-        "resume must not replay stale Unicode-core support before the new reply: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b[?2048h"),
-        "resume must not replay stale in-band-resize support before the new reply: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b[=1;1u"),
-        "resume must not replay stale Kitty keyboard support before the new reply: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b[>4;2m"),
-        "resume must not replay stale modifyOtherKeys support before the new reply: {out:?}"
-    );
 }
 
 /// `finish` consumes the screen and there is no `Drop` impl, so if a teardown

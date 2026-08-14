@@ -278,11 +278,6 @@ pub struct ScreenOptions {
     /// Ignored when [`query_capabilities`](Self::query_capabilities) is
     /// `false`, since there is then no batch to join; use
     /// [`Screen::query`](Screen::query) instead. Empty by default.
-    ///
-    /// Re-sent on [`resume`](Screen::resume) along with the screen's own
-    /// queries, since the terminal on the other end may not be the one that
-    /// answered before. Reset your own probe state when you resume, or you
-    /// will be reading one terminal's answers mixed with another's.
     pub extra_init_queries: Vec<u8>,
     /// How long teardown ([`finish`](Screen::finish) /
     /// [`pause`](Screen::pause)) will wait for the capability-query replies
@@ -959,9 +954,8 @@ where
     ///
     /// This is the mid-session form of
     /// [`ScreenOptions::extra_init_queries`], for questions that only come up
-    /// later: re-reading the palette after a color-scheme change, or
-    /// re-probing after [`resume`](Self::resume), where a different terminal
-    /// may be on the other end.
+    /// later: re-reading the palette after a color-scheme change, or asking
+    /// about something the program did not know it would need at startup.
     ///
     /// The terminating DA request is what makes the batch answerable: replies
     /// arrive before it, so the [`PrimaryDeviceAttributes`] event that follows
@@ -1444,46 +1438,6 @@ where
         self.renderer.set_color_profile(profile);
     }
 
-    /// Forget capability-derived state before probing a resumed terminal.
-    ///
-    /// A pause hands the device back to the shell; on resume the attached
-    /// terminal may be a different emulator. Keep caller-owned state (title,
-    /// colors, cursor shape, explicit mouse, etc.) but drop modes we enabled
-    /// only because earlier replies said they were supported.
-    fn reset_discovered_capabilities(&mut self) {
-        if self.caps.synchronized_output {
-            self.state.sync_updates = false;
-        }
-        if self.caps.grapheme_clusters {
-            self.state.grapheme_clusters = false;
-        }
-        if self.options.prefer_in_band_resize && self.caps.in_band_resize {
-            self.state.in_band_resize = false;
-            self.source.lock().unwrap().set_handle_resize(true);
-        }
-        if !self.options.keyboard_enhancements.is_empty() {
-            if self.caps.kitty_keyboard {
-                self.state.kitty_keyboard = crate::ansi::kitty::KittyKeyboardFlags::empty();
-            }
-            if self.caps.modify_other_keys {
-                self.state.modify_other_keys = crate::event::ModifyOtherKeysMode::Disabled;
-            }
-        }
-        self.caps = Capabilities::default();
-        self.defaults_applied = false;
-        self.queries_sent_at = None;
-    }
-
-    fn restart_capability_discovery(&mut self, is_tty: bool) -> io::Result<()> {
-        self.apply_env_color_profile(is_tty);
-        if self.options.query_capabilities {
-            self.reset_discovered_capabilities();
-            // `send_init_queries` arms the drain when it writes the terminator.
-            self.send_init_queries()?;
-        }
-        Ok(())
-    }
-
     /// Reconcile the terminal's hardware tab stops with the every-eight
     /// columns layout the renderer assumes. A prior program may have left
     /// arbitrary stops behind, which would make the `HT` (`\t`) moves the
@@ -1870,8 +1824,6 @@ where
         self.reset_lnm()?;
         self.autoresize()?;
         self.reset_tab_stops()?;
-        let is_tty = self.terminal.is_terminal().1;
-        self.restart_capability_discovery(is_tty)?;
         self.restore()?;
         self.invalidate();
         self.flush()
@@ -2021,8 +1973,6 @@ where
         self.reset_lnm()?;
         self.autoresize()?;
         self.reset_tab_stops()?;
-        let is_tty = self.terminal.is_terminal().1;
-        self.restart_capability_discovery(is_tty)?;
         self.restore()?;
         self.invalidate();
         self.flush()
