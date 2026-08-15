@@ -318,6 +318,16 @@ fn scan_csi(bytes: &[u8], from: usize) -> usize {
 /// Scan a control string to its terminator, which is ST - and also `BEL` if
 /// `bel_ends`, that being an xterm convention for OSC and no other string.
 ///
+/// `from` is the byte after the introducer, which for DCS is not yet the
+/// payload: a DCS carries a CSI-shaped command section first, so the shape is
+/// `ESC P` prefix params intermediates final, and only then the string. This
+/// scan does not need to know where that boundary is, because every byte the
+/// command section may hold - prefix `0x3C..=0x3F`, parameters `0x30..=0x3B`,
+/// intermediates `0x20..=0x2F`, final `0x40..=0x7E` - lies inside
+/// `0x20..=0x7E` and so is none of ST, BEL or ESC. Anything that has to treat
+/// the payload differently from the command section, such as the doubled ESC
+/// bytes in a tmux passthrough, does need to find it.
+///
 /// Terminators are only ever tested at a character boundary. `0x9C` is 8-bit
 /// ST between characters and a continuation byte inside one, and every code
 /// point in U+2700..U+273F carries one, so a scan that does not know which it
