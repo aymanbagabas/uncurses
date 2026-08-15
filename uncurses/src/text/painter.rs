@@ -206,13 +206,17 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
             match tok {
                 // SAFETY (all `from_utf8_unchecked`): the tokenizer cuts on
                 // grapheme-cluster boundaries of a valid `&str`, so each slice
-                // is valid UTF-8.
+                // is valid UTF-8. Checked under `debug_assert!` for the same
+                // reason as `ansi::wrap::bs` - the invariant is the tokenizer's
+                // to keep, and when it stopped keeping it this was UB.
                 Token::Text { text, width: 0 } => {
                     if let Some((_, _, ref mut content, _)) = pending {
+                        debug_assert!(std::str::from_utf8(text).is_ok());
                         content.push_str(unsafe { std::str::from_utf8_unchecked(text) });
                     }
                 }
                 Token::Text { text, width } => {
+                    debug_assert!(std::str::from_utf8(text).is_ok());
                     if truncated {
                         continue;
                     }
