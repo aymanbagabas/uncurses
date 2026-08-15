@@ -299,9 +299,13 @@ impl Renderer {
 
     /// Replace the color profile used for future style emission.
     ///
-    /// Clears cached color conversions when `profile` differs from the
+    /// Clears cached color conversions and requests a full erase and
+    /// redraw on the next render when `profile` differs from the
     /// current value.
     pub(crate) fn set_color_profile(&mut self, profile: Profile) {
+        if self.color_profile.profile() != profile {
+            self.request_clear();
+        }
         self.color_profile.set_profile(profile);
     }
 
