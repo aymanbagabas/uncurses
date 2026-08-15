@@ -20,7 +20,18 @@ use super::text::{Token, WidthMode, string_width, tokenize};
 
 #[inline]
 fn bs(b: &[u8]) -> &str {
-    // SAFETY: token slices from `&str` input fall on valid UTF-8 boundaries.
+    // The tokenizer never splits a character: text tokens are whole grapheme
+    // clusters, and every sequence scanner steps a whole UTF-8 character at a
+    // time. Nothing enforced that, and when a scanner did split one - 0x9C is
+    // 8-bit ST and also a continuation byte, so an OSC title containing a
+    // check mark ended mid-character - the ill-formed bytes arrived here and
+    // this was undefined behaviour. Checked where checking is free.
+    debug_assert!(
+        std::str::from_utf8(b).is_ok(),
+        "token split a UTF-8 character: {b:?}"
+    );
+    // SAFETY: `b` is a token slice of `&str` input, taken on character
+    // boundaries, as asserted above.
     unsafe { std::str::from_utf8_unchecked(b) }
 }
 

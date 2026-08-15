@@ -253,7 +253,15 @@ fn scan_string(bytes: &[u8], from: usize) -> usize {
         if b == 0x1b {
             return i;
         }
-        i += 1;
+        // Step a whole UTF-8 character at a time. `0x9C` is a continuation
+        // byte as well as 8-bit ST, and stepping byte by byte read it as a
+        // terminator in the middle of a character: every code point in
+        // U+2700..U+273F - "✅", "✔", "✨" - ends an OSC title early and
+        // leaves its trailing bytes orphaned outside the sequence. As a lead
+        // byte 0x9C is never valid, so a 0x9C at a character boundary is
+        // still unambiguously ST.
+        let n = utf8_char_len(b);
+        i += if n == 0 { 1 } else { n.min(len - i) };
     }
     len
 }
@@ -264,7 +272,14 @@ fn scan_esc_intermediate(bytes: &[u8], at: usize) -> usize {
     while i < len && (0x20..=0x2f).contains(&bytes[i]) {
         i += 1;
     }
-    if i < len { i + 1 } else { len }
+    if i < len {
+        // The final byte, or the whole character it leads - splitting one
+        // strands continuation bytes that the next token reads as C1
+        // controls.
+        i + utf8_char_len(bytes[i]).max(1).min(len - i)
+    } else {
+        len
+    }
 }
 
 #[cfg(test)]
@@ -447,6 +462,37 @@ mod fast_path {
             vec![("a".into(), 1), ("\u{4e00}".into(), 2), ("b".into(), 1)],
             "a wide character between two ASCII ones is still wide"
         );
+    }
+    /// An OSC payload may contain any UTF-8, and `0x9C` appears inside a great
+    /// many characters as a continuation byte. Terminating the string there
+    /// cut those characters in half, which left the trailing bytes of one
+    /// outside the escape token - where the rest of the crate, reasonably,
+    /// treated a token it had been told was text as UTF-8.
+    #[test]
+    fn a_continuation_byte_does_not_terminate_a_string_sequence() {
+        for c in ['\u{2705}', '\u{2714}', '\u{2728}', '\u{171c}'] {
+            let input = format!("\x1b]0;Build {c}\x07after");
+            let toks: Vec<_> = tokenize(input.as_bytes(), WidthMode::Wc, false).collect();
+            let (escape, rest) = toks.split_first().expect("a token");
+            let Token::Escape(seq) = escape else {
+                panic!("expected the OSC to be one escape token, got {escape:?}")
+            };
+            assert_eq!(
+                std::str::from_utf8(seq).expect("the sequence is whole"),
+                format!("\x1b]0;Build {c}\x07")
+            );
+            let text: String = rest
+                .iter()
+                .filter_map(|t| match t {
+                    Token::Text { text, .. } => std::str::from_utf8(text).ok(),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(text, "after");
+        }
+        // A `0x9C` on a character boundary is still an 8-bit ST.
+        let toks: Vec<_> = tokenize(b"\x1b]0;t\x9cx", WidthMode::Wc, false).collect();
+        assert!(matches!(toks[0], Token::Escape(b"\x1b]0;t\x9c")));
     }
 }
 
