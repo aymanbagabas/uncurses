@@ -21,6 +21,42 @@
 pub use crate::text::WidthMode;
 use crate::unicode::graphemes;
 
+/// Counts the work the tokenizer does, so a test can assert it stays linear in
+/// the input without measuring a clock.
+///
+/// The property that matters is that the scan for a run boundary, and the
+/// UTF-8 validation of what it finds, each visit a byte a bounded number of
+/// times over a whole tokenization. Timing that instead makes the test a
+/// benchmark: on a loaded machine a linear run reads slower than the
+/// quadratic threshold it is meant to catch, so it fails at random and passes
+/// at random. Counting the visits is exact and takes no wall-clock time.
+#[cfg(test)]
+pub(crate) mod instrument {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SCANNED: Cell<usize> = const { Cell::new(0) };
+        static VALIDATED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn scanned(n: usize) {
+        SCANNED.with(|c| c.set(c.get() + n));
+    }
+
+    pub(super) fn validated(n: usize) {
+        VALIDATED.with(|c| c.set(c.get() + n));
+    }
+
+    /// Tokenize `bytes` fully and return (bytes visited by the run scan, bytes
+    /// submitted to UTF-8 validation).
+    pub(crate) fn measure(bytes: &[u8]) -> (usize, usize) {
+        SCANNED.with(|c| c.set(0));
+        VALIDATED.with(|c| c.set(0));
+        for _ in super::tokenize(bytes, super::WidthMode::Wc, false) {}
+        (SCANNED.with(|c| c.get()), VALIDATED.with(|c| c.get()))
+    }
+}
+
 /// A single token produced by [`tokenize`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token<'a> {
@@ -57,7 +93,8 @@ pub fn tokenize(bytes: &[u8], mode: WidthMode, eaw_wide: bool) -> Tokenizer<'_> 
         pos: 0,
         mode,
         eaw_wide,
-        valid_end: 0,
+        scan_end: 0,
+        run: "",
     }
 }
 
@@ -67,16 +104,25 @@ pub struct Tokenizer<'a> {
     pos: usize,
     mode: WidthMode,
     eaw_wide: bool,
-    /// How far past `pos` the current run of plain text has been scanned and
-    /// found to be valid UTF-8.
+    /// Where the current run of plain text ends - the next byte that opens an
+    /// escape or a control token, or that cannot start a UTF-8 character.
     ///
     /// The run is what makes this iterator linear. Finding where the plain
-    /// text ends, and validating it, is work proportional to the run's
-    /// length, and it is done once for the run rather than once for each
-    /// grapheme inside it. `pos` then walks the run a grapheme at a time and
-    /// only a run boundary - or a byte that is not valid UTF-8 - makes this
-    /// look again.
-    valid_end: usize,
+    /// text ends is work proportional to the run's length, and it is done
+    /// once for the run rather than once for each grapheme inside it. `pos`
+    /// then walks the run a grapheme at a time and only crossing `scan_end`
+    /// makes this look again.
+    scan_end: usize,
+    /// The validated remainder of the run, starting at `pos`.
+    ///
+    /// Held separately from `scan_end` on purpose. Malformed UTF-8 ends this
+    /// slice early but says nothing about where the *run* ends, and conflating
+    /// the two made every malformed byte rescan the rest of the input: text
+    /// that was one byte of UTF-8 short cost O(n^2) to tokenize. Keeping the
+    /// two boundaries apart means the scan still happens once per run, and
+    /// only the validation - which stops at the first bad byte, so it is cheap
+    /// exactly when it is repeated - runs again.
+    run: &'a str,
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
@@ -114,7 +160,7 @@ impl<'a> Iterator for Tokenizer<'a> {
         // made tokenizing a single long line quadratic in its length - a
         // 32 KB line took 852 ms, and nothing about the tokens it produced
         // changed, so only a timing test could see it.
-        if self.pos >= self.valid_end {
+        if self.pos >= self.scan_end {
             let mut end = self.pos;
             while end < self.bytes.len() {
                 let bb = self.bytes[end];
@@ -127,12 +173,31 @@ impl<'a> Iterator for Tokenizer<'a> {
                 }
                 end += n;
             }
-            self.valid_end = match std::str::from_utf8(&self.bytes[self.pos..end]) {
-                Ok(_) => end,
-                Err(e) => self.pos + e.valid_up_to(),
+            #[cfg(test)]
+            instrument::scanned(end.max(self.pos + 1) - self.pos);
+            self.scan_end = end;
+            self.run = "";
+        }
+        if self.run.is_empty() && self.pos < self.scan_end {
+            let slice = &self.bytes[self.pos..self.scan_end];
+            self.run = match std::str::from_utf8(slice) {
+                Ok(s) => {
+                    #[cfg(test)]
+                    instrument::validated(slice.len());
+                    s
+                }
+                // The prefix before the first bad byte is valid UTF-8 by
+                // definition, so this second call cannot fail. Validation
+                // stops at that byte, so both calls together are work
+                // proportional to the prefix, not to the rest of the input.
+                Err(e) => {
+                    #[cfg(test)]
+                    instrument::validated(2 * e.valid_up_to() + 1);
+                    std::str::from_utf8(&slice[..e.valid_up_to()]).unwrap_or("")
+                }
             };
         }
-        if self.valid_end <= self.pos {
+        if self.run.is_empty() {
             // Nothing plain starts here, or what does is not valid UTF-8.
             // Either way the byte is emitted verbatim to keep forward
             // progress, exactly as an invalid leading byte always was.
@@ -161,17 +226,17 @@ impl<'a> Iterator for Tokenizer<'a> {
             if next.is_none_or(|n| n < 0x80) {
                 let start = self.pos;
                 self.pos += 1;
+                self.run = &self.run[1..];
                 return Some(Token::Text {
                     text: &self.bytes[start..self.pos],
                     width: 1,
                 });
             }
         }
-        // SAFETY: `pos .. valid_end` was validated as UTF-8 above.
-        let valid = unsafe { std::str::from_utf8_unchecked(&self.bytes[self.pos..self.valid_end]) };
-        let g = graphemes(valid).next()?;
+        let g = graphemes(self.run).next()?;
         let start = self.pos;
         self.pos += g.len();
+        self.run = &self.run[g.len()..];
         let width = self.mode.grapheme_width(g, self.eaw_wide) as u16;
         Some(Token::Text {
             text: &self.bytes[start..self.pos],
@@ -500,7 +565,7 @@ mod fast_path {
 mod scaling {
     use super::*;
 
-    /// Tokenizing one long line must cost time proportional to its length.
+    /// Tokenizing one long line must cost work proportional to its length.
     ///
     /// This is not a micro-optimisation guard, it is a complexity one. The
     /// tokenizer used to find the end of the current run of text - and
@@ -512,36 +577,47 @@ mod scaling {
     /// result) took 852 ms to wrap, which is a hundred dropped frames for
     /// one entry scrolling past.
     ///
-    /// Doubling the input must not much more than double the time. The bound
-    /// is generous - 2.8x against an ideal 2.0x - because this is timing on a
-    /// shared machine and the failure it guards against is 3.9x.
+    /// The work is counted rather than timed. A timing test here is a
+    /// benchmark wearing a test's clothes: on a machine running anything else
+    /// the linear code reads slower than the quadratic threshold it is meant
+    /// to catch, so it fails for reasons that have nothing to do with the
+    /// code. Byte visits are exact, identical on every machine, and are the
+    /// thing that actually went quadratic.
     #[test]
     fn tokenizing_one_long_line_is_linear_in_its_length() {
-        fn nanos(n: usize) -> u128 {
+        for n in [1_000usize, 4_000, 16_000, 64_000] {
             let line: String = std::iter::repeat_n('x', n).collect();
-            // Warm the allocator and the branch predictors, then take the
-            // best of three: a slow sample can only come from the machine,
-            // never from the code, so the minimum is the honest reading.
-            let mut best = u128::MAX;
-            for _ in 0..3 {
-                let started = std::time::Instant::now();
-                let width = string_width(line.as_bytes(), WidthMode::Grapheme, false);
-                let elapsed = started.elapsed().as_nanos();
-                assert_eq!(width, n, "the width is still the width");
-                best = best.min(elapsed);
-            }
-            best
+            let (scanned, validated) = instrument::measure(line.as_bytes());
+            assert_eq!(scanned, n, "the run is found once, in one pass");
+            assert_eq!(validated, n, "and validated once");
         }
+    }
 
-        // Big enough that the quadratic term dominates the constants, small
-        // enough that a red run is still quick.
-        let small = nanos(8_000);
-        let large = nanos(16_000);
-        let ratio = large as f64 / small.max(1) as f64;
-        assert!(
-            ratio < 2.8,
-            "tokenizing twice the line took {ratio:.2}x the time \
-             ({small} ns -> {large} ns): the cost is super-linear in line length"
-        );
+    /// The same bound with the UTF-8 broken.
+    ///
+    /// This is the case the first version of the run cache missed. It cached
+    /// one boundary for two questions - where the run ends, and how much of
+    /// it is valid UTF-8 - so a single malformed byte invalidated the run and
+    /// sent the *scan* back over the rest of the input, once per byte. The
+    /// tokens were right and the timing test above passed, because its input
+    /// is valid; only text that was one byte short of valid stayed quadratic.
+    #[test]
+    fn malformed_utf8_is_linear_too() {
+        for n in [1_000usize, 4_000, 16_000, 64_000] {
+            // `C2` opens a two-byte character that `41` cannot continue: a
+            // malformed byte every two bytes, all the way through.
+            let bytes: Vec<u8> = std::iter::repeat_n([0xc2u8, 0x41], n / 2)
+                .flatten()
+                .collect();
+            let (scanned, validated) = instrument::measure(&bytes);
+            assert!(
+                scanned <= 2 * n,
+                "scanning {n} malformed bytes visited {scanned} of them"
+            );
+            assert!(
+                validated <= 4 * n,
+                "validating {n} malformed bytes submitted {validated} bytes"
+            );
+        }
     }
 }
