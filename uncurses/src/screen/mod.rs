@@ -193,6 +193,10 @@ where
     /// [`observe_event`](Self::observe_event) knows the next
     /// [`CursorPosition`](Event::CursorPosition) reply is ours to capture.
     origin_query_pending: bool,
+    /// Set while [`drain_pending_queries`](Self::drain_pending_queries) is
+    /// folding events, so observing one cannot put a fresh query on the wire
+    /// behind the terminator the drain stops on.
+    draining: bool,
 }
 
 /// Desired default behaviors applied by [`Screen::init_with`].
@@ -434,12 +438,20 @@ where
         self.window_cells = Some(cells);
         if ws.xpixel > 0 && ws.ypixel > 0 {
             self.window_pixels = Some(Size::new(ws.xpixel, ws.ypixel));
-        } else if self.options.request_pixel_size_on_resize && !self.state.in_band_resize {
+        } else if !self.draining
+            && self.options.request_pixel_size_on_resize
+            && !self.state.in_band_resize
+        {
             self.request_window_pixel_size()?;
         }
         // A terminal-size change may move the inline origin; re-request it
-        // (the reply is captured in observe_event).
-        if size_changed {
+        // (the reply is captured in observe_event). Both requests are skipped
+        // while the teardown drain is folding events: it observes to collect
+        // capabilities, not to ask more questions, and anything written now
+        // would trail the terminator the drain stops on, so the reply would
+        // reach the shell. The event is handed back to the application, which
+        // observes it again with the session still up.
+        if size_changed && !self.draining {
             self.write_request_origin()?;
             self.flush()?;
         }
@@ -982,8 +994,21 @@ where
         self.out_buf.write_all(queries)?;
         self.out_buf
             .write_all(crate::ansi::ctrl::REQUEST_PRIMARY_DA)?;
+        self.flush_query_batch()
+    }
+
+    /// Flush a batch of queries just written to the staging buffer and start
+    /// its drain budget.
+    ///
+    /// The marker is armed before the flush, so a flush that fails part-way
+    /// through still leaves teardown draining the replies to whatever did
+    /// reach the terminal, and refreshed after it, so a slow or blocked write
+    /// does not spend the budget before the questions have been asked.
+    fn flush_query_batch(&mut self) -> io::Result<()> {
         self.queries_sent_at = Some(Instant::now());
-        self.flush()
+        self.flush()?;
+        self.queries_sent_at = Some(Instant::now());
+        Ok(())
     }
 
     /// Consume any still-pending replies to the capability queries
@@ -1006,12 +1031,16 @@ where
     /// typed during teardown survives a [`pause`](Self::pause), and so does a
     /// reply to an application's own query that happened to arrive in this
     /// window. Those events are therefore observed twice, once here and again
-    /// when the application feeds them back; every arm is idempotent.
+    /// when the application feeds them back. Observing here only records —
+    /// the arms that would answer an event with a query of their own are
+    /// suppressed for the duration, since anything written now would trail
+    /// the terminator and its reply would reach the shell.
     fn drain_pending_queries(&mut self) -> io::Result<()> {
         let Some(sent_at) = self.queries_sent_at else {
             return Ok(());
         };
         let budget = self.options.query_drain_timeout;
+        self.draining = true;
         // Held back rather than discarded, and re-queued in arrival order
         // once the drain is done. Re-queueing inside the loop would make
         // `try_read_event` hand the same event straight back.
@@ -1024,11 +1053,11 @@ where
                 break;
             }
             // Wait up to the remaining budget for input, then decode whatever
-            // arrived. Only the terminator is observed here; the rest is the
-            // application's to see, and it will feed them back through
-            // `observe_event` itself. A read error — EOF on a closed input,
-            // say — ends the drain rather than failing teardown, which still
-            // has a terminal to hand back.
+            // arrived. Every event is observed, but only the terminator is
+            // consumed; the rest is the application's to see, and it will
+            // feed them back through `observe_event` itself. A read error — EOF
+            // on a closed input, say — ends the drain rather than failing
+            // teardown, which still has a terminal to hand back.
             if !matches!(self.poll_event(Some(remaining)), Ok(true)) {
                 break;
             }
@@ -1075,6 +1104,7 @@ where
         // Whether the terminator arrived or the budget ran out, this batch is
         // no longer outstanding: a second drain must not wait again.
         self.queries_sent_at = None;
+        self.draining = false;
         for ev in deferred.into_iter().rev() {
             self.unread_event(ev);
         }
@@ -1551,8 +1581,7 @@ where
         }
 
         self.out_buf.write_all(REQUEST_PRIMARY_DA)?;
-        self.queries_sent_at = Some(Instant::now());
-        self.flush()
+        self.flush_query_batch()
     }
 }
 
@@ -1691,6 +1720,7 @@ where
             queries_sent_at: None,
             origin: Position::ORIGIN,
             origin_query_pending: false,
+            draining: false,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {

@@ -74,6 +74,7 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
             queries_sent_at: None,
             origin: Position::ORIGIN,
             origin_query_pending: false,
+            draining: false,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
@@ -2311,6 +2312,68 @@ fn drain_observes_capability_replies_before_the_terminator() {
     assert!(
         screen.defaults_applied,
         "the terminator still applies defaults"
+    );
+}
+
+/// Observing is not free: a resize with no pixel dimensions normally answers
+/// with an XTWINOPS query of its own. During the drain that query would be
+/// written *behind* the terminator the drain stops on, so its reply would land
+/// in the shell once cooked mode is restored — exactly the leak the drain
+/// exists to prevent. The event is still handed back, so the application asks
+/// once the session is up again.
+#[cfg(unix)]
+#[test]
+fn drain_observes_without_putting_new_queries_on_the_wire() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    writer.write_all(b"\x1b[48;9;40;0;0t").unwrap();
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    screen.options.request_pixel_size_on_resize = true;
+    // Both preconditions for the origin re-request: mouse on, tracking on.
+    screen.state.mouse = Some(MouseTracking::default());
+    assert!(screen.options.track_origin);
+    screen.queries_sent_at = Some(std::time::Instant::now());
+
+    screen.drain_pending_queries().unwrap();
+
+    let written = String::from_utf8_lossy(screen.writer()).into_owned();
+    assert!(
+        !written.contains("\x1b[14t"),
+        "drain must not emit a pixel-size query, wrote {written:?}"
+    );
+    assert!(
+        !written.contains("\x1b[6n"),
+        "drain must not emit an origin query, wrote {written:?}"
+    );
+}
+
+/// The drain budget is measured from when the queries reached the terminal,
+/// not from when they were staged: a slow flush must not spend it. The marker
+/// is armed before the flush all the same, so a partial write still drains.
+#[test]
+fn query_starts_the_drain_budget_after_the_flush() {
+    struct SlowWriter(std::time::Duration);
+    impl Write for SlowWriter {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            std::thread::sleep(self.0);
+            Ok(())
+        }
+    }
+
+    let delay = std::time::Duration::from_millis(20);
+    let mut screen = Screen::for_test(SlowWriter(delay), (20, 1));
+    screen.query(b"\x1b[?2048$p").unwrap();
+
+    let elapsed = screen.queries_sent_at.unwrap().elapsed();
+    assert!(
+        elapsed < delay,
+        "budget already {elapsed:?} old before a reply could arrive"
     );
 }
 
