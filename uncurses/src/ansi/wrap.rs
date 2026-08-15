@@ -306,27 +306,41 @@ pub fn wrap_mode(
     // avoids. On text whose words all fit, which is nearly all text, the
     // second pass now disappears entirely.
     let wrapped = wordwrap_mode(s, limit, breakpoints, mode, eaw_wide);
-    let too_wide = |line: &str| string_width(line.as_bytes(), mode, eaw_wide) > limit;
-    if !wrapped.split('\n').any(too_wide) {
-        return wrapped;
-    }
-    let mut out = String::with_capacity(wrapped.len());
-    for (i, line) in wrapped.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
+    // Each line is measured once. Measuring to decide whether any line is too
+    // wide and then measuring again to find which ones costs a second full
+    // width pass over text that is nearly always entirely within the limit;
+    // the output is allocated lazily instead, at the first line that is not.
+    let mut out: Option<String> = None;
+    let mut consumed = 0usize;
+    for line in wrapped.split('\n') {
+        let wide = string_width(line.as_bytes(), mode, eaw_wide) > limit;
+        match (&mut out, wide) {
+            // Still byte-for-byte `wrapped`; nothing to copy yet.
+            (None, false) => {}
+            (None, true) => {
+                let mut o = String::with_capacity(wrapped.len());
+                o.push_str(&wrapped[..consumed]);
+                o.push_str(&hardwrap_mode(line, limit, false, mode, eaw_wide));
+                out = Some(o);
+            }
+            (Some(o), _) => {
+                o.push('\n');
+                if wide {
+                    o.push_str(&hardwrap_mode(line, limit, false, mode, eaw_wide));
+                } else {
+                    // Copied rather than re-emitted. A line that fits comes
+                    // back from the hard wrap byte-identical in every case
+                    // that can occur here, with one exception: it re-encodes
+                    // a lone C1 control byte as the two-byte UTF-8 for that
+                    // code point. Passing the line through keeps the caller's
+                    // bytes, which is the more faithful of the two.
+                    o.push_str(line);
+                }
+            }
         }
-        if too_wide(line) {
-            out.push_str(&hardwrap_mode(line, limit, false, mode, eaw_wide));
-        } else {
-            // Copied rather than re-emitted. A line that fits comes back from
-            // the hard wrap byte-identical in every case that can occur here,
-            // with one exception: it re-encodes a lone C1 control byte as the
-            // two-byte UTF-8 for that code point. Passing the line through
-            // keeps the caller's bytes, which is the more faithful of the two.
-            out.push_str(line);
-        }
+        consumed += line.len() + 1;
     }
-    out
+    out.unwrap_or(wrapped)
 }
 
 #[cfg(test)]
