@@ -479,8 +479,8 @@ mod tests {
 mod fast_path {
     use super::*;
 
-    fn text_tokens(s: &str, mode: WidthMode) -> Vec<(String, u16)> {
-        tokenize(s.as_bytes(), mode, false)
+    fn text_tokens_eaw(s: &str, mode: WidthMode, eaw_wide: bool) -> Vec<(String, u16)> {
+        tokenize(s.as_bytes(), mode, eaw_wide)
             .filter_map(|t| match t {
                 Token::Text { text, width } => {
                     Some((String::from_utf8_lossy(text).into_owned(), width))
@@ -502,32 +502,96 @@ mod fast_path {
     #[test]
     fn the_ascii_shortcut_agrees_with_grapheme_segmentation() {
         for mode in [WidthMode::Wc, WidthMode::Grapheme] {
-            assert_eq!(
-                text_tokens("abc", mode),
-                vec![("a".into(), 1), ("b".into(), 1), ("c".into(), 1)],
-                "plain ASCII is one column per byte"
-            );
-            // A combining acute joins the `e` before it: one cluster, and the
-            // shortcut must not have claimed that `e` on its own.
-            assert_eq!(
-                text_tokens("e\u{301}f", mode),
-                vec![("e\u{301}".into(), 1), ("f".into(), 1)],
-                "a combining mark still joins the ASCII base before it"
-            );
-            assert_eq!(
-                text_tokens("a", mode),
-                vec![("a".into(), 1)],
-                "the last byte of the input takes the shortcut too"
-            );
+            for eaw_wide in [false, true] {
+                let toks = |s: &str| text_tokens_eaw(s, mode, eaw_wide);
+                assert_eq!(
+                    toks("abc"),
+                    vec![("a".into(), 1), ("b".into(), 1), ("c".into(), 1)],
+                    "plain ASCII is one column per byte"
+                );
+                // A combining acute joins the `e` before it: one cluster, and
+                // the shortcut must not have claimed that `e` on its own.
+                assert_eq!(
+                    toks("e\u{301}f"),
+                    vec![("e\u{301}".into(), 1), ("f".into(), 1)],
+                    "a combining mark still joins the ASCII base before it"
+                );
+                assert_eq!(
+                    toks("a"),
+                    vec![("a".into(), 1)],
+                    "the last byte of the input takes the shortcut too"
+                );
+                // A variation selector and a keycap sequence both extend an
+                // ASCII base from bytes at 0x80 and above.
+                assert_eq!(
+                    toks("1\u{fe0f}\u{20e3}z"),
+                    vec![("1\u{fe0f}\u{20e3}".into(), 1), ("z".into(), 1)],
+                    "a keycap keeps its ASCII digit"
+                );
+                // A zero-width joiner cannot follow ASCII in any real text,
+                // but it must not be able to strand one either.
+                assert_eq!(
+                    toks("a\u{200d}b"),
+                    vec![("a\u{200d}".into(), 1), ("b".into(), 1)],
+                    "a ZWJ joins the ASCII base before it"
+                );
+                // The shortcut never applies across a non-ASCII byte, so a
+                // wide character keeps its two columns and its neighbours
+                // keep one each.
+                assert_eq!(
+                    toks("a\u{4e00}b"),
+                    vec![("a".into(), 1), ("\u{4e00}".into(), 2), ("b".into(), 1)],
+                    "a wide character between two ASCII ones is still wide"
+                );
+            }
         }
-        // The shortcut never applies across a non-ASCII byte, so a wide
-        // character keeps its two columns and its neighbours keep one each.
+        // The ambiguous-width block is the only thing `eaw_wide` moves, and
+        // it must not move the ASCII on either side of it.
         assert_eq!(
-            text_tokens("a\u{4e00}b", WidthMode::Wc),
-            vec![("a".into(), 1), ("\u{4e00}".into(), 2), ("b".into(), 1)],
-            "a wide character between two ASCII ones is still wide"
+            text_tokens_eaw("a\u{2018}b", WidthMode::Wc, false),
+            vec![("a".into(), 1), ("\u{2018}".into(), 1), ("b".into(), 1)]
+        );
+        assert_eq!(
+            text_tokens_eaw("a\u{2018}b", WidthMode::Wc, true),
+            vec![("a".into(), 1), ("\u{2018}".into(), 2), ("b".into(), 1)]
         );
     }
+
+    /// Every byte the fast path can see is printable ASCII.
+    ///
+    /// The shortcut answers "one column" for any byte below 0x80, which would
+    /// be wrong for the C0 controls and DEL - they are zero columns, not one.
+    /// It is correct because it never sees them: they are taken by the
+    /// control branch above it. This pins that ordering, which is the only
+    /// thing keeping the shortcut honest.
+    #[test]
+    fn controls_never_reach_the_ascii_shortcut() {
+        for b in 0u8..=0x7f {
+            let input = [b];
+            let toks: Vec<_> = tokenize(&input, WidthMode::Wc, false).collect();
+            match toks.as_slice() {
+                [Token::Text { text, width }] => {
+                    assert!(
+                        (0x20..=0x7e).contains(&b),
+                        "0x{b:02x} was emitted as text, but only printable ASCII may be"
+                    );
+                    assert_eq!(*text, &input[..]);
+                    assert_eq!(*width, 1);
+                }
+                [Token::Control(c)] => {
+                    assert_eq!(*c, b);
+                    assert!(
+                        b < 0x20 || b == 0x7f,
+                        "0x{b:02x} is printable but was emitted as a control"
+                    );
+                }
+                // A bare ESC opens a sequence with nothing in it.
+                [Token::Escape(seq)] => assert_eq!(*seq, b"\x1b"),
+                other => panic!("0x{b:02x} produced {other:?}"),
+            }
+        }
+    }
+
     /// An OSC payload may contain any UTF-8, and `0x9C` appears inside a great
     /// many characters as a continuation byte. Terminating the string there
     /// cut those characters in half, which left the trailing bytes of one
