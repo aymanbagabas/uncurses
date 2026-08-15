@@ -2381,6 +2381,35 @@ fn drain_observes_without_putting_new_queries_on_the_wire() {
     );
 }
 
+/// The terminator does not only end the drain, it applies the defaults, and
+/// [`ScreenOptions::mouse`] makes one of those defaults `enable_mouse`, which
+/// asks for the inline origin (`CSI 6n`). That request would be written behind
+/// the terminator the drain stops on, so its reply lands in the shell — the
+/// same leak as the resize path, reached through the arm that ends the drain.
+#[cfg(unix)]
+#[test]
+fn drain_does_not_ask_for_the_origin_when_defaults_turn_the_mouse_on() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    // The mouse is off until the terminator turns it on, which is the point:
+    // `write_request_origin` is a no-op until `enable_mouse` has run.
+    screen.options.mouse = Some(MouseTracking::default());
+    assert!(screen.options.track_origin);
+    screen.queries_sent_at = Some(std::time::Instant::now());
+
+    screen.drain_pending_queries().unwrap();
+
+    let written = String::from_utf8_lossy(screen.writer()).into_owned();
+    assert!(
+        !written.contains("\x1b[6n"),
+        "drain must not emit an origin query, wrote {written:?}"
+    );
+}
+
 /// The drain budget is measured from when the queries reached the terminal,
 /// not from when they were staged: a slow flush must not spend it. The marker
 /// is armed before the flush all the same, so a partial write still drains.

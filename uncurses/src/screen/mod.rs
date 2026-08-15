@@ -449,8 +449,11 @@ where
         // while the teardown drain is folding events: it observes to collect
         // capabilities, not to ask more questions, and anything written now
         // would trail the terminator the drain stops on, so the reply would
-        // reach the shell. The event is handed back to the application, which
-        // observes it again with the session still up.
+        // reach the shell. `write_request_origin` declines on its own account
+        // as well, since the drain also reaches it through the terminator; the
+        // check here is what holds back the flush with it. The event is handed
+        // back to the application, which observes it again with the session
+        // still up.
         if size_changed && !self.draining {
             self.write_request_origin()?;
             self.flush()?;
@@ -1229,7 +1232,18 @@ where
     /// whether anything was staged: `false` (a no-op) in the alternate
     /// screen, when tracking is off, or when the mouse is off.
     fn write_request_origin(&mut self) -> io::Result<bool> {
-        if self.state.alt_screen || !self.options.track_origin || self.state.mouse.is_none() {
+        // Nothing is asked while the teardown drain is folding events: it
+        // observes to collect capabilities, not to ask more questions, and
+        // anything written now would trail the terminator the drain stops on,
+        // so the reply would reach the shell. Checked here rather than at the
+        // call sites because one of them is reached *by* the terminator -
+        // applying the defaults turns the mouse on, and turning the mouse on
+        // asks where the origin is.
+        if self.draining
+            || self.state.alt_screen
+            || !self.options.track_origin
+            || self.state.mouse.is_none()
+        {
             return Ok(false);
         }
         // Park the cursor at the surface top-left; in relative-cursor inline
