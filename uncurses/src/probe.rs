@@ -61,7 +61,7 @@
 //! # }
 //! ```
 //!
-//! Write a [`observe_event`](Probe::observe_event) arm by hand only for
+//! Write an [`observe_event`](Probe::observe_event) arm by hand only for
 //! sequences this crate does not decode; those arrive as
 //! [`UnknownCsi`](Event::UnknownCsi), [`UnknownOsc`](Event::UnknownOsc) and
 //! friends, carrying their raw bytes.
