@@ -305,12 +305,15 @@ fn scan_sequence(bytes: &[u8], start: usize) -> usize {
             }
             match bytes[i] {
                 b'[' => scan_csi(bytes, i + 1),
-                b']' | b'P' | b'X' | b'^' | b'_' => scan_string(bytes, i + 1),
+                // The `true` is "BEL ends this": OSC only.
+                b']' => scan_string(bytes, i + 1, true),
+                b'P' | b'X' | b'^' | b'_' => scan_string(bytes, i + 1, false),
                 _ => scan_esc_intermediate(bytes, i),
             }
         }
         0x9b => scan_csi(bytes, start + 1),
-        0x9d | 0x90 | 0x98 | 0x9e | 0x9f => scan_string(bytes, start + 1),
+        0x9d => scan_string(bytes, start + 1, true),
+        0x90 | 0x98 | 0x9e | 0x9f => scan_string(bytes, start + 1, false),
         _ => start + 1,
     }
 }
@@ -327,22 +330,20 @@ fn scan_csi(bytes: &[u8], from: usize) -> usize {
     len
 }
 
-/// Scan a control string to its terminator.
+/// Scan a control string to its terminator, which is ST - and also `BEL` if
+/// `bel_ends`, that being an xterm convention for OSC and no other string.
 ///
-/// Terminators are tested only at a character boundary, never inside one. A
-/// byte in `0x80..=0x9F` means one thing when the decoder is between
-/// characters - an 8-bit C1 control - and another when it is part way through
-/// collecting one, where it is just a continuation byte. `0x9C` is both 8-bit
-/// ST and a continuation byte of every code point in U+2700..U+273F, so
-/// "✅", "✔" and "✨" all carry one, and a scan that does not know which
-/// state it is in ends the sequence in the middle of a character.
-fn scan_string(bytes: &[u8], from: usize) -> usize {
+/// Terminators are only ever tested at a character boundary. `0x9C` is 8-bit
+/// ST between characters and a continuation byte inside one, and every code
+/// point in U+2700..U+273F carries one, so a scan that does not know which it
+/// is looking at ends the sequence in the middle of "✅".
+fn scan_string(bytes: &[u8], from: usize, bel_ends: bool) -> usize {
     let len = bytes.len();
     let mut i = from;
     while i < len {
         let b = bytes[i];
         // At a boundary, so this is C1 ST and not a continuation byte.
-        if b == 0x07 || b == 0x9c {
+        if b == 0x9c || (b == 0x07 && bel_ends) {
             return i + 1;
         }
         if b == 0x1b && i + 1 < len && bytes[i + 1] == b'\\' {
@@ -530,6 +531,8 @@ mod sequences {
     ];
 
     /// Every way a string sequence may end.
+    ///
+    /// `BEL` is in here for OSC only; the loop skips it elsewhere.
     const TERMINATORS: &[(&str, &[u8])] = &[
         ("BEL", b"\x07"),
         ("ESC backslash", b"\x1b\\"),
@@ -557,6 +560,9 @@ mod sequences {
         for (name, seven, eight) in STRINGS {
             for (pname, payload) in PAYLOADS {
                 for (tname, term) in TERMINATORS {
+                    if *term == b"\x07" && *name != "OSC" {
+                        continue;
+                    }
                     for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
                         let mut input = intro;
                         input.extend_from_slice(payload.as_bytes());
@@ -788,6 +794,56 @@ mod sequences {
         // continuation byte, so the title survives whole.
         let toks = tokens("\u{1b}]0;\u{2705}\u{7}Z".as_bytes());
         assert_eq!(toks[0], Token::Escape("\u{1b}]0;\u{2705}\u{7}".as_bytes()));
+    }
+
+    /// `BEL` ends an OSC and only an OSC.
+    ///
+    /// `OSC Ps ; Pt BEL` is an xterm convention, and the common way to write
+    /// one, but it is not a rule about control strings in general - ECMA-48
+    /// gives them all a single terminator, ST. A `0x07` inside a DCS, SOS, PM
+    /// or APC is payload, and ending the sequence there would spill the rest
+    /// of that payload onto the screen as visible text.
+    #[test]
+    fn bel_ends_an_osc_and_nothing_else() {
+        for (name, seven, eight) in STRINGS {
+            for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+                let mut input = intro;
+                input.extend_from_slice(b"pay\x07load");
+                let bel_at = input.len() - b"load".len();
+                input.extend_from_slice(b"\x9cZ");
+
+                let toks = tokens(&input);
+                let what = format!("{name} {form}");
+                if *name == "OSC" {
+                    assert_eq!(
+                        toks[0],
+                        Token::Escape(&input[..bel_at]),
+                        "{what}: BEL should have ended it"
+                    );
+                    // What followed the BEL is now visible text.
+                    assert!(
+                        toks.iter()
+                            .any(|t| matches!(t, Token::Text { text: b"l", .. })),
+                        "{what}: text after the BEL went missing"
+                    );
+                } else {
+                    assert_eq!(
+                        toks[0],
+                        Token::Escape(&input[..input.len() - 1]),
+                        "{what}: BEL is payload, so it should have run to the ST"
+                    );
+                    assert_eq!(
+                        toks[1],
+                        Token::Text {
+                            text: b"Z",
+                            width: 1
+                        },
+                        "{what}"
+                    );
+                    assert_eq!(string_width(&input, WidthMode::Grapheme, false), 1);
+                }
+            }
+        }
     }
 
     /// The rule, over every C1 byte rather than the two that caused trouble.
