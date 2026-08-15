@@ -49,10 +49,29 @@ pub(crate) mod instrument {
 
     /// Tokenize `bytes` fully and return (bytes visited by the run scan, bytes
     /// submitted to UTF-8 validation).
+    ///
+    /// The tokens are checked, not discarded. This runs the byte shapes most
+    /// likely to desynchronise the run cache, so measuring their cost while
+    /// ignoring what they produced would miss a wrong answer that happens to
+    /// be cheap.
     pub(crate) fn measure(bytes: &[u8]) -> (usize, usize) {
         SCANNED.with(|c| c.set(0));
         VALIDATED.with(|c| c.set(0));
-        for _ in super::tokenize(bytes, super::WidthMode::Wc, false) {}
+        let mut rebuilt = Vec::with_capacity(bytes.len());
+        for t in super::tokenize(bytes, super::WidthMode::Wc, false) {
+            match t {
+                super::Token::Text { text, .. } => {
+                    assert!(
+                        std::str::from_utf8(text).is_ok(),
+                        "text token split a character: {text:x?}"
+                    );
+                    rebuilt.extend_from_slice(text);
+                }
+                super::Token::Escape(b) => rebuilt.extend_from_slice(b),
+                super::Token::Control(c) => rebuilt.push(c),
+            }
+        }
+        assert_eq!(rebuilt, bytes, "tokens did not reassemble the input");
         (SCANNED.with(|c| c.get()), VALIDATED.with(|c| c.get()))
     }
 }
@@ -167,35 +186,19 @@ impl<'a> Iterator for Tokenizer<'a> {
                 if bb == 0x1b || bb < 0x20 || bb == 0x7f || (0x80..=0x9f).contains(&bb) {
                     break;
                 }
-                let n = utf8_char_len(bb);
-                if n == 0 || end + n > self.bytes.len() {
-                    break;
+                match utf8_char_at(self.bytes, end) {
+                    Some(n) => end += n,
+                    None => break,
                 }
-                end += n;
             }
             #[cfg(test)]
             instrument::scanned(end.max(self.pos + 1) - self.pos);
             self.scan_end = end;
-            self.run = "";
-        }
-        if self.run.is_empty() && self.pos < self.scan_end {
-            let slice = &self.bytes[self.pos..self.scan_end];
-            self.run = match std::str::from_utf8(slice) {
-                Ok(s) => {
-                    #[cfg(test)]
-                    instrument::validated(slice.len());
-                    s
-                }
-                // The prefix before the first bad byte is valid UTF-8 by
-                // definition, so this second call cannot fail. Validation
-                // stops at that byte, so both calls together are work
-                // proportional to the prefix, not to the rest of the input.
-                Err(e) => {
-                    #[cfg(test)]
-                    instrument::validated(2 * e.valid_up_to() + 1);
-                    std::str::from_utf8(&slice[..e.valid_up_to()]).unwrap_or("")
-                }
-            };
+            // Valid by construction: the scan stopped at the first byte that
+            // does not begin a well-formed character, so this cannot fail.
+            #[cfg(test)]
+            instrument::validated(end - self.pos);
+            self.run = std::str::from_utf8(&self.bytes[self.pos..end]).unwrap_or("");
         }
         if self.run.is_empty() {
             // Nothing plain starts here, or what does is not valid UTF-8.
@@ -243,6 +246,28 @@ impl<'a> Iterator for Tokenizer<'a> {
             width,
         })
     }
+}
+
+/// The length of the well-formed UTF-8 character starting at `i`, if there is
+/// one.
+///
+/// A lead byte announces how many bytes follow it, and nothing else in this
+/// file may take that announcement on trust. Bytes that do not follow are the
+/// whole problem: a lead byte with the wrong continuations makes a naive walk
+/// step *over* whatever comes next, which is how a scan can pass a terminator
+/// it should have stopped at, and how the tokenizer's two boundaries came to
+/// disagree about where a character starts.
+fn utf8_char_at(bytes: &[u8], i: usize) -> Option<usize> {
+    let n = utf8_char_len(bytes[i]);
+    if n == 0 || i + n > bytes.len() {
+        return None;
+    }
+    // A one-byte character is ASCII, and `utf8_char_len` already established
+    // that; anything longer has to prove its continuations.
+    if n > 1 && std::str::from_utf8(&bytes[i..i + n]).is_err() {
+        return None;
+    }
+    Some(n)
 }
 
 #[inline]
@@ -310,6 +335,13 @@ fn scan_string(bytes: &[u8], from: usize) -> usize {
         if b == 0x07 || b == 0x9c {
             return i + 1;
         }
+        // `U+009C` is 8-bit ST as well, and its two-byte UTF-8 form is the
+        // only way one can appear in a `&str` - a raw `0x9C` byte cannot.
+        // Callers building sequences in Rust source write it as `"\u{9c}"`,
+        // and reading that as ordinary text swallows the rest of the string.
+        if b == 0xc2 && bytes.get(i + 1) == Some(&0x9c) {
+            return i + 2;
+        }
         if b == 0x1b && i + 1 < len && bytes[i + 1] == b'\\' {
             return i + 2;
         }
@@ -323,10 +355,14 @@ fn scan_string(bytes: &[u8], from: usize) -> usize {
         // terminator in the middle of a character: every code point in
         // U+2700..U+273F - "✅", "✔", "✨" - ends an OSC title early and
         // leaves its trailing bytes orphaned outside the sequence. As a lead
-        // byte 0x9C is never valid, so a 0x9C at a character boundary is
+        // byte 0x9C is never valid, so a 0x9C on a character boundary is
         // still unambiguously ST.
-        let n = utf8_char_len(b);
-        i += if n == 0 { 1 } else { n.min(len - i) };
+        //
+        // Only a *well-formed* character is stepped whole. Trusting a lead
+        // byte whose continuations do not match would step over whatever
+        // followed it, terminators included, so a single malformed byte in a
+        // payload would swallow the BEL that ends it and all the text after.
+        i += utf8_char_at(bytes, i).unwrap_or(1);
     }
     len
 }
@@ -341,7 +377,7 @@ fn scan_esc_intermediate(bytes: &[u8], at: usize) -> usize {
         // The final byte, or the whole character it leads - splitting one
         // strands continuation bytes that the next token reads as C1
         // controls.
-        i + utf8_char_len(bytes[i]).max(1).min(len - i)
+        i + utf8_char_at(bytes, i).unwrap_or(1)
     } else {
         len
     }
@@ -479,12 +515,29 @@ mod tests {
 mod fast_path {
     use super::*;
 
+    /// The visible text of `s`, which is what a caller loses when a sequence
+    /// runs past its terminator.
+    fn strip_for_test(s: &str) -> String {
+        tokenize(s.as_bytes(), WidthMode::Wc, false)
+            .filter_map(|t| match t {
+                Token::Text { text, .. } => Some(String::from_utf8_lossy(text).into_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn text_tokens_eaw(s: &str, mode: WidthMode, eaw_wide: bool) -> Vec<(String, u16)> {
         tokenize(s.as_bytes(), mode, eaw_wide)
             .filter_map(|t| match t {
-                Token::Text { text, width } => {
-                    Some((String::from_utf8_lossy(text).into_owned(), width))
-                }
+                // Not lossy: a token that is not valid UTF-8 is a bug, and
+                // rendering it as U+FFFD hides exactly the failure these
+                // tests exist to catch.
+                Token::Text { text, width } => Some((
+                    std::str::from_utf8(text)
+                        .expect("a text token is whole UTF-8")
+                        .to_owned(),
+                    width,
+                )),
                 _ => None,
             })
             .collect()
@@ -599,6 +652,43 @@ mod fast_path {
     /// treated a token it had been told was text as UTF-8.
     #[test]
     fn a_continuation_byte_does_not_terminate_a_string_sequence() {
+        // Every scanner that steps through a payload, not just the OSC one.
+        // `scan_esc_intermediate` has the same bug and the same fix, and a
+        // test that only builds OSC titles leaves half of it uncovered.
+        const PREFIXES: &[&str] = &[
+            "\u{1b}]0;",
+            "\u{1b}P",
+            "\u{1b}_",
+            "\u{1b}^",
+            "\u{1b}X",
+            "\u{1b}",
+            "\u{1b} ",
+            "\u{1b}#",
+        ];
+        for c in [
+            '\u{2705}',
+            '\u{2714}',
+            '\u{2728}',
+            '\u{171c}',
+            '\u{4e00}',
+            '\u{1f600}',
+        ] {
+            for prefix in PREFIXES {
+                let input = format!("{prefix}{c}\u{7}after");
+                for t in tokenize(input.as_bytes(), WidthMode::Wc, false) {
+                    let bytes = match t {
+                        Token::Text { text, .. } | Token::Escape(text) => text,
+                        Token::Control(_) => continue,
+                    };
+                    assert!(
+                        std::str::from_utf8(bytes).is_ok(),
+                        "{input:?} produced a token split mid-character: {bytes:x?}"
+                    );
+                }
+            }
+        }
+        // The OSC case in full: the sequence stays whole and the text after it
+        // survives.
         for c in ['\u{2705}', '\u{2714}', '\u{2728}', '\u{171c}'] {
             let input = format!("\x1b]0;Build {c}\x07after");
             let toks: Vec<_> = tokenize(input.as_bytes(), WidthMode::Wc, false).collect();
@@ -619,9 +709,160 @@ mod fast_path {
                 .collect();
             assert_eq!(text, "after");
         }
+        // A bare ESC takes the whole character after it, not its lead byte.
+        let toks: Vec<_> = tokenize("\u{1b}\u{2705}x".as_bytes(), WidthMode::Wc, false).collect();
+        assert_eq!(toks[0], Token::Escape("\u{1b}\u{2705}".as_bytes()));
         // A `0x9C` on a character boundary is still an 8-bit ST.
         let toks: Vec<_> = tokenize(b"\x1b]0;t\x9cx", WidthMode::Wc, false).collect();
         assert!(matches!(toks[0], Token::Escape(b"\x1b]0;t\x9c")));
+    }
+
+    /// `U+009C` is 8-bit ST, and in a `&str` its two-byte UTF-8 form is the
+    /// only form it can take - a raw `0x9C` byte is not valid UTF-8. Reading
+    /// it as ordinary text swallows the terminator and every visible
+    /// character after it.
+    #[test]
+    fn the_utf8_form_of_8_bit_st_terminates_a_string_sequence() {
+        for s in [
+            "\u{1b}]0;title\u{9c}visible text",
+            "\u{1b}Pq#0;2\u{9c}visible text",
+            "\u{1b}_payload\u{9c}visible text",
+        ] {
+            assert_eq!(strip_for_test(s), "visible text", "input {s:?}");
+        }
+        // The same byte pair inside a longer character is not a terminator:
+        // "\u{2705}" is E2 9C 85 and has no C2 lead.
+        assert_eq!(
+            strip_for_test("\u{1b}]0;\u{2705}\u{7}visible text"),
+            "visible text"
+        );
+    }
+
+    /// A malformed byte in a payload must not eat the terminator.
+    ///
+    /// Stepping a whole character on the strength of a lead byte alone steps
+    /// over whatever actually follows it. A stray high byte then swallowed
+    /// the BEL or `ESC \` that ends the sequence, and with it every visible
+    /// character after - and could consume a following legitimate CSI whole.
+    #[test]
+    fn a_malformed_byte_does_not_swallow_a_terminator() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"\x1b]0;\xe0\x07Zz", b"\x1b]0;\xe0\x07"),
+            (b"\x1b]0;\xf0\x1b\\Zz", b"\x1b]0;\xf0\x1b\\"),
+            (b"\x1b]0;\xe0\x9cZz", b"\x1b]0;\xe0\x9c"),
+            (b"\x1b_G\xf0\x9f\x1b\\Zz", b"\x1b_G\xf0\x9f\x1b\\"),
+            (b"\x1b]0;\xc2\x07visible", b"\x1b]0;\xc2\x07"),
+        ];
+        for (input, escape) in cases {
+            let toks: Vec<_> = tokenize(input, WidthMode::Wc, false).collect();
+            assert_eq!(
+                toks.first(),
+                Some(&Token::Escape(escape)),
+                "input {input:x?} did not stop at its terminator"
+            );
+            let visible: Vec<u8> = toks
+                .iter()
+                .filter_map(|t| match t {
+                    Token::Text { text, .. } => Some(*text),
+                    _ => None,
+                })
+                .flatten()
+                .copied()
+                .collect();
+            assert!(!visible.is_empty(), "input {input:x?} lost all its text");
+        }
+        // A bare ESC must not consume the CSI that follows a malformed byte.
+        let toks: Vec<_> = tokenize(b"\x1b\xe0\x1b[31mZ", WidthMode::Wc, false).collect();
+        assert_eq!(toks[0], Token::Escape(b"\x1b\xe0"));
+        assert_eq!(toks[1], Token::Escape(b"\x1b[31m"));
+    }
+
+    /// Arbitrary bytes must not panic, and must not produce a token that
+    /// splits a character.
+    ///
+    /// `tokenize` and `string_width` take `&[u8]`, so this is reachable from
+    /// the public API by anyone reading a PTY. The run cache holds a byte
+    /// offset and a validated `&str` and they have to agree about where a
+    /// character starts; when the scan trusted a lead byte its continuations
+    /// did not match, they disagreed, and slicing the run panicked.
+    #[test]
+    fn arbitrary_bytes_never_panic_or_split_a_character() {
+        // The token stream is pinned, not just checked for well-formedness.
+        // The desync had a quieter failure mode than the panic: a run cache
+        // that disagrees with itself demotes perfectly good characters to
+        // `Control` bytes, which round-trips and splits nothing while losing
+        // every character after the first bad byte. These are the merge-base
+        // streams, byte for byte.
+        let pinned: &[(&[u8], &str)] = &[
+            (
+                b"\xe0\x20\x0d\xef\xb8\x8f",
+                "Ce0 T[20]w1 C0d T[ef, b8, 8f]w0",
+            ),
+            (
+                b"\xf0\x30\x0d\x5b\xe2\x9c\x85\x30",
+                "Cf0 T[30]w1 C0d T[5b]w1 T[e2, 9c, 85]w2 T[30]w1",
+            ),
+            (
+                b"\xe0\x41\x1b\x41\xc3\xa9",
+                "Ce0 T[41]w1 E[1b, 41] T[c3, a9]w1",
+            ),
+            (b"\xcf\xc8\x9c", "Ccf T[c8, 9c]w1"),
+            (
+                b"\xe3\x61\x0a\xc4\x81\xc4\x81\x78",
+                "Ce3 T[61]w1 C0a T[c4, 81]w1 T[c4, 81]w1 T[78]w1",
+            ),
+        ];
+        for (seed, expected) in pinned {
+            let rendered: Vec<String> = tokenize(seed, WidthMode::Grapheme, false)
+                .map(|t| match t {
+                    Token::Text { text, width } => format!("T{text:x?}w{width}"),
+                    Token::Escape(b) => format!("E{b:x?}"),
+                    Token::Control(c) => format!("C{c:02x}"),
+                })
+                .collect();
+            assert_eq!(rendered.join(" "), *expected, "input {seed:x?}");
+            string_width(seed, WidthMode::Grapheme, false);
+            string_width(seed, WidthMode::Wc, false);
+        }
+
+        // A cheap xorshift beats no fuzzing at all; the seeds above are the
+        // cases it found, kept so a failure names itself.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut buf = [0u8; 24];
+        for _ in 0..200_000 {
+            let len = {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state % 24) as usize
+            };
+            for b in buf.iter_mut().take(len) {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                // Weighted towards the bytes that break things: lead bytes,
+                // continuations, introducers, controls.
+                *b =
+                    match state % 4 {
+                        0 => (state >> 8) as u8,
+                        1 => [0x1b, 0x9b, 0x9d, 0x90, 0x98, 0x9e, 0x9f, 0x07]
+                            [(state >> 8) as usize % 8],
+                        2 => [0xc2, 0xe0, 0xe2, 0xf0, 0xf4, 0xff, 0x9c, 0x80]
+                            [(state >> 8) as usize % 8],
+                        _ => b"abc \n\r\\;0"[(state >> 8) as usize % 9],
+                    };
+            }
+            let input = &buf[..len];
+            for t in tokenize(input, WidthMode::Grapheme, false) {
+                if let Token::Text { text, .. } = t {
+                    assert!(
+                        std::str::from_utf8(text).is_ok(),
+                        "{input:x?} produced a split character {text:x?}"
+                    );
+                }
+            }
+            string_width(input, WidthMode::Grapheme, false);
+        }
     }
 }
 
