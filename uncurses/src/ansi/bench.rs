@@ -174,6 +174,7 @@ fn width_emoji_250k(b: &mut Bencher) {
 /// like: short runs, but not degenerate ones.
 #[bench]
 fn width_styled_250k(b: &mut Bencher) {
-    let s: String = std::iter::repeat_n("\x1b[31mword\x1b[0m ", BIG / 15).collect();
+    const UNIT: &str = "\x1b[31mword\x1b[0m ";
+    let s: String = std::iter::repeat_n(UNIT, BIG / UNIT.len()).collect();
     b.iter(|| black_box(string_width(black_box(s.as_bytes()), WidthMode::Wc, false)));
 }
