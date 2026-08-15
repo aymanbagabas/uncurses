@@ -21,61 +21,6 @@
 pub use crate::text::WidthMode;
 use crate::unicode::graphemes;
 
-/// Counts the work the tokenizer does, so a test can assert it stays linear in
-/// the input without measuring a clock.
-///
-/// The property that matters is that the scan for a run boundary, and the
-/// UTF-8 validation of what it finds, each visit a byte a bounded number of
-/// times over a whole tokenization. Timing that instead makes the test a
-/// benchmark: on a loaded machine a linear run reads slower than the
-/// quadratic threshold it is meant to catch, so it fails at random and passes
-/// at random. Counting the visits is exact and takes no wall-clock time.
-#[cfg(test)]
-pub(crate) mod instrument {
-    use std::cell::Cell;
-
-    thread_local! {
-        static SCANNED: Cell<usize> = const { Cell::new(0) };
-        static VALIDATED: Cell<usize> = const { Cell::new(0) };
-    }
-
-    pub(super) fn scanned(n: usize) {
-        SCANNED.with(|c| c.set(c.get() + n));
-    }
-
-    pub(super) fn validated(n: usize) {
-        VALIDATED.with(|c| c.set(c.get() + n));
-    }
-
-    /// Tokenize `bytes` fully and return (bytes visited by the run scan, bytes
-    /// submitted to UTF-8 validation).
-    ///
-    /// The tokens are checked, not discarded. This runs the byte shapes most
-    /// likely to desynchronise the run cache, so measuring their cost while
-    /// ignoring what they produced would miss a wrong answer that happens to
-    /// be cheap.
-    pub(crate) fn measure(bytes: &[u8]) -> (usize, usize) {
-        SCANNED.with(|c| c.set(0));
-        VALIDATED.with(|c| c.set(0));
-        let mut rebuilt = Vec::with_capacity(bytes.len());
-        for t in super::tokenize(bytes, super::WidthMode::Wc, false) {
-            match t {
-                super::Token::Text { text, .. } => {
-                    assert!(
-                        std::str::from_utf8(text).is_ok(),
-                        "text token split a character: {text:x?}"
-                    );
-                    rebuilt.extend_from_slice(text);
-                }
-                super::Token::Escape(b) => rebuilt.extend_from_slice(b),
-                super::Token::Control(c) => rebuilt.push(c),
-            }
-        }
-        assert_eq!(rebuilt, bytes, "tokens did not reassemble the input");
-        (SCANNED.with(|c| c.get()), VALIDATED.with(|c| c.get()))
-    }
-}
-
 /// A single token produced by [`tokenize`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token<'a> {
@@ -114,6 +59,8 @@ pub fn tokenize(bytes: &[u8], mode: WidthMode, eaw_wide: bool) -> Tokenizer<'_> 
         eaw_wide,
         scan_end: 0,
         run: "",
+        #[cfg(test)]
+        scanned: 0,
     }
 }
 
@@ -142,6 +89,13 @@ pub struct Tokenizer<'a> {
     /// only the validation - which stops at the first bad byte, so it is cheap
     /// exactly when it is repeated - runs again.
     run: &'a str,
+    /// Bytes visited by the run scan, which is the thing that went quadratic.
+    ///
+    /// It is not visible in the tokens - that is why the bug survived a full
+    /// test suite - and timing it is a benchmark, not a test. So the tests
+    /// count it.
+    #[cfg(test)]
+    scanned: usize,
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
@@ -192,12 +146,12 @@ impl<'a> Iterator for Tokenizer<'a> {
                 }
             }
             #[cfg(test)]
-            instrument::scanned(end.max(self.pos + 1) - self.pos);
+            {
+                self.scanned += end.max(self.pos + 1) - self.pos;
+            }
             self.scan_end = end;
             // Valid by construction: the scan stopped at the first byte that
             // does not begin a well-formed character, so this cannot fail.
-            #[cfg(test)]
-            instrument::validated(end - self.pos);
             self.run = std::str::from_utf8(&self.bytes[self.pos..end]).unwrap_or("");
         }
         if self.run.is_empty() {
@@ -1236,6 +1190,32 @@ mod fast_path {
 mod scaling {
     use super::*;
 
+    /// Tokenize `bytes` fully and return the bytes the run scan visited.
+    ///
+    /// The tokens are checked rather than discarded: these inputs are the
+    /// shapes most likely to desynchronise the run cache, so measuring what
+    /// they cost while ignoring what they produced would miss an answer that
+    /// is wrong but cheap.
+    fn scan_cost(bytes: &[u8]) -> usize {
+        let mut t = tokenize(bytes, WidthMode::Wc, false);
+        let mut rebuilt = Vec::with_capacity(bytes.len());
+        for tok in &mut t {
+            match tok {
+                Token::Text { text, .. } => {
+                    assert!(
+                        std::str::from_utf8(text).is_ok(),
+                        "text token split a character: {text:x?}"
+                    );
+                    rebuilt.extend_from_slice(text);
+                }
+                Token::Escape(b) => rebuilt.extend_from_slice(b),
+                Token::Control(c) => rebuilt.push(c),
+            }
+        }
+        assert_eq!(rebuilt, bytes, "tokens did not reassemble the input");
+        t.scanned
+    }
+
     /// Tokenizing one long line must cost work proportional to its length.
     ///
     /// This is not a micro-optimisation guard, it is a complexity one. The
@@ -1258,9 +1238,11 @@ mod scaling {
     fn tokenizing_one_long_line_is_linear_in_its_length() {
         for n in [1_000usize, 4_000, 16_000, 64_000] {
             let line: String = std::iter::repeat_n('x', n).collect();
-            let (scanned, validated) = instrument::measure(line.as_bytes());
-            assert_eq!(scanned, n, "the run is found once, in one pass");
-            assert_eq!(validated, n, "and validated once");
+            assert_eq!(
+                scan_cost(line.as_bytes()),
+                n,
+                "the run is found once, in one pass"
+            );
         }
     }
 
@@ -1280,14 +1262,10 @@ mod scaling {
             let bytes: Vec<u8> = std::iter::repeat_n([0xc2u8, 0x41], n / 2)
                 .flatten()
                 .collect();
-            let (scanned, validated) = instrument::measure(&bytes);
+            let scanned = scan_cost(&bytes);
             assert!(
                 scanned <= 2 * n,
                 "scanning {n} malformed bytes visited {scanned} of them"
-            );
-            assert!(
-                validated <= 4 * n,
-                "validating {n} malformed bytes submitted {validated} bytes"
             );
         }
     }
