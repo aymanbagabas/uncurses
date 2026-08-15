@@ -120,9 +120,14 @@ pub fn wordwrap_mode(
             _ => wide_bp.push(c),
         }
     }
+    // The ASCII half was an index and the non-ASCII half was still a scan,
+    // which put the same constant back for anyone whose breakpoints are not
+    // ASCII: wrapping n characters on n breakpoints measured an exponent of
+    // 1.895. Sorting once buys a binary search and needs no new type.
+    wide_bp.sort_unstable();
     let is_bp = |c: char| match u32::from(c) {
         n if n < 128 => ascii_bp[n as usize],
-        _ => wide_bp.contains(&c),
+        _ => wide_bp.binary_search(&c).is_ok(),
     };
 
     // We build the output as: completed lines + current line state.
@@ -389,6 +394,23 @@ mod tests {
     fn wordwrap_with_hyphen_break() {
         let got = wordwrap("foo-bar-baz", 4, DEFAULT_BREAKPOINTS);
         assert_eq!(got, "foo-\nbar-\nbaz");
+    }
+
+    /// Non-ASCII breakpoints are looked up in a sorted list, so they only
+    /// work if that list is actually sorted.
+    #[test]
+    fn wordwrap_breaks_on_non_ascii_breakpoints() {
+        // Deliberately unsorted, and with a decoy that is not in the input.
+        assert_eq!(
+            wordwrap("ab\u{3002}cd", 3, "\u{ff1b}\u{3002}\u{300c}"),
+            "ab\u{3002}\ncd"
+        );
+        assert_eq!(
+            wordwrap("ab\u{ff1b}cd", 3, "\u{ff1b}\u{3002}"),
+            "ab\u{ff1b}\ncd"
+        );
+        // A character absent from the set must not break.
+        assert_eq!(wordwrap("ab\u{3001}cd", 9, "\u{3002}"), "ab\u{3001}cd");
     }
 
     #[test]
