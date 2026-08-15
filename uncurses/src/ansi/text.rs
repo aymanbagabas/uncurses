@@ -511,6 +511,280 @@ mod tests {
     }
 }
 
+/// The five string sequences - OSC, DCS, SOS, PM, APC - across both control
+/// forms, every terminator, and payloads that do and do not contain UTF-8.
+///
+/// These share one scanner, so they share one bug. The `0x9C` split that made
+/// this file's `from_utf8_unchecked` calls undefined behaviour was found in an
+/// OSC title, but it was never an OSC bug: DCS, SOS, PM and APC all reached
+/// the same code, and only OSC was tested. A payload is arbitrary text, so any
+/// of them can carry a character whose continuation bytes look like a
+/// terminator.
+#[cfg(test)]
+mod sequences {
+    use super::*;
+
+    /// `(name, 7-bit introducer, 8-bit introducer)`.
+    const STRINGS: &[(&str, &[u8], u8)] = &[
+        ("OSC", b"\x1b]", 0x9d),
+        ("DCS", b"\x1bP", 0x90),
+        ("SOS", b"\x1bX", 0x98),
+        ("PM", b"\x1b^", 0x9e),
+        ("APC", b"\x1b_", 0x9f),
+    ];
+
+    /// Every way a string sequence may end.
+    ///
+    /// `U+009C` is the two-byte UTF-8 spelling of 8-bit ST, which is the only
+    /// spelling available inside a `&str`.
+    const TERMINATORS: &[(&str, &[u8])] = &[
+        ("BEL", b"\x07"),
+        ("ESC backslash", b"\x1b\\"),
+        ("8-bit ST", b"\x9c"),
+        ("U+009C", b"\xc2\x9c"),
+    ];
+
+    /// Payloads with and without UTF-8. The non-ASCII one is chosen for the
+    /// bytes it contains, not for how it reads: `é` is `C3 A9`, `✅` is
+    /// `E2 9C 85` and carries a `0x9C`, `一` is `E4 B8 80`, and `😀` is a
+    /// four-byte character.
+    const PAYLOADS: &[(&str, &str)] = &[
+        ("ascii", "0;plain title"),
+        ("utf8", "0;caf\u{e9} \u{2705} \u{4e00} \u{1f600}"),
+    ];
+
+    fn tokens(input: &[u8]) -> Vec<Token<'_>> {
+        tokenize(input, WidthMode::Grapheme, false).collect()
+    }
+
+    /// Whatever the type, the form, the payload or the terminator, the whole
+    /// sequence is exactly one zero-width token and the text after it
+    /// survives intact.
+    #[test]
+    fn every_string_sequence_is_one_whole_token() {
+        for (name, seven, eight) in STRINGS {
+            for (pname, payload) in PAYLOADS {
+                for (tname, term) in TERMINATORS {
+                    for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+                        let mut input = intro;
+                        input.extend_from_slice(payload.as_bytes());
+                        input.extend_from_slice(term);
+                        let seq_len = input.len();
+                        input.extend_from_slice("after \u{2705}".as_bytes());
+
+                        let what = format!("{name} {form} {pname} payload, {tname} terminator");
+                        let toks = tokens(&input);
+                        assert_eq!(
+                            toks.first(),
+                            Some(&Token::Escape(&input[..seq_len])),
+                            "{what}: the sequence is not one token"
+                        );
+                        let visible: String = toks[1..]
+                            .iter()
+                            .filter_map(|t| match t {
+                                Token::Text { text, .. } => {
+                                    Some(std::str::from_utf8(text).expect("a whole character"))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(visible, "after \u{2705}", "{what}: text after was lost");
+                        // The sequence itself is invisible.
+                        assert_eq!(
+                            string_width(&input, WidthMode::Grapheme, false),
+                            8,
+                            "{what}: the sequence was measured"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A payload that runs off the end is still one token, not a stream of
+    /// stray control bytes.
+    #[test]
+    fn an_unterminated_string_sequence_runs_to_the_end() {
+        for (name, seven, eight) in STRINGS {
+            for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+                for (pname, payload) in PAYLOADS {
+                    let mut input = intro.clone();
+                    input.extend_from_slice(payload.as_bytes());
+                    let toks = tokens(&input);
+                    assert_eq!(
+                        toks,
+                        vec![Token::Escape(&input[..])],
+                        "{name} {form} {pname}: an unterminated sequence should be one token"
+                    );
+                    assert_eq!(string_width(&input, WidthMode::Grapheme, false), 0);
+                }
+            }
+        }
+    }
+
+    /// A lone ESC ends the string and is left to open the next sequence, so a
+    /// sequence cannot swallow the one that follows it.
+    #[test]
+    fn a_lone_esc_ends_a_string_and_is_reparsed() {
+        for (name, seven, eight) in STRINGS {
+            for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+                let mut input = intro.clone();
+                input.extend_from_slice("pay\u{2705}".as_bytes());
+                let cut = input.len();
+                input.extend_from_slice(b"\x1b[31mZ");
+
+                let toks = tokens(&input);
+                assert_eq!(
+                    toks[0],
+                    Token::Escape(&input[..cut]),
+                    "{name} {form}: the string should stop at the ESC"
+                );
+                assert_eq!(
+                    toks[1],
+                    Token::Escape(b"\x1b[31m"),
+                    "{name} {form}: the CSI after it should survive whole"
+                );
+                assert_eq!(
+                    toks[2],
+                    Token::Text {
+                        text: b"Z",
+                        width: 1
+                    }
+                );
+            }
+        }
+    }
+
+    /// Two sequences back to back, in either control form, stay two.
+    #[test]
+    fn adjacent_sequences_do_not_merge() {
+        // (input, first sequence, second sequence); the input names the case.
+        let cases: &[(&[u8], &[u8], &[u8])] = &[
+            // 7-bit OSC then 7-bit DCS.
+            (
+                b"\x1b]0;a\x07\x1bPq\x1b\\Z",
+                b"\x1b]0;a\x07",
+                b"\x1bPq\x1b\\",
+            ),
+            // 8-bit APC then 8-bit PM.
+            (b"\x9fa\x9c\x9eb\x9cZ", b"\x9fa\x9c", b"\x9eb\x9c"),
+            // An 8-bit introducer closed by 7-bit ST, then a 7-bit introducer
+            // closed by 8-bit ST: both mixed forms, adjacent.
+            (b"\x9d0;a\x1b\\\x1b^b\x9cZ", b"\x9d0;a\x1b\\", b"\x1b^b\x9c"),
+        ];
+        for (input, first, second) in cases {
+            let toks = tokens(input);
+            assert_eq!(toks[0], Token::Escape(first), "{input:x?}");
+            assert_eq!(toks[1], Token::Escape(second), "{input:x?}");
+            assert_eq!(
+                toks[2],
+                Token::Text {
+                    text: b"Z",
+                    width: 1
+                },
+                "{input:x?}"
+            );
+        }
+    }
+
+    /// Sequences as they actually arrive from terminals and applications.
+    #[test]
+    fn real_payloads_survive() {
+        // (what, input, the opening sequence, the visible text)
+        let cases: &[(&str, &[u8], &[u8], &str)] = &[
+            (
+                "sixel",
+                b"\x1bPq#0;2;0;0;0#1;2;100;100;100\x1b\\ok",
+                b"\x1bPq#0;2;0;0;0#1;2;100;100;100\x1b\\",
+                "ok",
+            ),
+            (
+                "DECRQSS reply",
+                b"\x1bP1$r0;1m\x1b\\ok",
+                b"\x1bP1$r0;1m\x1b\\",
+                "ok",
+            ),
+            (
+                "OSC 8 hyperlink with a UTF-8 target",
+                "\u{1b}]8;;https://example.com/\u{2705}\u{7}link\u{1b}]8;;\u{7}".as_bytes(),
+                "\u{1b}]8;;https://example.com/\u{2705}\u{7}".as_bytes(),
+                "link",
+            ),
+            (
+                "OSC with an empty payload",
+                b"\x1b]\x07ok",
+                b"\x1b]\x07",
+                "ok",
+            ),
+            (
+                "8-bit APC with an empty payload",
+                b"\x9f\x9cok",
+                b"\x9f\x9c",
+                "ok",
+            ),
+        ];
+        for (what, input, opening, visible) in cases {
+            let toks = tokens(input);
+            assert_eq!(toks.first(), Some(&Token::Escape(opening)), "{what}");
+            let got: String = toks
+                .iter()
+                .filter_map(|t| match t {
+                    Token::Text { text, .. } => {
+                        Some(std::str::from_utf8(text).expect("a whole character"))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(got, *visible, "{what}");
+            // Nothing is invented or dropped anywhere in the stream.
+            let mut rebuilt = Vec::new();
+            for t in &toks {
+                match t {
+                    Token::Text { text, .. } | Token::Escape(text) => {
+                        rebuilt.extend_from_slice(text)
+                    }
+                    Token::Control(c) => rebuilt.push(*c),
+                }
+            }
+            assert_eq!(rebuilt, *input, "{what}: the stream did not reassemble");
+        }
+    }
+
+    /// C1 controls are recognised as raw bytes, not as the characters that
+    /// encode them - with one deliberate exception.
+    ///
+    /// A raw `0x9D` cannot appear in a `&str`, so an application writing an
+    /// 8-bit introducer there writes `"\u{9d}"`, which is `C2 9D`, which this
+    /// reads as text. `"\u{9c}"` *is* honoured as a terminator, because the
+    /// two failures are not comparable: an unrecognised introducer shows a
+    /// payload that should have been hidden, while an unrecognised terminator
+    /// hides every character after it, silently and without end.
+    #[test]
+    fn a_utf8_encoded_c1_introducer_is_text() {
+        let toks = tokens("\u{9d}0;title\u{7}Z".as_bytes());
+        assert!(
+            !matches!(toks[0], Token::Escape(_)),
+            "U+009D opened a sequence: {toks:?}"
+        );
+        // The C1 character measures zero, `0;title` seven, BEL zero, `Z` one.
+        assert_eq!(
+            string_width("\u{9d}0;title\u{7}Z".as_bytes(), WidthMode::Wc, false),
+            8
+        );
+
+        // The exception, stated as a test so it cannot drift back by accident.
+        let toks = tokens("\u{1b}]0;title\u{9c}Z".as_bytes());
+        assert_eq!(toks[0], Token::Escape("\u{1b}]0;title\u{9c}".as_bytes()));
+        assert_eq!(
+            toks[1],
+            Token::Text {
+                text: b"Z",
+                width: 1
+            }
+        );
+    }
+}
+
 #[cfg(test)]
 mod fast_path {
     use super::*;
