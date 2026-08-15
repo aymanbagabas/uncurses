@@ -110,8 +110,28 @@ pub fn wordwrap_mode(
     mode: WidthMode,
     eaw_wide: bool,
 ) -> String {
+    wordwrap_inner(s, limit, breakpoints, mode, eaw_wide).0
+}
+
+/// [`wordwrap_mode`], and whether any line it produced is still wider than
+/// `limit`.
+///
+/// Word wrapping measures every line it emits in order to decide where to
+/// break, so the answer costs nothing here and a second width pass over the
+/// whole output anywhere else. It is what lets [`wrap_mode`] stop after one
+/// pass on text whose words all fit, which is nearly all text.
+fn wordwrap_inner(
+    s: &str,
+    limit: usize,
+    breakpoints: &str,
+    mode: WidthMode,
+    eaw_wide: bool,
+) -> (String, bool) {
     if limit == 0 {
-        return s.to_string();
+        // No wrapping happened, so nothing was made to fit and nothing needs
+        // to be: `hardwrap_mode` returns its input unchanged at this limit
+        // too.
+        return (s.to_string(), false);
     }
     // A breakpoint test that is an array index, not a scan. `is_break` runs
     // once per grapheme, and a linear search of the breakpoint list per
@@ -145,19 +165,26 @@ pub fn wordwrap_mode(
     let mut word_w = 0usize;
     let mut space = String::new();
     let mut space_w = 0usize;
+    let mut over = false;
 
-    let flush_word_to_line = |line: &mut String,
-                              line_w: &mut usize,
-                              word: &mut String,
-                              word_w: &mut usize,
-                              space: &mut String,
-                              space_w: &mut usize| {
+    let mut flush_word_to_line = |line: &mut String,
+                                  line_w: &mut usize,
+                                  word: &mut String,
+                                  word_w: &mut usize,
+                                  space: &mut String,
+                                  space_w: &mut usize| {
         if !word.is_empty() {
             // If line+space+word exceeds limit and line is non-empty, wrap.
             // Handled by caller before calling.
             line.push_str(space);
             line.push_str(word);
             *line_w += *space_w + *word_w;
+            // The only place `line_w` grows, and it is cleared the moment the
+            // line is emitted, so its value here is the width that line will
+            // be emitted at - checking it once here covers all five emit
+            // sites. A line ends up over the limit when a single word is
+            // wider than the limit, which is what hard wrapping is for.
+            over |= *line_w > limit;
             space.clear();
             *space_w = 0;
             word.clear();
@@ -276,11 +303,13 @@ pub fn wordwrap_mode(
             &mut space_w,
         );
     } else if !space.is_empty() {
-        // Trailing space attaches to line.
+        // Trailing space attaches to line, and can be what carries it over -
+        // the one line that ends up too wide without an oversized word in it.
         line.push_str(&space);
+        over |= line_w + space_w > limit;
     }
     out.push_str(&line);
-    out
+    (out, over)
 }
 
 /// Soft-wrap `s` at word breakpoints, then hard-wrap any remaining overlong line.
@@ -303,22 +332,37 @@ pub fn wrap_mode(
     if limit == 0 {
         return s.to_string();
     }
-    // First wordwrap, then hardwrap - but only the lines that need it.
+    // First wordwrap, then hardwrap - but only the lines that need it, and
+    // only if any line does.
     //
     // Hard-wrapping exists for the one case word-wrapping cannot solve: a
     // single word longer than the limit. Every other line is already inside
     // it, and running the hard wrap over those lines is a second full pass
     // that copies them to themselves. That pass is not cheap - measured, the
-    // wrap is exactly the sum of its two halves, so it costs as much as the
-    // wrapping did - while *asking* whether a line is too wide is only a
-    // width measurement, which runs several times faster than the wrap it
-    // avoids. On text whose words all fit, which is nearly all text, the
-    // second pass now disappears entirely.
-    let wrapped = wordwrap_mode(s, limit, breakpoints, mode, eaw_wide);
-    // Each line is measured once. Measuring to decide whether any line is too
-    // wide and then measuring again to find which ones costs a second full
-    // width pass over text that is nearly always entirely within the limit;
-    // the output is allocated lazily instead, at the first line that is not.
+    // wrap was exactly the sum of its two halves, so it cost as much as the
+    // wrapping did.
+    //
+    // Nor is asking whether a line is too wide, if it is asked by measuring
+    // the line again: the word wrap has already measured every line it
+    // emitted, so it is the only pass that needs to measure at all. It
+    // returns what it found. On text whose words all fit, which is nearly all
+    // text, the second pass now disappears entirely - along with the width
+    // pass that used to decide whether to run it.
+    let (wrapped, over) = wordwrap_inner(s, limit, breakpoints, mode, eaw_wide);
+    if !over {
+        // The word wrap's per-line widths and a fresh measurement of its
+        // output must agree; if they ever did not, this would silently return
+        // lines wider than the limit. Free to check where it is affordable.
+        debug_assert!(
+            wrapped
+                .split('\n')
+                .all(|l| string_width(l.as_bytes(), mode, eaw_wide) <= limit),
+            "word wrapping reported every line within {limit}, and one is not"
+        );
+        return wrapped;
+    }
+    // Some line is over. Measure to find which - the output is allocated
+    // lazily, at the first line that is.
     let mut out: Option<String> = None;
     let mut consumed = 0usize;
     for line in wrapped.split('\n') {
@@ -431,6 +475,19 @@ mod tests {
             wrap("hello superlongword end", 5, " "),
             "hello\nsuper\nlongw\nord\nend"
         );
+    }
+
+    /// `wrap` hard wraps only when word wrapping tells it a line is still too
+    /// wide, and word wrapping counts a line's width as it builds it. A
+    /// trailing space is the one thing that lands on a line after that count
+    /// is otherwise final: "hello" fits in five columns and "hello " does not,
+    /// with no oversized word anywhere to notice.
+    #[test]
+    fn wrap_hard_wraps_a_line_carried_over_by_a_trailing_space() {
+        assert_eq!(wrap("hello ", 5, " "), "hello\n");
+        assert_eq!(wrap("ab cd ", 5, " "), "ab cd\n");
+        // Still within the limit with the space on it, so left alone.
+        assert_eq!(wrap("hi  ", 5, " "), "hi  ");
     }
 
     #[test]
