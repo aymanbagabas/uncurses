@@ -485,6 +485,37 @@ fn truecolor_profile_emits_38_2_rgb() {
 }
 
 #[test]
+fn truecolor_termcap_upgrade_repaints_unchanged_cells() {
+    let mut screen = Screen::for_test(Vec::new(), (1, 1)).with_color_profile(Profile::Ansi256);
+    screen.set_cell(
+        (0u16, 0u16),
+        &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+    );
+    screen.render().unwrap();
+
+    let first_len = screen.writer().len();
+    let first = s(screen.writer());
+    assert!(
+        first.contains("\x1b[38;5;"),
+        "first frame should be downsampled: {first:?}"
+    );
+
+    screen
+        .observe_event(&Event::Termcap {
+            recognized: true,
+            payload: "RGB".to_string(),
+        })
+        .unwrap();
+    screen.render().unwrap();
+
+    let second = s(&screen.writer()[first_len..]);
+    assert!(
+        second.contains("\x1b[38;2;255;0;0m"),
+        "unchanged cell must be repainted after truecolor upgrade: {second:?}"
+    );
+}
+
+#[test]
 fn ansi256_profile_emits_38_5_index() {
     let mut buf: Vec<u8> = Vec::new();
     {
