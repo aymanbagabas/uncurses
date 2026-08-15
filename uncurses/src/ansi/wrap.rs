@@ -338,11 +338,14 @@ pub fn wrap_mode(
                     o.push_str(&hardwrap_mode(line, limit, false, mode, eaw_wide));
                 } else {
                     // Copied rather than re-emitted. A line that fits comes
-                    // back from the hard wrap byte-identical in every case
-                    // that can occur here, with one exception: it re-encodes
-                    // a lone C1 control byte as the two-byte UTF-8 for that
-                    // code point. Passing the line through keeps the caller's
-                    // bytes, which is the more faithful of the two.
+                    // back from the hard wrap byte-identical, so this is
+                    // simply not doing the work - it is not guarding against
+                    // a difference. `hardwrap_mode` does re-encode a lone C1
+                    // control byte as the two-byte UTF-8 for that code point,
+                    // but that cannot arise from `&str` input: at a character
+                    // boundary in valid UTF-8 a byte in `0x80..=0x9F` is never
+                    // a lead byte, so the tokenizer never emits one as a
+                    // `Control`.
                     o.push_str(line);
                 }
             }
