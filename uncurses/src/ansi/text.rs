@@ -334,6 +334,51 @@ fn scan_esc_intermediate(bytes: &[u8], at: usize) -> usize {
     }
 }
 
+/// Helpers shared by the test modules below.
+#[cfg(test)]
+mod util {
+    use super::*;
+
+    pub(super) fn tokens(input: &[u8]) -> Vec<Token<'_>> {
+        tokenize(input, WidthMode::Grapheme, false).collect()
+    }
+
+    /// The visible text of a token stream, which is what a caller loses when
+    /// a sequence runs past its terminator or a character is cut in half.
+    ///
+    /// Not lossy: a text token that is not whole UTF-8 is a bug, and
+    /// rendering it as U+FFFD hides the failure these tests exist to catch.
+    pub(super) fn visible(toks: &[Token<'_>]) -> String {
+        toks.iter()
+            .filter_map(|t| match t {
+                Token::Text { text, .. } => {
+                    Some(std::str::from_utf8(text).expect("a text token is whole UTF-8"))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Concatenate a token stream back into bytes. It must equal the input:
+    /// the tokenizer may reclassify a byte but must never invent or drop one.
+    pub(super) fn rebuild(toks: &[Token<'_>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for t in toks {
+            match t {
+                Token::Text { text, .. } | Token::Escape(text) => out.extend_from_slice(text),
+                Token::Control(c) => out.push(*c),
+            }
+        }
+        out
+    }
+
+    /// A control function in both of its forms: `ESC x` and the single C1
+    /// byte. Every sequence test runs over both, so every test needs this.
+    pub(super) fn forms(seven: &[u8], eight: u8) -> [(&'static str, Vec<u8>); 2] {
+        [("7-bit", seven.to_vec()), ("8-bit", vec![eight])]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +518,7 @@ mod tests {
 /// terminator.
 #[cfg(test)]
 mod sequences {
+    use super::util::*;
     use super::*;
 
     /// `(name, 7-bit introducer, 8-bit introducer)`.
@@ -502,10 +548,6 @@ mod sequences {
         ("utf8", "0;caf\u{e9} \u{2705} \u{4e00} \u{1f600}"),
     ];
 
-    fn tokens(input: &[u8]) -> Vec<Token<'_>> {
-        tokenize(input, WidthMode::Grapheme, false).collect()
-    }
-
     /// Whatever the type, the form, the payload or the terminator, the whole
     /// sequence is exactly one zero-width token and the text after it
     /// survives intact.
@@ -517,7 +559,7 @@ mod sequences {
                     if *term == b"\x07" && *name != "OSC" {
                         continue;
                     }
-                    for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+                    for (form, intro) in forms(seven, *eight) {
                         let mut input = intro;
                         input.extend_from_slice(payload.as_bytes());
                         input.extend_from_slice(term);
@@ -531,16 +573,11 @@ mod sequences {
                             Some(&Token::Escape(&input[..seq_len])),
                             "{what}: the sequence is not one token"
                         );
-                        let visible: String = toks[1..]
-                            .iter()
-                            .filter_map(|t| match t {
-                                Token::Text { text, .. } => {
-                                    Some(std::str::from_utf8(text).expect("a whole character"))
-                                }
-                                _ => None,
-                            })
-                            .collect();
-                        assert_eq!(visible, "after \u{2705}", "{what}: text after was lost");
+                        assert_eq!(
+                            visible(&toks[1..]),
+                            "after \u{2705}",
+                            "{what}: text after was lost"
+                        );
                         // The sequence itself is invisible.
                         assert_eq!(
                             string_width(&input, WidthMode::Grapheme, false),
@@ -558,7 +595,7 @@ mod sequences {
     #[test]
     fn an_unterminated_string_sequence_runs_to_the_end() {
         for (name, seven, eight) in STRINGS {
-            for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+            for (form, intro) in forms(seven, *eight) {
                 for (pname, payload) in PAYLOADS {
                     let mut input = intro.clone();
                     input.extend_from_slice(payload.as_bytes());
@@ -579,7 +616,7 @@ mod sequences {
     #[test]
     fn a_lone_esc_ends_a_string_and_is_reparsed() {
         for (name, seven, eight) in STRINGS {
-            for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+            for (form, intro) in forms(seven, *eight) {
                 let mut input = intro.clone();
                 input.extend_from_slice("pay\u{2705}".as_bytes());
                 let cut = input.len();
@@ -675,30 +712,16 @@ mod sequences {
                 "ok",
             ),
         ];
-        for (what, input, opening, visible) in cases {
+        for (what, input, opening, want) in cases {
             let toks = tokens(input);
             assert_eq!(toks.first(), Some(&Token::Escape(opening)), "{what}");
-            let got: String = toks
-                .iter()
-                .filter_map(|t| match t {
-                    Token::Text { text, .. } => {
-                        Some(std::str::from_utf8(text).expect("a whole character"))
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(got, *visible, "{what}");
+            assert_eq!(visible(&toks), *want, "{what}");
             // Nothing is invented or dropped anywhere in the stream.
-            let mut rebuilt = Vec::new();
-            for t in &toks {
-                match t {
-                    Token::Text { text, .. } | Token::Escape(text) => {
-                        rebuilt.extend_from_slice(text)
-                    }
-                    Token::Control(c) => rebuilt.push(*c),
-                }
-            }
-            assert_eq!(rebuilt, *input, "{what}: the stream did not reassemble");
+            assert_eq!(
+                rebuild(&toks),
+                *input,
+                "{what}: the stream did not reassemble"
+            );
         }
     }
 
@@ -761,7 +784,7 @@ mod sequences {
     #[test]
     fn bel_ends_an_osc_and_nothing_else() {
         for (name, seven, eight) in STRINGS {
-            for (form, intro) in [("7-bit", seven.to_vec()), ("8-bit", vec![*eight])] {
+            for (form, intro) in forms(seven, *eight) {
                 let mut input = intro;
                 input.extend_from_slice(b"pay\x07load");
                 let bel_at = input.len() - b"load".len();
@@ -866,6 +889,7 @@ mod sequences {
 
 #[cfg(test)]
 mod fast_path {
+    use super::util::*;
     use super::*;
 
     fn text_tokens_eaw(s: &str, mode: WidthMode, eaw_wide: bool) -> Vec<(String, u16)> {
@@ -1040,14 +1064,7 @@ mod fast_path {
             want.extend_from_slice(c.to_string().as_bytes());
             want.push(0x07);
             assert_eq!(*seq, &want[..], "the sequence is whole");
-            let text: String = rest
-                .iter()
-                .filter_map(|t| match t {
-                    Token::Text { text, .. } => std::str::from_utf8(text).ok(),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(text, "after");
+            assert_eq!(visible(rest), "after");
         }
         // A bare ESC takes the whole character after it, not its lead byte.
         let toks: Vec<_> = tokenize(b"\x1b\xe2\x9c\x85x", WidthMode::Wc, false).collect();
@@ -1079,16 +1096,10 @@ mod fast_path {
                 Some(&Token::Escape(escape)),
                 "input {input:x?} did not stop at its terminator"
             );
-            let visible: Vec<u8> = toks
-                .iter()
-                .filter_map(|t| match t {
-                    Token::Text { text, .. } => Some(*text),
-                    _ => None,
-                })
-                .flatten()
-                .copied()
-                .collect();
-            assert!(!visible.is_empty(), "input {input:x?} lost all its text");
+            assert!(
+                !visible(&toks).is_empty(),
+                "input {input:x?} lost all its text"
+            );
         }
         // A bare ESC must not consume the CSI that follows a malformed byte.
         let toks: Vec<_> = tokenize(b"\x1b\xe0\x1b[31mZ", WidthMode::Wc, false).collect();
@@ -1187,6 +1198,7 @@ mod fast_path {
 
 #[cfg(test)]
 mod scaling {
+    use super::util::*;
     use super::*;
 
     /// Tokenize `bytes` fully and return the bytes the run scan visited.
@@ -1197,21 +1209,10 @@ mod scaling {
     /// is wrong but cheap.
     fn scan_cost(bytes: &[u8]) -> usize {
         let mut t = tokenize(bytes, WidthMode::Wc, false);
-        let mut rebuilt = Vec::with_capacity(bytes.len());
-        for tok in &mut t {
-            match tok {
-                Token::Text { text, .. } => {
-                    assert!(
-                        std::str::from_utf8(text).is_ok(),
-                        "text token split a character: {text:x?}"
-                    );
-                    rebuilt.extend_from_slice(text);
-                }
-                Token::Escape(b) => rebuilt.extend_from_slice(b),
-                Token::Control(c) => rebuilt.push(c),
-            }
-        }
-        assert_eq!(rebuilt, bytes, "tokens did not reassemble the input");
+        let toks: Vec<_> = (&mut t).collect();
+        // `visible` asserts each text token is whole UTF-8 on the way past.
+        visible(&toks);
+        assert_eq!(rebuild(&toks), bytes, "tokens did not reassemble the input");
         t.scanned
     }
 
