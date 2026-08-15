@@ -658,8 +658,8 @@ mod sequences {
             ),
             (
                 "OSC 8 hyperlink with a UTF-8 target",
-                "\u{1b}]8;;https://example.com/\u{2705}\u{7}link\u{1b}]8;;\u{7}".as_bytes(),
-                "\u{1b}]8;;https://example.com/\u{2705}\u{7}".as_bytes(),
+                b"\x1b]8;;https://example.com/\xe2\x9c\x85\x07link\x1b]8;;\x07",
+                b"\x1b]8;;https://example.com/\xe2\x9c\x85\x07",
                 "link",
             ),
             (
@@ -725,29 +725,30 @@ mod sequences {
         );
 
         // Inside a character: a continuation byte, and the sequence runs on.
-        // "\u{9c}" is C2 9C, so the OSC here is simply unterminated.
-        let unterminated = "\u{1b}]0;title\u{9c}Z".as_bytes();
-        assert_eq!(tokens(unterminated), vec![Token::Escape(unterminated)]);
+        // `C2 9C` is the character U+009C - what `"\u{9c}"` would compile to -
+        // so the OSC here is simply unterminated.
+        let unterminated = b"\x1b]0;title\xc2\x9cZ";
+        assert_eq!(tokens(unterminated), vec![Token::Escape(&unterminated[..])]);
 
         // The same for an introducer: the byte opens a sequence, the
         // character does not.
         let toks = tokens(b"\x9d0;title\x07Z");
         assert_eq!(toks[0], Token::Escape(b"\x9d0;title\x07"));
-        let toks = tokens("\u{9d}0;title\u{7}Z".as_bytes());
+        let toks = tokens(b"\xc2\x9d0;title\x07Z");
         assert!(
             !matches!(toks[0], Token::Escape(_)),
             "the character U+009D opened a sequence: {toks:?}"
         );
         // U+009D measures zero, `0;title` seven, BEL zero, `Z` one.
         assert_eq!(
-            string_width("\u{9d}0;title\u{7}Z".as_bytes(), WidthMode::Wc, false),
+            string_width(b"\xc2\x9d0;title\x07Z", WidthMode::Wc, false),
             8
         );
 
         // And the case that made this matter: the `9C` inside "✅" is a
         // continuation byte, so the title survives whole.
-        let toks = tokens("\u{1b}]0;\u{2705}\u{7}Z".as_bytes());
-        assert_eq!(toks[0], Token::Escape("\u{1b}]0;\u{2705}\u{7}".as_bytes()));
+        let toks = tokens(b"\x1b]0;\xe2\x9c\x85\x07Z");
+        assert_eq!(toks[0], Token::Escape(b"\x1b]0;\xe2\x9c\x85\x07"));
     }
 
     /// `BEL` ends an OSC and only an OSC.
@@ -996,15 +997,8 @@ mod fast_path {
         // Every scanner that steps through a payload, not just the OSC one.
         // `scan_esc_intermediate` has the same bug and the same fix, and a
         // test that only builds OSC titles leaves half of it uncovered.
-        const PREFIXES: &[&str] = &[
-            "\u{1b}]0;",
-            "\u{1b}P",
-            "\u{1b}_",
-            "\u{1b}^",
-            "\u{1b}X",
-            "\u{1b}",
-            "\u{1b} ",
-            "\u{1b}#",
+        const PREFIXES: &[&[u8]] = &[
+            b"\x1b]0;", b"\x1bP", b"\x1b_", b"\x1b^", b"\x1bX", b"\x1b", b"\x1b ", b"\x1b#",
         ];
         for c in [
             '\u{2705}',
@@ -1015,15 +1009,18 @@ mod fast_path {
             '\u{1f600}',
         ] {
             for prefix in PREFIXES {
-                let input = format!("{prefix}{c}\u{7}after");
-                for t in tokenize(input.as_bytes(), WidthMode::Wc, false) {
+                // Controls as bytes, the character as a character.
+                let mut input = prefix.to_vec();
+                input.extend_from_slice(c.to_string().as_bytes());
+                input.extend_from_slice(b"\x07after");
+                for t in tokenize(&input, WidthMode::Wc, false) {
                     let bytes = match t {
                         Token::Text { text, .. } | Token::Escape(text) => text,
                         Token::Control(_) => continue,
                     };
                     assert!(
                         std::str::from_utf8(bytes).is_ok(),
-                        "{input:?} produced a token split mid-character: {bytes:x?}"
+                        "{input:x?} produced a token split mid-character: {bytes:x?}"
                     );
                 }
             }
@@ -1031,16 +1028,18 @@ mod fast_path {
         // The OSC case in full: the sequence stays whole and the text after it
         // survives.
         for c in ['\u{2705}', '\u{2714}', '\u{2728}', '\u{171c}'] {
-            let input = format!("\x1b]0;Build {c}\x07after");
-            let toks: Vec<_> = tokenize(input.as_bytes(), WidthMode::Wc, false).collect();
+            let mut input = b"\x1b]0;Build ".to_vec();
+            input.extend_from_slice(c.to_string().as_bytes());
+            input.extend_from_slice(b"\x07after");
+            let toks: Vec<_> = tokenize(&input, WidthMode::Wc, false).collect();
             let (escape, rest) = toks.split_first().expect("a token");
             let Token::Escape(seq) = escape else {
                 panic!("expected the OSC to be one escape token, got {escape:?}")
             };
-            assert_eq!(
-                std::str::from_utf8(seq).expect("the sequence is whole"),
-                format!("\x1b]0;Build {c}\x07")
-            );
+            let mut want = b"\x1b]0;Build ".to_vec();
+            want.extend_from_slice(c.to_string().as_bytes());
+            want.push(0x07);
+            assert_eq!(*seq, &want[..], "the sequence is whole");
             let text: String = rest
                 .iter()
                 .filter_map(|t| match t {
@@ -1051,8 +1050,8 @@ mod fast_path {
             assert_eq!(text, "after");
         }
         // A bare ESC takes the whole character after it, not its lead byte.
-        let toks: Vec<_> = tokenize("\u{1b}\u{2705}x".as_bytes(), WidthMode::Wc, false).collect();
-        assert_eq!(toks[0], Token::Escape("\u{1b}\u{2705}".as_bytes()));
+        let toks: Vec<_> = tokenize(b"\x1b\xe2\x9c\x85x", WidthMode::Wc, false).collect();
+        assert_eq!(toks[0], Token::Escape(b"\x1b\xe2\x9c\x85"));
         // A `0x9C` on a character boundary is still an 8-bit ST.
         let toks: Vec<_> = tokenize(b"\x1b]0;t\x9cx", WidthMode::Wc, false).collect();
         assert!(matches!(toks[0], Token::Escape(b"\x1b]0;t\x9c")));
