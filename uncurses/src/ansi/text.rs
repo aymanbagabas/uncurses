@@ -327,20 +327,23 @@ fn scan_csi(bytes: &[u8], from: usize) -> usize {
     len
 }
 
+/// Scan a control string to its terminator.
+///
+/// Terminators are tested only at a character boundary, never inside one. A
+/// byte in `0x80..=0x9F` means one thing when the decoder is between
+/// characters - an 8-bit C1 control - and another when it is part way through
+/// collecting one, where it is just a continuation byte. `0x9C` is both 8-bit
+/// ST and a continuation byte of every code point in U+2700..U+273F, so
+/// "✅", "✔" and "✨" all carry one, and a scan that does not know which
+/// state it is in ends the sequence in the middle of a character.
 fn scan_string(bytes: &[u8], from: usize) -> usize {
     let len = bytes.len();
     let mut i = from;
     while i < len {
         let b = bytes[i];
+        // At a boundary, so this is C1 ST and not a continuation byte.
         if b == 0x07 || b == 0x9c {
             return i + 1;
-        }
-        // `U+009C` is 8-bit ST as well, and its two-byte UTF-8 form is the
-        // only way one can appear in a `&str` - a raw `0x9C` byte cannot.
-        // Callers building sequences in Rust source write it as `"\u{9c}"`,
-        // and reading that as ordinary text swallows the rest of the string.
-        if b == 0xc2 && bytes.get(i + 1) == Some(&0x9c) {
-            return i + 2;
         }
         if b == 0x1b && i + 1 < len && bytes[i + 1] == b'\\' {
             return i + 2;
@@ -350,18 +353,11 @@ fn scan_string(bytes: &[u8], from: usize) -> usize {
         if b == 0x1b {
             return i;
         }
-        // Step a whole UTF-8 character at a time. `0x9C` is a continuation
-        // byte as well as 8-bit ST, and stepping byte by byte read it as a
-        // terminator in the middle of a character: every code point in
-        // U+2700..U+273F - "✅", "✔", "✨" - ends an OSC title early and
-        // leaves its trailing bytes orphaned outside the sequence. As a lead
-        // byte 0x9C is never valid, so a 0x9C on a character boundary is
-        // still unambiguously ST.
-        //
-        // Only a *well-formed* character is stepped whole. Trusting a lead
-        // byte whose continuations do not match would step over whatever
-        // followed it, terminators included, so a single malformed byte in a
-        // payload would swallow the BEL that ends it and all the text after.
+        // Collect a whole character, so the bytes inside it are never tested
+        // as terminators. Only a *well-formed* one: trusting a lead byte
+        // whose continuations do not match would step over whatever followed
+        // it, terminators included, and one malformed byte in a payload would
+        // swallow the BEL that ends it and all the text after.
         i += utf8_char_at(bytes, i).unwrap_or(1);
     }
     len
@@ -534,14 +530,10 @@ mod sequences {
     ];
 
     /// Every way a string sequence may end.
-    ///
-    /// `U+009C` is the two-byte UTF-8 spelling of 8-bit ST, which is the only
-    /// spelling available inside a `&str`.
     const TERMINATORS: &[(&str, &[u8])] = &[
         ("BEL", b"\x07"),
         ("ESC backslash", b"\x1b\\"),
         ("8-bit ST", b"\x9c"),
-        ("U+009C", b"\xc2\x9c"),
     ];
 
     /// Payloads with and without UTF-8. The non-ASCII one is chosen for the
@@ -750,31 +742,20 @@ mod sequences {
         }
     }
 
-    /// C1 controls are recognised as raw bytes, not as the characters that
-    /// encode them - with one deliberate exception.
+    /// A byte in `0x80..=0x9F` is a C1 control between characters and a
+    /// continuation byte inside one. Which it is depends only on the decoder's
+    /// state, never on what a caller meant.
     ///
-    /// A raw `0x9D` cannot appear in a `&str`, so an application writing an
-    /// 8-bit introducer there writes `"\u{9d}"`, which is `C2 9D`, which this
-    /// reads as text. `"\u{9c}"` *is* honoured as a terminator, because the
-    /// two failures are not comparable: an unrecognised introducer shows a
-    /// payload that should have been hidden, while an unrecognised terminator
-    /// hides every character after it, silently and without end.
+    /// So `C2 9C` is the character U+009C - a lead byte, then a continuation
+    /// byte collected as part of it - and not 8-bit ST, which is the single
+    /// byte `9C`. Likewise `C2 9D` is the character U+009D and does not open
+    /// an OSC. A `&str` cannot hold a raw C1 byte at all, which is what 7-bit
+    /// `ESC \` and `ESC ]` are for.
     #[test]
-    fn a_utf8_encoded_c1_introducer_is_text() {
-        let toks = tokens("\u{9d}0;title\u{7}Z".as_bytes());
-        assert!(
-            !matches!(toks[0], Token::Escape(_)),
-            "U+009D opened a sequence: {toks:?}"
-        );
-        // The C1 character measures zero, `0;title` seven, BEL zero, `Z` one.
-        assert_eq!(
-            string_width("\u{9d}0;title\u{7}Z".as_bytes(), WidthMode::Wc, false),
-            8
-        );
-
-        // The exception, stated as a test so it cannot drift back by accident.
-        let toks = tokens("\u{1b}]0;title\u{9c}Z".as_bytes());
-        assert_eq!(toks[0], Token::Escape("\u{1b}]0;title\u{9c}".as_bytes()));
+    fn a_c1_byte_inside_a_character_is_not_a_control() {
+        // Between characters: 8-bit ST, and the sequence ends.
+        let toks = tokens(b"\x1b]0;title\x9cZ");
+        assert_eq!(toks[0], Token::Escape(b"\x1b]0;title\x9c"));
         assert_eq!(
             toks[1],
             Token::Text {
@@ -782,23 +763,99 @@ mod sequences {
                 width: 1
             }
         );
+
+        // Inside a character: a continuation byte, and the sequence runs on.
+        // "\u{9c}" is C2 9C, so the OSC here is simply unterminated.
+        let unterminated = "\u{1b}]0;title\u{9c}Z".as_bytes();
+        assert_eq!(tokens(unterminated), vec![Token::Escape(unterminated)]);
+
+        // The same for an introducer: the byte opens a sequence, the
+        // character does not.
+        let toks = tokens(b"\x9d0;title\x07Z");
+        assert_eq!(toks[0], Token::Escape(b"\x9d0;title\x07"));
+        let toks = tokens("\u{9d}0;title\u{7}Z".as_bytes());
+        assert!(
+            !matches!(toks[0], Token::Escape(_)),
+            "the character U+009D opened a sequence: {toks:?}"
+        );
+        // U+009D measures zero, `0;title` seven, BEL zero, `Z` one.
+        assert_eq!(
+            string_width("\u{9d}0;title\u{7}Z".as_bytes(), WidthMode::Wc, false),
+            8
+        );
+
+        // And the case that made this matter: the `9C` inside "✅" is a
+        // continuation byte, so the title survives whole.
+        let toks = tokens("\u{1b}]0;\u{2705}\u{7}Z".as_bytes());
+        assert_eq!(toks[0], Token::Escape("\u{1b}]0;\u{2705}\u{7}".as_bytes()));
+    }
+
+    /// The rule, over every C1 byte rather than the two that caused trouble.
+    ///
+    /// `C2 xx` encodes U+0080..U+00BF, so for any C1 byte there is a
+    /// character that carries it as a continuation byte. On its own the byte
+    /// is a control; inside that character it is not.
+    #[test]
+    fn every_c1_byte_depends_on_the_decoder_state() {
+        for c in 0x80u8..=0x9f {
+            // Between characters: a control, either standalone or opening a
+            // sequence.
+            let single = [c];
+            let alone: Vec<Token<'_>> = tokenize(&single, WidthMode::Wc, false).collect();
+            match alone.as_slice() {
+                [Token::Control(got)] => assert_eq!(*got, c),
+                [Token::Escape(seq)] => assert!(
+                    is_c1_introducer(c) && *seq == &single[..],
+                    "0x{c:02x} opened a sequence but is not an introducer"
+                ),
+                other => panic!("0x{c:02x} alone produced {other:?}"),
+            }
+            assert_eq!(string_width(&single, WidthMode::Wc, false), 0);
+
+            // Inside a character: one zero-width text token, no control.
+            let encoded = [0xc2, c];
+            let inside: Vec<Token<'_>> = tokenize(&encoded, WidthMode::Wc, false).collect();
+            assert_eq!(
+                inside,
+                vec![Token::Text {
+                    text: &encoded[..],
+                    width: 0
+                }],
+                "U+{:04X} was not read as a character",
+                0x80 + u32::from(c) - 0x80
+            );
+
+            // The same inside a control string: the byte ends it only if it
+            // is ST, the character never does.
+            let mut raw = b"\x1b]0;".to_vec();
+            raw.push(c);
+            raw.extend_from_slice(b"Z\x07");
+            let ends_early = matches!(
+                tokenize(&raw, WidthMode::Wc, false).next(),
+                Some(Token::Escape(seq)) if seq.len() < raw.len()
+            );
+            assert_eq!(
+                ends_early,
+                c == 0x9c || c == 0x1b,
+                "0x{c:02x} in a payload terminated the sequence unexpectedly"
+            );
+
+            let mut encoded_in = b"\x1b]0;".to_vec();
+            encoded_in.extend_from_slice(&encoded);
+            encoded_in.extend_from_slice(b"Z\x07");
+            let len = encoded_in.len();
+            assert_eq!(
+                tokenize(&encoded_in, WidthMode::Wc, false).next(),
+                Some(Token::Escape(&encoded_in[..len])),
+                "U+00{c:02X} in a payload ended the sequence"
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod fast_path {
     use super::*;
-
-    /// The visible text of `s`, which is what a caller loses when a sequence
-    /// runs past its terminator.
-    fn strip_for_test(s: &str) -> String {
-        tokenize(s.as_bytes(), WidthMode::Wc, false)
-            .filter_map(|t| match t {
-                Token::Text { text, .. } => Some(String::from_utf8_lossy(text).into_owned()),
-                _ => None,
-            })
-            .collect()
-    }
 
     fn text_tokens_eaw(s: &str, mode: WidthMode, eaw_wide: bool) -> Vec<(String, u16)> {
         tokenize(s.as_bytes(), mode, eaw_wide)
@@ -989,27 +1046,6 @@ mod fast_path {
         // A `0x9C` on a character boundary is still an 8-bit ST.
         let toks: Vec<_> = tokenize(b"\x1b]0;t\x9cx", WidthMode::Wc, false).collect();
         assert!(matches!(toks[0], Token::Escape(b"\x1b]0;t\x9c")));
-    }
-
-    /// `U+009C` is 8-bit ST, and in a `&str` its two-byte UTF-8 form is the
-    /// only form it can take - a raw `0x9C` byte is not valid UTF-8. Reading
-    /// it as ordinary text swallows the terminator and every visible
-    /// character after it.
-    #[test]
-    fn the_utf8_form_of_8_bit_st_terminates_a_string_sequence() {
-        for s in [
-            "\u{1b}]0;title\u{9c}visible text",
-            "\u{1b}Pq#0;2\u{9c}visible text",
-            "\u{1b}_payload\u{9c}visible text",
-        ] {
-            assert_eq!(strip_for_test(s), "visible text", "input {s:?}");
-        }
-        // The same byte pair inside a longer character is not a terminator:
-        // "\u{2705}" is E2 9C 85 and has no C2 lead.
-        assert_eq!(
-            strip_for_test("\u{1b}]0;\u{2705}\u{7}visible text"),
-            "visible text"
-        );
     }
 
     /// A malformed byte in a payload must not eat the terminator.
