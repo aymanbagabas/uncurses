@@ -248,6 +248,11 @@ impl Probe for CursorColor {
 ///
 /// Ask for the entries you need — the first 16 are the ANSI colors — rather
 /// than all 256, since every index costs a query and a reply.
+///
+/// Only the indices it asked about are recorded. Replies are broadcast, and a
+/// screen or another probe on the same terminal is asking its own questions —
+/// absorbing those answers would make the contents depend on who else is on
+/// the wire.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PaletteColor {
     wanted: Vec<u8>,
@@ -300,7 +305,9 @@ impl Probe for PaletteColor {
     }
 
     fn observe_event(&mut self, event: &Event) -> io::Result<()> {
-        if let Event::PaletteColor { index, color } = *event {
+        if let Event::PaletteColor { index, color } = *event
+            && self.wanted.contains(&index)
+        {
             self.entries.insert(index, color);
         }
         Ok(())
@@ -375,6 +382,10 @@ impl Probe for ModeReport {
 }
 
 /// DA1 (`CSI c`): the terminal's primary device attributes.
+///
+/// Listens only. Every batch is terminated by a Primary DA request, so the
+/// answer arrives without asking — and asking again would put a second
+/// terminator on the wire and end the batch early.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PrimaryDeviceAttributes(pub Vec<Option<u32>>);
 
@@ -395,10 +406,6 @@ impl PrimaryDeviceAttributes {
 }
 
 impl Probe for PrimaryDeviceAttributes {
-    fn write_queries(&self, out: &mut dyn Write) -> io::Result<()> {
-        out.write_all(ctrl::REQUEST_PRIMARY_DA)
-    }
-
     fn observe_event(&mut self, event: &Event) -> io::Result<()> {
         if let Event::PrimaryDeviceAttributes(attrs) = event {
             self.0.clone_from(attrs);
@@ -495,9 +502,16 @@ impl Probe for Termcap {
             return Ok(());
         }
         if *recognized {
+            self.unsupported.retain(|u| u != name);
             self.entries.insert(name.to_owned(), value.to_owned());
-        } else if !self.unsupported.iter().any(|u| u == name) {
-            self.unsupported.push(name.to_owned());
+        } else {
+            // A later reply replaces the earlier status rather than adding a
+            // second one: reprobing after enabling a feature must not leave a
+            // capability reported both supported and unsupported.
+            self.entries.remove(name);
+            if !self.unsupported.iter().any(|u| u == name) {
+                self.unsupported.push(name.to_owned());
+            }
         }
         Ok(())
     }
@@ -631,6 +645,15 @@ mod tests {
         assert!(p.is_complete());
         assert_eq!(p.entries().count(), 2);
         assert_eq!(q(&PaletteColor::ansi()).matches("\x1b]4;").count(), 16);
+
+        // Something else on this terminal asked about index 9.
+        p.observe_event(&Event::PaletteColor {
+            index: 9,
+            color: Color::Green,
+        })
+        .unwrap();
+        assert_eq!(p.get(9), None, "records only the indices it asked about");
+        assert_eq!(p.entries().count(), 2);
     }
 
     #[test]
@@ -673,7 +696,9 @@ mod tests {
     #[test]
     fn primary_device_attributes_asks_and_folds() {
         let mut p = PrimaryDeviceAttributes::default();
-        assert_eq!(q(&p), "\x1b[c");
+        // Listens only: the batch terminator is a DA1 request already, and a
+        // second one would end the batch early.
+        assert_eq!(q(&p), "");
 
         p.observe_event(&Event::PrimaryDeviceAttributes(vec![
             Some(65),
@@ -784,6 +809,38 @@ mod tests {
             .unwrap();
         }
         assert_eq!(p.unsupported().count(), 1);
+    }
+
+    /// Reprobing after enabling a feature can flip a capability's status. The
+    /// later reply replaces the earlier one rather than adding a second, so a
+    /// name is never reported supported and unsupported at once.
+    #[test]
+    fn termcap_replaces_a_status_rather_than_accumulating() {
+        let mut p = Termcap::new(["Su"]);
+
+        p.observe_event(&Event::Termcap {
+            recognized: false,
+            payload: "Su".into(),
+        })
+        .unwrap();
+        assert!(!p.has("Su"));
+        assert_eq!(p.unsupported().collect::<Vec<_>>(), ["Su"]);
+
+        p.observe_event(&Event::Termcap {
+            recognized: true,
+            payload: "Su=1".into(),
+        })
+        .unwrap();
+        assert_eq!(p.get("Su"), Some("1"));
+        assert_eq!(p.unsupported().count(), 0, "no longer unsupported");
+
+        p.observe_event(&Event::Termcap {
+            recognized: false,
+            payload: "Su".into(),
+        })
+        .unwrap();
+        assert!(!p.has("Su"), "the stale value is dropped");
+        assert_eq!(p.unsupported().collect::<Vec<_>>(), ["Su"]);
     }
 
     #[test]
