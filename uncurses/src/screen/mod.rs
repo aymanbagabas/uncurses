@@ -278,6 +278,16 @@ pub struct ScreenOptions {
     ///   in the screen's mode state, so teardown cannot restore them.
     /// * **Nothing unterminated.** An unfinished OSC or DCS swallows the
     ///   terminator as payload, and the batch never completes.
+    /// * **Nothing answered out of stream order.** The batch is done when the
+    ///   terminator's reply lands, which only bounds queries the terminal
+    ///   answers as it reads them. A clipboard read
+    ///   ([`write_request_clipboard`](crate::ansi::clipboard::write_request_clipboard))
+    ///   is answered "when allowed by terminal policy" — behind a confirmation
+    ///   prompt, relayed by a multiplexer, or not at all — so its reply can
+    ///   arrive after the Primary DA that ended the batch, which puts it past
+    ///   the drain and into the shell. Send those with [`Write`] during the
+    ///   session and fold the reply as an ordinary event; they need no
+    ///   boundary, because nothing is waiting for them.
     ///
     /// Ignored when [`query_capabilities`](Self::query_capabilities) is
     /// `false`, since there is then no batch to join; use
@@ -982,7 +992,8 @@ where
     /// The replies surface as ordinary events for a [`Probe`](crate::probe::Probe)
     /// of your own to fold; `Screen` does not interpret them. The caveats on
     /// [`extra_init_queries`](ScreenOptions::extra_init_queries) apply here
-    /// too: no terminator of your own, queries only, nothing unterminated.
+    /// too: no terminator of your own, queries only, nothing unterminated,
+    /// nothing answered out of stream order.
     ///
     /// Keep one batch outstanding at a time. A second batch sent before the
     /// first is answered shares its terminator, so the first DA reply ends
