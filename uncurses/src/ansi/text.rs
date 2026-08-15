@@ -61,6 +61,8 @@ pub fn tokenize(bytes: &[u8], mode: WidthMode, eaw_wide: bool) -> Tokenizer<'_> 
         run: "",
         #[cfg(test)]
         scanned: 0,
+        #[cfg(test)]
+        validated: 0,
     }
 }
 
@@ -96,6 +98,35 @@ pub struct Tokenizer<'a> {
     /// count it.
     #[cfg(test)]
     scanned: usize,
+    /// Bytes handed to UTF-8 validation, counted separately from `scanned`.
+    ///
+    /// The scan and the validation are two different pieces of work over the
+    /// same run, and only one of them is refreshed at `scan_end`. A version
+    /// that finds the run once but revalidates the remainder on every token
+    /// is quadratic in real time - 4x per doubling, 8 s for a 128 KB line of
+    /// CJK - while visiting each byte exactly once *in the scan*. `scanned`
+    /// alone cannot see that; this can.
+    #[cfg(test)]
+    validated: usize,
+}
+
+impl<'a> Tokenizer<'a> {
+    /// Set `run` to the validated text from `pos` up to `to`.
+    ///
+    /// The byte count lives here rather than at the call site on purpose: the
+    /// cost that has to stay linear is "bytes handed to `from_utf8`", so
+    /// moving the validation moves its meter with it. A version that finds the
+    /// run once but revalidates the remainder per token keeps `scanned` at
+    /// exactly one visit per byte while running in quadratic time.
+    #[inline]
+    fn validate(&mut self, to: usize) {
+        let from = self.pos;
+        #[cfg(test)]
+        {
+            self.validated += to - from;
+        }
+        self.run = std::str::from_utf8(&self.bytes[from..to]).unwrap_or("");
+    }
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
@@ -152,7 +183,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             self.scan_end = end;
             // Valid by construction: the scan stopped at the first byte that
             // does not begin a well-formed character, so this cannot fail.
-            self.run = std::str::from_utf8(&self.bytes[self.pos..end]).unwrap_or("");
+            self.validate(end);
         }
         if self.run.is_empty() {
             // Nothing plain starts here, or what does is not valid UTF-8.
@@ -1201,19 +1232,28 @@ mod scaling {
     use super::util::*;
     use super::*;
 
-    /// Tokenize `bytes` fully and return the bytes the run scan visited.
+    /// Tokenize `bytes` fully and return the work it cost: bytes visited by
+    /// the run scan, and bytes handed to UTF-8 validation.
+    ///
+    /// Both are needed. They are two passes over the same run refreshed by two
+    /// different conditions, so either can go quadratic while the other stays
+    /// linear - a tokenizer that scans once per run but revalidates the
+    /// remainder once per token takes 4x as long for each doubling of the
+    /// input and still reports exactly one scan visit per byte.
     ///
     /// The tokens are checked rather than discarded: these inputs are the
     /// shapes most likely to desynchronise the run cache, so measuring what
     /// they cost while ignoring what they produced would miss an answer that
     /// is wrong but cheap.
-    fn scan_cost(bytes: &[u8]) -> usize {
+    fn scan_cost(bytes: &[u8]) -> (usize, usize) {
         let mut t = tokenize(bytes, WidthMode::Wc, false);
         let toks: Vec<_> = (&mut t).collect();
-        // `visible` asserts each text token is whole UTF-8 on the way past.
-        visible(&toks);
+        // Measuring what a wrong answer costs is no use, so check it. The
+        // discarded `visible` is the check: it panics on a text token that is
+        // not whole UTF-8.
+        let _ = visible(&toks);
         assert_eq!(rebuild(&toks), bytes, "tokens did not reassemble the input");
-        t.scanned
+        (t.scanned, t.validated)
     }
 
     /// Tokenizing one long line must cost work proportional to its length.
@@ -1240,9 +1280,32 @@ mod scaling {
             let line: String = std::iter::repeat_n('x', n).collect();
             assert_eq!(
                 scan_cost(line.as_bytes()),
-                n,
-                "the run is found once, in one pass"
+                (n, n),
+                "the run is found once, and validated once, in one pass each"
             );
+        }
+    }
+
+    /// The same bound for text that is not ASCII.
+    ///
+    /// The line above is all `x`, so every token leaves through the ASCII
+    /// shortcut and the grapheme path is never entered. A run of non-ASCII
+    /// characters is the one that walks `run` a cluster at a time, and it is
+    /// the one the run cache exists for: `latin1`, wide, astral, and a base
+    /// plus a combining mark, which is the case where a cluster spans more
+    /// than one character.
+    #[test]
+    fn tokenizing_a_long_non_ascii_line_is_linear_too() {
+        for unit in ["\u{e9}", "\u{4e00}", "\u{1f600}", "e\u{301}"] {
+            for n in [1_000usize, 4_000, 16_000, 64_000] {
+                let line = unit.repeat(n);
+                let len = line.len();
+                assert_eq!(
+                    scan_cost(line.as_bytes()),
+                    (len, len),
+                    "{unit:?} x{n}: the run is found once and validated once"
+                );
+            }
         }
     }
 
@@ -1262,10 +1325,14 @@ mod scaling {
             let bytes: Vec<u8> = std::iter::repeat_n([0xc2u8, 0x41], n / 2)
                 .flatten()
                 .collect();
-            let scanned = scan_cost(&bytes);
+            let (scanned, validated) = scan_cost(&bytes);
             assert!(
                 scanned <= 2 * n,
                 "scanning {n} malformed bytes visited {scanned} of them"
+            );
+            assert!(
+                validated <= 2 * n,
+                "validating {n} malformed bytes submitted {validated} of them"
             );
         }
     }
