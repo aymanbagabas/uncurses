@@ -8,9 +8,37 @@
 //!
 //! ## 7-bit and 8-bit controls
 //!
-//! Both 7-bit forms (`ESC [`, `ESC ]`, `ESC P`, `ESC _`) and 8-bit C1 forms
-//! (`0x9b`, `0x9d`, `0x90`, `0x9f`) are recognized. String controls terminate on
-//! BEL, `ST` (`ESC \\`), or 8-bit ST where applicable.
+//! Both 7-bit forms (`ESC [`, `ESC ]`, `ESC P`, `ESC X`, `ESC ^`, `ESC _`) and
+//! their 8-bit C1 bytes (`0x9B`, `0x9D`, `0x90`, `0x98`, `0x9E`, `0x9F`) open a
+//! sequence.
+//!
+//! A control string ends at ST, in either form - the byte `0x9C`, or `ESC \`.
+//! **`BEL` ends an OSC and nothing else**: `OSC Ps ; Pt BEL` is an xterm
+//! convention rather than a rule about control strings, and ECMA-48 gives them
+//! all one terminator. A `0x07` inside a DCS, SOS, PM or APC is payload, which
+//! matters because DCS carries arbitrary data. A lone `ESC` also ends a string
+//! and is re-parsed as the start of the next sequence.
+//!
+//! ## C1 bytes depend on decoder state
+//!
+//! A byte in `0x80..=0x9F` is a C1 control **between** characters and a UTF-8
+//! continuation byte **inside** one. Which it is depends on where the decoder
+//! is and on nothing else, so:
+//!
+//! - the byte `0x9C` is 8-bit ST, and the byte `0x9D` opens an OSC;
+//! - `C2 9C` is the *character* U+009C and is text, as is `C2 9D`;
+//! - the `0x9C` inside `E2 9C 85` ("✅") is neither, and is never examined.
+//!
+//! That last case is why every code point in U+2700..U+273F survives inside an
+//! OSC title. A `&str` cannot hold a raw C1 byte at all, which is what the
+//! 7-bit forms are for.
+//!
+//! ## Malformed input
+//!
+//! [`tokenize`] takes bytes, so its input need not be valid UTF-8. A byte that
+//! begins no well-formed character is emitted as [`Token::Control`] to keep
+//! forward progress, and contributes no width. Tokens always concatenate back
+//! to the input exactly.
 //!
 //! ## Mode interaction
 //!
@@ -24,7 +52,12 @@ use crate::unicode::graphemes;
 /// A single token produced by [`tokenize`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token<'a> {
-    /// A grapheme of visible text with its display width.
+    /// One grapheme cluster and its display width.
+    ///
+    /// Always whole, well-formed UTF-8. The width may be zero - a combining
+    /// mark, a variation selector, or a C1 character such as U+009C written
+    /// as `C2 9C` - so "visible" here means "not a control byte", not
+    /// "occupies a cell".
     Text {
         /// Grapheme bytes.
         text: &'a [u8],
@@ -33,8 +66,9 @@ pub enum Token<'a> {
     },
     /// An ANSI escape sequence (passed through verbatim, no width).
     Escape(&'a [u8]),
-    /// A single control byte (C0, DEL, or a non-introducer C1) that isn't
-    /// part of an escape sequence.
+    /// A single byte that stands on its own: a C0 control, DEL, a C1 byte
+    /// that introduces nothing, or a byte that begins no well-formed UTF-8
+    /// character. All are zero width.
     Control(u8),
 }
 
@@ -51,6 +85,13 @@ pub fn string_width(bytes: &[u8], mode: WidthMode, eaw_wide: bool) -> usize {
 }
 
 /// Tokenize an input byte slice into ANSI-aware tokens.
+///
+/// The tokens concatenate back to `bytes` exactly; the tokenizer reclassifies
+/// bytes but never invents or drops one. `bytes` need not be valid UTF-8.
+///
+/// See the [module docs](self) for which byte ends a control string, and for
+/// why a byte in `0x80..=0x9F` is a C1 control in one position and part of a
+/// character in another.
 pub fn tokenize(bytes: &[u8], mode: WidthMode, eaw_wide: bool) -> Tokenizer<'_> {
     Tokenizer {
         bytes,

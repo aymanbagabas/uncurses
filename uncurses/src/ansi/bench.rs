@@ -10,8 +10,9 @@
 //! RUSTFLAGS="--cfg uncurses_bench" cargo +nightly bench
 //! ```
 //!
-//! On a stable toolchain this module is not compiled at all, so it has no
-//! effect on normal builds, tests, or downstream consumers.
+//! Nothing compiles this module unless `--cfg uncurses_bench` is set, so it
+//! has no effect on normal builds, tests, or downstream consumers. It needs
+//! nightly because the `test` crate's `Bencher` is unstable.
 
 extern crate test;
 
@@ -141,9 +142,10 @@ fn hardwrap_ascii_250k(b: &mut Bencher) {
 
 /// Styled output - an SGR pair around every word - which breaks the text into
 /// short runs and is what a real TUI actually measures.
-/// Text broken into one-character runs by an SGR pair, which is the shape
-/// that costs most when the run cache is refreshed per run rather than per
-/// character.
+/// One SGR after every character, so every run of plain text is a single
+/// character. This is the shape that pays the per-run cost most often, and
+/// the one where carrying the run as a `&str` rather than an index costs
+/// most.
 #[bench]
 fn width_escape_dense_250k(b: &mut Bencher) {
     let s: String = std::iter::repeat_n("a\x1b[31m", BIG / 6).collect();
@@ -168,6 +170,8 @@ fn width_emoji_250k(b: &mut Bencher) {
     });
 }
 
+/// An SGR pair around every word, which is what coloured log output looks
+/// like: short runs, but not degenerate ones.
 #[bench]
 fn width_styled_250k(b: &mut Bencher) {
     let s: String = std::iter::repeat_n("\x1b[31mword\x1b[0m ", BIG / 15).collect();

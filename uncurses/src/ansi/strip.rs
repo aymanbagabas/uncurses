@@ -14,6 +14,10 @@
 //!
 //! Stripping does not emulate terminal modes. It is a byte-stream transformation
 //! suitable for display-width and plain-text extraction paths.
+//!
+//! Sequence boundaries and widths come from [`crate::ansi::text`];
+//! which byte ends a control string, and when a byte in `0x80..=0x9F`
+//! is a C1 control rather than part of a character, are documented there.
 
 use super::text::{Token, WidthMode, tokenize};
 

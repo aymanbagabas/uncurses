@@ -17,6 +17,10 @@
 //!
 //! Truncation does not emulate terminal modes. Mode-dependent sequence semantics
 //! are preserved as bytes but not interpreted.
+//!
+//! Sequence boundaries and widths come from [`crate::ansi::text`];
+//! which byte ends a control string, and when a byte in `0x80..=0x9F`
+//! is a C1 control rather than part of a character, are documented there.
 
 use super::text::{Token, WidthMode, string_width, tokenize};
 
