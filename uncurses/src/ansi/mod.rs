@@ -87,3 +87,93 @@ pub mod urxvt;
 pub mod winop;
 pub mod wrap;
 pub mod xterm;
+
+#[cfg(uncurses_bench)]
+mod bench;
+
+/// The text utilities all reach `from_utf8_unchecked` through their own `bs`,
+/// on the tokenizer's promise that no token ever splits a character.
+///
+/// That promise is checked at the tokenizer, and the `debug_assert!`s in
+/// `wrap::bs`, `truncate::bs`, `strip::bs` and `text::painter` exist to check
+/// it again where it is relied on - but nothing drove them. Every escape
+/// sequence in these modules' tests has an ASCII payload, so reverting the
+/// scanner fix (stepping one byte instead of one character) left all of them
+/// green while `strip` handed ill-formed bytes to `from_utf8_unchecked`. These
+/// inputs put a character that carries a C1 byte inside a sequence, which is
+/// the shape that made it undefined behaviour.
+#[cfg(test)]
+mod utf8_boundaries {
+    use super::{strip::strip, truncate, wrap};
+
+    /// Sequences whose payload contains a character with a C1 continuation
+    /// byte, followed by visible text.
+    ///
+    /// `\u{2705}` is `E2 9C 85` and carries 8-bit ST; `\u{9c}` is `C2 9C` and
+    /// *is* that byte, encoded; `\u{9d}` is `C2 9D`, the OSC introducer
+    /// encoded. Each appears in a terminated sequence, so what follows is
+    /// text a caller can see.
+    const INPUTS: &[&str] = &[
+        "\x1b]0;\u{2705}\x07visible",
+        "\x1b]0;a\u{9c}b\x07visible",
+        "\x1b]0;a\u{9d}b\x07visible",
+        "\x1b]8;;https://example.com/\u{2705}\x07visible\x1b]8;;\x07",
+        "\x1bP1$r\u{2705}\x1b\\visible",
+        "\x1b_G\u{2705}\x1b\\visible",
+        "\x1b^\u{2705}\x1b\\visible",
+        "\x1bX\u{2705}\x1b\\visible",
+        // An intermediate-byte escape whose final byte is non-ASCII, which is
+        // `scan_esc_intermediate`'s half of the same bug.
+        "\x1b#\u{2705}visible",
+        "\x1b\u{2705}visible",
+        // A payload that is not terminated at all: the whole tail is one
+        // escape token, and it still must not stop mid-character.
+        "\x1b]0;caf\u{e9} \u{2705} \u{4e00} \u{1f600}",
+    ];
+
+    #[test]
+    fn the_text_utilities_never_see_a_split_character() {
+        for input in INPUTS {
+            // The assertion is inside the callees: each of these routes every
+            // token through its module's `bs`, which checks the slice is whole
+            // UTF-8 before `from_utf8_unchecked` takes it on trust. A scanner
+            // that stops mid-character makes these panic under
+            // `debug_assertions` and makes them UB without.
+            for limit in [0usize, 1, 3, 7, 100] {
+                wrap::hardwrap(input, limit, false);
+                wrap::hardwrap(input, limit, true);
+                wrap::wordwrap(input, limit, wrap::DEFAULT_BREAKPOINTS);
+                wrap::wrap(input, limit, wrap::DEFAULT_BREAKPOINTS);
+                truncate::truncate(input, limit, "…");
+                truncate::truncate_left(input, limit, "…");
+                truncate::cut(input, limit / 2, limit);
+                strip(input);
+            }
+        }
+    }
+
+    /// The visible text survives the sequence, which is the user-facing half
+    /// of the same promise: a scanner that stops mid-character leaves the
+    /// remaining bytes of that character outside the escape, where they are
+    /// dropped or painted as garbage.
+    #[test]
+    fn the_text_after_a_utf8_payload_survives() {
+        for input in &INPUTS[..INPUTS.len() - 1] {
+            assert_eq!(
+                strip(input),
+                "visible",
+                "strip lost the text after {input:?}"
+            );
+            assert_eq!(
+                truncate::truncate(input, 7, ""),
+                *input,
+                "truncate at the full width should keep {input:?} intact"
+            );
+            assert_eq!(
+                strip(&wrap::hardwrap(input, 100, false)),
+                "visible",
+                "hardwrap lost the text after {input:?}"
+            );
+        }
+    }
+}

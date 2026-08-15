@@ -686,6 +686,60 @@ mod tests {
         assert_eq!(cell_at(&b, 0, 0).style.fg, Some(Color::Red));
     }
 
+    /// The painter's `from_utf8_unchecked` on a text token, driven by the
+    /// sequences that used to break the tokenizer's promise.
+    ///
+    /// Every other painter test uses ASCII-only escape payloads, so reverting
+    /// the scanner fix left them all green while the painter took ill-formed
+    /// bytes on trust. `\u{2705}` is `E2 9C 85` and carries an 8-bit ST byte;
+    /// `\u{9c}` and `\u{9d}` encode the ST and OSC bytes themselves.
+    #[test]
+    fn utf8_payloads_in_sequences_paint_the_text_after_them() {
+        for input in [
+            "\x1b]0;\u{2705}\x07ab",
+            "\x1b]0;x\u{9c}y\x07ab",
+            "\x1b]0;x\u{9d}y\x07ab",
+            "\x1bP1$r\u{2705}\x1b\\ab",
+            "\x1b_G\u{2705}\x1b\\ab",
+            "\x1b#\u{2705}ab",
+        ] {
+            let mut b = buf(10, 1);
+            let end = Painter::new(&mut b).set_str_wrap(
+                (0, 0),
+                input,
+                WrapMode::Truncate,
+                Style::default(),
+            );
+            assert_eq!(
+                end,
+                Position::new(2, 0),
+                "{input:?} painted the wrong width"
+            );
+            assert_eq!(cell_at(&b, 0, 0).content(), "a", "{input:?}");
+            assert_eq!(cell_at(&b, 1, 0).content(), "b", "{input:?}");
+        }
+    }
+
+    /// An OSC 8 whose URL carries a C1 continuation byte still yields a link
+    /// with the whole URL, and the styled text after it.
+    #[test]
+    fn osc8_with_a_utf8_url() {
+        let mut b = buf(10, 1);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "\x1b]8;;https://x/\u{2705}\x1b\\a\x1b]8;;\x1b\\b",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(
+            link_of(&cell_at(&b, 0, 0).style),
+            Some(("https://x/\u{2705}", ""))
+        );
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert!(cell_at(&b, 1, 0).style.link.is_none());
+        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+    }
+
     #[test]
     fn osc8_toggles_link() {
         let mut b = buf(10, 1);
