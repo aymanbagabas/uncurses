@@ -74,6 +74,7 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
             queries_sent_at: None,
             origin: Position::ORIGIN,
             origin_query_pending: false,
+            draining: false,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
@@ -2278,6 +2279,73 @@ fn drain_consumes_in_band_resize_echo_from_enabling_default() {
     assert!(
         screen.try_read_event().is_none(),
         "the in-band resize echo must be consumed, not left to leak"
+    );
+}
+
+/// Observing is not free. A resize report that carries no pixel dimensions
+/// answers with `CSI 14 t`, and a size change re-requests the inline origin
+/// with `CSI 6 n`; both flush. Inside the drain that writes a query *behind*
+/// the Primary DA terminator the drain stops on, so the reply arrives after
+/// cooked mode is restored and lands in the shell, which is the leak the
+/// drain exists to prevent.
+#[cfg(unix)]
+#[test]
+fn drain_observes_without_putting_new_queries_on_the_wire() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    // A resize with no pixel dimensions, then the terminator.
+    writer.write_all(b"\x1b[48;9;40;0;0t").unwrap();
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    screen.options.request_pixel_size_on_resize = true;
+    // Both preconditions for the origin re-request: mouse on, tracking on.
+    screen.state.mouse = Some(MouseTracking::default());
+    assert!(screen.options.track_origin);
+    screen.queries_sent_at = Some(std::time::Instant::now());
+
+    screen.drain_pending_queries().unwrap();
+
+    let written = String::from_utf8_lossy(screen.writer()).into_owned();
+    assert!(
+        !written.contains("\x1b[14t"),
+        "drain must not emit a pixel-size query, wrote {written:?}"
+    );
+    assert!(
+        !written.contains("\x1b[6n"),
+        "drain must not emit an origin query, wrote {written:?}"
+    );
+}
+
+/// The suppression lasts exactly as long as the drain. A screen that has
+/// handed the terminal back and taken it again must be able to ask questions,
+/// so the flag is cleared on every exit from the drain.
+#[cfg(unix)]
+#[test]
+fn a_finished_drain_leaves_the_screen_able_to_ask_again() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    screen.options.request_pixel_size_on_resize = true;
+    screen.queries_sent_at = Some(std::time::Instant::now());
+    screen.drain_pending_queries().unwrap();
+
+    screen
+        .observe_event(&crate::event::Event::Resize(crate::terminal::Winsize {
+            row: 9,
+            col: 40,
+            xpixel: 0,
+            ypixel: 0,
+        }))
+        .unwrap();
+
+    assert!(
+        String::from_utf8_lossy(screen.writer()).contains("\x1b[14t"),
+        "the drain must not mute queries past its own lifetime"
     );
 }
 
