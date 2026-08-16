@@ -311,6 +311,34 @@ fn test_resize() {
     assert_eq!(screen.height(), 30);
 }
 
+/// Resizing drops the tracked terminal contents, so it costs a full repaint.
+/// `autoresize` runs on every resize report, including ones that leave the
+/// cell grid alone, so the same size must not pay that cost.
+#[test]
+fn resize_to_the_same_size_does_not_repaint() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_str((0, 0), "hello", crate::style::Style::default());
+    screen.render().unwrap();
+
+    let after_first = screen.writer().len();
+    screen.resize((80, 24));
+    screen.render().unwrap();
+    assert_eq!(
+        screen.writer().len(),
+        after_first,
+        "same size repainted: {:?}",
+        String::from_utf8_lossy(&screen.writer()[after_first..])
+    );
+
+    // A real change still repaints.
+    screen.resize((80, 25));
+    screen.render().unwrap();
+    assert!(
+        screen.writer().len() > after_first,
+        "a changed size must repaint"
+    );
+}
+
 #[test]
 fn test_screen_clears_stale_chars_after_navigating() {
     // Simulate the file_explorer scenario: a row that had a long
