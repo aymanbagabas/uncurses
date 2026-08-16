@@ -193,6 +193,10 @@ where
     /// [`observe_event`](Self::observe_event) knows the next
     /// [`CursorPosition`](Event::CursorPosition) reply is ours to capture.
     origin_query_pending: bool,
+    /// Set while [`drain_pending_queries`](Self::drain_pending_queries) is
+    /// folding events, so observing one cannot put a fresh query on the wire
+    /// behind the terminator the drain stops on.
+    draining: bool,
 }
 
 /// Desired default behaviors applied by [`Screen::init_with`].
@@ -405,12 +409,19 @@ where
         self.window_cells = Some(cells);
         if ws.xpixel > 0 && ws.ypixel > 0 {
             self.window_pixels = Some(Size::new(ws.xpixel, ws.ypixel));
-        } else if self.options.request_pixel_size_on_resize && !self.state.in_band_resize {
+        } else if !self.draining
+            && self.options.request_pixel_size_on_resize
+            && !self.state.in_band_resize
+        {
             self.request_window_pixel_size()?;
         }
         // A terminal-size change may move the inline origin; re-request it
-        // (the reply is captured in observe_event).
-        if size_changed {
+        // (the reply is captured in observe_event). Both requests are skipped
+        // while the teardown drain is folding events: it observes to collect
+        // capabilities, not to ask more questions, and anything written now
+        // would trail the terminator the drain stops on, so the reply would
+        // arrive after cooked mode is restored and reach the shell.
+        if size_changed && !self.draining {
             self.write_request_origin()?;
             self.flush()?;
         }
@@ -932,6 +943,20 @@ where
     /// the normal decode path means replies are consumed (not flushed), which
     /// is race-free and identical on every platform.
     fn drain_pending_queries(&mut self) -> io::Result<()> {
+        // Observing an event can answer it with a query of the screen's own,
+        // which here would go out behind the terminator this stops on. Held
+        // across the error paths too: a drain that gives up must not leave
+        // the rest of the session unable to ask anything.
+        self.draining = true;
+        let drained = self.drain_observing_replies();
+        self.draining = false;
+        drained
+    }
+
+    /// The drain proper. Always called through
+    /// [`drain_pending_queries`](Self::drain_pending_queries), which holds
+    /// `draining` for the duration.
+    fn drain_observing_replies(&mut self) -> io::Result<()> {
         if self.defaults_applied {
             return Ok(());
         }
@@ -1580,6 +1605,7 @@ where
             queries_sent_at: None,
             origin: Position::ORIGIN,
             origin_query_pending: false,
+            draining: false,
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
