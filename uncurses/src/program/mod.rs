@@ -125,9 +125,6 @@ where
     /// carries pixel dimensions) and `WindowPixelSize` reports. `None`
     /// until first observed.
     window_pixels: Option<Size>,
-    /// The raw XTVERSION reply identifying the terminal (e.g.
-    /// `"XTerm(380)"`). `None` until the reply is observed.
-    terminal_name: Option<String>,
     /// Physical screen coordinate (0-based, from the terminal's top-left) of
     /// the managed area's top-left cell, tracked for inline sessions. Only
     /// meaningful inline; fullscreen [`origin`](Self::origin) is always
@@ -365,11 +362,11 @@ where
 
     // --- Capabilities and geometry ---------------------------------------
 
-    /// Terminal capabilities detected so far from intercepted query
-    /// replies. Populated as the relevant reports arrive through the event
-    /// delegates after [`Self::init`].
-    pub fn capabilities(&self) -> Capabilities {
-        self.caps
+    /// What the terminal has told us about itself so far, as the replies
+    /// themselves rather than a summary. Empty until you call
+    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    pub fn capabilities(&self) -> &Capabilities {
+        &self.caps
     }
 
     /// Last observed full terminal size in cells, or `None` before the first
@@ -386,9 +383,10 @@ where
     }
 
     /// The terminal's self-reported name from its XTVERSION reply (e.g.
-    /// `"XTerm(380)"`), or `None` when it has not answered.
+    /// `"XTerm(380)"`), or `None` when it has not answered. Shorthand for
+    /// [`Capabilities::terminal_name`].
     pub fn terminal_name(&self) -> Option<&str> {
-        self.terminal_name.as_deref()
+        self.caps.terminal_name()
     }
 
     /// Convert a mouse event carrying pixel coordinates into cell
@@ -509,50 +507,46 @@ where
     pub fn observe_event(&mut self, event: &Event) -> io::Result<()> {
         use crate::ansi::mode::Mode;
         match *event {
-            Event::ModeReport { mode, setting } if setting.is_available() => match mode {
-                // Render-affecting and free to adopt: the screen emits the
-                // 2026 markers per frame, so knowing the terminal understands
-                // them is all it takes. Override with
-                // [`Screen::set_synchronized_output`].
-                Mode::SYNCHRONIZED_OUTPUT => {
-                    self.caps.synchronized_output = true;
-                    self.screen.set_synchronized_output(true);
-                }
-                Mode::UNICODE_CORE => {
-                    self.caps.grapheme_clusters = true;
-                    if self.options.prefer_grapheme_clusters && !self.state.grapheme_clusters {
-                        self.enable_grapheme_clusters()?;
+            Event::ModeReport { mode, setting } => {
+                // Record every report, including "not recognized": a definite
+                // no is information an app may want, and is not the same as
+                // the terminal staying silent.
+                self.caps.set_mode(mode, setting);
+                if setting.is_available() {
+                    match mode {
+                        // Render-affecting and free to adopt: the screen emits
+                        // the 2026 markers per frame, so knowing the terminal
+                        // understands them is all it takes. Override with
+                        // [`Screen::set_synchronized_output`].
+                        Mode::SYNCHRONIZED_OUTPUT => {
+                            self.screen.set_synchronized_output(true);
+                        }
+                        Mode::UNICODE_CORE
+                            if self.options.prefer_grapheme_clusters
+                                && !self.state.grapheme_clusters =>
+                        {
+                            self.enable_grapheme_clusters()?;
+                        }
+                        Mode::IN_BAND_RESIZE
+                            if self.options.prefer_in_band_resize && !self.state.in_band_resize =>
+                        {
+                            self.enable_in_band_resize()?;
+                        }
+                        _ => {}
                     }
-                }
-                Mode::IN_BAND_RESIZE => {
-                    self.caps.in_band_resize = true;
-                    if self.options.prefer_in_band_resize && !self.state.in_band_resize {
-                        self.enable_in_band_resize()?;
-                    }
-                }
-                Mode::MOUSE_NORMAL => self.caps.mouse_normal = true,
-                Mode::MOUSE_BUTTON => self.caps.mouse_button = true,
-                Mode::MOUSE_ANY => self.caps.mouse_any = true,
-                Mode::MOUSE_SGR => self.caps.mouse_sgr = true,
-                Mode::MOUSE_SGR_PIXEL => self.caps.mouse_sgr_pixel = true,
-                _ => {}
-            },
-            Event::KittyKeyboardEnhancements(_) => self.caps.kitty_keyboard = true,
-            // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
-            // query, so a reply means the terminal recognizes the feature.
-            Event::ModifyOtherKeys(_) => self.caps.modify_other_keys = true,
-            Event::PrimaryDeviceAttributes(ref attrs) => {
-                // These come for free in the DA1 reply, which is sent as the
-                // capability-query terminator regardless.
-                if attrs.contains(&Some(4)) {
-                    self.caps.sixel = true;
-                }
-                if attrs.contains(&Some(52)) {
-                    self.caps.clipboard = true;
                 }
             }
+            Event::KittyKeyboardEnhancements(flags) => self.caps.set_kitty_keyboard(flags),
+            // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
+            // query, so a reply means the terminal recognizes the feature.
+            Event::ModifyOtherKeys(mode) => self.caps.set_modify_other_keys(mode),
+            Event::PrimaryDeviceAttributes(ref attrs) => {
+                // Sixel (4) and clipboard (52) support ride along in this
+                // reply, which is sent as the query terminator regardless.
+                self.caps.set_primary_device_attributes(attrs.clone());
+            }
             Event::TerminalName(ref report) => {
-                self.terminal_name = Some(report.clone());
+                self.caps.set_terminal_name(report.clone());
             }
             // Cache the full terminal size as it changes. Refitting the
             // managed area is left to the app (call autoresize() as desired).
@@ -579,7 +573,7 @@ where
                 recognized: true,
                 ref payload,
             } if payload.contains("RGB") || payload.contains("Tc") => {
-                self.caps.true_color = true;
+                self.caps.set_true_color();
                 self.screen
                     .set_color_profile(crate::color::Profile::TrueColor);
             }
@@ -721,7 +715,6 @@ where
             options: ProgramOptions::default(),
             window_cells: None,
             window_pixels: None,
-            terminal_name: None,
             origin: Position::ORIGIN,
             origin_queries_pending: 0,
         })
@@ -820,21 +813,26 @@ where
             }
         } else {
             // Terminal.app mishandles the capability queries, but its
-            // support for these features is known, so record them directly:
-            // mouse tracking (normal/button/any) and the SGR encoding (no
-            // pixel reporting). Bracketed paste is enabled unconditionally,
-            // so it needs no capability flag.
-            self.caps.mouse_normal = true;
-            self.caps.mouse_button = true;
-            self.caps.mouse_any = true;
-            self.caps.mouse_sgr = true;
+            // support for these features is known, so record them as though
+            // it had answered: mouse tracking (normal/button/any) and the SGR
+            // encoding (no pixel reporting). `Reset` is the honest reading —
+            // available, not currently on. Bracketed paste is enabled
+            // unconditionally, so it needs no capability record.
+            for mode in [
+                mode::Mode::MOUSE_NORMAL,
+                mode::Mode::MOUSE_BUTTON,
+                mode::Mode::MOUSE_ANY,
+                mode::Mode::MOUSE_SGR,
+            ] {
+                self.caps.set_mode(mode, mode::ModeSetting::Reset);
+            }
             // Terminal.app gained direct-color support in the build shipped
             // with macOS Tahoe; record it and upgrade the renderer when the
             // env-derived profile hasn't already.
             if profile < Profile::TrueColor
                 && self.apple_terminal_version().is_some_and(|v| v >= 470)
             {
-                self.caps.true_color = true;
+                self.caps.set_true_color();
                 self.screen.set_color_profile(Profile::TrueColor);
             }
         }

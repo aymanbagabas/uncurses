@@ -83,7 +83,6 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
             options: ProgramOptions::default(),
             window_cells: None,
             window_pixels: None,
-            terminal_name: None,
             origin: Position::ORIGIN,
             origin_queries_pending: 0,
         }
@@ -1179,7 +1178,11 @@ fn prefer_grapheme_clusters_enables_the_mode_when_the_terminal_reports_it() {
         .unwrap();
     program.screen_mut().flush().unwrap();
 
-    assert!(program.capabilities().grapheme_clusters);
+    assert!(
+        program
+            .capabilities()
+            .supports(crate::ansi::mode::Mode::UNICODE_CORE)
+    );
     // The render property follows, so the screen measures the way the
     // terminal now does.
     assert!(program.screen().grapheme_clusters());
@@ -1200,7 +1203,11 @@ fn prefer_in_band_resize_enables_the_mode_when_the_terminal_reports_it() {
         .unwrap();
     program.screen_mut().flush().unwrap();
 
-    assert!(program.capabilities().in_band_resize);
+    assert!(
+        program
+            .capabilities()
+            .supports(crate::ansi::mode::Mode::IN_BAND_RESIZE)
+    );
     assert!(program.state.in_band_resize);
     assert!(written(&buf).contains("\x1b[?2048h"));
 }
@@ -1226,8 +1233,16 @@ fn prefer_flags_off_records_the_capability_without_emitting() {
     program.screen_mut().flush().unwrap();
 
     // Detection still records the capability; only the adoption is opt-out.
-    assert!(program.capabilities().grapheme_clusters);
-    assert!(program.capabilities().in_band_resize);
+    assert!(
+        program
+            .capabilities()
+            .supports(crate::ansi::mode::Mode::UNICODE_CORE)
+    );
+    assert!(
+        program
+            .capabilities()
+            .supports(crate::ansi::mode::Mode::IN_BAND_RESIZE)
+    );
     assert!(!program.screen().grapheme_clusters());
     assert!(!program.state.in_band_resize);
     let out = written(&buf);
@@ -1282,8 +1297,16 @@ fn an_unavailable_mode_report_enables_nothing() {
     }
     program.screen_mut().flush().unwrap();
 
-    assert!(!program.capabilities().grapheme_clusters);
-    assert!(!program.capabilities().in_band_resize);
+    assert!(
+        !program
+            .capabilities()
+            .supports(crate::ansi::mode::Mode::UNICODE_CORE)
+    );
+    assert!(
+        !program
+            .capabilities()
+            .supports(crate::ansi::mode::Mode::IN_BAND_RESIZE)
+    );
     assert!(!program.screen().grapheme_clusters());
     let out = written(&buf);
     assert!(!out.contains("2027h") && !out.contains("2048h"), "{out:?}");
@@ -1313,4 +1336,198 @@ fn a_preferred_mode_enabled_by_discovery_is_undone_by_reset() {
     let out = written(&buf);
     assert!(out.contains("\x1b[?2027l"), "{out:?}");
     assert!(out.contains("\x1b[?2048l"), "{out:?}");
+}
+
+#[test]
+fn capabilities_keep_the_reported_mode_setting_not_just_availability() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    for (mode, setting) in [
+        (Mode::SYNCHRONIZED_OUTPUT, ModeSetting::PermanentlySet),
+        (Mode::MOUSE_SGR_PIXEL, ModeSetting::Reset),
+        (Mode::COLUMN_132, ModeSetting::NotRecognized),
+    ] {
+        program
+            .observe_event(&Event::ModeReport { mode, setting })
+            .unwrap();
+    }
+
+    let caps = program.capabilities();
+    // The exact reply survives, so "permanently set" stays distinguishable
+    // from "currently set".
+    assert_eq!(
+        caps.mode(Mode::SYNCHRONIZED_OUTPUT),
+        Some(ModeSetting::PermanentlySet)
+    );
+    assert_eq!(caps.mode(Mode::MOUSE_SGR_PIXEL), Some(ModeSetting::Reset));
+    // A definite "no" is recorded, and is not the same as silence.
+    assert_eq!(
+        caps.mode(Mode::COLUMN_132),
+        Some(ModeSetting::NotRecognized)
+    );
+    assert_eq!(caps.mode(Mode::AUTO_WRAP), None);
+
+    assert!(caps.supports(Mode::SYNCHRONIZED_OUTPUT));
+    assert!(caps.supports(Mode::MOUSE_SGR_PIXEL));
+    assert!(!caps.supports(Mode::COLUMN_132));
+    assert!(!caps.supports(Mode::AUTO_WRAP));
+}
+
+#[test]
+fn capabilities_record_a_mode_the_program_does_not_act_on() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    // Nothing in the program special-cases DECCKM; it is still recorded, so
+    // an app can query any mode it asked about.
+    program
+        .observe_event(&Event::ModeReport {
+            mode: Mode::CURSOR_KEYS,
+            setting: ModeSetting::Set,
+        })
+        .unwrap();
+
+    assert_eq!(
+        program.capabilities().mode(Mode::CURSOR_KEYS),
+        Some(ModeSetting::Set)
+    );
+}
+
+#[test]
+fn capabilities_keep_the_raw_primary_da_attributes() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program
+        .observe_event(&Event::PrimaryDeviceAttributes(vec![
+            Some(62),
+            Some(4),
+            None,
+            Some(52),
+        ]))
+        .unwrap();
+
+    let caps = program.capabilities();
+    assert_eq!(
+        caps.primary_device_attributes(),
+        Some([Some(62), Some(4), None, Some(52)].as_slice())
+    );
+    assert!(caps.sixel());
+    assert!(caps.clipboard());
+    assert!(caps.da_attribute(62));
+    assert!(!caps.da_attribute(21));
+}
+
+#[test]
+fn primary_device_attributes_are_none_until_the_terminal_answers() {
+    let buf = RefCell::new(Vec::new());
+    let program = Program::for_test(&buf, (20, 1));
+    let caps = program.capabilities();
+    assert_eq!(caps.primary_device_attributes(), None);
+    assert!(!caps.sixel());
+    assert!(!caps.clipboard());
+    assert_eq!(caps.kitty_keyboard(), None);
+    assert_eq!(caps.modify_other_keys(), None);
+    assert_eq!(caps.terminal_name(), None);
+    assert!(!caps.true_color());
+}
+
+#[test]
+fn capabilities_keep_the_reported_kitty_flags_and_modify_other_keys() {
+    use crate::ansi::kitty::KittyKeyboardFlags;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    let flags =
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES | KittyKeyboardFlags::REPORT_EVENT_TYPES;
+    program
+        .observe_event(&Event::KittyKeyboardEnhancements(flags))
+        .unwrap();
+    program
+        .observe_event(&Event::ModifyOtherKeys(
+            crate::event::ModifyOtherKeysMode::Mode2,
+        ))
+        .unwrap();
+
+    let caps = program.capabilities();
+    // The reported value, not merely "it answered".
+    assert_eq!(caps.kitty_keyboard(), Some(flags));
+    assert_eq!(
+        caps.modify_other_keys(),
+        Some(crate::event::ModifyOtherKeysMode::Mode2)
+    );
+}
+
+#[test]
+fn an_empty_kitty_reply_still_proves_support() {
+    use crate::ansi::kitty::KittyKeyboardFlags;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program
+        .observe_event(&Event::KittyKeyboardEnhancements(
+            KittyKeyboardFlags::empty(),
+        ))
+        .unwrap();
+
+    // Some(empty) means "supported, nothing enabled"; None would mean silence.
+    assert_eq!(
+        program.capabilities().kitty_keyboard(),
+        Some(KittyKeyboardFlags::empty())
+    );
+}
+
+#[test]
+fn a_disabled_modify_other_keys_reply_still_proves_support() {
+    use crate::event::ModifyOtherKeysMode;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program
+        .observe_event(&Event::ModifyOtherKeys(ModifyOtherKeysMode::Disabled))
+        .unwrap();
+
+    // The old bool could not say this: answering "disabled" proves the
+    // terminal knows the feature, which is not the same as never answering.
+    assert_eq!(
+        program.capabilities().modify_other_keys(),
+        Some(ModifyOtherKeysMode::Disabled)
+    );
+}
+
+#[test]
+fn the_terminal_name_lands_in_capabilities() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program
+        .observe_event(&Event::TerminalName("XTerm(380)".to_string()))
+        .unwrap();
+
+    assert_eq!(program.capabilities().terminal_name(), Some("XTerm(380)"));
+    // The Program shorthand reads the same storage.
+    assert_eq!(program.terminal_name(), Some("XTerm(380)"));
+}
+
+#[test]
+fn a_later_mode_report_replaces_an_earlier_one() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    for setting in [ModeSetting::Reset, ModeSetting::Set] {
+        program
+            .observe_event(&Event::ModeReport {
+                mode: Mode::MOUSE_ANY,
+                setting,
+            })
+            .unwrap();
+    }
+
+    assert_eq!(
+        program.capabilities().mode(Mode::MOUSE_ANY),
+        Some(ModeSetting::Set)
+    );
+    assert_eq!(program.capabilities().modes().len(), 1);
 }

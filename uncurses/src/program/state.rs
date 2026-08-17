@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 
 use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
+use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
 use crate::event::ModifyOtherKeysMode;
 
@@ -132,44 +133,140 @@ impl Default for State {
     }
 }
 
-/// Terminal capabilities detected from the replies to the queries
-/// [`Program::init`](super::Program::init) fires. Every field answers a
-/// single question: does the terminal support this? The facade intercepts
-/// the reply events as they flow through
-/// [`read_event`](super::Program::read_event) / [`try_read_event`](super::Program::try_read_event),
-/// records support here, and applies the render-affecting ones — the app
-/// never sees the reply events. Read back with
-/// [`Program::capabilities`](super::Program::capabilities).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// What the terminal told us about itself.
+///
+/// This holds the replies themselves, not a summary of them: the
+/// [`ModeSetting`] reported for every mode that was asked about, the raw
+/// Primary DA attribute list, the Kitty keyboard flags, and the
+/// modifyOtherKeys mode. A reply that says "I do not recognize that" is
+/// recorded too, which is why the accessors return [`Option`] — `None` means
+/// the terminal never answered, which is different from answering no.
+///
+/// The facade records these as reply events flow through
+/// [`read_event`](super::Program::read_event) /
+/// [`try_read_event`](super::Program::try_read_event). Nothing lands here
+/// unless you ask: see
+/// [`query_capabilities`](super::Program::query_capabilities). Read it back
+/// with [`Program::capabilities`](super::Program::capabilities).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Capabilities {
-    /// Synchronized output (DEC private mode 2026). Applied: frames are
-    /// wrapped in begin/end-synchronized-update markers.
-    pub synchronized_output: bool,
-    /// Unicode core / grapheme-cluster mode (DEC private mode 2027).
-    /// Applied: cell widths are measured per grapheme cluster.
-    pub grapheme_clusters: bool,
-    /// In-band resize notifications (DEC private mode 2048).
-    pub in_band_resize: bool,
-    /// Normal mouse button tracking (DEC private mode 1000).
-    pub mouse_normal: bool,
-    /// Button-event mouse tracking (DEC private mode 1002).
-    pub mouse_button: bool,
-    /// Any-event mouse tracking (DEC private mode 1003).
-    pub mouse_any: bool,
-    /// SGR mouse encoding (DEC private mode 1006).
-    pub mouse_sgr: bool,
-    /// SGR-pixel mouse encoding (DEC private mode 1016).
-    pub mouse_sgr_pixel: bool,
-    /// Sixel graphics (Primary DA attribute 4).
-    pub sixel: bool,
+    modes: BTreeMap<Mode, ModeSetting>,
+    primary_device_attributes: Option<Vec<Option<u32>>>,
+    kitty_keyboard: Option<KittyKeyboardFlags>,
+    modify_other_keys: Option<ModifyOtherKeysMode>,
+    terminal_name: Option<String>,
+    true_color: bool,
+}
+
+impl Capabilities {
+    /// The [`ModeSetting`] the terminal reported for `mode`, or `None` if it
+    /// never reported on that mode.
+    ///
+    /// Use this when the distinction matters: [`ModeSetting::Set`] means the
+    /// mode is currently on, [`ModeSetting::PermanentlySet`] means it cannot
+    /// be turned off, and [`ModeSetting::NotRecognized`] is a definite "no"
+    /// rather than silence.
+    pub fn mode(&self, mode: Mode) -> Option<ModeSetting> {
+        self.modes.get(&mode).copied()
+    }
+
+    /// Whether the terminal reported `mode` as available, in any state.
+    ///
+    /// ```ignore
+    /// use uncurses::ansi::mode::Mode;
+    ///
+    /// if program.capabilities().supports(Mode::MOUSE_SGR_PIXEL) {
+    ///     // pixel-accurate mouse reporting is available
+    /// }
+    /// ```
+    pub fn supports(&self, mode: Mode) -> bool {
+        self.mode(mode).is_some_and(ModeSetting::is_available)
+    }
+
+    /// Every mode report recorded so far, keyed by mode.
+    pub fn modes(&self) -> &BTreeMap<Mode, ModeSetting> {
+        &self.modes
+    }
+
+    /// The raw Primary DA attribute list, or `None` if the terminal never
+    /// answered. Entries are `None` where the terminal sent an empty
+    /// parameter.
+    pub fn primary_device_attributes(&self) -> Option<&[Option<u32>]> {
+        self.primary_device_attributes.as_deref()
+    }
+
+    /// Whether the Primary DA reply advertised `attribute`.
+    pub fn da_attribute(&self, attribute: u32) -> bool {
+        self.primary_device_attributes
+            .as_ref()
+            .is_some_and(|attrs| attrs.contains(&Some(attribute)))
+    }
+
+    /// Sixel graphics support (Primary DA attribute 4).
+    pub fn sixel(&self) -> bool {
+        self.da_attribute(4)
+    }
+
     /// Clipboard access (Primary DA attribute 52).
-    pub clipboard: bool,
-    /// Kitty keyboard protocol (the terminal answered `CSI ? u`).
-    pub kitty_keyboard: bool,
-    /// xterm modifyOtherKeys (the terminal answered `CSI ? 4 m`).
-    pub modify_other_keys: bool,
+    pub fn clipboard(&self) -> bool {
+        self.da_attribute(52)
+    }
+
+    /// The Kitty keyboard enhancements the terminal reported, or `None` if it
+    /// never answered `CSI ? u`. An answer of
+    /// [`empty`](KittyKeyboardFlags::empty) means the protocol is supported
+    /// with no enhancements currently active.
+    pub fn kitty_keyboard(&self) -> Option<KittyKeyboardFlags> {
+        self.kitty_keyboard
+    }
+
+    /// The xterm modifyOtherKeys mode the terminal reported, or `None` if it
+    /// never answered `CSI ? 4 m`.
+    pub fn modify_other_keys(&self) -> Option<ModifyOtherKeysMode> {
+        self.modify_other_keys
+    }
+
+    /// The terminal's self-reported name from XTVERSION (for example
+    /// `"XTerm(380)"`), or `None` if it never answered.
+    pub fn terminal_name(&self) -> Option<&str> {
+        self.terminal_name.as_deref()
+    }
+
     /// Direct (24-bit) color, confirmed by an XTGETTCAP `RGB`/`Tc` reply.
-    /// Applied: the renderer's color profile is upgraded to
-    /// [`Profile::TrueColor`](crate::color::Profile::TrueColor).
-    pub true_color: bool,
+    ///
+    /// Unlike the others this is not a reply value but a fact derived from
+    /// one, because the reply is a capability string rather than a state.
+    pub fn true_color(&self) -> bool {
+        self.true_color
+    }
+
+    /// Record a mode report.
+    pub(super) fn set_mode(&mut self, mode: Mode, setting: ModeSetting) {
+        self.modes.insert(mode, setting);
+    }
+
+    /// Record the Primary DA attribute list.
+    pub(super) fn set_primary_device_attributes(&mut self, attrs: Vec<Option<u32>>) {
+        self.primary_device_attributes = Some(attrs);
+    }
+
+    /// Record the reported Kitty keyboard enhancements.
+    pub(super) fn set_kitty_keyboard(&mut self, flags: KittyKeyboardFlags) {
+        self.kitty_keyboard = Some(flags);
+    }
+
+    /// Record the reported modifyOtherKeys mode.
+    pub(super) fn set_modify_other_keys(&mut self, mode: ModifyOtherKeysMode) {
+        self.modify_other_keys = Some(mode);
+    }
+
+    /// Record the terminal's XTVERSION name.
+    pub(super) fn set_terminal_name(&mut self, name: String) {
+        self.terminal_name = Some(name);
+    }
+
+    /// Record confirmed direct-color support.
+    pub(super) fn set_true_color(&mut self) {
+        self.true_color = true;
+    }
 }
