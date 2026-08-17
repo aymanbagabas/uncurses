@@ -21,14 +21,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # uncurses first: cargo publish waits for it to hit the index, so the
-      # dependent crate can resolve it on the next line.
+      # --workspace verifies every crate before uploading any of them and
+      # orders the uploads by the dependency graph. Publishing one at a time
+      # can upload uncurses and then fail verifying uncurses-ratatui, and a
+      # crates.io release cannot be taken back.
       - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          cargo publish -p uncurses
-          cargo publish -p uncurses-ratatui
+        run: cargo publish --workspace --locked
 
       - name: Generate release notes
         id: cliff
