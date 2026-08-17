@@ -15,6 +15,7 @@ use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -143,7 +144,7 @@ impl Field {
 /// Uncapped starfield app. `start` enters raw mode + alternate screen
 /// and `run` renders frames as fast as possible while draining input.
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     rng: Rng,
     field: Field,
     fps: Fps,
@@ -152,13 +153,13 @@ struct App {
 
 impl App {
     fn start() -> io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
         Ok(Self {
-            screen,
+            program,
             rng: Rng::new(seed_from_clock()),
             field: Field::new(),
             fps: Fps::new(),
@@ -170,16 +171,16 @@ impl App {
         self.frame_count = self.frame_count.wrapping_add(1);
         let t0 = Instant::now();
         draw(
-            &mut self.screen,
+            self.program.screen_mut(),
             &mut self.field,
             &mut self.rng,
             &self.fps,
             self.frame_count,
         );
         let t1 = Instant::now();
-        self.screen.render()?;
+        self.program.screen_mut().render()?;
         let t2 = Instant::now();
-        self.screen.flush()?;
+        self.program.screen_mut().flush()?;
         let t3 = Instant::now();
         self.fps.record(t1 - t0, t2 - t1, t3 - t2);
         Ok(())
@@ -188,11 +189,11 @@ impl App {
     fn run(&mut self) -> io::Result<()> {
         loop {
             // Drain pending input without blocking the render loop.
-            while self.screen.poll_event(Some(Duration::ZERO))? {
-                let Some(ev) = self.screen.try_read_event() else {
+            while self.program.poll_event(Some(Duration::ZERO))? {
+                let Some(ev) = self.program.try_read_event()? else {
                     break;
                 };
-                self.screen.observe_event(&ev)?;
+                self.program.observe_event(&ev)?;
                 match ev {
                     Event::KeyPress(Key {
                         code: KeyCode::Char('q'),
@@ -205,7 +206,7 @@ impl App {
                         ..
                     }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(()),
                     Event::Resize(ws) => {
-                        self.screen.resize((ws.col, ws.row));
+                        self.program.screen_mut().resize((ws.col, ws.row));
                         self.field = Field::new();
                     }
                     _ => {}
@@ -216,7 +217,7 @@ impl App {
     }
 
     fn stop(self) -> io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -228,7 +229,7 @@ fn main() -> io::Result<()> {
 }
 
 fn draw(
-    screen: &mut Screen<Stdin, Stdout>,
+    screen: &mut Screen<Stdout>,
     field: &mut Field,
     rng: &mut Rng,
     fps: &Fps,

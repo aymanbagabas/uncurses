@@ -10,14 +10,14 @@
 //! ## Fullscreen default
 //!
 //! [`try_init`] and [`init`] create a backend over process stdio, initialize
-//! the wrapped [`Screen`](uncurses::screen::Screen) with default
-//! [`ScreenOptions`], enter the alternate screen, hide the cursor, and build a
+//! the wrapped [`Program`](uncurses::screen::Screen) with default
+//! [`ProgramOptions`], enter the alternate screen, hide the cursor, and build a
 //! [`Terminal`] with [`Viewport::Fullscreen`].
 //!
 //! ## Custom options and viewports
 //!
 //! [`try_init_with_options`] and [`init_with_options`] accept the exact
-//! [`TerminalOptions`] and [`ScreenOptions`] to apply. Fullscreen and fixed
+//! [`TerminalOptions`] and [`ProgramOptions`] to apply. Fullscreen and fixed
 //! viewports enter the alternate screen. [`Viewport::Inline`] intentionally
 //! stays on the main screen, resizes the screen buffer to the requested inline
 //! height, and lets the backend translate absolute frame rows into that inline
@@ -41,7 +41,7 @@
 use std::io;
 
 use ratatui::{Terminal, TerminalOptions, Viewport};
-use uncurses::screen::ScreenOptions;
+use uncurses::program::ProgramOptions;
 use uncurses::terminal::{Stdin, Stdout};
 
 use crate::UncursesBackend;
@@ -65,7 +65,7 @@ pub type DefaultTerminal = Terminal<UncursesBackend<Stdin, Stdout>>;
 /// ## Returns
 ///
 /// A ready-to-draw [`DefaultTerminal`] using [`Viewport::Fullscreen`] and
-/// default [`ScreenOptions`].
+/// default [`ProgramOptions`].
 ///
 /// ## Panics
 ///
@@ -82,7 +82,7 @@ pub fn init() -> DefaultTerminal {
 /// Initialize a fullscreen terminal over process stdio.
 ///
 /// This uses [`try_init_with_options`] with [`Viewport::Fullscreen`] and
-/// [`ScreenOptions::default`]. Setup constructs an [`UncursesBackend`] over
+/// [`ProgramOptions::default`]. Setup constructs an [`UncursesBackend`] over
 /// stdio, initializes its screen, enters the alternate screen, hides the
 /// cursor, records the fullscreen viewport, and builds the returned
 /// [`Terminal`].
@@ -113,7 +113,7 @@ pub fn try_init() -> io::Result<DefaultTerminal> {
         TerminalOptions {
             viewport: Viewport::Fullscreen,
         },
-        ScreenOptions::default(),
+        ProgramOptions::default(),
     )
 }
 
@@ -142,7 +142,7 @@ pub fn try_init() -> io::Result<DefaultTerminal> {
 /// reporting. Pair a successful call with [`restore`] or [`try_restore`].
 pub fn init_with_options(
     options: TerminalOptions,
-    screen_options: ScreenOptions,
+    screen_options: ProgramOptions,
 ) -> DefaultTerminal {
     try_init_with_options(options, screen_options).expect("failed to initialize terminal")
 }
@@ -183,15 +183,15 @@ pub fn init_with_options(
 /// [`try_restore`] or [`restore`] after a successful setup.
 pub fn try_init_with_options(
     options: TerminalOptions,
-    screen_options: ScreenOptions,
+    screen_options: ProgramOptions,
 ) -> io::Result<DefaultTerminal> {
     let viewport = options.viewport.clone();
     let mut backend = UncursesBackend::stdio()?;
     backend.init_with(screen_options)?;
     if !matches!(viewport, Viewport::Inline(_)) {
-        backend.screen_mut().enter_alt_screen()?;
+        backend.program_mut().enter_alt_screen()?;
     }
-    backend.screen_mut().hide_cursor()?;
+    backend.program_mut().hide_cursor()?;
     backend.set_viewport(viewport);
     Terminal::with_options(backend, options)
 }

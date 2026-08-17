@@ -1,9 +1,9 @@
-//! Shell out to `$EDITOR` with `Screen::pause` and `Screen::resume`.
+//! Shell out to `$EDITOR` with `Program::pause` and `Program::resume`.
 //!
 //! Sometimes a TUI needs to hand the whole terminal to another program —
 //! open `$EDITOR`, run a pager, drop to a shell — and take it back when
-//! that program exits. [`Screen::pause`] tears down raw mode and the
-//! alternate screen and gives the terminal back; [`Screen::resume`]
+//! that program exits. [`Program::pause`] tears down raw mode and the
+//! alternate screen and gives the terminal back; [`Program::resume`]
 //! re-acquires it and repaints. The screen keeps all its state in between,
 //! so resuming is seamless.
 //!
@@ -18,30 +18,31 @@ use std::process::Command;
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode};
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    let mut program = Program::stdio()?;
+    program.init()?;
+    program.enter_alt_screen()?;
+    program.hide_cursor()?;
 
-    let result = run(&mut screen);
-    screen.finish()?;
+    let result = run(&mut program);
+    program.finish()?;
     result
 }
 
-fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let mut text = String::from("Edit me in $EDITOR.\n\nLine two.\n");
     let mut status = String::new();
-    render(screen, &text, &status);
+    render(program.screen_mut(), &text, &status);
 
     loop {
-        let ev = screen.read_event()?;
-        screen.observe_event(&ev)?;
+        let ev = program.read_event()?;
+        program.observe_event(&ev)?;
         match ev {
             Event::KeyPress(Key {
                 code: KeyCode::Char('q'),
@@ -51,18 +52,18 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
                 code: KeyCode::Char('e'),
                 ..
             }) => {
-                status = match edit_in_editor(screen, &text) {
+                status = match edit_in_editor(program, &text) {
                     Ok(edited) => {
                         text = edited;
                         "edited in $EDITOR".to_string()
                     }
                     Err(e) => format!("editor failed: {e}"),
                 };
-                render(screen, &text, &status);
+                render(program.screen_mut(), &text, &status);
             }
             Event::Resize(ws) => {
-                screen.resize((ws.col, ws.row));
-                render(screen, &text, &status);
+                program.screen_mut().resize((ws.col, ws.row));
+                render(program.screen_mut(), &text, &status);
             }
             _ => {}
         }
@@ -73,7 +74,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 /// Write `text` to a temp file, hand the terminal to `$EDITOR`, then take
 /// it back and read the file. The `pause`/`resume` pair brackets the child
 /// so the editor sees a normal cooked terminal.
-fn edit_in_editor(screen: &mut Screen<Stdin, Stdout>, text: &str) -> std::io::Result<String> {
+fn edit_in_editor(program: &mut Program<Stdin, Stdout>, text: &str) -> std::io::Result<String> {
     let editor = std::env::var("EDITOR")
         .or_else(|_| std::env::var("VISUAL"))
         .unwrap_or_else(|_| "vi".to_string());
@@ -84,9 +85,9 @@ fn edit_in_editor(screen: &mut Screen<Stdin, Stdout>, text: &str) -> std::io::Re
     // Hand the terminal back, run the editor (it inherits our stdio), then
     // re-acquire. `resume` runs even if the editor fails, so the UI always
     // comes back.
-    screen.pause()?;
+    program.pause()?;
     let spawn = Command::new(&editor).arg(&path).status();
-    screen.resume()?;
+    program.resume()?;
     spawn?;
 
     let edited = std::fs::read_to_string(&path)?;
@@ -94,7 +95,7 @@ fn edit_in_editor(screen: &mut Screen<Stdin, Stdout>, text: &str) -> std::io::Re
     Ok(edited)
 }
 
-fn render(screen: &mut Screen<Stdin, Stdout>, text: &str, status: &str) {
+fn render(screen: &mut Screen<Stdout>, text: &str, status: &str) {
     screen.clear();
     let dim = Style::default().fg(Color::BrightBlack);
     screen.set_str((0, 0), "e: edit in $EDITOR   q: quit", dim.clone());

@@ -17,7 +17,7 @@
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::{TextSurface, char_width};
@@ -149,13 +149,15 @@ fn char_index_to_byte(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
-fn redraw(screen: &mut Screen<TtyInput, TtyOutput>, buf: &Buffer) {
-    screen.clear();
+fn redraw(program: &mut Program<TtyInput, TtyOutput>, buf: &Buffer) {
+    program.screen_mut().clear();
     for (row, line) in buf.lines.iter().enumerate() {
         let prefix = if row == 0 { "> " } else { ". " };
         let rendered = format!("{}{}", prefix, line);
         {
-            screen.set_str((0, row as u16), &rendered, Style::default());
+            program
+                .screen_mut()
+                .set_str((0, row as u16), &rendered, Style::default());
         };
     }
 
@@ -174,7 +176,7 @@ fn redraw(screen: &mut Screen<TtyInput, TtyOutput>, buf: &Buffer) {
         .sum();
     let cursor_x = prefix_w + before_width;
     let cursor_ch = line_chars.get(buf.col).copied().unwrap_or(' ');
-    screen.set_str(
+    program.screen_mut().set_str(
         (cursor_x, buf.row as u16),
         &cursor_ch.to_string(),
         Style::default().reverse(),
@@ -182,44 +184,46 @@ fn redraw(screen: &mut Screen<TtyInput, TtyOutput>, buf: &Buffer) {
 }
 
 struct App {
-    screen: Screen<TtyInput, TtyOutput>,
+    program: Program<TtyInput, TtyOutput>,
     buffer: Buffer,
     paste: Option<Vec<u8>>,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::open()?;
+        let mut program = Program::open()?;
         // Inline mode: no alternate screen. Bracketed paste is enabled by
         // default, so PasteStart/Chunk/End events arrive as the user pastes.
-        screen.init()?;
-        screen.hide_cursor()?;
+        program.init()?;
+        program.hide_cursor()?;
         // Start one row tall; the prompt grows as lines are added.
-        let w = screen.width();
-        screen.resize((w, 1));
+        let w = program.screen().width();
+        program.screen_mut().resize((w, 1));
 
         let buffer = Buffer::new();
         let paste = None;
 
         Ok(Self {
-            screen,
+            program,
             buffer,
             paste,
         })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, &self.buffer);
-        self.screen.render()
+        redraw(&mut self.program, &self.buffer);
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
-        let w = self.screen.width();
-        self.screen.resize((w, self.buffer.lines.len() as u16));
+        let w = self.program.screen().width();
+        self.program
+            .screen_mut()
+            .resize((w, self.buffer.lines.len() as u16));
         self.render()?;
 
-        while let Ok(ev) = self.screen.read_event() {
-            let _ = self.screen.observe_event(&ev);
+        while let Ok(ev) = self.program.read_event() {
+            let _ = self.program.observe_event(&ev);
             match ev {
                 Event::KeyPress(Key {
                     code, modifiers, ..
@@ -230,7 +234,7 @@ impl App {
                         if modifiers.contains(KeyModifiers::CTRL) && !self.buffer.is_blank() =>
                     {
                         let text = self.buffer.as_text();
-                        self.screen.insert_above(&text)?;
+                        self.program.screen_mut().insert_above(&text)?;
                         self.buffer.clear();
                     }
                     KeyCode::Enter => self.buffer.insert_newline(),
@@ -266,20 +270,24 @@ impl App {
                     }
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize((ws.col, self.buffer.lines.len() as u16));
+                    self.program
+                        .screen_mut()
+                        .resize((ws.col, self.buffer.lines.len() as u16));
                 }
                 _ => {}
             }
 
-            let w = self.screen.width();
-            self.screen.resize((w, self.buffer.lines.len() as u16));
+            let w = self.program.screen().width();
+            self.program
+                .screen_mut()
+                .resize((w, self.buffer.lines.len() as u16));
             self.render()?;
         }
         Ok(())
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
