@@ -1163,3 +1163,154 @@ fn restore_reapplies_the_emitted_render_coupled_modes() {
         "did not re-enable grapheme mode: {out:?}"
     );
 }
+
+#[test]
+fn prefer_grapheme_clusters_enables_the_mode_when_the_terminal_reports_it() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    assert!(program.options.prefer_grapheme_clusters);
+    assert!(!program.screen().grapheme_clusters());
+
+    program
+        .observe_event(&Event::ModeReport {
+            mode: crate::ansi::mode::Mode::UNICODE_CORE,
+            setting: crate::ansi::mode::ModeSetting::Reset,
+        })
+        .unwrap();
+    program.screen_mut().flush().unwrap();
+
+    assert!(program.capabilities().grapheme_clusters);
+    // The render property follows, so the screen measures the way the
+    // terminal now does.
+    assert!(program.screen().grapheme_clusters());
+    assert!(written(&buf).contains("\x1b[?2027h"));
+}
+
+#[test]
+fn prefer_in_band_resize_enables_the_mode_when_the_terminal_reports_it() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    assert!(program.options.prefer_in_band_resize);
+
+    program
+        .observe_event(&Event::ModeReport {
+            mode: crate::ansi::mode::Mode::IN_BAND_RESIZE,
+            setting: crate::ansi::mode::ModeSetting::Reset,
+        })
+        .unwrap();
+    program.screen_mut().flush().unwrap();
+
+    assert!(program.capabilities().in_band_resize);
+    assert!(program.state.in_band_resize);
+    assert!(written(&buf).contains("\x1b[?2048h"));
+}
+
+#[test]
+fn prefer_flags_off_records_the_capability_without_emitting() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.options.prefer_grapheme_clusters = false;
+    program.options.prefer_in_band_resize = false;
+
+    for mode in [
+        crate::ansi::mode::Mode::UNICODE_CORE,
+        crate::ansi::mode::Mode::IN_BAND_RESIZE,
+    ] {
+        program
+            .observe_event(&Event::ModeReport {
+                mode,
+                setting: crate::ansi::mode::ModeSetting::Reset,
+            })
+            .unwrap();
+    }
+    program.screen_mut().flush().unwrap();
+
+    // Detection still records the capability; only the adoption is opt-out.
+    assert!(program.capabilities().grapheme_clusters);
+    assert!(program.capabilities().in_band_resize);
+    assert!(!program.screen().grapheme_clusters());
+    assert!(!program.state.in_band_resize);
+    let out = written(&buf);
+    assert!(
+        !out.contains("2027h"),
+        "emitted 2027 with the flag off: {out:?}"
+    );
+    assert!(
+        !out.contains("2048h"),
+        "emitted 2048 with the flag off: {out:?}"
+    );
+}
+
+#[test]
+fn a_repeated_mode_report_does_not_re_emit_the_mode() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    for _ in 0..3 {
+        for mode in [
+            crate::ansi::mode::Mode::UNICODE_CORE,
+            crate::ansi::mode::Mode::IN_BAND_RESIZE,
+        ] {
+            program
+                .observe_event(&Event::ModeReport {
+                    mode,
+                    setting: crate::ansi::mode::ModeSetting::Reset,
+                })
+                .unwrap();
+        }
+    }
+    program.screen_mut().flush().unwrap();
+
+    let out = written(&buf);
+    assert_eq!(out.matches("\x1b[?2027h").count(), 1, "{out:?}");
+    assert_eq!(out.matches("\x1b[?2048h").count(), 1, "{out:?}");
+}
+
+#[test]
+fn an_unavailable_mode_report_enables_nothing() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    for mode in [
+        crate::ansi::mode::Mode::UNICODE_CORE,
+        crate::ansi::mode::Mode::IN_BAND_RESIZE,
+    ] {
+        program
+            .observe_event(&Event::ModeReport {
+                mode,
+                setting: crate::ansi::mode::ModeSetting::NotRecognized,
+            })
+            .unwrap();
+    }
+    program.screen_mut().flush().unwrap();
+
+    assert!(!program.capabilities().grapheme_clusters);
+    assert!(!program.capabilities().in_band_resize);
+    assert!(!program.screen().grapheme_clusters());
+    let out = written(&buf);
+    assert!(!out.contains("2027h") && !out.contains("2048h"), "{out:?}");
+}
+
+#[test]
+fn a_preferred_mode_enabled_by_discovery_is_undone_by_reset() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    for mode in [
+        crate::ansi::mode::Mode::UNICODE_CORE,
+        crate::ansi::mode::Mode::IN_BAND_RESIZE,
+    ] {
+        program
+            .observe_event(&Event::ModeReport {
+                mode,
+                setting: crate::ansi::mode::ModeSetting::Reset,
+            })
+            .unwrap();
+    }
+    buf.borrow_mut().clear();
+
+    // Discovery goes through the same emit path as an explicit call, so the
+    // emitted-mode record covers it and teardown undoes it.
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
+    let out = written(&buf);
+    assert!(out.contains("\x1b[?2027l"), "{out:?}");
+    assert!(out.contains("\x1b[?2048l"), "{out:?}");
+}

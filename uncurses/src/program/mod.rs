@@ -50,9 +50,13 @@
 //! [`init`](Program::init) uses [`ProgramOptions::default`];
 //! [`init_with`](Program::init_with) takes an explicit [`ProgramOptions`] to
 //! choose whether to enable bracketed paste and mouse tracking at startup.
-//! They take effect immediately; everything else, capability queries
-//! included, is yours to ask for (see
-//! [`capabilities`](Program::capabilities)).
+//! Those take effect immediately at init.
+//!
+//! The two `prefer_*` fields are discovery-driven instead: they enable
+//! grapheme-cluster mode and in-band resize only once the terminal reports
+//! the mode as available. Since a program never probes on its own, that
+//! means calling [`query_capabilities`](Program::query_capabilities) and
+//! reading the replies (see [`capabilities`](Program::capabilities)).
 //!
 //! [`Terminal`]: crate::terminal::Terminal
 //! [`EventSource`]: crate::event::EventSource
@@ -140,11 +144,12 @@ where
 
 /// Defaults applied by [`Program::init_with`].
 ///
-/// Every field here takes effect at init unconditionally — nothing in this
-/// struct depends on capability detection, because a [`Program`] never probes
-/// the terminal on its own. Call
-/// [`query_capabilities`](Program::query_capabilities) if you want
-/// [`Capabilities`] populated, then act on them yourself.
+/// Most fields take effect at init unconditionally. The two `prefer_*` fields
+/// are the exception: they depend on capability detection, so they do nothing
+/// until the terminal reports the matching mode as available. A [`Program`]
+/// never probes on its own, so that report only arrives if you call
+/// [`query_capabilities`](Program::query_capabilities) and read the replies.
+/// Without it these two fields stay dormant and the modes are never enabled.
 #[derive(Debug, Clone)]
 pub struct ProgramOptions {
     /// Enable bracketed paste at init. Defaults to `true`.
@@ -154,6 +159,26 @@ pub struct ProgramOptions {
     /// terminals ignore modes they do not support and degrade gracefully.
     /// Defaults to `None` (mouse tracking off).
     pub mouse: Option<MouseTracking>,
+    /// Enable grapheme-cluster mode (DEC mode 2027) once the terminal reports
+    /// it as available, so the terminal and the [`Screen`] measure text the
+    /// same way. Defaults to `true`.
+    ///
+    /// Nothing is emitted until that report arrives, which requires
+    /// [`query_capabilities`](Program::query_capabilities) and a read loop.
+    /// Set to `false` to keep per-code-point measurement, or call
+    /// [`enable_grapheme_clusters`](Program::enable_grapheme_clusters)
+    /// yourself to opt in without waiting for a report.
+    pub prefer_grapheme_clusters: bool,
+    /// Enable in-band resize notifications (DEC mode 2048) once the terminal
+    /// reports them as available, so resizes arrive on the event stream with
+    /// pixel dimensions instead of through `SIGWINCH`. Defaults to `true`.
+    ///
+    /// Nothing is emitted until that report arrives, which requires
+    /// [`query_capabilities`](Program::query_capabilities) and a read loop.
+    /// Set to `false` to stay on the signal path, or call
+    /// [`enable_in_band_resize`](Program::enable_in_band_resize) yourself to
+    /// opt in without waiting for a report.
+    pub prefer_in_band_resize: bool,
 }
 
 bitflags! {
@@ -214,6 +239,8 @@ impl Default for ProgramOptions {
         Self {
             bracketed_paste: true,
             mouse: None,
+            prefer_grapheme_clusters: true,
+            prefer_in_band_resize: true,
         }
     }
 }
@@ -452,8 +479,14 @@ where
     /// `request_*` methods are recorded into
     /// [`capabilities`](Self::capabilities), window-size reports update
     /// [`window_cells`](Self::window_cells) /
-    /// [`window_pixels`](Self::window_pixels), and the render-affecting reports
-    /// are applied to the [`Screen`].
+    /// [`window_pixels`](Self::window_pixels), and the render-affecting
+    /// reports are applied to the [`Screen`].
+    ///
+    /// Observing is otherwise passive, with one class of exception: a mode
+    /// report proving support for grapheme clusters or in-band resize enables
+    /// that mode when the matching
+    /// [`ProgramOptions`] `prefer_*` field is set, which writes to the
+    /// terminal. Each is enabled at most once.
     ///
     /// Observing never queries. Nothing here asks the terminal a question, so
     /// no reply appears on the event stream that the application did not ask
@@ -485,9 +518,18 @@ where
                     self.caps.synchronized_output = true;
                     self.screen.set_synchronized_output(true);
                 }
-                Mode::UNICODE_CORE => self.caps.grapheme_clusters = true,
-                // Recorded only; enabling is the app's choice.
-                Mode::IN_BAND_RESIZE => self.caps.in_band_resize = true,
+                Mode::UNICODE_CORE => {
+                    self.caps.grapheme_clusters = true;
+                    if self.options.prefer_grapheme_clusters && !self.state.grapheme_clusters {
+                        self.enable_grapheme_clusters()?;
+                    }
+                }
+                Mode::IN_BAND_RESIZE => {
+                    self.caps.in_band_resize = true;
+                    if self.options.prefer_in_band_resize && !self.state.in_band_resize {
+                        self.enable_in_band_resize()?;
+                    }
+                }
                 Mode::MOUSE_NORMAL => self.caps.mouse_normal = true,
                 Mode::MOUSE_BUTTON => self.caps.mouse_button = true,
                 Mode::MOUSE_ANY => self.caps.mouse_any = true,
