@@ -10,6 +10,7 @@ use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key};
 use uncurses::layout::Rect;
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -40,7 +41,7 @@ const BACKGROUND: &[&str] = &[
 /// Modal-toggle app. `start` enters raw mode and the alternate screen,
 /// and `run` drives the event loop.
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     modal_open: bool,
     quit_keys: [Key; 3],
     toggle_keys: [Key; 2],
@@ -48,16 +49,16 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
         // Parse key bindings once. `Key: FromStr`, and `==` compares on
         // the canonical chord identity — so plain equality is the right
         // operator for keyboard-shortcut matching.
         Ok(Self {
-            screen,
+            program,
             modal_open: true,
             quit_keys: ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap()),
             toggle_keys: ["space", "m"].map(|s| s.parse().unwrap()),
@@ -65,16 +66,16 @@ impl App {
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, self.modal_open);
-        self.screen.render()
+        redraw(&mut self.program, self.modal_open);
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
         loop {
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
+            self.program.observe_event(&ev)?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -83,7 +84,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize((ws.col, ws.row));
+                    self.program.screen_mut().resize((ws.col, ws.row));
                     dirty = true;
                 }
                 _ => {}
@@ -96,7 +97,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -107,16 +108,16 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
-    screen.clear();
-    paint_background(screen);
-    paint_status(screen, modal_open);
-    if modal_open && let Some(rect) = modal_rect(screen) {
-        paint_modal(screen, rect);
+fn redraw(program: &mut Program<Stdin, Stdout>, modal_open: bool) {
+    program.screen_mut().clear();
+    paint_background(program.screen_mut());
+    paint_status(program.screen_mut(), modal_open);
+    if modal_open && let Some(rect) = modal_rect(program.screen_mut()) {
+        paint_modal(program, rect);
     }
 }
 
-fn paint_background(screen: &mut Screen<Stdin, Stdout>) {
+fn paint_background(screen: &mut Screen<Stdout>) {
     let w = screen.width();
     let h = screen.height();
     if w == 0 || h == 0 {
@@ -131,7 +132,7 @@ fn paint_background(screen: &mut Screen<Stdin, Stdout>) {
     }
 }
 
-fn paint_status(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
+fn paint_status(screen: &mut Screen<Stdout>, modal_open: bool) {
     let h = screen.height();
     if h == 0 {
         return;
@@ -150,7 +151,7 @@ fn paint_status(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
     screen.set_str((0, y), label, status);
 }
 
-fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
+fn modal_rect(screen: &Screen<Stdout>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W + 2 || h < MODAL_H + 2 {
@@ -161,7 +162,7 @@ fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
+fn paint_modal(program: &mut Program<Stdin, Stdout>, rect: Rect) {
     let frame = Style::default()
         .fg(Color::BrightWhite)
         .bg(Color::Blue)
@@ -173,28 +174,46 @@ fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
         .italic();
 
     // Solid fill so background text never bleeds through the modal.
-    screen.fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
+    program
+        .screen_mut()
+        .fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
 
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;
     // Borders.
     for x in (rect.x + 1)..right {
-        screen.set_str((x, rect.y), "─", frame.clone());
-        screen.set_str((x, bottom), "─", frame.clone());
+        program
+            .screen_mut()
+            .set_str((x, rect.y), "─", frame.clone());
+        program
+            .screen_mut()
+            .set_str((x, bottom), "─", frame.clone());
     }
     for y in (rect.y + 1)..bottom {
-        screen.set_str((rect.x, y), "│", frame.clone());
-        screen.set_str((right, y), "│", frame.clone());
+        program
+            .screen_mut()
+            .set_str((rect.x, y), "│", frame.clone());
+        program.screen_mut().set_str((right, y), "│", frame.clone());
     }
-    screen.set_str((rect.x, rect.y), "┌", frame.clone());
-    screen.set_str((right, rect.y), "┐", frame.clone());
-    screen.set_str((rect.x, bottom), "└", frame.clone());
-    screen.set_str((right, bottom), "┘", frame.clone());
+    program
+        .screen_mut()
+        .set_str((rect.x, rect.y), "┌", frame.clone());
+    program
+        .screen_mut()
+        .set_str((right, rect.y), "┐", frame.clone());
+    program
+        .screen_mut()
+        .set_str((rect.x, bottom), "└", frame.clone());
+    program
+        .screen_mut()
+        .set_str((right, bottom), "┘", frame.clone());
 
     // Title bar.
     let title = " Modal ";
     let title_x = rect.x + (rect.width - title.chars().count() as u16) / 2;
-    screen.set_str((title_x, rect.y), title, frame.clone());
+    program
+        .screen_mut()
+        .set_str((title_x, rect.y), title, frame.clone());
 
     // Body wraps inside the modal's inner area.
     let inner = Rect::new(
@@ -203,13 +222,15 @@ fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
         rect.width.saturating_sub(4),
         rect.height.saturating_sub(2),
     );
-    let body_text = "This panel covers a fixed slice of the screen. \
+    let body_text = "This panel covers a fixed slice of the program. \
                      The paragraph text behind it is hidden until the \
                      modal is dismissed.";
-    screen.set_str_rect_wrap(inner, body_text, WrapMode::Wrap, body.clone());
+    program
+        .screen_mut()
+        .set_str_rect_wrap(inner, body_text, WrapMode::Wrap, body.clone());
 
     // Footer hint inside the modal.
     let footer = "press space / m to close";
     let fx = rect.x + (rect.width - footer.chars().count() as u16) / 2;
-    screen.set_str((fx, bottom - 1), footer, hint);
+    program.screen_mut().set_str((fx, bottom - 1), footer, hint);
 }

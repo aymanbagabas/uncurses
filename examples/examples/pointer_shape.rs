@@ -2,7 +2,7 @@
 //!
 //! Draws a few OSC 8 hyperlinks and tracks the mouse with any-event motion
 //! reporting. While the pointer is over a link the mouse cursor is switched to
-//! the `"pointer"` (hand) shape via `OSC 22` ([`Screen::set_pointer_shape`]);
+//! the `"pointer"` (hand) shape via `OSC 22` ([`Program::set_pointer_shape`]);
 //! moving off every link resets it to the terminal default. The shape is only
 //! touched when the hover state changes, so we don't spam `OSC 22` on every
 //! motion event.
@@ -20,7 +20,8 @@ use std::io;
 use uncurses::buffer::SurfaceMut;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key};
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -56,24 +57,24 @@ impl Link {
 }
 
 fn main() -> io::Result<()> {
-    let mut screen = Screen::stdio()?;
+    let mut program = Program::stdio()?;
     // `MOTION` enables any-event tracking so we get hover moves with no button
     // held, which is what tells us when the pointer enters or leaves a link.
-    screen.init_with(ScreenOptions {
+    program.init_with(ProgramOptions {
         mouse: Some(MouseTracking::MOTION),
-        ..ScreenOptions::default()
+        ..ProgramOptions::default()
     })?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    program.enter_alt_screen()?;
+    program.hide_cursor()?;
 
-    let result = run(&mut screen);
+    let result = run(&mut program);
     // finish() resets the pointer shape as part of teardown, so a hand left
     // hovering at exit is restored for us.
-    screen.finish()?;
+    program.finish()?;
     result
 }
 
-fn run(screen: &mut Screen<Stdin, Stdout>) -> io::Result<()> {
+fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
 
     // Fixed layout; measure each label with the renderer's own width policy so
@@ -86,21 +87,21 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> io::Result<()> {
             url,
             x: 4,
             y: 3 + i as u16 * 2,
-            w: screen.str_width(label),
+            w: program.screen_mut().str_width(label),
         })
         .collect();
 
     let mut pointer: Option<(u16, u16)> = None;
     let mut hovering = false;
-    render(screen, &links);
+    render(program.screen_mut(), &links);
 
     loop {
-        let event = screen.read_event()?;
-        screen.observe_event(&event)?;
+        let event = program.read_event()?;
+        program.observe_event(&event)?;
         match event {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::MouseMove(m) | Event::MouseClick(m) => pointer = Some((m.x, m.y)),
-            Event::Resize(ws) => screen.resize((ws.col, ws.row)),
+            Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
             _ => continue,
         }
 
@@ -108,18 +109,18 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> io::Result<()> {
         if now_hovering != hovering {
             hovering = now_hovering;
             if hovering {
-                screen.set_pointer_shape("pointer")?;
+                program.set_pointer_shape("pointer")?;
             } else {
-                screen.reset_pointer_shape()?;
+                program.reset_pointer_shape()?;
             }
         }
 
-        render(screen, &links);
+        render(program.screen_mut(), &links);
     }
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdin, Stdout>, links: &[Link]) {
+fn render(screen: &mut Screen<Stdout>, links: &[Link]) {
     screen.clear();
 
     let dim = Style::default().fg(Color::BrightBlack);

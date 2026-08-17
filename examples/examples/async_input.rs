@@ -1,4 +1,4 @@
-//! Truly async terminal input via [`EventStream`], no [`Screen`] in sight.
+//! Truly async terminal input via [`EventStream`], no [`Program`] in sight.
 //!
 //! This is the low-level async path: build an [`EventStream`] over stdin and
 //! await events on a tokio runtime, concurrently with a timer via

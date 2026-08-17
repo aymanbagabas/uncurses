@@ -184,7 +184,7 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         // Drain input without blocking so the render loop runs flat out.
         let events = terminal.backend_mut();
         while events.poll_event(Some(Duration::ZERO))? {
-            let Some(ev) = events.try_read_event() else {
+            let Some(ev) = events.try_read_event()? else {
                 break;
             };
             events.observe_event(&ev)?;
