@@ -10,10 +10,12 @@ Keyboard input arrives as key events. A press is `Event::KeyPress` carrying a
 `text` it would produce.
 
 {{< callout type="info" >}}
-Raw `Screen` reads are pure. Passing each event to `screen.observe_event(&ev)?`
-after `read_event`, `try_read_event`, or an async event stream is optional; it
-keeps capability detection, resize tracking, and discovery defaults alive, and
-skipping it still reads fine. The ratatui `UncursesBackend` follows the same contract.
+`Program` owns input, terminal modes, and capability tracking. Draw through
+`program.screen_mut()`, but read through `program.read_event()` or
+`program.try_read_event()?`. The sync readers observe events automatically, so
+capability replies and resize tracking stay current as you read. If you take
+events from `program.event_stream()`, feed each one to `program.observe_event(&ev)?`
+as shown in the async guide.
 {{< /callout >}}
 
 ## Matching keys the easy way
@@ -24,8 +26,7 @@ For keybindings, check the shortcut text directly with `matches` or
 ```rust
 use uncurses::event::Event;
 
-let ev = screen.read_event()?;
-screen.observe_event(&ev)?;
+let ev = program.read_event()?;
 
 match ev {
     Event::KeyPress(ref k) if k.matches("ctrl+c") => return Ok(()),
@@ -41,8 +42,7 @@ kitty keyboard protocol, a shifted glyph like `}` may display as `shift+]`, whil
 `k.matches("}")` still matches the produced text.
 
 ```rust
-let ev = screen.read_event()?;
-screen.observe_event(&ev)?;
+let ev = program.read_event()?;
 
 match ev {
     Event::KeyPress(ref k) if k.matches_any(["q", "esc", "ctrl+c"]) => break,
@@ -59,8 +59,7 @@ When you want to branch on the key itself, match on `KeyCode` and inspect
 ```rust
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 
-let ev = screen.read_event()?;
-screen.observe_event(&ev)?;
+let ev = program.read_event()?;
 
 match ev {
     Event::KeyPress(Key { code: KeyCode::Char('q'), modifiers, .. })
@@ -96,8 +95,7 @@ means the key would type something, already in the right layout (`"!"` for
 `code`.
 
 ```rust
-let ev = screen.read_event()?;
-screen.observe_event(&ev)?;
+let ev = program.read_event()?;
 
 if let Event::KeyPress(k) = ev {
     if let Some(text) = &k.text {
@@ -116,7 +114,7 @@ enable the bits you want, or `None` to switch every enhancement back off.
 ```rust
 use uncurses::ansi::kitty::KittyKeyboardFlags;
 
-screen.set_kitty_keyboard(Some(
+program.set_kitty_keyboard(Some(
     KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
         | KittyKeyboardFlags::REPORT_EVENT_TYPES,
 ))?;

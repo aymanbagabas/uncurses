@@ -80,12 +80,12 @@ everything back on the way out.
 
 ## The Terminal handle
 
-In uncurses, that borrow-and-restore flow lives on the
+In uncurses, that borrow-and-restore flow starts with the
 [`terminal`](/api/uncurses/terminal/index.html) module's `Terminal` handle. It
 pairs input and output handles, snapshots the environment, and caches the
 pre-raw state returned by `make_raw` so `restore` can re-apply it:
 
-```rust
+```rust,no_run
 use uncurses::terminal::Terminal;
 
 fn main() -> std::io::Result<()> {
@@ -99,10 +99,12 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-Most apps never touch this directly. [Screen]({{< relref "screen.md" >}})
-manages this lifecycle for you: `init` borrows raw mode, and `finish()` restores
-the terminal in one call. `pause` and `resume` temporarily leave and re-enter raw
-mode. Reach for `Terminal::stdio` or `Terminal::open` when you want the raw
+Most apps never touch `Terminal` directly. [`Program`]({{< relref "program.md" >}})
+manages the session lifecycle: `init()` borrows raw mode, `finish()` restores
+the terminal, and `pause()` / `resume()` temporarily hand it away and take it
+back. [`Screen`]({{< relref "screen.md" >}}) is the renderer inside the program,
+generic over one writer type `W: Write`; it does not own the tty lifecycle.
+Reach for `Terminal::stdio` or `Terminal::open` only when you want the raw
 connection yourself.
 
 ## Going deeper

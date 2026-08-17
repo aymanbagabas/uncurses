@@ -9,30 +9,31 @@ to press `q`, and hands the terminal back cleanly.
 ```rust
 use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key};
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?;
+    let mut program = Program::stdio()?;
+    program.init()?;
 
-    let w = screen.width();
-    screen.resize((w, 2));
+    let w = program.screen().width();
+    program.screen_mut().resize((w, 2));
 
-    screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
-    screen.render()?;
+    program
+        .screen_mut()
+        .set_str((0, 0), "Hello! Press q to quit.", Style::new());
+    program.screen_mut().render()?;
 
     let q: Key = "q".parse().unwrap();
     loop {
-        let ev = screen.read_event()?;
-        screen.observe_event(&ev)?;
+        let ev = program.read_event()?;
         if matches!(ev, Event::KeyPress(k) if k == q) {
             break;
         }
     }
 
-    screen.finish()
+    program.finish()
 }
 ```
 
@@ -42,26 +43,30 @@ whole contract.
 
 ## Line by line
 
-**Open the screen.**
+The snippets below are fragments from the complete program above.
+
+**Open the program.**
 
 ```rust
-let mut screen = Screen::stdio()?;
-screen.init()?;
+let mut program = Program::stdio()?;
+program.init()?;
 ```
 
-`Screen::stdio()` wires the screen to standard input and output. `init()` enters
-raw mode and starts capability discovery. A session is bracketed by `init()` and
-`finish()`; before `init()`, construction does not change terminal modes.
+`Program::stdio()` wires a `Program` to standard input and output. The program
+owns the terminal session, the input decoder, and a `Screen` renderer. `init()`
+enters raw mode and applies the default session options, but it does not query
+the terminal. A session is bracketed by `init()` and `finish()`; before `init()`,
+construction does not change terminal modes.
 
-After `init()`, the screen starts *inline*: it draws in the normal buffer, right
-where your cursor already is, and it leaves the cursor visible. The alternate
-screen and a hidden cursor are opt-in, which we will get to below.
+After `init()`, the renderer starts *inline*: it draws in the normal buffer,
+right where your cursor already is, and it leaves the cursor visible. The
+alternate screen and a hidden cursor are opt-in, which we will get to below.
 
 **Claim some space.**
 
 ```rust
-let w = screen.width();
-screen.resize((w, 2));
+let w = program.screen().width();
+program.screen_mut().resize((w, 2));
 ```
 
 Inline, the screen owns however many rows you ask for. Here we take the full
@@ -72,22 +77,24 @@ back on a fresh line of its own instead of butting up against your last line.
 **Draw, then show.**
 
 ```rust
-screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
-screen.render()?;
+program
+    .screen_mut()
+    .set_str((0, 0), "Hello! Press q to quit.", Style::new());
+program.screen_mut().render()?;
 ```
 
-`set_str` paints text at an x/y position into an in-memory frame. Nothing
-reaches the terminal until `render()`, which diffs the new frame against what is
-already on screen and writes only the difference. Painting cannot fail; only
-`render()` talks to the terminal, so only `render()` returns a `Result`.
+`screen_mut()` gives you the pure renderer owned by the program. `set_str`
+paints text at an x/y position into an in-memory frame. Nothing reaches the
+terminal until `render()`, which exists on `Screen`, diffs the new frame against
+what is already on screen, and writes only the difference. Painting cannot fail;
+only `render()` talks to the terminal, so only `render()` returns a `Result`.
 
 **Wait for input.**
 
 ```rust
 let q: Key = "q".parse().unwrap();
 loop {
-    let ev = screen.read_event()?;
-    screen.observe_event(&ev)?;
+    let ev = program.read_event()?;
     if matches!(ev, Event::KeyPress(k) if k == q) {
         break;
     }
@@ -95,21 +102,27 @@ loop {
 ```
 
 `read_event()` blocks until something happens: a keypress, a resize, a paste.
-Passing each event to `observe_event()` is optional; it lets the screen keep
-terminal discovery and resize state current, and skipping it still reads fine.
-Here we loop until that event is the `q` key. Keys parse from strings, so `"q"`,
-`"ctrl+c"`, and `"f1"` all just work.
+It also observes the event for you, so terminal capability replies and resize
+state are recorded as ordinary events pass through the loop. Here we loop until
+that event is the `q` key. Keys parse from strings, so `"q"`, `"ctrl+c"`, and
+`"f1"` all just work.
 
 **Put the terminal back.**
 
 ```rust
-screen.finish()
+program.finish()
 ```
 
-One call. `finish()` drains pending capability-query replies, resets tracked
-modes and the managed area, restores the terminal's prior state, and consumes the
-screen so you cannot use it by accident afterward. Arrange for `finish()` to run
-before your app returns, including from error paths.
+One call. `finish()` resets the modes this `Program` emitted, resets the managed
+area, restores the terminal's prior state, and consumes the program so you
+cannot use it by accident afterward. Arrange for `finish()` to run before your
+app returns, including from error paths.
+
+If you want terminal capability discovery, it is now explicit: call
+`program.query_capabilities(&[])?`, then keep reading events until
+`Event::PrimaryDeviceAttributes` arrives or your own timeout expires. A normal
+`read_event()` loop observes those replies automatically, but `init()` and
+`finish()` do not send or drain queries for you.
 
 ## Going fullscreen
 
@@ -119,44 +132,47 @@ alternate screen and hide the cursor right after `init()`:
 
 ```rust
 use uncurses::event::{Event, Key};
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    let mut program = Program::stdio()?;
+    program.init()?;
+    program.enter_alt_screen()?;
+    program.hide_cursor()?;
 
-    screen.set_str((0, 0), "Fullscreen. Press q to quit.", Style::new());
-    screen.render()?;
+    program
+        .screen_mut()
+        .set_str((0, 0), "Fullscreen. Press q to quit.", Style::new());
+    program.screen_mut().render()?;
 
     let q: Key = "q".parse().unwrap();
     loop {
-        let ev = screen.read_event()?;
-        screen.observe_event(&ev)?;
+        let ev = program.read_event()?;
         if matches!(ev, Event::KeyPress(k) if k == q) {
             break;
         }
     }
 
-    screen.finish()
+    program.finish()
 }
 ```
 
 Two differences from the inline version. First, `enter_alt_screen()` switches to
-the terminal's alternate buffer, so your drawing does not scroll into the
-shell's history and the original screen comes back untouched on `finish()`.
-Second, there is no manual `resize`: right after `init()`, the screen is already
-sized to the terminal. `hide_cursor()` just keeps the blinking caret out of your
-layout.
+the terminal's alternate buffer and tells the renderer it is now drawing the
+whole viewport, so your drawing does not scroll into the shell's history and the
+original screen comes back untouched on `finish()`. Second, there is no manual
+`resize`: right after `init()`, the renderer is sized to the terminal.
+`hide_cursor()` emits the terminal mode and records the matching render
+property, keeping the blinking caret out of your layout.
 
 Everything else is the same, `finish()` included. It resets tracked modes, puts
 the cursor back, and leaves the alternate screen for you.
 
 ## Next steps
 
-You have met `Screen`, the front-door entry point. It is not the only one. The
+You have met `Program`, the front-door entry point for interactive apps. It owns
+a pure `Screen` renderer, but `Screen` is not the whole session anymore. The
 next page maps out [the layers]({{< relref "the-layers.md" >}})
 and when to reach for each.

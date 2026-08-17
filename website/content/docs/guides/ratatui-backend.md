@@ -5,9 +5,9 @@ weight: 10
 
 If you already write your UI with [ratatui](https://docs.rs/ratatui) widgets, you
 do not have to give that up to get uncurses underneath. The `uncurses-ratatui`
-crate is a ratatui `Backend` that renders through an uncurses `Screen`: you keep
-writing widgets, and uncurses diffs the frames and writes only the necessary
-bytes.
+crate is a ratatui `Backend` that wraps an uncurses `Program`: ratatui keeps
+writing widgets, the program owns input and terminal modes, and its `Screen`
+diffs the frames and writes only the necessary bytes.
 
 ## Install
 
@@ -36,30 +36,36 @@ fn main() -> io::Result<()> {
     uncurses_ratatui::restore(&mut terminal);
     result
 }
+
+fn run(_: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
+    Ok(())
+}
 ```
 
 `try_init` returns an `io::Result`; if you would rather panic on failure, `init`
 gives you the terminal directly. There are `*_with_options` variants when you
-want to pass ratatui `TerminalOptions` and uncurses `ScreenOptions`, for example
-to skip the startup capability probe with `query_capabilities: false`.
+want to pass ratatui `TerminalOptions` and uncurses `ProgramOptions`.
+`ProgramOptions` is re-exported from `uncurses_ratatui`, defined in
+`uncurses::program`, and has exactly four fields: `bracketed_paste`,
+`request_pixel_size_on_resize`, `mouse`, and `track_origin`.
 
 ```rust
 use std::io;
 
 use ratatui::{TerminalOptions, Viewport};
-use uncurses_ratatui::ScreenOptions;
+use uncurses_ratatui::ProgramOptions;
 
 fn main() -> io::Result<()> {
-    let screen_options = ScreenOptions {
-        query_capabilities: false,
-        ..ScreenOptions::default()
+    let program_options = ProgramOptions {
+        bracketed_paste: false,
+        ..ProgramOptions::default()
     };
 
     let mut terminal = uncurses_ratatui::try_init_with_options(
         TerminalOptions {
             viewport: Viewport::Fullscreen,
         },
-        screen_options,
+        program_options,
     )?;
 
     uncurses_ratatui::restore(&mut terminal);
@@ -87,10 +93,9 @@ fn run(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         if !backend.poll_event(None)? {
             continue;
         }
-        let Some(ev) = backend.try_read_event() else {
+        let Some(ev) = backend.try_read_event()? else {
             continue;
         };
-        backend.observe_event(&ev)?;
         if let Event::KeyPress(_) = ev {
             break;
         }
@@ -100,24 +105,27 @@ fn run(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 ```
 
 `backend_mut` exposes the same `read_event`, `poll_event`, and `try_read_event`
-you use on a bare `Screen`, producing uncurses `Event` values. So your render
-layer is ratatui and your input layer is uncurses, each doing what it is best
-at. Features covered in the other guides, including [mouse input]({{< relref "mouse-input.md" >}}),
+you use on a bare `Program`, producing uncurses `Event` values. It also exposes
+the wrapped program as `program()` and `program_mut()`, so renderer access is
+`backend.program_mut().screen_mut()`. Your render layer is ratatui and your
+input layer is uncurses, each doing what it is best at. Features covered in the
+other guides, including [mouse input]({{< relref "mouse-input.md" >}}),
 [paste]({{< relref "handling-paste.md" >}}), [async events]({{< relref "async-events.md" >}}),
 and [terminal queries]({{< relref "querying-the-terminal.md" >}}), work through the backend.
 
 {{< callout type="info" >}}
-Backend reads are pure, exactly like a raw `Screen`'s. Pass each event to
-`backend.observe_event(&ev)?` to keep capability tracking alive (mouse, kitty
-keyboard, in-band resize, truecolor, grapheme); skip it and reads still work. The
-`ratatui_*` examples show the pattern.
+`init` and `try_init` do not probe the terminal, and no replies are drained.
+Querying is opt-in with `backend.program_mut().query_capabilities(&[])?`.
+Synchronous reads observe replies automatically. If you read through
+`event_stream()`, pass each event to `backend.observe_event(&ev)?`.
 {{< /callout >}}
 
 ## Async input
 
 With the `async` feature, the backend exposes its own `event_stream()` for a
-`tokio::select!` loop. Like the sync reads it yields events without observing
-them, so pair it with `observe_event` to keep capability tracking alive:
+`tokio::select!` loop. Unlike the sync reads, it yields events without
+observing them, so pair it with `observe_event` to keep capability tracking
+alive:
 
 ```rust
 use std::time::Duration;
@@ -144,7 +152,7 @@ loop {
 }
 ```
 
-The stream shares the screen's decoder by handle, so you can hold it and still
+The stream shares the program's decoder by handle, so you can hold it and still
 call mutable backend methods in the same loop. See the [async events guide]({{<
 relref "async-events.md" >}}) for the full pattern.
 

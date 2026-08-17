@@ -72,8 +72,11 @@ You rarely call the measurement functions yourself. Any
 and an `eaw_wide` flag, and its string-painting methods use them, laying down
 wide primaries and their continuations for you. [`TextBuffer`](/api/uncurses/buffer/struct.TextBuffer.html)
 exposes `set_width_mode` and `set_eaw_wide`; a
-[screen]({{< relref "screen.md" >}}) pairs grapheme-cluster mode with DEC mode
-2027. When you do want the raw measurement:
+[screen]({{< relref "screen.md" >}}) carries the same mode so it measures the
+way the terminal does. Keeping the two in step is the
+[program]({{< relref "program.md" >}})'s job: `enable_grapheme_clusters` emits
+DEC mode 2027 and switches the screen's measurement together. When you do want
+the raw measurement:
 
 ```rust
 use uncurses::text::grapheme_width;

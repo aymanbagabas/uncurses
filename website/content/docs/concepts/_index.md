@@ -17,5 +17,6 @@ jump straight to whatever you need.
   {{< card link="color" title="Color" subtitle="Color depths and how uncurses downsamples to the terminal." >}}
   {{< card link="surfaces" title="Surfaces" subtitle="The shared traits that let you draw once and reuse the code." >}}
   {{< card link="events" title="Events" subtitle="Turning the raw input stream into typed key, mouse, and terminal reply events." >}}
-  {{< card link="screen" title="Screen" subtitle="The facade that unites drawing, input, the terminal, and the renderer." >}}
+  {{< card link="screen" title="Screen" subtitle="The pure cell-grid and diff renderer over any std::io::Write." >}}
+  {{< card link="program" title="Program" subtitle="The interactive facade for terminal lifecycle, modes, events, and rendering." >}}
 {{< /cards >}}

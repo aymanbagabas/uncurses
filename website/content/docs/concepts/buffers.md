@@ -30,9 +30,10 @@ your private copy of that same idea.
 ## Off-screen by design
 
 A buffer is just memory. Writing into it changes nothing on the terminal. You
-compose a full frame in the grid, then hand it to something that actually draws
-([`Screen`](/api/uncurses/screen/struct.Screen.html) does this for you). That
-separation makes the useful tricks possible: diffing one frame against the
+compose a full frame in the grid, then hand it to something that actually draws:
+[`Screen`]({{< relref "screen.md" >}}) renders a desired grid to bytes, and
+[`Program`]({{< relref "program.md" >}}) owns that screen for interactive apps.
+That separation makes the useful tricks possible: diffing one frame against the
 last, snapshotting a frame in a test, or serializing it to bytes for a
 transcript.
 
