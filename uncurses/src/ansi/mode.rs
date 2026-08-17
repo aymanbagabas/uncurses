@@ -30,7 +30,7 @@ use std::io::{self, Write};
 /// [`Mode::Ansi`] writes ordinary CSI mode numbers such as `ESC [ 4 h`;
 /// [`Mode::Dec`] writes private mode numbers with `?`, such as
 /// `ESC [ ? 1049 h`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Mode {
     /// Standard ANSI mode number.
     ///
