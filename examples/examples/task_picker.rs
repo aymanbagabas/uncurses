@@ -5,8 +5,8 @@
 //! `q`, `Esc`, or `Ctrl-C` exits at any time.
 //!
 //! The bar is also reported to the terminal with `OSC 9;4`
-//! ([`Screen::set_progress_state`]), so terminals that support it show the
-//! same progress in the taskbar or tab. [`Screen::finish`] takes it back
+//! ([`Program::set_progress_state`]), so terminals that support it show the
+//! same progress in the taskbar or tab. [`Program::finish`] takes it back
 //! down, so nothing is left behind on exit.
 //!
 //! Inline screen: each renderer paints into a [`Painter`] and reports
@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::{ProgressState, Screen};
+use uncurses::program::{Program, ProgressState};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::{Painter, TextSurface};
@@ -45,35 +45,35 @@ struct State {
 }
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     state: State,
     term_cols: u16,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        let term_cols = screen.width();
+        let mut program = Program::stdio()?;
+        program.init()?;
+        let term_cols = program.screen().width();
         let state = State {
             ticks: 10,
             ..Default::default()
         };
         // Start at a single row; the first redraw will grow the screen to
         // match the first frame's measured height.
-        screen.resize((term_cols, 1));
-        screen.hide_cursor()?;
+        program.screen_mut().resize((term_cols, 1));
+        program.hide_cursor()?;
 
         Ok(Self {
-            screen,
+            program,
             state,
             term_cols,
         })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        fit_and_redraw(&mut self.screen, &self.state, self.term_cols);
-        self.screen.render()
+        fit_and_redraw(&mut self.program, &self.state, self.term_cols);
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
@@ -92,9 +92,9 @@ impl App {
             let timeout = next.saturating_duration_since(now);
 
             let mut dirty = false;
-            if self.screen.poll_event(Some(timeout))? {
-                while let Some(ev) = self.screen.try_read_event() {
-                    self.screen.observe_event(&ev)?;
+            if self.program.poll_event(Some(timeout))? {
+                while let Some(ev) = self.program.try_read_event()? {
+                    self.program.observe_event(&ev)?;
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q') | KeyCode::Escape,
@@ -120,7 +120,7 @@ impl App {
                             KeyCode::Enter => {
                                 self.state.chosen = true;
                                 self.state.progress = 0.0;
-                                self.screen.set_progress_state(ProgressState::Normal(0))?;
+                                self.program.set_progress_state(ProgressState::Normal(0))?;
                                 next_frame = Instant::now() + FRAME;
                                 dirty = true;
                             }
@@ -144,7 +144,8 @@ impl App {
                 self.state.progress = (self.state.progress + 0.01).min(1.0);
                 // Mirror the on-screen bar into the terminal's taskbar/tab.
                 let pct = (self.state.progress * 100.0).round() as u8;
-                self.screen.set_progress_state(ProgressState::Normal(pct))?;
+                self.program
+                    .set_progress_state(ProgressState::Normal(pct))?;
                 if self.state.progress >= 1.0 {
                     self.state.loaded = true;
                     self.state.ticks = 3;
@@ -176,17 +177,18 @@ impl App {
 
         // Bye: "Bye!" on row 1 plus a trailing blank row so the prompt
         // returns on its own line below the message.
-        self.screen.resize((self.term_cols, 3));
-        self.screen.clear();
-        self.screen
+        self.program.screen_mut().resize((self.term_cols, 3));
+        self.program.screen_mut().clear();
+        self.program
+            .screen_mut()
             .set_str((2, 1), "Bye!", uncurses::style::Style::default());
-        self.screen.render()?;
+        self.program.screen_mut().render()?;
 
         Ok(())
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -202,21 +204,21 @@ fn main() -> std::io::Result<()> {
 /// Each renderer tracks its own intended row count independent of any
 /// clipping, so a too-small initial buffer simply triggers a resize and
 /// a single repaint.
-fn fit_and_redraw(screen: &mut Screen<Stdin, Stdout>, s: &State, cols: u16) {
-    screen.clear();
-    let needed = paint(screen, s);
-    if screen.width() != cols || screen.height() != needed {
-        screen.resize((cols, needed));
-        screen.clear();
-        paint(screen, s);
+fn fit_and_redraw(program: &mut Program<Stdin, Stdout>, s: &State, cols: u16) {
+    program.screen_mut().clear();
+    let needed = paint(program, s);
+    if program.screen().width() != cols || program.screen().height() != needed {
+        program.screen_mut().resize((cols, needed));
+        program.screen_mut().clear();
+        paint(program, s);
     }
 }
 
-fn paint(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
+fn paint(program: &mut Program<Stdin, Stdout>, s: &State) -> u16 {
     if s.chosen {
-        draw_chosen(screen, s)
+        draw_chosen(program, s)
     } else {
-        draw_choices(screen, s)
+        draw_choices(program, s)
     }
 }
 
@@ -231,14 +233,14 @@ fn sgr(style: &Style) -> String {
 /// SGR reset (`ESC [ m`) — restores [`Style::default()`] for following cells.
 const RESET: &str = "\x1b[m";
 
-fn draw_choices(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
+fn draw_choices(program: &mut Program<Stdin, Stdout>, s: &State) -> u16 {
     let subtle = sgr(&Style::default().fg(Color::BrightBlack));
     let checkbox = sgr(&Style::default().fg(Color::Cyan).bold());
     let ticks_st = sgr(&Style::default().fg(Color::Yellow).bold());
 
     // Paint through a Painter so the inline SGR sequences in the strings
     // below are interpreted instead of drawn literally.
-    let mut p = Painter::new(screen);
+    let mut p = Painter::new(program.screen_mut());
     let mut last = 0u16;
     let mut y = 1u16;
     p.set_str((2, y), "What to do today?", None);
@@ -269,7 +271,7 @@ fn draw_choices(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
     last + 1
 }
 
-fn draw_chosen(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
+fn draw_chosen(program: &mut Program<Stdin, Stdout>, s: &State) -> u16 {
     let keyword = sgr(&Style::default().fg(Color::BrightMagenta).bold());
     let ticks_st = sgr(&Style::default().fg(Color::Yellow).bold());
     let bar_st = sgr(&Style::default().fg(Color::BrightGreen));
@@ -285,7 +287,7 @@ fn draw_chosen(screen: &mut Screen<Stdin, Stdout>, s: &State) -> u16 {
         ),
     };
 
-    let mut p = Painter::new(screen);
+    let mut p = Painter::new(program.screen_mut());
     let mut last = 0u16;
     let mut y = 1u16;
     p.set_str((2, y), head, None);

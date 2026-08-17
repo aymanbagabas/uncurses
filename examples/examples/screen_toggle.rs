@@ -7,7 +7,7 @@
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -16,32 +16,35 @@ use uncurses::text::TextSurface;
 const INLINE_ROWS: u16 = 4;
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     alt: bool,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.hide_cursor()?;
-        let cols = screen.width();
-        screen.resize((cols, INLINE_ROWS));
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.hide_cursor()?;
+        let cols = program.screen().width();
+        program.screen_mut().resize((cols, INLINE_ROWS));
 
-        Ok(Self { screen, alt: false })
+        Ok(Self {
+            program,
+            alt: false,
+        })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, self.alt);
-        self.screen.render()
+        redraw(&mut self.program, self.alt);
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
         loop {
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
+            self.program.observe_event(&ev)?;
             match ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q') | KeyCode::Escape,
@@ -61,8 +64,8 @@ impl App {
                 }) if modifiers.contains(KeyModifiers::CTRL) => {
                     // suspend()/resume() preserve the alt-screen state and
                     // refit the managed area to the current window.
-                    self.screen.suspend()?;
-                    self.screen.resume()?;
+                    self.program.suspend()?;
+                    self.program.resume()?;
                     self.render()?;
                 }
                 Event::KeyPress(Key {
@@ -71,20 +74,20 @@ impl App {
                 }) => {
                     self.alt = !self.alt;
                     if self.alt {
-                        self.screen.enter_alt_screen()?;
-                        self.screen.autoresize()?;
+                        self.program.enter_alt_screen()?;
+                        self.program.autoresize()?;
                     } else {
-                        self.screen.exit_alt_screen()?;
-                        let cols = self.screen.width();
-                        self.screen.resize((cols, INLINE_ROWS));
+                        self.program.exit_alt_screen()?;
+                        let cols = self.program.screen().width();
+                        self.program.screen_mut().resize((cols, INLINE_ROWS));
                     }
                     self.render()?;
                 }
                 Event::Resize(ws) => {
                     if self.alt {
-                        self.screen.resize((ws.col, ws.row));
+                        self.program.screen_mut().resize((ws.col, ws.row));
                     } else {
-                        self.screen.resize((ws.col, INLINE_ROWS));
+                        self.program.screen_mut().resize((ws.col, INLINE_ROWS));
                     }
                     self.render()?;
                 }
@@ -95,7 +98,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -106,8 +109,8 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw(screen: &mut Screen<Stdin, Stdout>, alt: bool) {
-    screen.clear();
+fn redraw(program: &mut Program<Stdin, Stdout>, alt: bool) {
+    program.screen_mut().clear();
     let mode = if alt {
         " alt-screen mode "
     } else {
@@ -119,7 +122,11 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, alt: bool) {
         .bold();
     let help = Style::default().fg(Color::BrightBlack);
 
-    screen.set_str((2, 1), "You're in", uncurses::style::Style::default());
-    screen.set_str((12, 1), mode, keyword);
-    screen.set_str((2, 3), "space: switch modes • q: quit", help);
+    program
+        .screen_mut()
+        .set_str((2, 1), "You're in", uncurses::style::Style::default());
+    program.screen_mut().set_str((12, 1), mode, keyword);
+    program
+        .screen_mut()
+        .set_str((2, 3), "space: switch modes • q: quit", help);
 }
