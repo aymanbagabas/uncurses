@@ -120,8 +120,8 @@ impl<I: Input, O: Write> Program<I, O> {
     ///
     /// To learn which variant a terminal actually chose, read
     /// [`capabilities`](Self::capabilities) (for example
-    /// [`mouse_sgr_pixel`](crate::program::Capabilities::mouse_sgr_pixel) to tell
-    /// whether pixels or cells will arrive). When pixel reporting is active, a
+    /// [`supports(Mode::MOUSE_SGR_PIXEL)`](super::Capabilities::supports) to
+    /// tell whether pixels or cells will arrive). When pixel reporting is active, a
     /// [`Mouse`](crate::event::Mouse) event's pixel coordinates can be converted
     /// to cells with [`mouse_pixels_to_cells`](Self::mouse_pixels_to_cells).
     ///
@@ -228,9 +228,9 @@ impl<I: Input, O: Write> Program<I, O> {
     /// while this is on, so a size change is reported once, not twice.
     ///
     /// Only call this after [`capabilities`](Self::capabilities) reports
-    /// [`in_band_resize`](super::Capabilities::in_band_resize); a terminal
-    /// that ignores the mode would otherwise leave you with no resize events
-    /// at all.
+    /// [`supports(Mode::IN_BAND_RESIZE)`](super::Capabilities::supports); a
+    /// terminal that ignores the mode would otherwise leave you with no
+    /// resize events at all.
     ///
     /// [`Event::Resize`]: crate::event::Event::Resize
     pub fn enable_in_band_resize(&mut self) -> io::Result<()> {
@@ -368,7 +368,7 @@ impl<I: Input, O: Write> Program<I, O> {
     /// it agrees with the terminal.
     ///
     /// Only call this after [`capabilities`](Self::capabilities) reports
-    /// [`grapheme_clusters`](super::Capabilities::grapheme_clusters); a
+    /// [`supports(Mode::UNICODE_CORE)`](super::Capabilities::supports); a
     /// terminal that ignores the mode still measures per code point, and the
     /// two disagreeing misplaces every cell after the first cluster on a line.
     pub fn enable_grapheme_clusters(&mut self) -> io::Result<()> {

@@ -16,7 +16,7 @@
 //! screen. Press `space` to toggle it back to the hint bar.
 //!
 //! When the terminal reports SGR-pixel mouse support
-//! ([`Capabilities::mouse_sgr_pixel`](uncurses::screen::Capabilities)), the
+//! ([`Capabilities::supports`](uncurses::program::Capabilities)), the
 //! example enables pixel-accurate tracking and resolves *which half* of a cell
 //! the pointer is over, reading the exact sub-pixel color. Otherwise it
 //! degrades seamlessly to cell coordinates and reads the cell's left
@@ -26,6 +26,7 @@
 //! Run with `cargo run --example gradient`. Resize to watch it reflow;
 //! press `q` or `Ctrl-C` to quit.
 
+use uncurses::ansi::mode::Mode;
 use uncurses::buffer::Bounded;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
@@ -190,7 +191,7 @@ fn resolve(program: &Program<Stdin, Stdout>, state: &State) -> Option<(u16, u16,
     // value cached at startup would be wrong. Mouse events only arrive once
     // tracking is enabled (which happens after detection), so by the time we
     // get here the capability reflects the encoding actually in use.
-    if !program.capabilities().mouse_sgr_pixel {
+    if !program.capabilities().supports(Mode::MOUSE_SGR_PIXEL) {
         return Some((m.x, m.y, m.x.saturating_mul(2)));
     }
     let cell = program.mouse_pixels_to_cells(m)?;
