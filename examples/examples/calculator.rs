@@ -5,10 +5,10 @@
 //! in whole-screen cell coordinates, but an inline surface starts partway
 //! down the screen. Turning the mouse on inline activates uncurses's origin
 //! tracking: the screen asks the terminal where its top-left cell physically
-//! is (and re-asks on resize), exposed as [`Screen::origin`]. Each click is
-//! mapped into surface-local coordinates with [`Screen::mouse_to_origin`]
+//! is (and re-asks on resize), exposed as [`Program::origin`]. Each click is
+//! mapped into surface-local coordinates with [`Program::mouse_to_origin`]
 //! before hit-testing the buttons, the mouse-origin analogue of
-//! [`Screen::mouse_pixels_to_cells`].
+//! [`Program::mouse_pixels_to_cells`].
 //!
 //! Run with `cargo run --example calculator`. Click the buttons; press `q`,
 //! `Esc`, or `Ctrl-C` to quit.
@@ -18,7 +18,8 @@ use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
 use uncurses::layout::Rect;
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -272,25 +273,27 @@ impl Calc {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
+    let mut program = Program::stdio()?;
     // Inline (no alt screen). Enabling the mouse activates origin tracking so
     // whole-screen click coordinates can be mapped into the surface.
-    screen.init_with(ScreenOptions {
+    program.init_with(ProgramOptions {
         mouse: Some(MouseTracking::empty()),
-        ..ScreenOptions::default()
+        ..ProgramOptions::default()
     })?;
-    let (cols, rows) = (screen.width(), screen.height());
-    fit(&mut screen, cols, rows);
-    screen.hide_cursor()?;
+    let (cols, rows) = (program.screen().width(), program.screen().height());
+    fit(program.screen_mut(), cols, rows);
+    program.hide_cursor()?;
 
-    let result = run(&mut screen);
+    let result = run(&mut program);
     // Shrink the surface and sign off, one blank row above and a couple of
     // columns to the left of the message.
-    screen.resize((cols.max(1), 2));
-    screen.clear();
-    screen.set_str((2, 1), "Bye!", Style::default());
-    screen.render()?;
-    screen.finish()?;
+    program.screen_mut().resize((cols.max(1), 2));
+    program.screen_mut().clear();
+    program
+        .screen_mut()
+        .set_str((2, 1), "Bye!", Style::default());
+    program.screen_mut().render()?;
+    program.finish()?;
     result
 }
 
@@ -298,45 +301,45 @@ fn main() -> std::io::Result<()> {
 /// centered and trailing line-erases fall on the default background rather
 /// than bleeding a button color across the row), and just tall enough for the
 /// keypad.
-fn fit(screen: &mut Screen<Stdin, Stdout>, cols: u16, rows: u16) {
+fn fit(screen: &mut Screen<Stdout>, cols: u16, rows: u16) {
     let h = BOARD_H.min(rows.max(1));
     screen.resize((cols.max(1), h));
 }
 
 /// The left margin that centers the keypad in the surface.
-fn margin(screen: &Screen<Stdin, Stdout>) -> u16 {
+fn margin(screen: &Screen<Stdout>) -> u16 {
     screen.width().saturating_sub(BOARD_W) / 2
 }
 
-fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
     let keys = buttons();
     let mut calc = Calc::default();
     let mut pressed: Option<usize> = None;
-    render(screen, &keys, &calc, pressed);
+    render(program, &keys, &calc, pressed);
 
     loop {
-        let event = screen.read_event()?;
-        screen.observe_event(&event)?;
+        let event = program.read_event()?;
+        program.observe_event(&event)?;
         match event {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::MouseClick(m) if m.button == MouseButton::Left => {
                 // Map the whole-screen click into surface-local coordinates,
                 // then hit-test the keypad.
-                let local = screen.mouse_to_origin(m);
-                let dx = margin(screen);
+                let local = program.mouse_to_origin(m);
+                let dx = margin(program.screen_mut());
                 if let Some(i) = keys.iter().position(|b| b.contains(local.x, local.y, dx)) {
                     calc.press(keys[i].action);
                     pressed = Some(i); // light the key while the button is held
-                    render(screen, &keys, &calc, pressed);
+                    render(program, &keys, &calc, pressed);
                 }
             }
             Event::MouseRelease(_) if pressed.take().is_some() => {
-                render(screen, &keys, &calc, pressed);
+                render(program, &keys, &calc, pressed);
             }
             Event::Resize(ws) => {
-                fit(screen, ws.col, ws.row);
-                render(screen, &keys, &calc, pressed);
+                fit(program.screen_mut(), ws.col, ws.row);
+                render(program, &keys, &calc, pressed);
             }
             _ => {}
         }
@@ -345,26 +348,26 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
 }
 
 fn render(
-    screen: &mut Screen<Stdin, Stdout>,
+    program: &mut Program<Stdin, Stdout>,
     keys: &[Button],
     calc: &Calc,
     pressed: Option<usize>,
 ) {
-    let dx = margin(screen);
-    screen.clear();
-    paint_display(screen, &calc.formatted(), dx);
+    let dx = margin(program.screen_mut());
+    program.screen_mut().clear();
+    paint_display(program.screen_mut(), &calc.formatted(), dx);
     for (i, btn) in keys.iter().enumerate() {
         // The clear key shows AC when the display is empty, C otherwise.
         let label = match btn.action {
             Action::Clear if !calc.is_clear() => "C",
             _ => btn.label,
         };
-        paint_button(screen, btn, label, dx, pressed == Some(i));
+        paint_button(program.screen_mut(), btn, label, dx, pressed == Some(i));
     }
-    let _ = screen.render();
+    let _ = program.screen_mut().render();
 }
 
-fn paint_display(screen: &mut Screen<Stdin, Stdout>, text: &str, dx: u16) {
+fn paint_display(screen: &mut Screen<Stdout>, text: &str, dx: u16) {
     let style = Style::default().fg(Color::BrightWhite).bg(Color::Black);
     let rect = Rect::new(dx, 0, BOARD_W, DISPLAY_H);
     screen.fill_rect(rect, &Cell::narrow(" ").style(style.clone()));
@@ -382,13 +385,7 @@ fn paint_display(screen: &mut Screen<Stdin, Stdout>, text: &str, dx: u16) {
     screen.set_str((x, DISPLAY_H / 2), &shown, style.bold());
 }
 
-fn paint_button(
-    screen: &mut Screen<Stdin, Stdout>,
-    btn: &Button,
-    label: &str,
-    dx: u16,
-    pressed: bool,
-) {
+fn paint_button(screen: &mut Screen<Stdout>, btn: &Button, label: &str, dx: u16, pressed: bool) {
     // Each family has a resting color and a lighter pressed color.
     let (bg, fg) = match (btn.kind, pressed) {
         (Kind::Fun, false) => (Color::Rgb(0xa5, 0xa5, 0xa5), Color::Black),

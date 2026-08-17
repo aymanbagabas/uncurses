@@ -4,7 +4,7 @@
 //! ## What this backend is
 //!
 //! [`UncursesBackend`] implements [`ratatui::backend::Backend`] by wrapping a
-//! single [`Screen`](uncurses::screen::Screen). The screen owns the
+//! single [`Program`](uncurses::screen::Screen). The screen owns the
 //! terminal handle, its diffing renderer, and the input source. The backend's job is to adapt
 //! frame drawing, cursor operations, clearing, size queries, and event access
 //! to that one screen.
@@ -44,7 +44,7 @@
 //!
 //! Use [`try_init`] / [`init`] for the standard fullscreen session over
 //! process stdio. Use [`try_init_with_options`] / [`init_with_options`] when
-//! you need explicit [`ratatui::TerminalOptions`] or [`ScreenOptions`]. Pair
+//! you need explicit [`ratatui::TerminalOptions`] or [`ProgramOptions`]. Pair
 //! those helpers with [`try_restore`] or [`restore`] on exit.
 //!
 //! The helpers enter raw mode, apply screen options, hide the cursor, and set
@@ -78,7 +78,7 @@
 //! event loops can call [`UncursesBackend::poll_event`],
 //! [`UncursesBackend::try_read_event`], or [`UncursesBackend::read_event`] on
 //! `terminal.backend_mut()`. These reads are pure, like
-//! [`Screen`](uncurses::screen::Screen)'s: pass each event to
+//! [`Program`](uncurses::screen::Screen)'s: pass each event to
 //! [`UncursesBackend::observe_event`] to keep capability tracking alive.
 //!
 //! With the `async` feature, use [`UncursesBackend::event_stream`] with
@@ -89,15 +89,15 @@
 //!
 //! The constructors are inert: they do not enter raw mode, choose a viewport,
 //! enter the alternate screen, or hide the cursor. Use them when you need a
-//! prebuilt [`Screen`](uncurses::screen::Screen), a controlling terminal
+//! prebuilt [`Program`](uncurses::screen::Screen), a controlling terminal
 //! instead of stdio, or custom setup ordering.
 //!
 //! ```rust,ignore
-//! use uncurses_ratatui::{ScreenOptions, UncursesBackend};
+//! use uncurses_ratatui::{ProgramOptions, UncursesBackend};
 //!
 //! fn main() -> std::io::Result<()> {
 //!     let mut backend = UncursesBackend::stdio()?;
-//!     backend.init_with(ScreenOptions::default())?;
+//!     backend.init_with(ProgramOptions::default())?;
 //!     // Build ratatui::Terminal with `backend`, then restore the backend
 //!     // when the session ends.
 //!     Ok(())
@@ -114,4 +114,4 @@ pub use init::{
     DefaultTerminal, init, init_with_options, restore, try_init, try_init_with_options, try_restore,
 };
 #[doc(no_inline)]
-pub use uncurses::screen::{MouseTracking, ScreenOptions};
+pub use uncurses::program::{MouseTracking, ProgramOptions};

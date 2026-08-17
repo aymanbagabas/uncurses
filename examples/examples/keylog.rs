@@ -15,7 +15,7 @@
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
 use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::TextSurface;
 
@@ -83,17 +83,17 @@ fn format_event(ev: &Event) -> String {
     }
 }
 
-fn redraw(screen: &mut Screen<TtyInput, TtyOutput>, last: &str) -> std::io::Result<()> {
-    screen.clear();
-    let w = screen.width();
+fn redraw(program: &mut Program<TtyInput, TtyOutput>, last: &str) -> std::io::Result<()> {
+    program.screen_mut().clear();
+    let w = program.screen().width();
     let header = "keylog — press q or Ctrl-C to quit. Type, click, drag, paste, resize.";
-    screen.set_str(
+    program.screen_mut().set_str(
         (0, 0),
         &truncate(header, w),
         uncurses::style::Style::default(),
     );
     let line = format!("last: {}", last);
-    screen.set_str(
+    program.screen_mut().set_str(
         (0, 1),
         &truncate(&line, w),
         uncurses::style::Style::default(),
@@ -115,41 +115,41 @@ fn truncate(s: &str, width: u16) -> String {
 /// `run` logs every event into the scrollback, and `stop` restores the
 /// terminal. On Unix, Ctrl-Z suspends and resumes cleanly.
 struct App {
-    screen: Screen<TtyInput, TtyOutput>,
+    program: Program<TtyInput, TtyOutput>,
     last: String,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::open()?;
+        let mut program = Program::open()?;
         // Enable motion mouse tracking (for drag) and focus reporting so the
         // log shows the full breadth of events.
-        screen.init_with(ScreenOptions {
+        program.init_with(ProgramOptions {
             mouse: Some(MouseTracking::MOTION),
-            ..ScreenOptions::default()
+            ..ProgramOptions::default()
         })?;
-        screen.enable_focus_events()?;
-        screen.hide_cursor()?;
+        program.enable_focus_events()?;
+        program.hide_cursor()?;
         // Inline status area is two rows tall; insert_above scrolls events
         // into the scrollback above it.
-        let cols = screen.width();
-        screen.resize((cols, 2));
+        let cols = program.screen().width();
+        program.screen_mut().resize((cols, 2));
         Ok(Self {
-            screen,
+            program,
             last: String::from("(waiting for input)"),
         })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, &self.last)?;
-        self.screen.render()
+        redraw(&mut self.program, &self.last)?;
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
-        while let Ok(ev) = self.screen.read_event() {
-            let _ = self.screen.observe_event(&ev);
+        while let Ok(ev) = self.program.read_event() {
+            let _ = self.program.observe_event(&ev);
             match &ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q'),
@@ -167,20 +167,20 @@ impl App {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => {
-                    self.screen.suspend()?;
-                    self.screen.resume()?;
+                    self.program.suspend()?;
+                    self.program.resume()?;
                     self.last = String::from("(resumed)");
                     self.render()?;
                     continue;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize((ws.col, 2));
+                    self.program.screen_mut().resize((ws.col, 2));
                 }
                 _ => {}
             }
 
             let line = format_event(&ev);
-            self.screen.insert_above(&line)?;
+            self.program.screen_mut().insert_above(&line)?;
             self.last = line;
             self.render()?;
         }
@@ -188,7 +188,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 

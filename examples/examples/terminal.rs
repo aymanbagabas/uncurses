@@ -8,41 +8,44 @@ use std::io;
 
 use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::terminal::{TtyInput, TtyOutput};
 use uncurses::text::TextSurface;
 
 struct App {
-    screen: Screen<TtyInput, TtyOutput>,
+    program: Program<TtyInput, TtyOutput>,
 }
 
 impl App {
     fn start() -> io::Result<Self> {
-        let mut screen = Screen::open()?;
-        screen.init()?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
-        Ok(Self { screen })
+        let mut program = Program::open()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
+        Ok(Self { program })
     }
 
     fn run(&mut self) -> io::Result<()> {
-        let (mut w, mut h) = (self.screen.width(), self.screen.height());
+        let (mut w, mut h) = (
+            self.program.screen().width(),
+            self.program.screen().height(),
+        );
         let mut events = 0u64;
         loop {
-            self.screen.set_str(
+            self.program.screen_mut().set_str(
                 (0, 0),
                 "uncurses compositional demo — press q or Ctrl-C to quit",
                 uncurses::style::Style::default(),
             );
-            self.screen.set_str(
+            self.program.screen_mut().set_str(
                 (0, 1),
                 &format!("size: {w}x{h}   events: {events}      "),
                 uncurses::style::Style::default(),
             );
-            self.screen.render()?;
+            self.program.screen_mut().render()?;
 
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
+            self.program.observe_event(&ev)?;
             match ev {
                 Event::KeyPress(Key {
                     code: KeyCode::Char('q'),
@@ -54,8 +57,11 @@ impl App {
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => break,
                 Event::Resize(ws) => {
-                    self.screen.resize((ws.col, ws.row));
-                    (w, h) = (self.screen.width(), self.screen.height());
+                    self.program.screen_mut().resize((ws.col, ws.row));
+                    (w, h) = (
+                        self.program.screen().width(),
+                        self.program.screen().height(),
+                    );
                 }
                 _ => {}
             }
@@ -65,7 +71,7 @@ impl App {
     }
 
     fn stop(self) -> io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 

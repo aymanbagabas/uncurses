@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key};
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -91,25 +92,25 @@ enum Outcome {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?; // bracketed paste on by default
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    let mut program = Program::stdio()?;
+    program.init()?; // bracketed paste on by default
+    program.enter_alt_screen()?;
+    program.hide_cursor()?;
 
-    let result = run(&mut screen);
-    screen.finish()?;
+    let result = run(&mut program);
+    program.finish()?;
     result
 }
 
-fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
     let mut last: Option<Outcome> = None;
     let mut sink: Option<PasteSink> = None;
-    render(screen, last.as_ref());
+    render(program.screen_mut(), last.as_ref());
 
     loop {
-        let ev = screen.read_event()?;
-        screen.observe_event(&ev)?;
+        let ev = program.read_event()?;
+        program.observe_event(&ev)?;
         match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::PasteStart => sink = Some(PasteSink::new()),
@@ -121,12 +122,12 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
             Event::PasteEnd => {
                 if let Some(s) = sink.take() {
                     last = Some(s.finish()?);
-                    render(screen, last.as_ref());
+                    render(program.screen_mut(), last.as_ref());
                 }
             }
             Event::Resize(ws) => {
-                screen.resize((ws.col, ws.row));
-                render(screen, last.as_ref());
+                program.screen_mut().resize((ws.col, ws.row));
+                render(program.screen_mut(), last.as_ref());
             }
             _ => {}
         }
@@ -134,7 +135,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdin, Stdout>, last: Option<&Outcome>) {
+fn render(screen: &mut Screen<Stdout>, last: Option<&Outcome>) {
     screen.clear();
     let dim = Style::default().fg(Color::BrightBlack);
     let hint = format!("Paste text. Pastes over {THRESHOLD} bytes spill to a file. q quits.");

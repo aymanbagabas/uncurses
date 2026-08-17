@@ -26,7 +26,7 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         terminal.draw(render)?;
         let events = terminal.backend_mut();
         if events.poll_event(None)?
-            && let Some(ev) = events.try_read_event()
+            && let Some(ev) = events.try_read_event()?
         {
             events.observe_event(&ev)?;
             if let Event::KeyPress(_) = ev {
