@@ -720,7 +720,7 @@ impl<I: Input, O: Write> Program<I, O> {
     // --- Request delegates -----------------------------------------------
     //
     // Each writes a terminal query and flushes; the reply arrives later
-    // through the event flow. Replies that double as init capability
+    // through the event flow. Replies that double as capability
     // reports (mode, kitty keyboard) are recorded into
     // [`capabilities`](Self::capabilities); value replies (cursor
     // position, colors, pixel sizes) surface to the caller as events.
