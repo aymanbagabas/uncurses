@@ -1767,6 +1767,34 @@ fn a_setting_report_is_not_recorded_as_a_termcap_capability() {
 }
 
 #[test]
+fn a_decrqss_setting_report_is_not_recorded() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (80, 24));
+    let before = program.capabilities().clone();
+
+    program
+        .observe_event(&Event::SettingReport {
+            recognized: true,
+            value: "0;1".to_string(),
+            selector: "m".to_string(),
+        })
+        .unwrap();
+    program
+        .observe_event(&Event::SettingReport {
+            recognized: false,
+            value: String::new(),
+            selector: String::new(),
+        })
+        .unwrap();
+
+    // Which setting a DECRPSS reply is about lives in the DECRQSS request,
+    // not in the reply: a refusal names nothing at all. The request is the
+    // caller's, so the reply reaches the caller untouched and nothing here
+    // tries to file it.
+    assert_eq!(program.capabilities(), &before);
+}
+
+#[test]
 fn a_truecolor_termcap_reply_upgrades_the_color_profile() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (10, 3));

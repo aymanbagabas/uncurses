@@ -84,17 +84,32 @@ fn recognize(payload: &[u8]) -> Option<Event> {
         });
     }
 
-    // DECRQSS response: DCS 1$r ... ST (valid) or DCS 0$r ... ST (invalid).
-    // Reported separately from XTGETTCAP: this payload is a settings string,
-    // not `cap=value` pairs.
-    if (params_raw == b"1" || params_raw == b"0")
-        && intermediates == b"$"
-        && final_byte == b'r'
-        && let Ok(s) = std::str::from_utf8(payload)
-    {
+    // DECRQSS response: DCS 1$r <value><selector> ST (valid) or
+    // DCS 0$r ST (invalid). Reported separately from XTGETTCAP: the data is
+    // a settings string, not `cap=value` pairs.
+    //
+    // The data is the CSI string for the setting: an optional private
+    // prefix, the parameters, then the intermediates and the final byte.
+    // Prefix and tail together name the control function, so both are the
+    // selector and only the middle is the value. Keeping the prefix out of
+    // the value is what tells SGR (`m`) apart from XTQMODKEYS (`>m`), which
+    // otherwise share a final byte.
+    //
+    // Splitting here rather than in each caller: the ranges are disjoint, so
+    // the split is unambiguous, and nobody should have to know the grammar
+    // to learn which setting was reported.
+    if (params_raw == b"1" || params_raw == b"0") && intermediates == b"$" && final_byte == b'r' {
+        let head = usize::from(data.first().is_some_and(|b| (0x3c..=0x3f).contains(b)));
+        let tail = data[head..]
+            .iter()
+            .position(|&b| !(0x30..=0x3b).contains(&b))
+            .map_or(data.len(), |i| head + i);
+        let mut selector = String::from_utf8_lossy(&data[..head]).into_owned();
+        selector.push_str(&String::from_utf8_lossy(&data[tail..]));
         return Some(Event::SettingReport {
             recognized: params_raw == b"1",
-            payload: s.to_string(),
+            value: String::from_utf8_lossy(&data[head..tail]).into_owned(),
+            selector,
         });
     }
 
