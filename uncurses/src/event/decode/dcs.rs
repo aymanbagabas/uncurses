@@ -88,6 +88,12 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     // DCS 0$r ST (invalid). Reported separately from XTGETTCAP: the data is
     // a settings string, not `cap=value` pairs.
     //
+    // Only 0 and 1 are ever sent, but do not "correct" which is which. The
+    // VT510 manual documents 0 as valid and 1 as invalid, and it is wrong:
+    // testing a VT420 in 1996 showed the two reversed, and vttest, DEC STD
+    // 070 and xterm all agree that 1 is the valid one. See the "Contents of
+    // this document" notes in xterm's ctlseqs.
+    //
     // The data is the CSI string for the setting: an optional private
     // prefix, the parameters, then the intermediates and the final byte.
     // Prefix and tail together name the control function, so both are the
