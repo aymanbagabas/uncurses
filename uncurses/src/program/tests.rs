@@ -83,6 +83,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
             options: ProgramOptions::default(),
             window_cells: None,
             window_pixels: None,
+            cell_pixels: None,
             origin: Position::ORIGIN,
             origin_queries_pending: 0,
         }
@@ -1530,4 +1531,197 @@ fn a_later_mode_report_replaces_an_earlier_one() {
         Some(ModeSetting::Set)
     );
     assert_eq!(program.capabilities().modes().len(), 1);
+}
+
+#[test]
+fn capabilities_keep_the_raw_secondary_and_tertiary_device_attributes() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+
+    program
+        .observe_event(&Event::SecondaryDeviceAttributes(vec![
+            Some(0),
+            Some(95),
+            None,
+        ]))
+        .unwrap();
+    program
+        .observe_event(&Event::TertiaryDeviceAttributes("00000000".to_string()))
+        .unwrap();
+
+    let caps = program.capabilities();
+    assert_eq!(
+        caps.secondary_device_attributes(),
+        Some(&[Some(0), Some(95), None][..]),
+        "DA2 is reported unparsed, empty parameters included"
+    );
+    assert_eq!(caps.tertiary_device_attributes(), Some("00000000"));
+}
+
+#[test]
+fn capabilities_record_the_terminals_own_colors_not_the_overrides() {
+    use crate::color::Color;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+
+    let reported = Color::Rgb(0x1e, 0x1e, 0x2e);
+    program
+        .observe_event(&Event::BackgroundColor(reported))
+        .unwrap();
+    program
+        .observe_event(&Event::ForegroundColor(Color::Rgb(0xcd, 0xd6, 0xf4)))
+        .unwrap();
+    program
+        .observe_event(&Event::CursorColor(Color::Rgb(0xf5, 0xe0, 0xdc)))
+        .unwrap();
+    program
+        .observe_event(&Event::PaletteColor {
+            index: 4,
+            color: Color::Rgb(0, 0, 0xff),
+        })
+        .unwrap();
+
+    // Overriding the background must not rewrite what the terminal reported:
+    // one is what we told it, the other is what it told us.
+    program
+        .set_background_color(Color::Rgb(0xff, 0, 0))
+        .unwrap();
+
+    let caps = program.capabilities();
+    assert_eq!(caps.background_color(), Some(reported));
+    assert_eq!(caps.foreground_color(), Some(Color::Rgb(0xcd, 0xd6, 0xf4)));
+    assert_eq!(caps.cursor_color(), Some(Color::Rgb(0xf5, 0xe0, 0xdc)));
+    assert_eq!(caps.palette_color(4), Some(Color::Rgb(0, 0, 0xff)));
+    assert_eq!(caps.palette_color(5), None);
+}
+
+#[test]
+fn capabilities_track_the_latest_color_scheme() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+
+    assert_eq!(program.capabilities().color_scheme(), None);
+    program
+        .observe_event(&Event::ColorScheme(crate::event::ColorScheme::Dark))
+        .unwrap();
+    assert_eq!(
+        program.capabilities().color_scheme(),
+        Some(crate::event::ColorScheme::Dark)
+    );
+    // Mode 2031 keeps reporting as the user toggles the scheme.
+    program
+        .observe_event(&Event::ColorScheme(crate::event::ColorScheme::Light))
+        .unwrap();
+    assert_eq!(
+        program.capabilities().color_scheme(),
+        Some(crate::event::ColorScheme::Light)
+    );
+}
+
+#[test]
+fn capabilities_keep_termcap_values_and_distinguish_a_no_from_silence() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+
+    program
+        .observe_event(&Event::Termcap {
+            recognized: true,
+            payload: "TN=xterm;Co=256;kb".to_string(),
+        })
+        .unwrap();
+    program
+        .observe_event(&Event::Termcap {
+            recognized: false,
+            payload: "RGB".to_string(),
+        })
+        .unwrap();
+
+    let caps = program.capabilities();
+    assert_eq!(caps.termcap("TN"), Some("xterm"));
+    assert_eq!(caps.termcap("Co"), Some("256"));
+    // A boolean capability arrives with no value but is still supported.
+    assert_eq!(caps.termcap("kb"), Some(""));
+    assert!(caps.supports_termcap("kb"));
+    // Reported unsupported: recorded as a definite no, not as silence.
+    assert!(!caps.supports_termcap("RGB"));
+    assert_eq!(caps.termcap_reports().get("RGB"), Some(&None));
+    assert_eq!(caps.termcap_reports().get("Tc"), None);
+    assert!(!caps.true_color());
+}
+
+#[test]
+fn a_truecolor_termcap_reply_upgrades_the_color_profile() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.screen_mut().set_color_profile(Profile::Ansi256);
+
+    program
+        .observe_event(&Event::Termcap {
+            recognized: true,
+            payload: "Tc".to_string(),
+        })
+        .unwrap();
+
+    assert!(program.capabilities().true_color());
+    assert_eq!(program.screen().color_profile(), Profile::TrueColor);
+}
+
+#[test]
+fn a_kitty_graphics_response_records_graphics_support() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+
+    assert!(!program.capabilities().kitty_graphics());
+    program
+        .observe_event(&Event::KittyGraphics {
+            options: vec![("i".to_string(), "1".to_string())],
+            payload: b"OK".to_vec(),
+        })
+        .unwrap();
+    assert!(program.capabilities().kitty_graphics());
+}
+
+#[test]
+fn a_reported_cell_size_beats_dividing_the_window_sizes() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+
+    assert_eq!(program.cell_pixels(), None);
+
+    // Padding around the grid makes the quotient (8x16) understate the cell.
+    program
+        .observe_event(&Event::WindowCellSize {
+            width: 10,
+            height: 4,
+        })
+        .unwrap();
+    program
+        .observe_event(&Event::WindowPixelSize {
+            width: 84,
+            height: 68,
+        })
+        .unwrap();
+    assert_eq!(program.cell_pixels(), Some(Size::new(8, 17)));
+
+    program
+        .observe_event(&Event::CellPixelSize {
+            width: 8,
+            height: 16,
+        })
+        .unwrap();
+    assert_eq!(
+        program.cell_pixels(),
+        Some(Size::new(8, 16)),
+        "the terminal's own reply wins over the derived approximation"
+    );
+
+    let mouse = crate::event::Mouse::new(
+        24,
+        32,
+        crate::event::MouseButton::Left,
+        crate::event::KeyModifiers::empty(),
+    );
+    let cells = program.mouse_pixels_to_cells(mouse).unwrap();
+    assert_eq!((cells.x, cells.y), (3, 2));
 }
