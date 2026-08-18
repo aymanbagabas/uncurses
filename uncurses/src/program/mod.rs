@@ -252,6 +252,29 @@ where
     I: Input,
     O: Write,
 {
+    // --- The terminal ----------------------------------------------------
+
+    /// Borrow the [`Terminal`] this program drives.
+    ///
+    /// Read-only on purpose. The program tracks the modes and raw-mode state
+    /// it has emitted so it can restore them, and handing out a mutable
+    /// terminal would let that record drift from the terminal it describes.
+    /// Everything the program itself changes has a method here.
+    pub fn terminal(&self) -> &Terminal<I, O> {
+        &self.terminal
+    }
+
+    /// The environment snapshot the [`Terminal`] captured.
+    ///
+    /// This is where the answers the terminal never sends live: `TERM`,
+    /// `COLORTERM`, `TERM_PROGRAM`, and the rest. Shorthand for
+    /// [`terminal().env()`](crate::terminal::Terminal::env), and the
+    /// counterpart to [`capabilities`](Self::capabilities), which holds only
+    /// what the terminal answered.
+    pub fn env(&self) -> &crate::terminal::Env {
+        self.terminal.env()
+    }
+
     // --- The screen ------------------------------------------------------
 
     /// Borrow the [`Screen`] this program renders with.
