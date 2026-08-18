@@ -1345,7 +1345,9 @@ mod tests {
         buf.push(0x9c);
         let evs = p.parse(&buf);
         match evs.first() {
-            Some(Event::Termcap { payload, .. }) => assert!(payload.starts_with("TN=")),
+            Some(Event::Termcap { entries, .. }) => {
+                assert_eq!(entries, &[("TN".to_string(), Some("xterm".to_string()))]);
+            }
             other => panic!("expected Capability event, got {:?}", other),
         }
     }
@@ -1356,11 +1358,11 @@ mod tests {
         // treated as part of the body, not as ST.
         let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1bP1$r0\x07more\x1b\\");
-        // Single event: a Capability covering the whole payload (with BEL
-        // embedded). The parser must NOT split it on BEL.
+        // Single event: a setting report covering the whole payload (with
+        // BEL embedded). The parser must NOT split it on BEL.
         assert_eq!(evs.len(), 1, "expected 1 event, got {:?}", evs);
         match &evs[0] {
-            Event::Termcap { payload, .. } => {
+            Event::SettingReport { payload, .. } => {
                 assert!(payload.starts_with("1$r0"));
                 assert!(payload.contains('\u{07}'));
                 assert!(payload.ends_with("more"));
@@ -1602,7 +1604,13 @@ mod tests {
         let evs = p.parse(b"\x1bP1+r544E=787465726D;436F=323536\x1b\\");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
-            Event::Termcap { payload, .. } => assert_eq!(payload, "TN=xterm;Co=256"),
+            Event::Termcap { entries, .. } => assert_eq!(
+                entries,
+                &[
+                    ("TN".to_string(), Some("xterm".to_string())),
+                    ("Co".to_string(), Some("256".to_string())),
+                ]
+            ),
             other => panic!("expected Capability, got {:?}", other),
         }
     }
@@ -1614,9 +1622,32 @@ mod tests {
         let evs = p.parse(b"\x1bP1+rZZ=AA;544E=78;6B62\x1b\\");
         assert_eq!(evs.len(), 1);
         match &evs[0] {
-            // "TN=x" and "kb" survive; the bogus "ZZ=AA" entry is skipped.
-            Event::Termcap { payload, .. } => assert_eq!(payload, "TN=x;kb"),
+            // "TN=x" and the boolean "kb" survive; "ZZ=AA" is skipped.
+            Event::Termcap { entries, .. } => assert_eq!(
+                entries,
+                &[
+                    ("TN".to_string(), Some("x".to_string())),
+                    ("kb".to_string(), None),
+                ]
+            ),
             other => panic!("expected Capability, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_dcs_xtgettcap_value_containing_delimiters() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // kf13=\E[1;2P, verbatim from xterm-256color. The value holds a `;`,
+        // which is only a delimiter in the hex form, so the entry must stay
+        // whole rather than splitting into a bogus second capability.
+        let evs = p.parse(b"\x1bP1+r6B663133=1B5B313B3250\x1b\\");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Termcap { entries, .. } => assert_eq!(
+                entries,
+                &[("kf13".to_string(), Some("\x1b[1;2P".to_string()))]
+            ),
+            other => panic!("expected Termcap, got {:?}", other),
         }
     }
 
@@ -1631,10 +1662,10 @@ mod tests {
         match &evs[0] {
             Event::Termcap {
                 recognized,
-                payload,
+                entries,
             } => {
                 assert!(!recognized);
-                assert_eq!(payload, "RGB");
+                assert_eq!(entries, &[("RGB".to_string(), None)]);
             }
             other => panic!("expected Termcap, got {:?}", other),
         }
@@ -1650,10 +1681,10 @@ mod tests {
         match &evs[0] {
             Event::Termcap {
                 recognized,
-                payload,
+                entries,
             } => {
                 assert!(recognized);
-                assert_eq!(payload, "RGB");
+                assert_eq!(entries, &[("RGB".to_string(), None)]);
             }
             other => panic!("expected Termcap, got {:?}", other),
         }
@@ -1662,10 +1693,10 @@ mod tests {
         match &evs[0] {
             Event::Termcap {
                 recognized,
-                payload,
+                entries,
             } => {
                 assert!(recognized);
-                assert_eq!(payload, "Tc");
+                assert_eq!(entries, &[("Tc".to_string(), None)]);
             }
             other => panic!("expected Termcap, got {:?}", other),
         }
