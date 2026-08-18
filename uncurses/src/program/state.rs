@@ -16,7 +16,7 @@
 //!
 //! [`Program`]: super::Program
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
@@ -105,6 +105,15 @@ pub(super) struct State {
     /// Whether grapheme-cluster mode is on (DEC 2027). Mirrors
     /// [`Screen::grapheme_clusters`](crate::screen::Screen::grapheme_clusters).
     pub grapheme_clusters: bool,
+    /// Modes the application has taken a position on, by calling the matching
+    /// `enable_*` / `disable_*` method or by having one adopted on its behalf.
+    ///
+    /// The mode fields above cannot carry this: `false` reads the same whether
+    /// the app turned the mode off or never mentioned it. Discovery adopts a
+    /// preferred mode only for a mode absent from this set, so an explicit
+    /// `disable_*` issued before the terminal ever reports is not quietly
+    /// undone by the report when it arrives.
+    pub chosen: BTreeSet<Mode>,
 }
 
 impl Default for State {
@@ -129,6 +138,7 @@ impl Default for State {
             alt_screen: false,
             cursor_visible: true,
             grapheme_clusters: false,
+            chosen: BTreeSet::new(),
         }
     }
 }

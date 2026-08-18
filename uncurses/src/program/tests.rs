@@ -668,6 +668,17 @@ fn alt_screen_origin_is_zero() {
     // In the alternate program the managed area starts at the top-left,
     // regardless of any stored inline origin.
     assert_eq!(program.origin(), Position::ORIGIN);
+    // Which every consumer of the origin has to agree on. Going fullscreen
+    // does not clear the tracked value, so anything reading the raw field
+    // instead would keep shifting mouse events by a dead inline anchor.
+    let m = crate::event::Mouse::new(
+        6,
+        11,
+        crate::event::MouseButton::Left,
+        crate::event::KeyModifiers::empty(),
+    );
+    let mapped = program.mouse_to_origin(m);
+    assert_eq!((mapped.x, mapped.y), (6, 11));
 }
 
 #[test]
@@ -1829,4 +1840,82 @@ fn a_reported_cell_size_beats_dividing_the_window_sizes() {
     );
     let cells = program.mouse_pixels_to_cells(mouse).unwrap();
     assert_eq!((cells.x, cells.y), (3, 2));
+}
+
+#[test]
+fn a_later_mode_report_does_not_undo_an_explicit_disable() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 5));
+
+    let report = Event::ModeReport {
+        mode: Mode::UNICODE_CORE,
+        setting: ModeSetting::Set,
+    };
+    program.observe_event(&report).unwrap();
+    assert!(program.state.grapheme_clusters, "adopted on discovery");
+
+    program.disable_grapheme_clusters().unwrap();
+    buf.borrow_mut().clear();
+
+    // A second query, or a mode the app asks about itself, reports again.
+    program.observe_event(&report).unwrap();
+    assert!(
+        !program.state.grapheme_clusters,
+        "the explicit disable must stand"
+    );
+    assert!(
+        written(&buf).is_empty(),
+        "and nothing may be written behind the app's back"
+    );
+    // Observing is not configuring. Adoption is remembered in the recorded
+    // capability, so the caller's options read back exactly as written.
+    assert!(
+        program.options.prefer_grapheme_clusters,
+        "observing must not rewrite the caller's options"
+    );
+}
+
+/// The mirror of the test above, for the ordering where the application opts
+/// out *before* the terminal has said anything. The mode fields cannot tell
+/// that apart from never having decided, so a guard reading them alone lets
+/// the first report enable a mode the app just turned off.
+#[test]
+fn a_first_mode_report_does_not_undo_an_earlier_explicit_disable() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 5));
+    program.disable_grapheme_clusters().unwrap();
+    program.disable_in_band_resize().unwrap();
+    // Synchronized output has no mode to emit, so it is opted out of through
+    // the options rather than a setter.
+    program.options.prefer_synchronized_output = false;
+    program.screen_mut().set_synchronized_output(false);
+    buf.borrow_mut().clear();
+
+    for mode in [
+        Mode::UNICODE_CORE,
+        Mode::IN_BAND_RESIZE,
+        Mode::SYNCHRONIZED_OUTPUT,
+    ] {
+        program
+            .observe_event(&Event::ModeReport {
+                mode,
+                setting: ModeSetting::Set,
+            })
+            .unwrap();
+    }
+    program.screen_mut().flush().unwrap();
+
+    let out = written(&buf);
+    assert!(out.is_empty(), "wrote behind the app's back: {out:?}");
+    assert!(!program.state.grapheme_clusters);
+    assert!(!program.state.in_band_resize);
+    assert!(!program.screen().synchronized_output());
+    // The reports are still recorded: refusing to adopt is not refusing to
+    // listen.
+    assert!(program.capabilities().supports(Mode::UNICODE_CORE));
+    assert!(program.capabilities().supports(Mode::SYNCHRONIZED_OUTPUT));
 }

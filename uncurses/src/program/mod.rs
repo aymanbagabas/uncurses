@@ -88,7 +88,7 @@ use crate::screen::Screen;
 use crate::terminal::Terminal;
 
 /// An interactive terminal session composing a [`Terminal`], an
-/// [`EventSource`], and a [`Screen`] with the terminal and input modes. See
+/// [`EventSource`], and a [`Screen`] to render with. See
 /// the [module documentation](self) for the lifecycle.
 ///
 /// `Program` is [`Send`] and [`Sync`] whenever its input and output handles
@@ -120,8 +120,9 @@ where
     /// would observe them a second time, and a reply counts once.
     unread: VecDeque<Event>,
     state: state::State,
-    /// Terminal capabilities detected by intercepting the replies to the
-    /// queries the application fires.
+    /// Terminal capabilities, recorded by intercepting replies as they pass
+    /// through the read path. Empty until [`Self::query_capabilities`] is
+    /// called and the replies are read.
     caps: Capabilities,
     /// Desired default behaviors, set by [`Self::init_with`].
     options: ProgramOptions,
@@ -188,6 +189,20 @@ pub struct ProgramOptions {
     /// [`enable_in_band_resize`](Program::enable_in_band_resize) yourself to
     /// opt in without waiting for a report.
     pub prefer_in_band_resize: bool,
+    /// Wrap each frame in synchronized-output markers (DEC mode 2026) once the
+    /// terminal reports them as available, so a frame is presented in one
+    /// piece instead of tearing. Defaults to `true`.
+    ///
+    /// Unlike the two above this emits nothing of its own: synchronized output
+    /// is a render property, so adopting it only tells the [`Screen`] to start
+    /// bracketing frames. Set to `false` to keep frames unwrapped for the whole
+    /// session. [`Screen::set_synchronized_output`] drives the same property
+    /// directly, but the program cannot see a choice made there, so a call made
+    /// before the terminal's first report is still overridden by adoption; use
+    /// this field when the decision has to hold from the start.
+    ///
+    /// [`Screen::set_synchronized_output`]: crate::screen::Screen::set_synchronized_output
+    pub prefer_synchronized_output: bool,
 }
 
 bitflags! {
@@ -250,6 +265,7 @@ impl Default for ProgramOptions {
             mouse: None,
             prefer_grapheme_clusters: true,
             prefer_in_band_resize: true,
+            prefer_synchronized_output: true,
         }
     }
 }
@@ -554,7 +570,11 @@ where
     /// report proving support for grapheme clusters or in-band resize enables
     /// that mode when the matching
     /// [`ProgramOptions`] `prefer_*` field is set, which writes to the
-    /// terminal. Each is enabled at most once.
+    /// terminal. That adoption happens only while the application has taken no
+    /// position of its own: calling the mode's `enable_*` or `disable_*`
+    /// method, in either direction and at any point, settles it for good, and
+    /// adoption itself counts as settling it. So each mode is adopted at most
+    /// once, and never against an explicit choice.
     ///
     /// Observing never queries. Nothing here asks the terminal a question, so
     /// no reply appears on the event stream that the application did not ask
@@ -582,24 +602,30 @@ where
                 // no is information an app may want, and is not the same as
                 // the terminal staying silent.
                 self.caps.modes.insert(mode, setting);
-                if setting.is_available() {
+                // Adopt a preferred mode only while the application has taken
+                // no position on it. Calling enable_* or disable_* records the
+                // position, and adopting records it too, so a mode is adopted
+                // at most once and an explicit choice is never overridden --
+                // including one made before the terminal ever reported, when
+                // the mode field alone still reads as its default. The
+                // caller's options are only read, never rewritten.
+                if setting.is_available() && !self.state.chosen.contains(&mode) {
                     match mode {
                         // Render-affecting and free to adopt: the screen emits
                         // the 2026 markers per frame, so knowing the terminal
-                        // understands them is all it takes. Override with
-                        // [`Screen::set_synchronized_output`].
+                        // understands them is all it takes. Turn it off for the
+                        // session with `prefer_synchronized_output`, or per
+                        // frame with [`Screen::set_synchronized_output`].
                         Mode::SYNCHRONIZED_OUTPUT => {
-                            self.screen.set_synchronized_output(true);
+                            if self.options.prefer_synchronized_output {
+                                self.screen.set_synchronized_output(true);
+                            }
+                            self.state.chosen.insert(mode);
                         }
-                        Mode::UNICODE_CORE
-                            if self.options.prefer_grapheme_clusters
-                                && !self.state.grapheme_clusters =>
-                        {
+                        Mode::UNICODE_CORE if self.options.prefer_grapheme_clusters => {
                             self.enable_grapheme_clusters()?;
                         }
-                        Mode::IN_BAND_RESIZE
-                            if self.options.prefer_in_band_resize && !self.state.in_band_resize =>
-                        {
+                        Mode::IN_BAND_RESIZE if self.options.prefer_in_band_resize => {
                             self.enable_in_band_resize()?;
                         }
                         _ => {}

@@ -236,6 +236,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn enable_in_band_resize(&mut self) -> io::Result<()> {
         mode::Mode::IN_BAND_RESIZE.set(&mut self.screen)?;
         self.state.in_band_resize = true;
+        self.state.chosen.insert(mode::Mode::IN_BAND_RESIZE);
         self.source.lock().unwrap().set_handle_resize(false);
         self.screen.flush()
     }
@@ -245,6 +246,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn disable_in_band_resize(&mut self) -> io::Result<()> {
         mode::Mode::IN_BAND_RESIZE.reset(&mut self.screen)?;
         self.state.in_band_resize = false;
+        self.state.chosen.insert(mode::Mode::IN_BAND_RESIZE);
         self.source.lock().unwrap().set_handle_resize(true);
         self.screen.flush()
     }
@@ -374,6 +376,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn enable_grapheme_clusters(&mut self) -> io::Result<()> {
         mode::Mode::UNICODE_CORE.set(&mut self.screen)?;
         self.state.grapheme_clusters = true;
+        self.state.chosen.insert(mode::Mode::UNICODE_CORE);
         self.screen.set_grapheme_clusters(true);
         self.screen.flush()
     }
@@ -383,6 +386,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn disable_grapheme_clusters(&mut self) -> io::Result<()> {
         mode::Mode::UNICODE_CORE.reset(&mut self.screen)?;
         self.state.grapheme_clusters = false;
+        self.state.chosen.insert(mode::Mode::UNICODE_CORE);
         self.screen.set_grapheme_clusters(false);
         self.screen.flush()
     }
@@ -720,7 +724,7 @@ impl<I: Input, O: Write> Program<I, O> {
     // --- Request delegates -----------------------------------------------
     //
     // Each writes a terminal query and flushes; the reply arrives later
-    // through the event flow. Replies that double as init capability
+    // through the event flow. Replies that double as capability
     // reports (mode, kitty keyboard) are recorded into
     // [`capabilities`](Self::capabilities); value replies (cursor
     // position, colors, pixel sizes) surface to the caller as events.
