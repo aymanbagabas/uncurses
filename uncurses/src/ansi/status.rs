@@ -105,11 +105,20 @@ pub fn write_decxcpr<W: Write>(w: &mut W, line: u16, column: u16, page: u16) -> 
 
 /// Encode a DECRQSS response (DECRPSS), `ESC P <ps> $ r <value><selector> ESC \`.
 ///
-/// `ps` reports whether the request was valid. Only two values are defined:
-/// `1` for a valid request, which the value and selector then answer, and
-/// `0` for an invalid one, which carries no data at all, so pass an empty
-/// `value` and `selector` with it. Anything else is written out as given,
-/// the same way [`write_dsr_request`] does not judge its own parameter.
+/// `ps` reports whether the request was valid, and has only three forms.
+/// `Some(1)` is a valid request, which the value and selector then answer.
+/// `Some(0)` is an invalid one, which carries no data at all, so pass an
+/// empty `value` and `selector` with it. `None` omits the parameter, which
+/// is well formed but means nothing DEC ever defined, so real terminals
+/// send one of the other two. No other value exists. Larger numbers are
+/// still written out as given, the same way [`write_dsr_request`] does not
+/// judge its own parameter.
+///
+/// DCS carries no parameters in ECMA-48 at all, where it is only an opening
+/// delimiter around an opaque command string. The `Ps $ r` shape is
+/// Digital's own convention of making device control strings look like
+/// control sequences, which is why a parameter can be left out here the way
+/// it can in a control sequence.
 ///
 /// Beware that the VT510 manual documents `0` and `1` the other way around.
 /// It is wrong: a VT420 tested in 1996 had them reversed, and vttest, DEC
@@ -120,10 +129,18 @@ pub fn write_decxcpr<W: Write>(w: &mut W, line: u16, column: u16, page: u16) -> 
 /// reporting `"4;2"` for `">m"` emits `> 4 ; 2 m`, matching xterm's
 /// `XTQMODKEYS`. This is the inverse of the split
 /// [`Event::SettingReport`](crate::event::Event::SettingReport) reports.
-pub fn write_decrpss<W: Write>(w: &mut W, ps: u16, value: &str, selector: &str) -> io::Result<()> {
+pub fn write_decrpss<W: Write>(
+    w: &mut W,
+    ps: Option<u16>,
+    value: &str,
+    selector: &str,
+) -> io::Result<()> {
     let head = usize::from(selector.starts_with(['<', '=', '>', '?']));
     let (prefix, tail) = selector.split_at(head);
-    write!(w, "\x1bP{ps}$r{prefix}{value}{tail}\x1b\\")
+    match ps {
+        Some(ps) => write!(w, "\x1bP{ps}$r{prefix}{value}{tail}\x1b\\"),
+        None => write!(w, "\x1bP$r{prefix}{value}{tail}\x1b\\"),
+    }
 }
 
 /// Encode a light/dark report response.
@@ -168,15 +185,17 @@ mod tests {
     #[test]
     fn test_decrpss() {
         let mut buf = Vec::new();
-        write_decrpss(&mut buf, 1, "0;1", "m").unwrap();
-        write_decrpss(&mut buf, 1, "2", " q").unwrap();
+        write_decrpss(&mut buf, Some(1), "0;1", "m").unwrap();
+        write_decrpss(&mut buf, Some(1), "2", " q").unwrap();
         // The value goes after the private prefix, not before it.
-        write_decrpss(&mut buf, 1, "4;2", ">m").unwrap();
+        write_decrpss(&mut buf, Some(1), "4;2", ">m").unwrap();
         // A refusal carries no data.
-        write_decrpss(&mut buf, 0, "", "").unwrap();
+        write_decrpss(&mut buf, Some(0), "", "").unwrap();
+        // The parameter can be left out entirely.
+        write_decrpss(&mut buf, None, "0", "m").unwrap();
         assert_eq!(
             buf,
-            b"\x1bP1$r0;1m\x1b\\\x1bP1$r2 q\x1b\\\x1bP1$r>4;2m\x1b\\\x1bP0$r\x1b\\"
+            b"\x1bP1$r0;1m\x1b\\\x1bP1$r2 q\x1b\\\x1bP1$r>4;2m\x1b\\\x1bP0$r\x1b\\\x1bP$r0m\x1b\\"
         );
     }
 
