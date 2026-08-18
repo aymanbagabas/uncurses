@@ -57,11 +57,11 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    program.init()?; // raw mode, inline, cursor visible
-    let w = program.screen().width();
-    program.screen_mut().resize((w, 2)); // one text row plus a trailing blank line
+    program.init()?; // raw mode; inline, cursor visible
 
     let screen = program.screen_mut();
+    let w = screen.width();
+    screen.resize((w, 2)); // inline: one text row plus a trailing blank line
     screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
     screen.render()?;
 
@@ -77,14 +77,14 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`init()` does not probe the terminal or drain replies. If you want discovery,
-call `program.query_capabilities(&[])?` and keep reading events until the
-Primary DA reply arrives; ordinary `read_event` and `try_read_event` calls
-observe those replies automatically. `observe_event` is only needed when events
-come from outside the program, such as `event_stream()`.
+`init()` sets up the session and leaves the terminal alone, so discovery is
+yours to start: call `program.query_capabilities(&[])?` and keep reading events
+until the Primary DA reply arrives; ordinary `read_event` and `try_read_event`
+calls observe those replies automatically. `observe_event` is only needed when
+events come from outside the program, such as `event_stream()`.
 
-Only need output? A `Screen` stands alone over any `Write`, with no terminal
-session at all:
+Only need output? A `Screen` stands alone over any `Write`, independent of any
+terminal session:
 
 ```rust
 use uncurses::screen::Screen;
