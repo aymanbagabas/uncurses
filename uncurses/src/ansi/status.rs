@@ -4,7 +4,8 @@
 //!
 //! This module emits DSR requests and report responses: cursor position, extended
 //! cursor position, and light/dark preference reporting. It also carries
-//! DECRQSS, which asks after a current setting rather than device status.
+//! DECRQSS and its DECRPSS response, which ask after a current setting
+//! rather than device status.
 //!
 //! ## CSI conventions
 //!
@@ -102,6 +103,26 @@ pub fn write_decxcpr<W: Write>(w: &mut W, line: u16, column: u16, page: u16) -> 
     }
 }
 
+/// Encode a DECRQSS response (DECRPSS), `ESC P 1 $ r <value><selector> ESC \`.
+///
+/// `value` is the setting's parameters, or `None` to refuse the request. A
+/// refusal is `ESC P 0 $ r ESC \` and carries no data at all, not even the
+/// selector, so only the request says which setting was refused.
+///
+/// The value goes after any private prefix rather than before the whole
+/// selector, since the reply spells out the CSI string for the setting:
+/// reporting `"4;2"` for `">m"` emits `> 4 ; 2 m`, matching xterm's
+/// `XTQMODKEYS`. This is the inverse of the split
+/// [`Event::SettingReport`](crate::event::Event::SettingReport) reports.
+pub fn write_decrpss<W: Write>(w: &mut W, value: Option<&str>, selector: &str) -> io::Result<()> {
+    let Some(value) = value else {
+        return w.write_all(b"\x1bP0$r\x1b\\");
+    };
+    let head = usize::from(selector.starts_with(['<', '=', '>', '?']));
+    let (prefix, tail) = selector.split_at(head);
+    write!(w, "\x1bP1$r{prefix}{value}{tail}\x1b\\")
+}
+
 /// Encode a light/dark report response.
 ///
 /// `dark == true` emits `ESC [ ? 997 ; 1 n`; `false` emits `ESC [ ? 997 ; 2 n`.
@@ -139,6 +160,21 @@ mod tests {
         write_decrqss(&mut buf, " q").unwrap();
         write_decrqss(&mut buf, "").unwrap();
         assert_eq!(buf, b"\x1bP$qm\x1b\\\x1bP$q q\x1b\\");
+    }
+
+    #[test]
+    fn test_decrpss() {
+        let mut buf = Vec::new();
+        write_decrpss(&mut buf, Some("0;1"), "m").unwrap();
+        write_decrpss(&mut buf, Some("2"), " q").unwrap();
+        // The value goes after the private prefix, not before it.
+        write_decrpss(&mut buf, Some("4;2"), ">m").unwrap();
+        // A refusal names nothing, not even the selector it was given.
+        write_decrpss(&mut buf, None, "m").unwrap();
+        assert_eq!(
+            buf,
+            b"\x1bP1$r0;1m\x1b\\\x1bP1$r2 q\x1b\\\x1bP1$r>4;2m\x1b\\\x1bP0$r\x1b\\"
+        );
     }
 
     #[test]
