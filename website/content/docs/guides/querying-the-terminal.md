@@ -21,9 +21,8 @@ flowchart TB
 ```
 
 {{< callout type="info" >}}
-`Program::init()` and `Program::init_with()` do not query the terminal. Startup
-is quiet, and there is no startup drain. Querying is entirely opt-in.
-`ProgramOptions` has no `query_capabilities` field.
+Startup is quiet. `Program::init()` and `Program::init_with()` set up the
+session and leave the terminal alone, so every query is a call you make.
 {{< /callout >}}
 
 ## Capability probing

@@ -38,12 +38,12 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-There is no `enter_alt_screen` or `hide_cursor` here. Those are opt-in,
-fullscreen-style choices.
+Inline mode leaves the alternate screen and the cursor as they are.
+`enter_alt_screen` and `hide_cursor` are opt-in, fullscreen-style choices.
 
 ## Fullscreen is a render property
 
-Inline versus fullscreen is now the screen's `fullscreen` render property.
+Inline versus fullscreen is the screen's `fullscreen` render property.
 Inline means relative addressing in a band in the normal buffer. Fullscreen means
 absolute addressing over the whole viewport, which is what you want after
 switching to the alternate screen buffer.
@@ -63,8 +63,9 @@ user types is just a `resize` per keystroke: keep the width at
 `program.screen().width()` and vary only the height.
 
 ```rust
-let width = program.screen().width();
-program.screen_mut().resize((width, lines.len() as u16));
+let screen = program.screen_mut();
+let width = screen.width();
+screen.resize((width, lines.len() as u16));
 ```
 
 The renderer keeps the block anchored in the normal buffer, so growing from two

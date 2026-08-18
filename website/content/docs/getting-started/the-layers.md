@@ -112,8 +112,8 @@ property together.
 
 An off-screen frame buffer. A `TextBuffer`, or any [surface]({{< relref
 "../concepts/surfaces.md" >}}) grid, is a structured grid of cells you paint
-complete frames into and compose before sending them anywhere. There is no
-diffing and no terminal session; it owns neither input nor output, so it never
+complete frames into and compose before sending them anywhere. It composes whole
+frames rather than diffing, and owns neither input nor output, so it never
 touches raw mode. When a frame is ready, the
 [`Encode`](/api/uncurses/text/trait.Encode.html) trait serializes it to bytes you
 write wherever you like: a terminal, a pipe, a file, or a string.

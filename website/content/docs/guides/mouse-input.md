@@ -115,8 +115,8 @@ When you ask for `MouseTracking::PIXELS`, a capable terminal reports the pointer
 in pixel offsets instead of cells, which is what you want for sub-cell precision
 like dragging a graphic. Two things change, and the program helps with both.
 
-First, find out whether you are actually getting pixels. `init()` no longer
-probes the terminal, so ask for capabilities when you need this answer. The
+First, find out whether you are actually getting pixels. `init()` leaves the
+terminal alone, so ask for capabilities when you need this answer. The
 terminal may not support the request, in which case you quietly keep getting
 cells. Once the capability replies have been observed, `program.capabilities()`
 tells you which mode you got:

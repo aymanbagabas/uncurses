@@ -19,4 +19,5 @@ jump straight to whatever you need.
   {{< card link="events" title="Events" subtitle="Turning the raw input stream into typed key, mouse, and terminal reply events." >}}
   {{< card link="screen" title="Screen" subtitle="The pure cell-grid and diff renderer over any std::io::Write." >}}
   {{< card link="program" title="Program" subtitle="The interactive facade for terminal lifecycle, modes, events, and rendering." >}}
+  {{< card link="capabilities" title="Capabilities" subtitle="What the terminal tells you about itself, and how to ask." >}}
 {{< /cards >}}

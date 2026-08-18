@@ -19,8 +19,8 @@ flowchart TB
   program --> screen["Screen<O>: renderer"]
 ```
 
-Constructing a `Program` is inert. It opens or accepts handles and sizes the
-renderer, but it does not enter raw mode and does not probe the terminal.
+Constructing a `Program` is inert: it opens or accepts handles and sizes the
+renderer. Raw mode and terminal probing each wait for an explicit call.
 
 - `Program::stdio()` uses process stdin and stdout.
 - `Program::open()` opens the controlling terminal (`/dev/tty`, or the Windows
@@ -41,10 +41,9 @@ fn main() -> std::io::Result<()> {
     program.enter_alt_screen()?;
     program.hide_cursor()?;
 
-    program
-        .screen_mut()
-        .set_str((0, 0), "hello, uncurses!", Style::default());
-    program.screen_mut().render()?;
+    let screen = program.screen_mut();
+    screen.set_str((0, 0), "hello, uncurses!", Style::default());
+    screen.render()?;
 
     while !matches!(program.read_event()?, Event::KeyPress(_)) {}
     program.finish()
@@ -54,7 +53,7 @@ fn main() -> std::io::Result<()> {
 `init()` enters raw mode, sizes the managed area, applies the always-on options,
 and prepares the renderer. `finish()` consumes the program, tears down the modes
 that program emitted, flushes the renderer, and restores the terminal state.
-There is no `Drop` teardown, so call `finish()` when the session is done.
+Teardown is explicit, so call `finish()` when the session is done.
 
 Use `pause()` when you need to hand the terminal to a child process and keep the
 program alive. Use `resume()` to re-enter raw mode, refit the managed area,
@@ -64,10 +63,12 @@ after it returns.
 
 ## Drawing through the screen
 
-`Program` has no `render()` and no `flush()`. Borrow the renderer with
-`screen()` or `screen_mut()`:
+Rendering lives on [`Screen`]({{< relref "screen.md" >}}). Borrow it with
+`screen()` or `screen_mut()`, and keep the binding for as long as you are
+drawing:
 
 ```rust,no_run
+use uncurses::event::Event;
 use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
@@ -75,11 +76,25 @@ use uncurses::text::TextSurface;
 fn main() -> std::io::Result<()> {
     let mut program = Program::open()?;
     program.init()?;
-    program.screen_mut().set_str((0, 0), "ready", Style::default());
-    program.screen_mut().render()?;
+
+    loop {
+        let screen = program.screen_mut();
+        screen.set_str((0, 0), "ready", Style::default());
+        screen.set_str((0, 1), "press any key", Style::default());
+        screen.render()?;
+
+        if matches!(program.read_event()?, Event::KeyPress(_)) {
+            break;
+        }
+    }
     program.finish()
 }
 ```
+
+The borrow ends at the binding's last use, so `program` is usable again on the
+next line, including inside an event loop. Reach for `program.screen_mut()`
+inline when you only have a single call to make, such as a `resize` in a match
+arm.
 
 Most drawing uses the surface traits on `Screen`. The renderer is still a pure
 cell grid and diff writer; the program just owns it for the duration of the
@@ -146,154 +161,12 @@ their own: the pixel sizes and the inline origin are refreshed when you call
 `request_window_pixel_size()`, `request_cell_pixel_size()`, and
 `request_origin()`, and not before.
 
-## Capability queries are opt-in
+## Startup options
 
-`init()` does not probe the terminal. Querying is explicit:
+`ProgramOptions` carries the startup behavior that `init` can emit directly:
+`bracketed_paste` and `mouse`.
 
-```rust,no_run
-use std::time::{Duration, Instant};
-use uncurses::event::Event;
-use uncurses::program::Program;
-
-fn main() -> std::io::Result<()> {
-    let mut program = Program::stdio()?;
-    program.init()?;
-    program.query_capabilities(&[])?;
-
-    let deadline = Instant::now() + Duration::from_millis(300);
-    while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
-        if !program.poll_event(Some(timeout))? {
-            break;
-        }
-        if matches!(program.try_read_event()?, Some(Event::PrimaryDeviceAttributes(_))) {
-            break;
-        }
-    }
-
-    let _caps = program.capabilities();
-    program.finish()
-}
-```
-
-`capabilities()` holds the replies themselves, not a summary of them. See
-[what the terminal told us](#what-the-terminal-told-us) below.
-
-`query_capabilities(&[])` writes the default query set and a Primary DA request
-last. You are responsible for consuming the replies. Read events until
-`Event::PrimaryDeviceAttributes` arrives, because that reply is the sentinel
-that every earlier reply has been delivered. A silent terminal may never answer,
-so bound the wait with `poll_event(Some(timeout))`.
-
-An ordinary event loop also works, because `read_event()` observes replies
-automatically as they pass through.
-
-## What the terminal told us
-
-`Capabilities` stores the replies rather than a set of booleans, because a
-boolean cannot express the difference between "the terminal said no" and "the
-terminal never answered". Every accessor that can be unanswered returns an
-`Option`, and `None` always means silence.
-
-```rust,no_run
-use uncurses::ansi::mode::{Mode, ModeSetting};
-use uncurses::program::Program;
-
-fn main() -> std::io::Result<()> {
-    let mut program = Program::stdio()?;
-    program.init()?;
-    program.query_capabilities(&[])?;
-    // ... read events until Event::PrimaryDeviceAttributes ...
-
-    let caps = program.capabilities();
-
-    // The reported state, for any mode you asked about.
-    match caps.mode(Mode::SYNCHRONIZED_OUTPUT) {
-        Some(ModeSetting::PermanentlySet) => {} // on, and cannot be turned off
-        Some(ModeSetting::NotRecognized) => {}  // a definite no
-        Some(_) => {}                           // available
-        None => {}                              // never answered
-    }
-
-    // Or just the yes/no question.
-    let _pixels = caps.supports(Mode::MOUSE_SGR_PIXEL);
-
-    // Raw replies for the non-mode queries.
-    let _da = caps.primary_device_attributes();
-    let _kitty = caps.kitty_keyboard();
-    let _mok = caps.modify_other_keys();
-    let _name = caps.terminal_name();
-
-    program.finish()
-}
-```
-
-The other half of what a program knows about its terminal never arrives as a
-reply at all. `program.env()` is the environment snapshot the terminal
-captured, so `TERM`, `COLORTERM`, and `TERM_PROGRAM` are readable without
-reaching for `std::env`, and they stay the values the session started with.
-`program.terminal()` borrows the terminal itself for its size and tty queries.
-Both are read-only: the program tracks the modes and raw-mode state it emitted
-so it can restore them, and a mutable terminal would let that record drift.
-
-`Capabilities` holds only replies, so it deliberately answers no question that
-another source can answer too. There is no `true_color()`, for instance:
-direct color is established by `COLORTERM` and `TERM` as readily as by an
-XTGETTCAP reply, so the answer is the render profile,
-`program.screen().color_profile()`, which already folds in both. See
-[Color]({{< relref "color.md" >}}). The reply itself is still here as
-`supports_termcap("RGB")` if you want to know how the profile was reached.
-
-Every reply a terminal can send about itself lands here, not just the ones the
-program acts on, so anything you send through `query_capabilities`'s `extra`
-bytes is readable afterwards. Besides the modes and the values above:
-
-| Reply | Accessor |
-| --- | --- |
-| Secondary/Tertiary DA | `secondary_device_attributes()`, `tertiary_device_attributes()` |
-| XTGETTCAP capability | `termcap(name)`, `supports_termcap(name)`, `termcap_reports()` |
-| DECRQSS setting | `setting(selector)`, `settings()` |
-| `OSC 10`/`11`/`12` colors | `foreground_color()`, `background_color()`, `cursor_color()` |
-| `OSC 4` palette entries | `palette_color(index)`, `palette()` |
-| DEC 2031 color scheme | `color_scheme()` |
-| Kitty graphics response | `kitty_graphics()` |
-
-`modes()`, `palette()`, `termcap_reports()`, and `settings()` return the whole
-map for each, so you can iterate everything the terminal answered.
-
-DECRQSS is the odd one out: nothing asks for it by default, since it reports
-current settings rather than what a terminal can do. Ask with
-`uncurses::ansi::status::write_decrqss` through `query_capabilities`'s `extra`
-bytes, passing the selector of the control function you want, `"m"` for SGR or
-`" q"` for the cursor style. The reply arrives as `Event::SettingReport`,
-either `Refused` or `Raw` holding the whole CSI sequence the terminal sent.
-`Raw` replies are recorded under their control function alone, so a `">4m"`
-request lands under `">m"` with the full `">4;2m"` as its value, which is what
-keeps xterm's `XTQMODKEYS` from overwriting SGR.
-
-Two of these keep changing after the initial query rather than answering once.
-`color_scheme()` tracks the latest DEC 2031 report while
-`enable_color_scheme_updates` is on, so it follows the user toggling dark and
-light mode. `kitty_graphics()` is set by any graphics response, including the
-acknowledgements a terminal sends while you transmit images.
-
-The colors are the terminal's own, which is the opposite side of what
-`Program` tracks for restore. Calling `set_background_color` does not change
-what `capabilities().background_color()` reports: one is what the terminal told
-you, the other is what you told the terminal.
-
-## Options and defaults
-
-Most of `ProgramOptions` is startup behavior that can be emitted without
-probing: `bracketed_paste` and `mouse` both take effect during `init`.
-
-Two fields are discovery-driven instead. `prefer_grapheme_clusters` and
-`prefer_in_band_resize` both default to `true`, but they emit nothing at init.
-They act only when a mode report proves the terminal supports DEC mode 2027 or
-2048, which means they stay dormant unless you call `query_capabilities` and
-read the replies. Adopting a mode this way goes through the same path as
-calling `enable_grapheme_clusters` or `enable_in_band_resize` yourself, so it
-is recorded in the emitted-mode set and `finish()` undoes it. Each is enabled
-at most once, so a repeated report does not re-emit.
-
-Set either to `false` to keep detection without adoption: the capability is
-still recorded in `capabilities()`, the mode is simply never enabled.
+Two more options, `prefer_grapheme_clusters` and `prefer_in_band_resize`, act on
+what the terminal reports about itself. Those live with the rest of the
+discovery story in [Capabilities]({{< relref "capabilities.md" >}}), along with
+everything a terminal can tell you and how to ask.

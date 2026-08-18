@@ -17,13 +17,11 @@ fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
     program.init()?;
 
-    let w = program.screen().width();
-    program.screen_mut().resize((w, 2));
-
-    program
-        .screen_mut()
-        .set_str((0, 0), "Hello! Press q to quit.", Style::new());
-    program.screen_mut().render()?;
+    let screen = program.screen_mut();
+    let w = screen.width();
+    screen.resize((w, 2));
+    screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
+    screen.render()?;
 
     let q: Key = "q".parse().unwrap();
     loop {
@@ -65,8 +63,9 @@ alternate screen and a hidden cursor are opt-in, which we will get to below.
 **Claim some space.**
 
 ```rust
-let w = program.screen().width();
-program.screen_mut().resize((w, 2));
+let screen = program.screen_mut();
+let w = screen.width();
+screen.resize((w, 2));
 ```
 
 Inline, the screen owns however many rows you ask for. Here we take the full
@@ -77,13 +76,13 @@ back on a fresh line of its own instead of butting up against your last line.
 **Draw, then show.**
 
 ```rust
-program
-    .screen_mut()
-    .set_str((0, 0), "Hello! Press q to quit.", Style::new());
-program.screen_mut().render()?;
+screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
+screen.render()?;
 ```
 
-`screen_mut()` gives you the pure renderer owned by the program. `set_str`
+`screen_mut()` gives you the pure renderer owned by the program. Bind it once
+and keep using it, as above; the borrow ends at its last use, so `program` is
+free again for the event loop below. `set_str`
 paints text at an x/y position into an in-memory frame. Nothing reaches the
 terminal until `render()`, which exists on `Screen`, diffs the new frame against
 what is already on screen, and writes only the difference. Painting cannot fail;
@@ -118,11 +117,11 @@ area, restores the terminal's prior state, and consumes the program so you
 cannot use it by accident afterward. Arrange for `finish()` to run before your
 app returns, including from error paths.
 
-If you want terminal capability discovery, it is now explicit: call
+If you want terminal capability discovery, it is explicit: call
 `program.query_capabilities(&[])?`, then keep reading events until
 `Event::PrimaryDeviceAttributes` arrives or your own timeout expires. A normal
-`read_event()` loop observes those replies automatically, but `init()` and
-`finish()` do not send or drain queries for you.
+`read_event()` loop observes those replies automatically, though sending the
+queries and draining them stays yours to do.
 
 ## Going fullscreen
 
@@ -142,10 +141,9 @@ fn main() -> std::io::Result<()> {
     program.enter_alt_screen()?;
     program.hide_cursor()?;
 
-    program
-        .screen_mut()
-        .set_str((0, 0), "Fullscreen. Press q to quit.", Style::new());
-    program.screen_mut().render()?;
+    let screen = program.screen_mut();
+    screen.set_str((0, 0), "Fullscreen. Press q to quit.", Style::new());
+    screen.render()?;
 
     let q: Key = "q".parse().unwrap();
     loop {
@@ -162,10 +160,10 @@ fn main() -> std::io::Result<()> {
 Two differences from the inline version. First, `enter_alt_screen()` switches to
 the terminal's alternate buffer and tells the renderer it is now drawing the
 whole viewport, so your drawing does not scroll into the shell's history and the
-original screen comes back untouched on `finish()`. Second, there is no manual
-`resize`: right after `init()`, the renderer is sized to the terminal.
-`hide_cursor()` emits the terminal mode and records the matching render
-property, keeping the blinking caret out of your layout.
+original screen comes back untouched on `finish()`. Second, the renderer is
+sized to the whole terminal right after `init()`, so fullscreen needs no
+`resize` call. `hide_cursor()` emits the terminal mode and records the matching
+render property, keeping the blinking caret out of your layout.
 
 Everything else is the same, `finish()` included. It resets tracked modes, puts
 the cursor back, and leaves the alternate screen for you.

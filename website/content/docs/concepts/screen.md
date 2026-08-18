@@ -5,8 +5,9 @@ weight: 8
 
 `Screen<W>` is the renderer. It owns a desired cell grid, a diff renderer, and
 one writer, where `W: std::io::Write`. That writer can be a terminal handle, a
-`Vec<u8>`, a file, or anything else that accepts bytes. `Screen` has no input
-side, no raw-mode lifecycle, no event source, and no terminal session.
+`Vec<u8>`, a file, or anything else that accepts bytes. Rendering is its whole
+job; the input side, raw-mode lifecycle, event source, and terminal session all
+live on [`Program`]({{< relref "program.md" >}}).
 
 For an interactive application, reach this renderer through
 [`Program::screen_mut`]({{< relref "program.md" >}}). For output-only work,
@@ -22,15 +23,15 @@ flowchart TB
   program["Program<I, O>"] -. owns for interactive apps .-> screen
 ```
 
-The type has one generic parameter, the writer. The old `Screen<I, O>` session
-object was split: [`Program`]({{< relref "program.md" >}}) owns the terminal,
-events, capabilities, and modes; `Screen<W>` only renders frames.
+The type has one generic parameter, the writer. That is the whole split:
+[`Program`]({{< relref "program.md" >}}) owns the terminal, events,
+capabilities, and modes; `Screen<W>` only renders frames.
 
 ## Constructing one
 
-`Screen::new(writer, size)` is infallible and performs no I/O. There is no
-`Screen::stdio()` or `Screen::open()`, because opening a terminal is a session
-concern and belongs to [`Program`]({{< relref "program.md" >}}).
+`Screen::new(writer, size)` is infallible and performs no I/O. Hand it a writer
+you already have. Opening a terminal is a session concern, so it belongs to
+[`Program`]({{< relref "program.md" >}}).
 
 ```rust
 use uncurses::screen::Screen;
@@ -48,8 +49,8 @@ fn main() -> std::io::Result<()> {
 
 Drawing methods update the in-memory frame. `render()` diffs that frame against
 what the renderer believes is already shown, writes only the changes, and
-flushes. `flush()` is also on `Screen`. `Program` has no `render` method, so an
-interactive app renders with `program.screen_mut().render()?`.
+flushes. `flush()` is also on `Screen`. Both stay on the renderer, so an
+interactive app borrows it first with `program.screen_mut()`.
 
 ## Drawing is a diff
 
