@@ -3,7 +3,8 @@
 //! ## Category
 //!
 //! This module emits DSR requests and report responses: cursor position, extended
-//! cursor position, and light/dark preference reporting.
+//! cursor position, and light/dark preference reporting. It also carries
+//! DECRQSS, which asks after a current setting rather than device status.
 //!
 //! ## CSI conventions
 //!
@@ -45,6 +46,27 @@ pub fn write_request_extended_cursor_position<W: Write>(w: &mut W) -> io::Result
 /// Write [`REQUEST_LIGHT_DARK_REPORT`], the light/dark preference query.
 pub fn write_request_light_dark_report<W: Write>(w: &mut W) -> io::Result<()> {
     w.write_all(REQUEST_LIGHT_DARK_REPORT)
+}
+
+/// Request a current setting with DECRQSS, `ESC P $ q <selector> ESC \`.
+///
+/// `selector` spells the control function being asked about, as its private
+/// prefix, intermediates and final byte: `"m"` for SGR, `" q"` for
+/// `DECSCUSR` (cursor style), `"r"` for `DECSTBM` (scrolling region),
+/// `"\"q"` for `DECSCA`, `"$|"` for `DECSCPP`. xterm's private requests take
+/// a parameter too, as in `">4m"` for `XTQMODKEYS`. An empty selector emits
+/// nothing.
+///
+/// The terminal answers with `ESC P 1 $ r <value><selector> ESC \` when it
+/// recognizes the request and `ESC P 0 $ r ESC \` when it does not, decoded
+/// as [`Event::SettingReport`](crate::event::Event::SettingReport). Because a
+/// refusal echoes nothing back, only the request says which setting it
+/// refused.
+pub fn write_decrqss<W: Write>(w: &mut W, selector: &str) -> io::Result<()> {
+    if selector.is_empty() {
+        return Ok(());
+    }
+    write!(w, "\x1bP$q{selector}\x1b\\")
 }
 
 /// Encode a Device Status Report request.
@@ -108,6 +130,15 @@ mod tests {
         write_decxcpr(&mut buf, 5, 6, 0).unwrap();
         write_decxcpr(&mut buf, 5, 6, 2).unwrap();
         assert_eq!(buf, b"\x1b[?5;6R\x1b[?5;6;2R");
+    }
+
+    #[test]
+    fn test_decrqss() {
+        let mut buf = Vec::new();
+        write_decrqss(&mut buf, "m").unwrap();
+        write_decrqss(&mut buf, " q").unwrap();
+        write_decrqss(&mut buf, "").unwrap();
+        assert_eq!(buf, b"\x1bP$qm\x1b\\\x1bP$q q\x1b\\");
     }
 
     #[test]

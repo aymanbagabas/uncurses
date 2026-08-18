@@ -173,6 +173,7 @@ pub struct Capabilities {
     pub(super) modify_other_keys: Option<ModifyOtherKeysMode>,
     pub(super) terminal_name: Option<String>,
     pub(super) termcap: BTreeMap<String, Option<String>>,
+    pub(super) settings: BTreeMap<String, Option<String>>,
     pub(super) foreground_color: Option<Color>,
     pub(super) background_color: Option<Color>,
     pub(super) cursor_color: Option<Color>,
@@ -293,6 +294,26 @@ impl Capabilities {
     /// unsupported, which is different from the key being absent.
     pub fn termcap_reports(&self) -> &BTreeMap<String, Option<String>> {
         &self.termcap
+    }
+
+    /// The value the terminal reported for the DECRQSS setting `selector`,
+    /// or `None` if it reported the setting as unsupported or was never
+    /// asked. The selector is the one that was requested: `"m"` for SGR,
+    /// `" q"` for `DECSCUSR`. A private prefix is part of the selector, so
+    /// a `">4m"` request is recorded under `">m"`.
+    pub fn setting(&self, selector: &str) -> Option<&str> {
+        self.settings.get(selector)?.as_deref()
+    }
+
+    /// Every DECRQSS reply recorded so far, keyed by selector. A value of
+    /// `None` is the terminal reporting that setting as unsupported, which is
+    /// different from the key being absent.
+    ///
+    /// A refusal echoes no selector back, so it is only recorded when the
+    /// terminal names the setting it is refusing. Terminals that answer a
+    /// bare `DCS 0 $ r ST` leave no entry at all.
+    pub fn settings(&self) -> &BTreeMap<String, Option<String>> {
+        &self.settings
     }
 
     /// The terminal's default foreground color (`OSC 10`), or `None` if it

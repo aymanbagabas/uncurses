@@ -1362,12 +1362,14 @@ mod tests {
         // BEL embedded). The parser must NOT split it on BEL.
         assert_eq!(evs.len(), 1, "expected 1 event, got {:?}", evs);
         match &evs[0] {
-            Event::SettingReport { payload, .. } => {
-                assert!(payload.starts_with("1$r0"));
-                assert!(payload.contains('\u{07}'));
-                assert!(payload.ends_with("more"));
+            Event::SettingReport {
+                value, selector, ..
+            } => {
+                assert_eq!(value, "0");
+                assert!(selector.contains('\u{07}'));
+                assert!(selector.ends_with("more"));
             }
-            other => panic!("expected Capability, got {:?}", other),
+            other => panic!("expected SettingReport, got {other:?}"),
         }
     }
 
@@ -1632,6 +1634,53 @@ mod tests {
             ),
             other => panic!("expected Capability, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_dcs_decrqss_splits_value_from_selector() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // SGR report: the value keeps its `;`, the selector is the final `m`.
+        let evs = p.parse(b"\x1bP1$r0;1m\x1b\\");
+        assert_eq!(evs.len(), 1);
+        assert_eq!(
+            evs[0],
+            Event::SettingReport {
+                recognized: true,
+                value: "0;1".to_string(),
+                selector: "m".to_string(),
+            }
+        );
+        // DECSCUSR: the selector is two bytes, an intermediate and a final.
+        let evs = p.parse(b"\x1bP1$r2 q\x1b\\");
+        assert_eq!(
+            evs[0],
+            Event::SettingReport {
+                recognized: true,
+                value: "2".to_string(),
+                selector: " q".to_string(),
+            }
+        );
+        // XTQMODKEYS: the private prefix belongs to the selector, not the
+        // value, or it would be indistinguishable from an SGR report.
+        let evs = p.parse(b"\x1bP1$r>4;2m\x1b\\");
+        assert_eq!(
+            evs[0],
+            Event::SettingReport {
+                recognized: true,
+                value: "4;2".to_string(),
+                selector: ">m".to_string(),
+            }
+        );
+        // A refusal carries no data at all.
+        let evs = p.parse(b"\x1bP0$r\x1b\\");
+        assert_eq!(
+            evs[0],
+            Event::SettingReport {
+                recognized: false,
+                value: String::new(),
+                selector: String::new(),
+            }
+        );
     }
 
     #[test]

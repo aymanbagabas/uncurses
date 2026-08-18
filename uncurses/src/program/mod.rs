@@ -639,6 +639,15 @@ where
                 self.origin_queries_pending -= 1;
                 self.origin = self.clip_origin(pos);
             }
+            Event::SettingReport {
+                recognized,
+                ref value,
+                ref selector,
+            } if !selector.is_empty() => {
+                self.caps
+                    .settings
+                    .insert(selector.clone(), recognized.then(|| value.clone()));
+            }
             Event::Termcap {
                 recognized,
                 ref entries,

@@ -270,14 +270,25 @@ pub enum Event {
         entries: Vec<(String, Option<String>)>,
     },
     /// DECRQSS setting reply (`DCS 1 $ r` on success, `DCS 0 $ r` on
-    /// failure), carrying the terminal's report of a current setting such as
-    /// the active SGR attributes or cursor style. The payload is the raw
-    /// reply text, which is not structured the way a termcap reply is.
+    /// failure), reporting a current setting such as the active SGR
+    /// attributes or cursor style. Sent in answer to
+    /// [`write_decrqss`](crate::ansi::status::write_decrqss).
+    ///
+    /// A reply of `DCS 1 $ r 0 ; 1 m ST` splits into the value `0;1` and the
+    /// selector `m`. A private prefix stays with the selector, so xterm's
+    /// `DCS 1 $ r > 4 ; 2 m ST` reports the value `4;2` under the selector
+    /// `>m`, which is what keeps it apart from SGR.
     SettingReport {
-        /// Whether the terminal recognized the requested setting.
+        /// Whether the terminal recognized the requested setting. A failure
+        /// reply carries no data at all, so both other fields are empty and
+        /// only the request itself says which setting was refused.
         recognized: bool,
-        /// Raw reply text.
-        payload: String,
+        /// The setting's current parameters, as reported.
+        value: String,
+        /// The control function the value belongs to, echoed back from the
+        /// request: `m` for SGR, `" q"` for `DECSCUSR`, `r` for `DECSTBM`,
+        /// `>m` for xterm's `XTQMODKEYS`.
+        selector: String,
     },
 
     // -- Colors --------------------------------------------------------------
