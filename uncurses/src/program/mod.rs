@@ -86,7 +86,7 @@ use crate::screen::Screen;
 use crate::terminal::Terminal;
 
 /// An interactive terminal session composing a [`Terminal`], an
-/// [`EventSource`], and a [`Screen`] with the terminal and input modes. See
+/// [`EventSource`], and a [`Screen`] to render with. See
 /// the [module documentation](self) for the lifecycle.
 ///
 /// `Program` is [`Send`] and [`Sync`] whenever its input and output handles
@@ -113,8 +113,9 @@ where
     /// single-reader case.
     source: Arc<Mutex<EventSource<I>>>,
     state: state::State,
-    /// Terminal capabilities detected by intercepting the replies to the
-    /// queries the application fires.
+    /// Terminal capabilities, recorded by intercepting replies as they pass
+    /// through the read path. Empty until [`Self::query_capabilities`] is
+    /// called and the replies are read.
     caps: Capabilities,
     /// Desired default behaviors, set by [`Self::init_with`].
     options: ProgramOptions,
@@ -567,16 +568,19 @@ where
                         Mode::SYNCHRONIZED_OUTPUT => {
                             self.screen.set_synchronized_output(true);
                         }
-                        Mode::UNICODE_CORE
-                            if self.options.prefer_grapheme_clusters
-                                && !self.state.grapheme_clusters =>
-                        {
-                            self.enable_grapheme_clusters()?;
+                        Mode::UNICODE_CORE if self.options.prefer_grapheme_clusters => {
+                            if !self.state.grapheme_clusters {
+                                self.enable_grapheme_clusters()?;
+                            }
+                            // Spend the preference: a later report must not
+                            // undo a disable the app asked for in between.
+                            self.options.prefer_grapheme_clusters = false;
                         }
-                        Mode::IN_BAND_RESIZE
-                            if self.options.prefer_in_band_resize && !self.state.in_band_resize =>
-                        {
-                            self.enable_in_band_resize()?;
+                        Mode::IN_BAND_RESIZE if self.options.prefer_in_band_resize => {
+                            if !self.state.in_band_resize {
+                                self.enable_in_band_resize()?;
+                            }
+                            self.options.prefer_in_band_resize = false;
                         }
                         _ => {}
                     }
@@ -642,6 +646,15 @@ where
                 // `cap[=value]` entries joined by `;`. A failure reply echoes
                 // the requested names, so it is recorded as an explicit "not
                 // supported" rather than dropped.
+                //
+                // ponytail: the wire form hex-encodes each name and value, so
+                // it is unambiguous, but the decoder joins them into one
+                // string before we see it. A value containing `;` or `=`
+                // therefore splits into bogus entries here. Rare in practice
+                // (the capabilities anyone queries hold neither) and not
+                // fixable at this end: it needs Event::Termcap to carry the
+                // pairs, which today it cannot, because DECRQSS status
+                // replies reuse the same variant for an unstructured string.
                 for entry in payload.split(';').filter(|e| !e.is_empty()) {
                     let (name, value) = match entry.split_once('=') {
                         Some((name, value)) => (name, value),
