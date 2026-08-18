@@ -180,11 +180,11 @@ fn color_at(sub: u16, y: u16, w: u16, h: u16) -> Color {
 /// Resolve the pointer to a `(cell_x, cell_y, sub_pixel_column)`.
 ///
 /// With pixel-accurate mouse the raw event is in pixels. The screen's converter
-/// floors it to a cell; the cell's *pixel* width — `window_pixels / window_cells`
-/// — then tells which half of that cell the pointer sits in, selecting the left
-/// or right sub-pixel column. Without pixel mouse the event is already a cell,
-/// so the inspector falls back to the cell's left sub-pixel. Returns `None`
-/// while pixel mouse is on but the pixel size is not known yet.
+/// floors it to a cell; the cell's *pixel* width from `cell_pixels` then tells
+/// which half of that cell the pointer sits in, selecting the left or right
+/// sub-pixel column. Without pixel mouse the event is already a cell, so the
+/// inspector falls back to the cell's left sub-pixel. Returns `None` while
+/// pixel mouse is on but the pixel size is not known yet.
 fn resolve(program: &Program<Stdin, Stdout>, state: &State) -> Option<(u16, u16, u16)> {
     let m = state.pointer?;
     // Read the capability live: it is detected asynchronously after init, so a
@@ -195,12 +195,8 @@ fn resolve(program: &Program<Stdin, Stdout>, state: &State) -> Option<(u16, u16,
         return Some((m.x, m.y, m.x.saturating_mul(2)));
     }
     let cell = program.mouse_pixels_to_cells(m)?;
-    let pixels = program.window_pixels()?;
-    let cells = program
-        .window_cells()
-        .unwrap_or_else(|| program.screen().size());
     // Cell width in pixels, then the pointer's offset within its cell.
-    let cell_w = (pixels.width / cells.width.max(1)).max(1);
+    let cell_w = program.cell_pixels()?.width;
     let within = m.x.saturating_sub(cell.x * cell_w);
     let right = within >= cell_w / 2;
     let sub = cell.x * 2 + u16::from(right);
