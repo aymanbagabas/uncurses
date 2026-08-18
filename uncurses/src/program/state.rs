@@ -149,6 +149,13 @@ impl Default for State {
 /// [`set_background_color`](super::Program::set_background_color) overrides
 /// it.
 ///
+/// Only replies land here, so questions the environment can also answer are
+/// deliberately absent. Direct-color support is the example: `COLORTERM` and
+/// `TERM` establish it as readily as an XTGETTCAP reply does, so the answer is
+/// [`Screen::color_profile`](crate::screen::Screen::color_profile), which
+/// folds in both, and what remains here is the reply itself via
+/// [`supports_termcap`](Self::supports_termcap).
+///
 /// The facade records these as reply events flow through
 /// [`read_event`](super::Program::read_event) /
 /// [`try_read_event`](super::Program::try_read_event). Nothing lands here
@@ -290,11 +297,6 @@ impl Capabilities {
     /// unsupported, which is different from the key being absent.
     pub fn termcap_reports(&self) -> &BTreeMap<String, Option<String>> {
         &self.termcap
-    }
-
-    /// Direct (24-bit) color, from an XTGETTCAP `RGB` or `Tc` reply.
-    pub fn true_color(&self) -> bool {
-        self.supports_termcap("RGB") || self.supports_termcap("Tc")
     }
 
     /// The terminal's default foreground color (`OSC 10`), or `None` if it
