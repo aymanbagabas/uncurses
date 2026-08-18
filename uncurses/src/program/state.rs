@@ -22,7 +22,7 @@ use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
-use crate::event::ModifyOtherKeysMode;
+use crate::event::{ColorScheme, ModifyOtherKeysMode};
 
 use super::MouseTracking;
 use super::ProgressState;
@@ -137,25 +137,41 @@ impl Default for State {
 ///
 /// This holds the replies themselves, not a summary of them: the
 /// [`ModeSetting`] reported for every mode that was asked about, the raw
-/// Primary DA attribute list, the Kitty keyboard flags, and the
-/// modifyOtherKeys mode. A reply that says "I do not recognize that" is
-/// recorded too, which is why the accessors return [`Option`] — `None` means
-/// the terminal never answered, which is different from answering no.
+/// device-attribute lists, the reported colors, and so on. A reply that says
+/// "I do not recognize that" is recorded too, which is why the accessors
+/// return [`Option`] — `None` means the terminal never answered, which is
+/// different from answering no.
+///
+/// Everything here is what the terminal reported, never what the facade told
+/// it. The two are easy to confuse where both exist: a
+/// [`background_color`](Self::background_color) recorded here stays the
+/// terminal's own default even after
+/// [`set_background_color`](super::Program::set_background_color) overrides
+/// it.
 ///
 /// The facade records these as reply events flow through
 /// [`read_event`](super::Program::read_event) /
 /// [`try_read_event`](super::Program::try_read_event). Nothing lands here
 /// unless you ask: see
-/// [`query_capabilities`](super::Program::query_capabilities). Read it back
-/// with [`Program::capabilities`](super::Program::capabilities).
+/// [`query_capabilities`](super::Program::query_capabilities), which asks for
+/// only some of this, and takes extra bytes so you can ask for the rest. Read
+/// it back with [`Program::capabilities`](super::Program::capabilities).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Capabilities {
-    modes: BTreeMap<Mode, ModeSetting>,
-    primary_device_attributes: Option<Vec<Option<u32>>>,
-    kitty_keyboard: Option<KittyKeyboardFlags>,
-    modify_other_keys: Option<ModifyOtherKeysMode>,
-    terminal_name: Option<String>,
-    true_color: bool,
+    pub(super) modes: BTreeMap<Mode, ModeSetting>,
+    pub(super) primary_device_attributes: Option<Vec<Option<u32>>>,
+    pub(super) secondary_device_attributes: Option<Vec<Option<u32>>>,
+    pub(super) tertiary_device_attributes: Option<String>,
+    pub(super) kitty_keyboard: Option<KittyKeyboardFlags>,
+    pub(super) modify_other_keys: Option<ModifyOtherKeysMode>,
+    pub(super) terminal_name: Option<String>,
+    pub(super) termcap: BTreeMap<String, Option<String>>,
+    pub(super) foreground_color: Option<Color>,
+    pub(super) background_color: Option<Color>,
+    pub(super) cursor_color: Option<Color>,
+    pub(super) palette: BTreeMap<u8, Color>,
+    pub(super) color_scheme: Option<ColorScheme>,
+    pub(super) kitty_graphics: bool,
 }
 
 impl Capabilities {
@@ -188,11 +204,25 @@ impl Capabilities {
         &self.modes
     }
 
-    /// The raw Primary DA attribute list, or `None` if the terminal never
-    /// answered. Entries are `None` where the terminal sent an empty
+    /// The raw Primary DA (`CSI c`) attribute list, or `None` if the terminal
+    /// never answered. Entries are `None` where the terminal sent an empty
     /// parameter.
     pub fn primary_device_attributes(&self) -> Option<&[Option<u32>]> {
         self.primary_device_attributes.as_deref()
+    }
+
+    /// The raw Secondary DA (`CSI > c`) attribute list, or `None` if the
+    /// terminal never answered. Conventionally terminal type, firmware
+    /// version, and hardware option, but the meaning of each entry varies by
+    /// terminal, so it is reported unparsed.
+    pub fn secondary_device_attributes(&self) -> Option<&[Option<u32>]> {
+        self.secondary_device_attributes.as_deref()
+    }
+
+    /// The Tertiary DA (`CSI = c`) terminal unit ID, or `None` if the
+    /// terminal never answered.
+    pub fn tertiary_device_attributes(&self) -> Option<&str> {
+        self.tertiary_device_attributes.as_deref()
     }
 
     /// Whether the Primary DA reply advertised `attribute`.
@@ -210,6 +240,13 @@ impl Capabilities {
     /// Clipboard access (Primary DA attribute 52).
     pub fn clipboard(&self) -> bool {
         self.da_attribute(52)
+    }
+
+    /// Whether the terminal has answered a Kitty graphics query, which is the
+    /// protocol's own support test: a terminal that does not implement it
+    /// stays silent.
+    pub fn kitty_graphics(&self) -> bool {
+        self.kitty_graphics
     }
 
     /// The Kitty keyboard enhancements the terminal reported, or `None` if it
@@ -232,41 +269,70 @@ impl Capabilities {
         self.terminal_name.as_deref()
     }
 
-    /// Direct (24-bit) color, confirmed by an XTGETTCAP `RGB`/`Tc` reply.
-    ///
-    /// Unlike the others this is not a reply value but a fact derived from
-    /// one, because the reply is a capability string rather than a state.
+    /// The value the terminal reported for the XTGETTCAP capability `name`,
+    /// or `None` if it reported the capability as unsupported or was never
+    /// asked. Boolean capabilities report an empty string, so use
+    /// [`supports_termcap`](Self::supports_termcap) to test for presence.
+    pub fn termcap(&self, name: &str) -> Option<&str> {
+        self.termcap.get(name)?.as_deref()
+    }
+
+    /// Whether the terminal reported the XTGETTCAP capability `name` as
+    /// supported. `false` both for a capability reported unsupported and for
+    /// one never asked about; tell them apart with
+    /// [`termcap_reports`](Self::termcap_reports).
+    pub fn supports_termcap(&self, name: &str) -> bool {
+        matches!(self.termcap.get(name), Some(Some(_)))
+    }
+
+    /// Every XTGETTCAP reply recorded so far, keyed by capability name. A
+    /// value of `None` is the terminal reporting that capability as
+    /// unsupported, which is different from the key being absent.
+    pub fn termcap_reports(&self) -> &BTreeMap<String, Option<String>> {
+        &self.termcap
+    }
+
+    /// Direct (24-bit) color, from an XTGETTCAP `RGB` or `Tc` reply.
     pub fn true_color(&self) -> bool {
-        self.true_color
+        self.supports_termcap("RGB") || self.supports_termcap("Tc")
     }
 
-    /// Record a mode report.
-    pub(super) fn set_mode(&mut self, mode: Mode, setting: ModeSetting) {
-        self.modes.insert(mode, setting);
+    /// The terminal's default foreground color (`OSC 10`), or `None` if it
+    /// never answered.
+    pub fn foreground_color(&self) -> Option<Color> {
+        self.foreground_color
     }
 
-    /// Record the Primary DA attribute list.
-    pub(super) fn set_primary_device_attributes(&mut self, attrs: Vec<Option<u32>>) {
-        self.primary_device_attributes = Some(attrs);
+    /// The terminal's default background color (`OSC 11`), or `None` if it
+    /// never answered.
+    pub fn background_color(&self) -> Option<Color> {
+        self.background_color
     }
 
-    /// Record the reported Kitty keyboard enhancements.
-    pub(super) fn set_kitty_keyboard(&mut self, flags: KittyKeyboardFlags) {
-        self.kitty_keyboard = Some(flags);
+    /// The terminal's cursor color (`OSC 12`), or `None` if it never
+    /// answered.
+    pub fn cursor_color(&self) -> Option<Color> {
+        self.cursor_color
     }
 
-    /// Record the reported modifyOtherKeys mode.
-    pub(super) fn set_modify_other_keys(&mut self, mode: ModifyOtherKeysMode) {
-        self.modify_other_keys = Some(mode);
+    /// The color the terminal reported for palette entry `index`
+    /// (`OSC 4 ; index ; ?`), or `None` if it never answered for that entry.
+    pub fn palette_color(&self, index: u8) -> Option<Color> {
+        self.palette.get(&index).copied()
     }
 
-    /// Record the terminal's XTVERSION name.
-    pub(super) fn set_terminal_name(&mut self, name: String) {
-        self.terminal_name = Some(name);
+    /// Every palette color reported so far, keyed by index.
+    pub fn palette(&self) -> &BTreeMap<u8, Color> {
+        &self.palette
     }
 
-    /// Record confirmed direct-color support.
-    pub(super) fn set_true_color(&mut self) {
-        self.true_color = true;
+    /// Whether the terminal is in its dark or light scheme (DEC mode 2031),
+    /// or `None` if it never reported one. Updated as the scheme changes
+    /// while [`enable_color_scheme_updates`](super::Program::enable_color_scheme_updates)
+    /// is on. This is the terminal's own preference flag, which a terminal
+    /// can report independently of the colors it uses; when it is absent,
+    /// [`background_color`](Self::background_color) is the fallback.
+    pub fn color_scheme(&self) -> Option<ColorScheme> {
+        self.color_scheme
     }
 }

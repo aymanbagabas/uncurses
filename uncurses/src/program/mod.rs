@@ -132,6 +132,10 @@ where
     /// carries pixel dimensions) and `WindowPixelSize` reports. `None`
     /// until first observed.
     window_pixels: Option<Size>,
+    /// Cell size in pixels as reported by a `CSI 16 t` reply. `None` until
+    /// the terminal answers one; [`cell_pixels`](Self::cell_pixels) falls
+    /// back to dividing the window sizes.
+    cell_pixels: Option<Size>,
     /// Physical screen coordinate (0-based, from the terminal's top-left) of
     /// the managed area's top-left cell, tracked for inline sessions. Only
     /// meaningful inline; fullscreen [`origin`](Self::origin) is always
@@ -403,6 +407,28 @@ where
         self.window_pixels
     }
 
+    /// Size of one character cell in pixels, or `None` when the terminal has
+    /// reported nothing to derive it from.
+    ///
+    /// Prefers the terminal's own `CSI 16 t` reply (see
+    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size)) and
+    /// otherwise divides [`window_pixels`](Self::window_pixels) by
+    /// [`window_cells`](Self::window_cells), which only approximates it: the
+    /// window pixel size includes any padding the terminal draws around the
+    /// grid, so the quotient can be a pixel or two short.
+    pub fn cell_pixels(&self) -> Option<Size> {
+        if let Some(cell) = self.cell_pixels.filter(|c| c.width > 0 && c.height > 0) {
+            return Some(cell);
+        }
+        let pixels = self.window_pixels?;
+        let cells = self.window_cells?;
+        if cells.width == 0 || cells.height == 0 {
+            return None;
+        }
+        let cell = Size::new(pixels.width / cells.width, pixels.height / cells.height);
+        (cell.width > 0 && cell.height > 0).then_some(cell)
+    }
+
     /// The terminal's self-reported name from its XTVERSION reply (e.g.
     /// `"XTerm(380)"`), or `None` when it has not answered. Shorthand for
     /// [`Capabilities::terminal_name`].
@@ -411,12 +437,24 @@ where
     }
 
     /// Convert a mouse event carrying pixel coordinates into cell
-    /// coordinates, using the last observed window pixel and cell sizes.
-    /// Returns `None` when either is unknown or degenerate. Neither is
-    /// refreshed on its own: call
-    /// [`request_window_pixel_size`](Self::request_window_pixel_size) at
-    /// startup, and again after a resize or a font-size change.
+    /// coordinates, using [`cell_pixels`](Self::cell_pixels). Returns `None`
+    /// when the cell size is unknown. It is not refreshed on its own: call
+    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size) at startup,
+    /// and again after a resize or a font-size change.
     pub fn mouse_pixels_to_cells(&self, mouse: crate::event::Mouse) -> Option<crate::event::Mouse> {
+        // A cell size the terminal reported is exact, so dividing by it lands
+        // in the right cell. The derived one is a truncated quotient and is
+        // narrower than the real cell whenever the pixel size is not an exact
+        // multiple of the grid, so dividing by that drifts right across the
+        // row and runs off the end. Scale across the grid in that case.
+        if let Some(cell) = self.cell_pixels.filter(|c| c.width > 0 && c.height > 0) {
+            return Some(crate::event::Mouse::new(
+                mouse.x / cell.width,
+                mouse.y / cell.height,
+                mouse.button,
+                mouse.modifiers,
+            ));
+        }
         let pixels = self.window_pixels?;
         let cells = self.window_cells?;
         if pixels.width == 0 || pixels.height == 0 || cells.width == 0 || cells.height == 0 {
@@ -533,7 +571,7 @@ where
                 // Record every report, including "not recognized": a definite
                 // no is information an app may want, and is not the same as
                 // the terminal staying silent.
-                self.caps.set_mode(mode, setting);
+                self.caps.modes.insert(mode, setting);
                 if setting.is_available() {
                     match mode {
                         // Render-affecting and free to adopt: the screen emits
@@ -558,18 +596,38 @@ where
                     }
                 }
             }
-            Event::KittyKeyboardEnhancements(flags) => self.caps.set_kitty_keyboard(flags),
+            Event::KittyKeyboardEnhancements(flags) => self.caps.kitty_keyboard = Some(flags),
             // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
             // query, so a reply means the terminal recognizes the feature.
-            Event::ModifyOtherKeys(mode) => self.caps.set_modify_other_keys(mode),
+            Event::ModifyOtherKeys(mode) => self.caps.modify_other_keys = Some(mode),
             Event::PrimaryDeviceAttributes(ref attrs) => {
                 // Sixel (4) and clipboard (52) support ride along in this
                 // reply, which is sent as the query terminator regardless.
-                self.caps.set_primary_device_attributes(attrs.clone());
+                self.caps.primary_device_attributes = Some(attrs.clone());
+            }
+            Event::SecondaryDeviceAttributes(ref attrs) => {
+                self.caps.secondary_device_attributes = Some(attrs.clone());
+            }
+            Event::TertiaryDeviceAttributes(ref id) => {
+                self.caps.tertiary_device_attributes = Some(id.clone());
             }
             Event::TerminalName(ref report) => {
-                self.caps.set_terminal_name(report.clone());
+                self.caps.terminal_name = Some(report.clone());
             }
+            // A graphics response is the Kitty protocol's own support test:
+            // terminals that do not implement it stay silent.
+            Event::KittyGraphics { .. } => self.caps.kitty_graphics = true,
+            // The terminal's own colors, as distinct from the overrides the
+            // facade installs (tracked in `state`).
+            Event::ForegroundColor(color) => self.caps.foreground_color = Some(color),
+            Event::BackgroundColor(color) => self.caps.background_color = Some(color),
+            Event::CursorColor(color) => self.caps.cursor_color = Some(color),
+            Event::PaletteColor { index, color } => {
+                self.caps.palette.insert(index, color);
+            }
+            // Mode 2031 keeps sending these as the scheme changes, so the
+            // record is the current scheme rather than a one-time answer.
+            Event::ColorScheme(scheme) => self.caps.color_scheme = Some(scheme),
             // Cache the full terminal size as it changes. Refitting the
             // managed area is left to the app (call autoresize() as desired).
             Event::Resize(ws) => {
@@ -581,6 +639,9 @@ where
             Event::WindowPixelSize { width, height } => {
                 self.window_pixels = Some(Size::new(width, height));
             }
+            Event::CellPixelSize { width, height } => {
+                self.cell_pixels = Some(Size::new(width, height));
+            }
             // Capture the reply to our own `request_origin`. Observing never
             // consumes, so an application that also queries the cursor still
             // sees this event.
@@ -588,19 +649,24 @@ where
                 self.origin_queries_pending -= 1;
                 self.origin = self.clip_origin(pos);
             }
-            // A successful XTGETTCAP reply for a truecolor capability
-            // confirms direct-color support: record and upgrade the
-            // renderer's color profile.
             Event::Termcap {
-                recognized: true,
+                recognized,
                 ref entries,
-            } if entries
-                .iter()
-                .any(|(name, _)| name == "RGB" || name == "Tc") =>
-            {
-                self.caps.set_true_color();
-                self.screen
-                    .set_color_profile(crate::color::Profile::TrueColor);
+            } => {
+                // A failure reply echoes the requested names, so it is
+                // recorded as an explicit "not supported" rather than
+                // dropped.
+                for (name, value) in entries {
+                    self.caps.termcap.insert(
+                        name.clone(),
+                        recognized.then(|| value.clone().unwrap_or_default()),
+                    );
+                }
+                // A truecolor capability upgrades the renderer's profile.
+                if self.caps.true_color() {
+                    self.screen
+                        .set_color_profile(crate::color::Profile::TrueColor);
+                }
             }
             _ => {}
         }
@@ -741,6 +807,7 @@ where
             options: ProgramOptions::default(),
             window_cells: None,
             window_pixels: None,
+            cell_pixels: None,
             origin: Position::ORIGIN,
             origin_queries_pending: 0,
         })
@@ -850,7 +917,7 @@ where
                 mode::Mode::MOUSE_ANY,
                 mode::Mode::MOUSE_SGR,
             ] {
-                self.caps.set_mode(mode, mode::ModeSetting::Reset);
+                self.caps.modes.insert(mode, mode::ModeSetting::Reset);
             }
             // Terminal.app gained direct-color support in the build shipped
             // with macOS Tahoe; record it and upgrade the renderer when the
@@ -858,7 +925,11 @@ where
             if profile < Profile::TrueColor
                 && self.apple_terminal_version().is_some_and(|v| v >= 470)
             {
-                self.caps.set_true_color();
+                // Recorded as the XTGETTCAP reply it would have sent, so
+                // `true_color` reads the same as on a terminal that answered.
+                self.caps
+                    .termcap
+                    .insert("RGB".to_string(), Some(String::new()));
                 self.screen.set_color_profile(Profile::TrueColor);
             }
         }
@@ -890,10 +961,11 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the defaults from
-    /// `options`. No capability query is sent; discovery is yours to start
-    /// with [`Self::query_capabilities`]. Call once after [`Self::new`],
-    /// before rendering.
+    /// Begin a session: enter raw mode and apply the always-on defaults from
+    /// `options`. This never probes the terminal; the `prefer_*` defaults
+    /// stay dormant until you call
+    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
@@ -1028,10 +1100,11 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the defaults from
-    /// `options`. No capability query is sent; discovery is yours to start
-    /// with [`Self::query_capabilities`]. Call once after [`Self::new`],
-    /// before rendering.
+    /// Begin a session: enter raw mode and apply the always-on defaults from
+    /// `options`. This never probes the terminal; the `prefer_*` defaults
+    /// stay dormant until you call
+    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
