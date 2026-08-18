@@ -1514,7 +1514,7 @@ fn primary_device_attributes_are_none_until_the_terminal_answers() {
     assert_eq!(caps.kitty_keyboard(), None);
     assert_eq!(caps.modify_other_keys(), None);
     assert_eq!(caps.terminal_name(), None);
-    assert!(!caps.true_color());
+    assert!(caps.termcap_reports().is_empty());
 }
 
 #[test]
@@ -1736,7 +1736,6 @@ fn capabilities_keep_termcap_values_and_distinguish_a_no_from_silence() {
     assert!(!caps.supports_termcap("RGB"));
     assert_eq!(caps.termcap_reports().get("RGB"), Some(&None));
     assert_eq!(caps.termcap_reports().get("Tc"), None);
-    assert!(!caps.true_color());
     // A value containing `;` and `=` stays one capability.
     assert_eq!(caps.termcap("kf13"), Some("\x1b[1;2P"));
     assert_eq!(caps.termcap_reports().len(), 5);
@@ -1774,7 +1773,7 @@ fn a_truecolor_termcap_reply_upgrades_the_color_profile() {
         })
         .unwrap();
 
-    assert!(program.capabilities().true_color());
+    assert!(program.capabilities().supports_termcap("Tc"));
     assert_eq!(program.screen().color_profile(), Profile::TrueColor);
 }
 
