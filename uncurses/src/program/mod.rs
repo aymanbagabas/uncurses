@@ -622,7 +622,10 @@ where
                         .insert(name.to_string(), recognized.then(|| value.to_string()));
                 }
                 // A truecolor capability upgrades the renderer's profile.
-                if self.caps.true_color() {
+                // The profile, not this record, is the answer to "can I send
+                // 24-bit color": the environment can establish it just as
+                // well, without any terminal reply to record here.
+                if self.caps.supports_termcap("RGB") || self.caps.supports_termcap("Tc") {
                     self.screen
                         .set_color_profile(crate::color::Profile::TrueColor);
                 }
@@ -884,7 +887,8 @@ where
                 && self.apple_terminal_version().is_some_and(|v| v >= 470)
             {
                 // Recorded as the XTGETTCAP reply it would have sent, so
-                // `true_color` reads the same as on a terminal that answered.
+                // the capability reads the same as on a terminal that
+                // answered.
                 self.caps
                     .termcap
                     .insert("RGB".to_string(), Some(String::new()));
