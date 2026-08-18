@@ -1633,13 +1633,20 @@ fn capabilities_keep_termcap_values_and_distinguish_a_no_from_silence() {
     program
         .observe_event(&Event::Termcap {
             recognized: true,
-            payload: "TN=xterm;Co=256;kb".to_string(),
+            entries: vec![
+                ("TN".to_string(), Some("xterm".to_string())),
+                ("Co".to_string(), Some("256".to_string())),
+                ("kb".to_string(), None),
+                // A value carrying the wire delimiters, which is ordinary:
+                // xterm-256color's kf13 is "\E[1;2P".
+                ("kf13".to_string(), Some("\x1b[1;2P".to_string())),
+            ],
         })
         .unwrap();
     program
         .observe_event(&Event::Termcap {
             recognized: false,
-            payload: "RGB".to_string(),
+            entries: vec![("RGB".to_string(), None)],
         })
         .unwrap();
 
@@ -1653,6 +1660,9 @@ fn capabilities_keep_termcap_values_and_distinguish_a_no_from_silence() {
     assert!(!caps.supports_termcap("RGB"));
     assert_eq!(caps.termcap_reports().get("RGB"), Some(&None));
     assert_eq!(caps.termcap_reports().get("Tc"), None);
+    // A value containing `;` and `=` stays one capability.
+    assert_eq!(caps.termcap("kf13"), Some("\x1b[1;2P"));
+    assert_eq!(caps.termcap_reports().len(), 5);
 }
 
 #[test]
@@ -1664,7 +1674,7 @@ fn a_truecolor_termcap_reply_upgrades_the_color_profile() {
     program
         .observe_event(&Event::Termcap {
             recognized: true,
-            payload: "Tc".to_string(),
+            entries: vec![("Tc".to_string(), None)],
         })
         .unwrap();
 

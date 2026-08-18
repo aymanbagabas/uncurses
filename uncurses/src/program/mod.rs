@@ -641,28 +641,16 @@ where
             }
             Event::Termcap {
                 recognized,
-                ref payload,
+                ref entries,
             } => {
-                // `cap[=value]` entries joined by `;`. A failure reply echoes
-                // the requested names, so it is recorded as an explicit "not
-                // supported" rather than dropped.
-                //
-                // ponytail: the wire form hex-encodes each name and value, so
-                // it is unambiguous, but the decoder joins them into one
-                // string before we see it. A value containing `;` or `=`
-                // therefore splits into bogus entries here. Rare in practice
-                // (the capabilities anyone queries hold neither) and not
-                // fixable at this end: it needs Event::Termcap to carry the
-                // pairs, which today it cannot, because DECRQSS status
-                // replies reuse the same variant for an unstructured string.
-                for entry in payload.split(';').filter(|e| !e.is_empty()) {
-                    let (name, value) = match entry.split_once('=') {
-                        Some((name, value)) => (name, value),
-                        None => (entry, ""),
-                    };
-                    self.caps
-                        .termcap
-                        .insert(name.to_string(), recognized.then(|| value.to_string()));
+                // A failure reply echoes the requested names, so it is
+                // recorded as an explicit "not supported" rather than
+                // dropped.
+                for (name, value) in entries {
+                    self.caps.termcap.insert(
+                        name.clone(),
+                        recognized.then(|| value.clone().unwrap_or_default()),
+                    );
                 }
                 // A truecolor capability upgrades the renderer's profile.
                 // The profile, not this record, is the answer to "can I send

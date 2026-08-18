@@ -255,13 +255,28 @@ pub enum Event {
     },
     /// XTGETTCAP / termcap capability reply. `recognized` is `true` for a
     /// successful reply (`DCS 1 + r`) and `false` for a failure
-    /// (`DCS 0 + r`); `payload` is the decoded `;`-joined `cap[=value]`
-    /// string, decoded the same way in both cases (a failure echoes the
-    /// requested, now known-unsupported, capability names).
+    /// (`DCS 0 + r`); the entries are decoded the same way in both cases (a
+    /// failure echoes the requested, now known-unsupported, capability
+    /// names).
     Termcap {
-        /// Whether the requested capability was recognized.
+        /// Whether the requested capabilities were recognized.
         recognized: bool,
-        /// Decoded capability payload.
+        /// Decoded `(name, value)` pairs. The value is `None` for a boolean
+        /// capability, which is reported as a bare name.
+        ///
+        /// Kept as pairs because only the hex wire form is delimiter-safe:
+        /// decoded values commonly contain `;` and `=` (`kf13` is
+        /// `\E[1;2P`), so a joined string could not be split back apart.
+        entries: Vec<(String, Option<String>)>,
+    },
+    /// DECRQSS setting reply (`DCS 1 $ r` on success, `DCS 0 $ r` on
+    /// failure), carrying the terminal's report of a current setting such as
+    /// the active SGR attributes or cursor style. The payload is the raw
+    /// reply text, which is not structured the way a termcap reply is.
+    SettingReport {
+        /// Whether the terminal recognized the requested setting.
+        recognized: bool,
+        /// Raw reply text.
         payload: String,
     },
 
