@@ -58,11 +58,13 @@ pub fn write_request_light_dark_report<W: Write>(w: &mut W) -> io::Result<()> {
 /// a parameter too, as in `">4m"` for `XTQMODKEYS`. An empty selector emits
 /// nothing.
 ///
-/// The terminal answers with `ESC P 1 $ r <value><selector> ESC \` when it
-/// recognizes the request and `ESC P 0 $ r ESC \` when it does not, decoded
-/// as [`Event::SettingReport`](crate::event::Event::SettingReport). Because a
+/// The terminal answers with DECRPSS: `ESC P 1 $ r <D...D> ESC \` when it
+/// recognizes the request, where the data string is the setting spelled out
+/// as a CSI sequence without its introducer, and `ESC P 0 $ r ESC \` when it
+/// does not. Both decode as
+/// [`Event::SettingReport`](crate::event::Event::SettingReport). Because a
 /// refusal echoes nothing back, only the request says which setting it
-/// refused.
+/// refused. Use [`write_decrpss`] to encode either reply.
 pub fn write_decrqss<W: Write>(w: &mut W, selector: &str) -> io::Result<()> {
     if selector.is_empty() {
         return Ok(());
@@ -103,44 +105,25 @@ pub fn write_decxcpr<W: Write>(w: &mut W, line: u16, column: u16, page: u16) -> 
     }
 }
 
-/// Encode a DECRQSS response (DECRPSS), `ESC P <ps> $ r <value><selector> ESC \`.
+/// Encode a DECRPSS report, `ESC P <ps> $ r <D...D> ESC \`.
 ///
-/// `ps` reports whether the request was valid, and has only three forms.
-/// `Some(1)` is a valid request, which the value and selector then answer.
-/// `Some(0)` is an invalid one, which carries no data at all, so pass an
-/// empty `value` and `selector` with it. `None` omits the parameter, which
-/// is well formed but means nothing DEC ever defined, so real terminals
-/// send one of the other two. No other value exists. Larger numbers are
-/// still written out as given, the same way [`write_dsr_request`] does not
-/// judge its own parameter.
+/// This is the terminal's answer to [`write_decrqss`]. `valid` says whether
+/// the terminal recognized the request. `settings` is the control function
+/// being reported, spelled out as every character of its CSI sequence except
+/// the introducer: `"0;4;5;7m"` for SGR, `"1;24r"` for `DECSTBM`, `"2 q"` for
+/// `DECSCUSR`, `">4;2m"` for xterm's `XTQMODKEYS`. A terminal sends no data
+/// string at all for an invalid request, so `false` emits `ESC P 0 $ r ESC \`
+/// and ignores `settings`.
 ///
-/// DCS carries no parameters in ECMA-48 at all, where it is only an opening
-/// delimiter around an opaque command string. The `Ps $ r` shape is
-/// Digital's own convention of making device control strings look like
-/// control sequences, which is why a parameter can be left out here the way
-/// it can in a control sequence.
-///
-/// Beware that the VT510 manual documents `0` and `1` the other way around.
-/// It is wrong: a VT420 tested in 1996 had them reversed, and vttest, DEC
-/// STD 070 and xterm all treat `1` as the valid one.
-///
-/// The value goes after any private prefix rather than before the whole
-/// selector, since the reply spells out the CSI string for the setting:
-/// reporting `"4;2"` for `">m"` emits `> 4 ; 2 m`, matching xterm's
-/// `XTQMODKEYS`. This is the inverse of the split
-/// [`Event::SettingReport`](crate::event::Event::SettingReport) reports.
-pub fn write_decrpss<W: Write>(
-    w: &mut W,
-    ps: Option<u16>,
-    value: &str,
-    selector: &str,
-) -> io::Result<()> {
-    let head = usize::from(selector.starts_with(['<', '=', '>', '?']));
-    let (prefix, tail) = selector.split_at(head);
-    match ps {
-        Some(ps) => write!(w, "\x1bP{ps}$r{prefix}{value}{tail}\x1b\\"),
-        None => write!(w, "\x1bP$r{prefix}{value}{tail}\x1b\\"),
+/// Beware that the VT510 manual documents `Ps` the other way around, as `0`
+/// for valid and `1` for invalid. It is wrong: a VT420 tested in 1996 had the
+/// two reversed, and vttest, DEC STD 070 and xterm all treat `1` as the valid
+/// one.
+pub fn write_decrpss<W: Write>(w: &mut W, valid: bool, settings: &str) -> io::Result<()> {
+    if !valid {
+        return w.write_all(b"\x1bP0$r\x1b\\");
     }
+    write!(w, "\x1bP1$r{settings}\x1b\\")
 }
 
 /// Encode a light/dark report response.
@@ -185,17 +168,15 @@ mod tests {
     #[test]
     fn test_decrpss() {
         let mut buf = Vec::new();
-        write_decrpss(&mut buf, Some(1), "0;1", "m").unwrap();
-        write_decrpss(&mut buf, Some(1), "2", " q").unwrap();
-        // The value goes after the private prefix, not before it.
-        write_decrpss(&mut buf, Some(1), "4;2", ">m").unwrap();
-        // A refusal carries no data.
-        write_decrpss(&mut buf, Some(0), "", "").unwrap();
-        // The parameter can be left out entirely.
-        write_decrpss(&mut buf, None, "0", "m").unwrap();
+        // The two examples the VT510 manual gives for DECRPSS.
+        write_decrpss(&mut buf, true, "0;4;5;7m").unwrap();
+        write_decrpss(&mut buf, true, "1;24r").unwrap();
+        write_decrpss(&mut buf, true, ">4;2m").unwrap();
+        // An invalid request gets no data string, whatever it is handed.
+        write_decrpss(&mut buf, false, "0;1m").unwrap();
         assert_eq!(
             buf,
-            b"\x1bP1$r0;1m\x1b\\\x1bP1$r2 q\x1b\\\x1bP1$r>4;2m\x1b\\\x1bP0$r\x1b\\\x1bP$r0m\x1b\\"
+            b"\x1bP1$r0;4;5;7m\x1b\\\x1bP1$r1;24r\x1b\\\x1bP1$r>4;2m\x1b\\\x1bP0$r\x1b\\"
         );
     }
 
