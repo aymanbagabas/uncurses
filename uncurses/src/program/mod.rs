@@ -866,32 +866,13 @@ where
                 write_xtgettcap(&mut self.screen, &["Tc"])?;
             }
         } else {
-            // Terminal.app mishandles the capability queries, but its
-            // support for these features is known, so record them as though
-            // it had answered: mouse tracking (normal/button/any) and the SGR
-            // encoding (no pixel reporting). `Reset` is the honest reading —
-            // available, not currently on. Bracketed paste is enabled
-            // unconditionally, so it needs no capability record.
-            for mode in [
-                mode::Mode::MOUSE_NORMAL,
-                mode::Mode::MOUSE_BUTTON,
-                mode::Mode::MOUSE_ANY,
-                mode::Mode::MOUSE_SGR,
-            ] {
-                self.caps.modes.insert(mode, mode::ModeSetting::Reset);
-            }
             // Terminal.app gained direct-color support in the build shipped
-            // with macOS Tahoe; record it and upgrade the renderer when the
-            // env-derived profile hasn't already.
+            // with macOS Tahoe. It does not answer capability queries, so the
+            // renderer is upgraded from the version alone; `capabilities()`
+            // keeps reporting only what the terminal actually said.
             if profile < Profile::TrueColor
                 && self.apple_terminal_version().is_some_and(|v| v >= 470)
             {
-                // Recorded as the XTGETTCAP reply it would have sent, so
-                // the capability reads the same as on a terminal that
-                // answered.
-                self.caps
-                    .termcap
-                    .insert("RGB".to_string(), Some(String::new()));
                 self.screen.set_color_profile(Profile::TrueColor);
             }
         }
