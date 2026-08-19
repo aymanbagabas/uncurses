@@ -751,9 +751,9 @@ impl<I: Input, O: Write> Program<I, O> {
     /// [`observe_event`](Self::observe_event); read the result with
     /// [`origin`](Self::origin). The event is still delivered to you.
     ///
-    /// Call this after [`enable_mouse`](Self::enable_mouse) and again whenever
-    /// the terminal resizes, since either can move the managed area. Without
-    /// it the origin stays at `(0, 0)` and
+    /// Call this once mouse mapping starts, again whenever the terminal
+    /// resizes, and again after [`resume`](Self::resume), each of which can
+    /// move the managed area. Without it the origin stays at `(0, 0)` and
     /// [`mouse_to_origin`](Self::mouse_to_origin) is an identity.
     ///
     /// A no-op in fullscreen, where the origin is always `(0, 0)`.
@@ -769,7 +769,7 @@ impl<I: Input, O: Write> Program<I, O> {
             .stage_move_cursor_to(crate::layout::Position::ORIGIN);
         self.screen
             .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
-        self.origin_query_pending = true;
+        self.origin_queries_pending = self.origin_queries_pending.saturating_add(1);
         self.screen.flush()
     }
 
