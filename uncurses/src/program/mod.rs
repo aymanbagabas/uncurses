@@ -557,8 +557,8 @@ where
             // query, so a reply means the terminal recognizes the feature.
             Event::ModifyOtherKeys(mode) => self.caps.modify_other_keys = Some(mode),
             Event::PrimaryDeviceAttributes(ref attrs) => {
-                // Sixel (4) and clipboard (52) support ride along in this
-                // reply, which is sent as the query terminator regardless.
+                // Stored unparsed: the attribute numbers are a terminal-author
+                // extension point, so callers test the ones they care about.
                 self.caps.primary_device_attributes = Some(attrs.clone());
             }
             Event::SecondaryDeviceAttributes(ref attrs) => {
