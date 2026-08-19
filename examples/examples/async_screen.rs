@@ -8,9 +8,8 @@
 //! `tokio::select!`, and the same task renders. No app-owned helper thread, no channels.
 //!
 //! The stream is pure: reading an event does not touch capability tracking.
-//! Feed each event back through [`Program::observe_event`] so resize handling
-//! and the discovery-driven defaults (mouse, keyboard, in-band resize) still
-//! apply. That one line is the whole contract.
+//! Feed each event back through [`Program::observe_event`] so capability
+//! tracking and resize handling still apply. That one line is the whole contract.
 //!
 //! Requires the `async` feature (on by default for the examples crate):
 //! `cargo run --example async_screen`. Press `q`, `Esc`, or `Ctrl-C` to quit.

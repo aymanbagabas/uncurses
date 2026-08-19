@@ -17,9 +17,8 @@
 //! collide), the starfield, and the glow/pulse selection effects.
 //!
 //! The stream is pure: reading an event does not touch capability tracking.
-//! Feed each event back through [`Program::observe_event`] so resize handling
-//! and the discovery-driven defaults (mouse, keyboard, in-band resize) still
-//! apply. That one line is the whole contract.
+//! Feed each event back through [`Program::observe_event`] so capability
+//! tracking and resize handling still apply. That one line is the whole contract.
 //!
 //! Controls: up/down (or k/j) move the selector, Enter fires a burst on the
 //! current item, Space drops an orb, q / Esc / Ctrl-C quit.

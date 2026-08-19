@@ -159,9 +159,8 @@ pub fn init_with_options(
 /// * `options` - terminal options from the widget library. The viewport is
 ///   cloned before constructing the [`Terminal`] so the backend can mirror the
 ///   same viewport behavior.
-/// * `screen_options` - screen defaults controlling bracketed paste, keyboard
-///   enhancements, mouse tracking, in-band resize preference, and pixel-size
-///   behavior.
+/// * `screen_options` - screen defaults controlling bracketed paste and mouse
+///   tracking.
 ///
 /// ## Returns
 ///
