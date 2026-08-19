@@ -3,7 +3,7 @@
 //! ## Purpose
 //!
 //! DCS sequences carry terminal-control reply strings. This decoder recognizes
-//! capability replies, DECRQSS-style status replies, terminal-name replies, and
+//! capability replies, DECRPSS status replies, terminal-name replies, and
 //! tertiary device attributes, while preserving unknown payloads as
 //! [`Event::UnknownDcs`].
 //!
@@ -41,7 +41,7 @@ impl Decoder {
     }
 }
 
-/// Builtin DCS recogniser: XTGETTCAP, DECRQSS, XTVersion, tertiary DA.
+/// Builtin DCS recogniser: XTGETTCAP, DECRPSS, XTVersion, tertiary DA.
 ///
 /// Splits the payload into its private prefix / parameter / intermediate /
 /// final-byte / data regions and matches the known reply shapes. Returns
@@ -84,7 +84,7 @@ fn recognize(payload: &[u8]) -> Option<Event> {
         });
     }
 
-    // DECRQSS response: DCS 1$r <value><selector> ST (valid) or
+    // DECRPSS, the reply to DECRQSS: DCS 1$r <D...D> ST (valid) or
     // DCS 0$r ST (invalid). Reported separately from XTGETTCAP: the data is
     // a settings string, not `cap=value` pairs.
     //

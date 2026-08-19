@@ -271,12 +271,14 @@ pub enum Event {
         /// `\E[1;2P`), so a joined string could not be split back apart.
         entries: Vec<(String, Option<String>)>,
     },
-    /// DECRQSS setting reply (`DCS 1 $ r` on success, `DCS 0 $ r` on
+    /// DECRPSS setting report (`DCS 1 $ r` on success, `DCS 0 $ r` on
     /// failure), reporting a current setting such as the active SGR
     /// attributes or cursor style. Sent in answer to
     /// [`write_decrqss`](crate::ansi::status::write_decrqss).
     ///
-    /// A reply of `DCS 1 $ r 0 ; 1 m ST` splits into the value `0;1` and the
+    /// DECRPSS carries the setting as one data string, being the whole CSI
+    /// sequence without its introducer. This splits it in two for matching:
+    /// a reply of `DCS 1 $ r 0 ; 1 m ST` reports the value `0;1` under the
     /// selector `m`. A private prefix stays with the selector, so xterm's
     /// `DCS 1 $ r > 4 ; 2 m ST` reports the value `4;2` under the selector
     /// `>m`, which is what keeps it apart from SGR.
