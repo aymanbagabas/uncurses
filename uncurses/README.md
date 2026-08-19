@@ -77,7 +77,7 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`init()` sets up the session and leaves the terminal alone, so discovery is
+`init()` sets up the session and sends no capability query, so discovery is
 yours to start: call `program.query_capabilities(&[])?` and keep reading events
 until the Primary DA reply arrives; ordinary `read_event` and `try_read_event`
 calls observe those replies automatically. `observe_event` is only needed when
