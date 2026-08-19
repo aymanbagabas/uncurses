@@ -64,7 +64,7 @@ const ITEMS: [&str; 5] = [
 ];
 
 /// Fixed render cadence. ~60 fps feels smooth and idles cheaply.
-// ponytail: fixed step, no elapsed-time integration; add dt if you port this
+// Fixed step, with no elapsed-time integration; add a dt term if you port this
 // to a machine where 16ms frames visibly drift.
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -427,13 +427,13 @@ impl World {
 
         // Orb-on-orb elastic bounce. O(n^2) over <=24 orbs is free, and it
         // turns a screensaver into a physics toy.
-        // ponytail: swap velocities (equal mass) only when approaching, so
-        // overlapping orbs don't jitter-lock; upgrade to real 2D impulse if
+        // Swap velocities (equal mass) only when approaching, so
+        // overlapping orbs don't jitter-lock; upgrade to a real 2D impulse if
         // you give orbs mass or size.
         // Orb-on-orb annihilation: when two orbs meet head-on they detonate,
         // both vanish (the orb counter drops), and a bright shockwave marks the
         // spot. O(n^2) over <=24 orbs is free.
-        // ponytail: mark-then-remove so one orb can't be freed twice in a
+        // Mark-then-remove so one orb can't be freed twice in a
         // multi-way pileup; upgrade to spatial hashing only past a few hundred
         // orbs, which this cap never reaches.
         let mut hits: Vec<(f32, f32, Color)> = Vec::new();
@@ -763,7 +763,6 @@ fn ramp_gold(p: u8) -> Color {
 }
 
 /// Tiny xorshift PRNG so the demo needs no `rand` dependency.
-// ponytail: xorshift, not `rand`; swap in rand only if you need real quality.
 struct Rng(u64);
 
 impl Rng {
