@@ -305,7 +305,7 @@ impl Capabilities {
         self.settings.get(selector)?.as_deref()
     }
 
-    /// Every DECRQSS reply recorded so far, keyed by selector. A value of
+    /// Every DECRPSS reply recorded so far, keyed by selector. A value of
     /// `None` is the terminal reporting that setting as unsupported, which is
     /// different from the key being absent.
     ///
