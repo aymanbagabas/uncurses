@@ -3,9 +3,10 @@
 //!
 //! The interesting part is coordinate mapping. Terminals report mouse clicks
 //! in whole-screen cell coordinates, but an inline surface starts partway
-//! down the screen. Turning the mouse on inline activates uncurses's origin
-//! tracking: the screen asks the terminal where its top-left cell physically
-//! is (and re-asks on resize), exposed as [`Program::origin`]. Each click is
+//! down the screen. [`Program::request_origin`] asks the terminal where the
+//! surface's top-left cell physically is, and the answer shows up as
+//! [`Program::origin`]; this asks once at startup and again on every resize,
+//! since a resize can move the surface. Each click is
 //! mapped into surface-local coordinates with [`Program::mouse_to_origin`]
 //! before hit-testing the buttons, the mouse-origin analogue of
 //! [`Program::mouse_pixels_to_cells`].
@@ -274,14 +275,16 @@ impl Calc {
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    // Inline (no alt screen). Enabling the mouse activates origin tracking so
-    // whole-screen click coordinates can be mapped into the surface.
+    // Inline (no alt screen), so clicks arrive in whole-screen coordinates and
+    // have to be mapped into the surface.
     program.init_with(ProgramOptions {
         mouse: Some(MouseTracking::empty()),
         ..ProgramOptions::default()
     })?;
     let (cols, rows) = (program.screen().width(), program.screen().height());
     fit(program.screen_mut(), cols, rows);
+    // Ask where the surface sits, so mouse_to_origin has something to subtract.
+    program.request_origin()?;
     program.hide_cursor()?;
 
     let result = run(&mut program);
@@ -339,6 +342,8 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
             }
             Event::Resize(ws) => {
                 fit(program.screen_mut(), ws.col, ws.row);
+                // A resize can move the surface, so the origin is stale now.
+                program.request_origin()?;
                 render(program, &keys, &calc, pressed);
             }
             _ => {}
