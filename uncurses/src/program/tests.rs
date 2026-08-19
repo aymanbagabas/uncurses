@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::event::SettingReport;
 use crate::text::TextSurface;
 
 #[cfg(unix)]
@@ -1666,39 +1667,29 @@ fn capabilities_keep_termcap_values_and_distinguish_a_no_from_silence() {
 }
 
 #[test]
-fn capabilities_record_decrqss_settings_by_selector() {
+fn capabilities_record_decrqss_settings_by_control_function() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (80, 24));
 
+    for body in ["0;1m", "2 q", ">4;2m", "m"] {
+        program
+            .observe_event(&Event::SettingReport(SettingReport::Raw(body.to_string())))
+            .unwrap();
+    }
+    // A refusal names no setting, so there is nothing to key it under.
     program
-        .observe_event(&Event::SettingReport {
-            recognized: true,
-            value: "0;1".to_string(),
-            selector: "m".to_string(),
-        })
-        .unwrap();
-    program
-        .observe_event(&Event::SettingReport {
-            recognized: false,
-            value: String::new(),
-            selector: " q".to_string(),
-        })
-        .unwrap();
-    // A bare refusal names no setting, so there is nothing to key it under.
-    program
-        .observe_event(&Event::SettingReport {
-            recognized: false,
-            value: String::new(),
-            selector: String::new(),
-        })
+        .observe_event(&Event::SettingReport(SettingReport::Refused))
         .unwrap();
 
     let caps = program.capabilities();
-    assert_eq!(caps.setting("m"), Some("0;1"));
-    assert_eq!(caps.setting(" q"), None);
-    assert_eq!(caps.settings().get(" q"), Some(&None));
-    assert_eq!(caps.settings().get("r"), None);
-    assert_eq!(caps.settings().len(), 2);
+    // A parameterless reply is still an answer, and it replaced the earlier
+    // SGR one under the same control function.
+    assert_eq!(caps.setting("m"), Some("m"));
+    assert_eq!(caps.setting(" q"), Some("2 q"));
+    // The private prefix keeps XTQMODKEYS out of the SGR entry.
+    assert_eq!(caps.setting(">m"), Some(">4;2m"));
+    assert_eq!(caps.setting("r"), None);
+    assert_eq!(caps.settings().len(), 3);
 }
 
 #[test]

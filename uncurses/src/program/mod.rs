@@ -79,7 +79,7 @@ use bitflags::bitflags;
 use crate::ansi::{mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
-use crate::event::{Event, EventSource};
+use crate::event::{Event, EventSource, SettingReport};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
 use crate::screen::Screen;
@@ -639,14 +639,16 @@ where
                 self.origin_queries_pending -= 1;
                 self.origin = self.clip_origin(pos);
             }
-            Event::SettingReport {
-                recognized,
-                ref value,
-                ref selector,
-            } if !selector.is_empty() => {
-                self.caps
-                    .settings
-                    .insert(selector.clone(), recognized.then(|| value.clone()));
+            Event::SettingReport(SettingReport::Raw(ref body)) => {
+                // Parameter bytes (0x30-0x3b) appear nowhere else in a CSI
+                // string, so dropping them leaves exactly the control
+                // function: private prefix, intermediates and final byte.
+                // That is what tells SGR (`m`) apart from xterm's
+                // XTQMODKEYS (`>m`), which share a final byte.
+                let key: String = body.chars().filter(|c| !('0'..=';').contains(c)).collect();
+                if !key.is_empty() {
+                    self.caps.settings.insert(key, body.clone());
+                }
             }
             Event::Termcap {
                 recognized,

@@ -273,25 +273,7 @@ pub enum Event {
     /// failure), reporting a current setting such as the active SGR
     /// attributes or cursor style. Sent in answer to
     /// [`write_decrqss`](crate::ansi::status::write_decrqss).
-    ///
-    /// DECRPSS carries the setting as one data string, being the whole CSI
-    /// sequence without its introducer. This splits it in two for matching:
-    /// a reply of `DCS 1 $ r 0 ; 1 m ST` reports the value `0;1` under the
-    /// selector `m`. A private prefix stays with the selector, so xterm's
-    /// `DCS 1 $ r > 4 ; 2 m ST` reports the value `4;2` under the selector
-    /// `>m`, which is what keeps it apart from SGR.
-    SettingReport {
-        /// Whether the terminal recognized the requested setting. A failure
-        /// reply carries no data at all, so both other fields are empty and
-        /// only the request itself says which setting was refused.
-        recognized: bool,
-        /// The setting's current parameters, as reported.
-        value: String,
-        /// The control function the value belongs to, echoed back from the
-        /// request: `m` for SGR, `" q"` for `DECSCUSR`, `r` for `DECSTBM`,
-        /// `>m` for xterm's `XTQMODKEYS`.
-        selector: String,
-    },
+    SettingReport(SettingReport),
 
     // -- Colors --------------------------------------------------------------
     /// OSC 10 default foreground color reply.
@@ -347,6 +329,19 @@ pub enum Event {
     UnknownApc(Vec<u8>),
     /// Catch-all for unrecognized byte sequences.
     Unknown(Vec<u8>),
+}
+
+/// The payload of a DECRPSS reply, [`Event::SettingReport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingReport {
+    /// The terminal did not recognize the requested setting (`DCS 0 $ r ST`).
+    /// A refusal carries no data at all, so only the request that provoked it
+    /// says which setting was refused.
+    Refused,
+    /// The setting as the terminal spelled it: the whole CSI sequence for the
+    /// control function without its introducer, so `0;1m` for SGR, `2 q` for
+    /// `DECSCUSR`, `>4;2m` for xterm's `XTQMODKEYS`.
+    Raw(String),
 }
 
 impl Event {

@@ -173,7 +173,7 @@ pub struct Capabilities {
     pub(super) modify_other_keys: Option<ModifyOtherKeysMode>,
     pub(super) terminal_name: Option<String>,
     pub(super) termcap: BTreeMap<String, Option<String>>,
-    pub(super) settings: BTreeMap<String, Option<String>>,
+    pub(super) settings: BTreeMap<String, String>,
     pub(super) foreground_color: Option<Color>,
     pub(super) background_color: Option<Color>,
     pub(super) cursor_color: Option<Color>,
@@ -296,23 +296,23 @@ impl Capabilities {
         &self.termcap
     }
 
-    /// The value the terminal reported for the DECRQSS setting `selector`,
-    /// or `None` if it reported the setting as unsupported or was never
-    /// asked. The selector is the one that was requested: `"m"` for SGR,
-    /// `" q"` for `DECSCUSR`. A private prefix is part of the selector, so
-    /// a `">4m"` request is recorded under `">m"`.
+    /// The setting the terminal reported for the control function
+    /// `selector`, or `None` if it refused the request or was never asked.
+    /// The selector is the control function alone: `"m"` for SGR, `" q"` for
+    /// `DECSCUSR`, `">m"` for xterm's `XTQMODKEYS`. The value is the whole
+    /// reply as the terminal spelled it, parameters included, so a `">4m"`
+    /// request is recorded under `">m"` with a value like `">4;2m"`.
     pub fn setting(&self, selector: &str) -> Option<&str> {
-        self.settings.get(selector)?.as_deref()
+        self.settings.get(selector).map(String::as_str)
     }
 
-    /// Every DECRPSS reply recorded so far, keyed by selector. A value of
-    /// `None` is the terminal reporting that setting as unsupported, which is
-    /// different from the key being absent.
+    /// Every DECRPSS reply recorded so far, keyed by control function.
     ///
-    /// A refusal echoes no selector back, so it is only recorded when the
-    /// terminal names the setting it is refusing. Terminals that answer a
-    /// bare `DCS 0 $ r ST` leave no entry at all.
-    pub fn settings(&self) -> &BTreeMap<String, Option<String>> {
+    /// A refusal names no setting, so it leaves no entry at all: what is here
+    /// is what the terminal answered. Requests that differ only in their
+    /// parameters share a control function, so of a `">4m"` and a `">2m"`
+    /// request only the later reply is kept.
+    pub fn settings(&self) -> &BTreeMap<String, String> {
         &self.settings
     }
 
