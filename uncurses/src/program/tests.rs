@@ -1415,10 +1415,10 @@ fn capabilities_keep_the_raw_primary_da_attributes() {
         caps.primary_device_attributes(),
         Some([Some(62), Some(4), None, Some(52)].as_slice())
     );
-    assert!(caps.sixel());
-    assert!(caps.clipboard());
-    assert!(caps.da_attribute(62));
-    assert!(!caps.da_attribute(21));
+    assert!(caps.supports_primary_device_attribute(4));
+    assert!(caps.supports_primary_device_attribute(52));
+    assert!(caps.supports_primary_device_attribute(62));
+    assert!(!caps.supports_primary_device_attribute(21));
 }
 
 #[test]
@@ -1427,8 +1427,7 @@ fn primary_device_attributes_are_none_until_the_terminal_answers() {
     let program = Program::for_test(&buf, (20, 1));
     let caps = program.capabilities();
     assert_eq!(caps.primary_device_attributes(), None);
-    assert!(!caps.sixel());
-    assert!(!caps.clipboard());
+    assert!(!caps.supports_primary_device_attribute(4));
     assert_eq!(caps.kitty_keyboard(), None);
     assert_eq!(caps.modify_other_keys(), None);
     assert_eq!(caps.terminal_name(), None);
