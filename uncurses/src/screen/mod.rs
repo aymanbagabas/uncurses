@@ -516,6 +516,10 @@ impl<W: Write> Screen<W> {
     /// [`render`](Self::render) is a full repaint: what is already on screen
     /// was measured the other way. Setting the current value is a no-op.
     ///
+    /// The repaint clears the screen, but buffered cells keep the width they
+    /// were measured with, so re-write any text whose measurement changes.
+    /// Applications that redraw their content each frame get that for free.
+    ///
     /// [`Program::enable_grapheme_clusters`]: crate::program::Program::enable_grapheme_clusters
     /// [`Program::disable_grapheme_clusters`]: crate::program::Program::disable_grapheme_clusters
     pub fn set_grapheme_clusters(&mut self, enabled: bool) {

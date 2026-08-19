@@ -430,13 +430,12 @@ where
     /// per event, on both the sync ([`read_event`](Self::read_event),
     /// [`try_read_event`](Self::try_read_event)) and async
     /// ([`event_stream`](Self::event_stream)) paths, to keep capability
-    /// detection, resize handling, and discovery-driven defaults alive. Skip it
-    /// and reads still work, you just forgo those upgrades.
+    /// detection, window-size tracking, and render properties in sync. Skip it
+    /// and reads still work, you just forgo those updates.
     ///
     /// ## Errors
     ///
-    /// Returns I/O errors from applying discovery-driven screen defaults
-    /// triggered by capability replies.
+    /// Returns the errors [`Program::observe_event`] reports.
     pub fn observe_event(&mut self, event: &Event) -> io::Result<()> {
         self.program.observe_event(event)
     }
@@ -470,8 +469,8 @@ where
 {
     /// Begin an interactive session with default [`ProgramOptions`].
     ///
-    /// This delegates to [`Program::init`]: the screen enters raw mode, applies
-    /// always-on defaults, and stages its terminal capability queries. It does
+    /// This delegates to [`Program::init`]: the program enters raw mode and
+    /// applies the always-on defaults. It sends no capability query, and does
     /// not enter the alternate screen or hide the cursor by itself; the
     /// crate-level setup helpers perform those additional steps.
     ///
@@ -481,8 +480,8 @@ where
     ///
     /// ## Errors
     ///
-    /// Returns errors from raw-mode setup, autoresizing, bracketed paste setup,
-    /// or staging capability queries.
+    /// Returns errors from raw-mode setup, autoresizing, or bracketed paste
+    /// setup.
     ///
     /// ## Panics
     ///
@@ -498,9 +497,8 @@ where
     /// Begin an interactive session with explicit [`ProgramOptions`].
     ///
     /// This delegates to [`Program::init_with`], allowing the caller to choose
-    /// bracketed paste, keyboard enhancements, mouse tracking, in-band resize
-    /// preference, and pixel-size behavior before capability queries are staged.
-    /// It does not enter the alternate screen or hide the cursor by itself.
+    /// bracketed paste and mouse tracking. It sends no capability queries, and
+    /// does not enter the alternate screen or hide the cursor by itself.
     ///
     /// ## Parameters
     ///
@@ -512,8 +510,8 @@ where
     ///
     /// ## Errors
     ///
-    /// Returns errors from raw-mode setup, autoresizing, always-on mode setup,
-    /// or staging capability queries.
+    /// Returns errors from raw-mode setup, autoresizing, or always-on mode
+    /// setup.
     ///
     /// ## Panics
     ///
