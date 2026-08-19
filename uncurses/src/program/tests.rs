@@ -85,7 +85,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
             window_pixels: None,
             terminal_name: None,
             origin: Position::ORIGIN,
-            origin_query_pending: false,
+            origin_queries_pending: 0,
         }
     }
 }
@@ -675,13 +675,13 @@ fn origin_captured_from_cursor_position_reply() {
     let mut program = Program::for_test(&buf, (10, 3));
     program.window_cells = Some(Size::new(10, 8));
     // Simulate an outstanding `CSI 6n` origin request.
-    program.origin_query_pending = true;
+    program.origin_queries_pending = 1;
     // The reply is observed (never consumed) and captured as the origin,
     // clipped so the 3-row area stays on program in an 8-row terminal.
     program
         .observe_event(&Event::CursorPosition(Position::new(2, 7)))
         .unwrap();
-    assert!(!program.origin_query_pending);
+    assert_eq!(program.origin_queries_pending, 0);
     assert_eq!(program.origin(), Position::new(2, 5));
 
     // A later stray CursorPosition (no request pending) is ignored.
@@ -689,6 +689,42 @@ fn origin_captured_from_cursor_position_reply() {
         .observe_event(&Event::CursorPosition(Position::new(0, 0)))
         .unwrap();
     assert_eq!(program.origin(), Position::new(2, 5));
+}
+
+#[test]
+fn a_burst_of_origin_requests_keeps_the_last_reply() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.window_cells = Some(Size::new(10, 20));
+    // Two requests in flight, e.g. two resize reports during a window drag.
+    program.request_origin().unwrap();
+    program.request_origin().unwrap();
+    assert_eq!(program.origin_queries_pending, 2);
+    // A single flag would keep the first reply and drop the second, leaving
+    // the origin at the position the drag started from.
+    program
+        .observe_event(&Event::CursorPosition(Position::new(0, 4)))
+        .unwrap();
+    program
+        .observe_event(&Event::CursorPosition(Position::new(0, 9)))
+        .unwrap();
+    assert_eq!(program.origin_queries_pending, 0);
+    assert_eq!(program.origin(), Position::new(0, 9));
+}
+
+#[test]
+fn mouse_to_origin_is_an_identity_in_fullscreen() {
+    use crate::event::{KeyModifiers, Mouse, MouseButton};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.origin = Position::new(0, 5);
+    // Entering the alternate screen re-anchors the area at the top-left, so
+    // the inline origin recorded earlier must not be subtracted any more.
+    program.screen_mut().set_fullscreen(true);
+    let m = Mouse::new(3, 7, MouseButton::Left, KeyModifiers::empty());
+    let mapped = program.mouse_to_origin(m);
+    assert_eq!((mapped.x, mapped.y), (3, 7));
 }
 
 #[test]
@@ -732,7 +768,7 @@ fn observing_a_resize_records_the_size_without_writing() {
     program.observe_event(&Event::Resize(ws)).unwrap();
 
     assert_eq!(program.window_cells, Some(Size::new(40, 12)));
-    assert!(!program.origin_query_pending);
+    assert_eq!(program.origin_queries_pending, 0);
     assert!(written(&buf).is_empty(), "{:?}", written(&buf));
 }
 
@@ -743,7 +779,7 @@ fn enabling_the_mouse_does_not_query_the_origin() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (10, 3));
     program.enable_mouse(MouseTracking::empty()).unwrap();
-    assert!(!program.origin_query_pending);
+    assert_eq!(program.origin_queries_pending, 0);
     assert!(!written(&buf).contains("\x1b[6n"), "{:?}", written(&buf));
 }
 
@@ -756,7 +792,7 @@ fn request_origin_parks_the_cursor_and_asks_where_it_landed() {
 
     let out = written(&buf);
     assert!(out.ends_with("\x1b[6n"), "{out:?}");
-    assert!(program.origin_query_pending);
+    assert_eq!(program.origin_queries_pending, 1);
 
     // The reply is captured as the origin, and observing stays pure.
     buf.borrow_mut().clear();
@@ -764,7 +800,7 @@ fn request_origin_parks_the_cursor_and_asks_where_it_landed() {
         .observe_event(&Event::CursorPosition(Position::new(2, 5)))
         .unwrap();
     assert_eq!(program.origin(), Position::new(2, 5));
-    assert!(!program.origin_query_pending);
+    assert_eq!(program.origin_queries_pending, 0);
     assert!(written(&buf).is_empty());
 }
 
@@ -774,7 +810,7 @@ fn request_origin_is_a_no_op_in_fullscreen() {
     let mut program = Program::for_test(&buf, (10, 3));
     program.screen_mut().set_fullscreen(true);
     program.request_origin().unwrap();
-    assert!(!program.origin_query_pending);
+    assert_eq!(program.origin_queries_pending, 0);
     assert!(written(&buf).is_empty(), "{:?}", written(&buf));
 }
 
