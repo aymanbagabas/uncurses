@@ -1,6 +1,6 @@
 //! [`Terminal`] — a typed input/output handle with raw-mode state.
 //!
-//! A `Terminal<I, O>` bundles a readable input half, a writable output half, a
+//! A `Terminal<I, O>` bundles a readable input half, a writable output half,
 //! an [`Env`], and one optional saved raw-mode [`State`]. It implements
 //! [`Read`] and [`Write`] by delegating to those halves, so it can be used
 //! directly for byte-level terminal control or split into halves for a

@@ -149,7 +149,6 @@ impl Profile {
 
 const DUMB_TERM: &str = "dumb";
 
-/// Environment-driven profile inference. Knows nothing about TTY-ness.
 /// Return whether an environment variable reads as a truthy boolean.
 ///
 /// Accepts `1`, `t`, `T`, `TRUE`, `true`, and `True`, matching Go's
@@ -162,6 +161,7 @@ fn is_truthy(env: &dyn Env, key: &str) -> bool {
     )
 }
 
+/// Environment-driven profile inference. Knows nothing about TTY-ness.
 fn env_color_profile(env: &dyn Env, term: &str) -> Profile {
     let mut p = if term == DUMB_TERM {
         // An explicit `dumb` terminal opts out of styling everywhere.
