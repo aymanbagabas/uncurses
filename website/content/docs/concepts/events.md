@@ -45,7 +45,7 @@ Events cover everything the terminal reports, not just keys:
 Most apps read events from [`Program`]({{< relref "program.md" >}}), because it
 owns the terminal session and the event source.
 
-```rust,no_run
+```rust
 use uncurses::event::{Event, KeyCode};
 use uncurses::program::Program;
 

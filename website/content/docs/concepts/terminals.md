@@ -85,7 +85,7 @@ In uncurses, that borrow-and-restore flow starts with the
 pairs input and output handles, snapshots the environment, and caches the
 pre-raw state returned by `make_raw` so `restore` can re-apply it:
 
-```rust,no_run
+```rust
 use uncurses::terminal::Terminal;
 
 fn main() -> std::io::Result<()> {

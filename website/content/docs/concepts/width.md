@@ -43,8 +43,8 @@ How a cluster is measured is a policy, captured by
   selectors, regional-indicator flags, and zero-width-joiner emoji sequences.
   The cluster boundaries follow the Unicode text-segmentation rules in
   [UTS-29](https://unicode.org/reports/tr29/). Pair it with terminal
-  [Unicode Core](https://contour-terminal.org/vt-extensions/unicode-core/) mode
-  (DEC mode 2027), which measures display width per grapheme cluster.
+  [Unicode Core](https://contour-terminal.org/vt-extensions/unicode-core/) mode,
+  which measures display width per grapheme cluster.
 
 ## East Asian ambiguous width
 
@@ -75,8 +75,8 @@ exposes `set_width_mode` and `set_eaw_wide`; a
 [screen]({{< relref "screen.md" >}}) carries the same mode so it measures the
 way the terminal does. Keeping the two in step is the
 [program]({{< relref "program.md" >}})'s job: `enable_grapheme_clusters` emits
-DEC mode 2027 and switches the screen's measurement together. That also happens
-on its own once the terminal reports 2027 as supported, since
+the terminal mode and switches the screen's measurement together. That also
+happens on its own once the terminal reports the mode as supported, since
 `ProgramOptions::prefer_grapheme_clusters` defaults to `true`; set it to `false`
 to stay on per-code-point measurement. When you do want the raw measurement:
 

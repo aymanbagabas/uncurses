@@ -3,33 +3,35 @@ title: "Program"
 weight: 9
 ---
 
-`Program<I, O>` is the interactive facade. It owns the terminal connection, the
-decoded event source, capability state, terminal and input modes, and a
-[`Screen`]({{< relref "screen.md" >}}) to render with. Drawing still happens on
-`Screen`; `Program` is the session object around it.
+`Program<I, O>` runs an interactive terminal session. It holds the connection to
+the terminal, turns arriving bytes into events, remembers what the terminal said
+about itself and which modes it switched on, and owns a
+[`Screen`]({{< relref "screen.md" >}}) for the drawing. Drawing still happens on
+`Screen`; `Program` is everything around it.
 
 ## What it owns
 
 ```mermaid
 flowchart TB
-  program["Program<I, O>"] --> terminal["Terminal: raw mode + I/O handles"]
-  program --> events["EventSource: decoded input"]
-  program --> modes["Modes: emitted and tracked"]
-  program --> caps["Capabilities: observed replies"]
-  program --> screen["Screen<O>: renderer"]
+  program["Program"] --> terminal["The terminal connection"]
+  program --> events["Keys, mouse, and other events"]
+  program --> modes["The modes it switched on"]
+  program --> caps["What the terminal said about itself"]
+  program --> screen["Screen: the renderer"]
 ```
 
-Constructing a `Program` is inert: it opens or accepts handles and sizes the
-renderer. Raw mode and terminal probing each wait for an explicit call.
+Creating a `Program` does nothing to the terminal. It takes the input and output
+handles and sizes the renderer to fit, and that is all. Starting the session and
+asking the terminal any questions both wait for you to ask.
 
-- `Program::stdio()` uses process stdin and stdout.
-- `Program::open()` opens the controlling terminal (`/dev/tty`, or the Windows
-  console), useful when stdio is redirected.
-- `Program::new(terminal)` builds over an existing `Terminal<I, O>`.
+- `Program::stdio()` uses the process's own input and output.
+- `Program::open()` talks to the terminal directly, which is what you want when
+  input or output has been redirected.
+- `Program::new(terminal)` builds on a terminal you already have.
 
 ## A minimal session
 
-```rust,no_run
+```rust
 use uncurses::event::Event;
 use uncurses::program::Program;
 use uncurses::style::Style;
@@ -50,123 +52,87 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`init()` enters raw mode, sizes the managed area, applies the always-on options,
-and prepares the renderer. `finish()` consumes the program, tears down the modes
-that program emitted, flushes the renderer, and restores the terminal state.
-Teardown is explicit, so call `finish()` when the session is done.
+`init()` starts the session. It puts the terminal into raw mode, so keystrokes
+arrive as you press them instead of a line at a time, and sizes the drawing area
+to fit. `finish()` ends the session, switching off everything the program
+switched on and handing the terminal back as it found it. Nothing tidies up on
+its own, so call `finish()` when you are done.
 
-Use `pause()` when you need to hand the terminal to a child process and keep the
-program alive. Use `resume()` to re-enter raw mode, refit the managed area,
-re-apply the modes this program emitted, and force a repaint. On Unix,
-`suspend()` pauses and then stops the process with `SIGTSTP`; call `resume()`
-after it returns.
+`pause()` hands the terminal back temporarily, which is what you want before
+running something like an editor, while keeping your program alive. `resume()`
+takes it back and repaints. On Unix, `suspend()` pauses and then stops the
+process the way Ctrl+Z does; call `resume()` once it starts again.
 
 ## Drawing through the screen
 
-Rendering lives on [`Screen`]({{< relref "screen.md" >}}). Borrow it with
+Drawing lives on [`Screen`]({{< relref "screen.md" >}}). Borrow it with
 `screen()` or `screen_mut()`, and keep the binding for as long as you are
 drawing:
 
-```rust,no_run
-use uncurses::event::Event;
-use uncurses::program::Program;
-use uncurses::style::Style;
-use uncurses::text::TextSurface;
+```rust
+loop {
+    let screen = program.screen_mut();
+    screen.set_str((0, 0), "ready", Style::default());
+    screen.render()?;
 
-fn main() -> std::io::Result<()> {
-    let mut program = Program::open()?;
-    program.init()?;
-
-    loop {
-        let screen = program.screen_mut();
-        screen.set_str((0, 0), "ready", Style::default());
-        screen.set_str((0, 1), "press any key", Style::default());
-        screen.render()?;
-
-        if matches!(program.read_event()?, Event::KeyPress(_)) {
-            break;
-        }
+    if matches!(program.read_event()?, Event::KeyPress(_)) {
+        break;
     }
-    program.finish()
 }
 ```
 
 The borrow ends at the binding's last use, so `program` is usable again on the
-next line, including inside an event loop. Reach for `program.screen_mut()`
-inline when you only have a single call to make, such as a `resize` in a match
-arm.
+next line, including inside an event loop like this one. Reach for
+`program.screen_mut()` inline when you only have a single call to make, such as
+a `resize` in a match arm.
 
-Most drawing uses the surface traits on `Screen`. The renderer is still a pure
-cell grid and diff writer; the program just owns it for the duration of the
-interactive session.
+Drawing works here exactly as it does on any other
+[surface]({{< relref "surfaces.md" >}}). The screen is still just a grid of
+cells that knows how to paint itself; the program only owns it for the length of
+the session.
 
-## Program emits every terminal mode
+## Program drives the screen
 
-This is the governing rule: `Screen` never leaves a terminal mode on, beyond
-the markers it wraps a single frame in and closes again. `Program`
-emits every mode and pushes the render consequence into `Screen` with a plain
-setter. For example, `Program::enter_alt_screen()` writes DECSET 1049 and calls
-`screen.set_fullscreen(true)`. `Program::hide_cursor()` writes DECTCEM and calls
-`screen.set_cursor_visible(false)`. `Program::enable_grapheme_clusters()` writes
-DECSET 2027 and calls `screen.set_grapheme_clusters(true)`.
+Some of what a program turns on changes how the screen should draw, and
+`Program` is what keeps the two in agreement. Moving to the alt screen is the
+clearest case: the terminal has to switch buffers, and the screen has to know it
+now covers the whole window instead of a few rows. Showing and hiding the cursor
+is the other.
 
-Use the `Program` methods for terminal modes:
+`Program` does both halves in a single call. `enter_alt_screen()` moves the
+terminal and tells the screen; `hide_cursor()` hides the cursor and tells the
+screen. Reach for these rather than setting the screen's half yourself, or the
+two end up disagreeing about what the terminal is actually doing.
 
-- `enter_alt_screen()` and `exit_alt_screen()`
-- `show_cursor()` and `hide_cursor()`
-- `enable_mouse(..)` and `disable_mouse()`
-- `enable_bracketed_paste()` and `disable_bracketed_paste()`
-- `enable_focus_events()` and `disable_focus_events()`
-- `enable_in_band_resize()` and `disable_in_band_resize()`
-- `set_kitty_keyboard(..)`, `set_modify_other_keys(..)`, `set_title(..)`,
-  `set_cursor_style(..)`, colors, clipboard, progress, pointer shape, `beep()`,
-  `reset()`, and `restore()`
-
-Each mode method writes its escape bytes and flushes immediately. Mode changes
-are not deferred to the next frame.
-
-## Teardown follows what Program emitted
-
-`Program` records the modes it emitted. `finish()` and `pause()` tear down
-exactly those modes, then restore the tty state. `resume()` re-applies exactly
-those modes and invalidates the renderer so the next frame repaints cleanly.
-
-Changing a render property directly through `program.screen_mut()` does not emit
-a mode and is not part of that mode record. If you call
-`program.screen_mut().set_fullscreen(true)`, the renderer switches to fullscreen
-addressing, but the terminal never enters the alternate screen and teardown has
-nothing to undo. Prefer `program.enter_alt_screen()`, `program.hide_cursor()`,
-and `program.enable_grapheme_clusters()` in terminal apps, because they do both
-halves.
+Everything else `Program` offers, such as mouse reporting, bracketed paste, and
+the window title, is between it and the terminal. The screen never needs to know
+about any of it. The [`Program` API
+reference](/api/uncurses/program/struct.Program.html) has the full set.
 
 ## Reading events
 
-The event methods live on `Program`:
+Input belongs to `Program`. It can block for the next event, wait with a
+timeout, or take one without blocking, whichever suits the loop you are writing.
 
-- `read_event()` blocks until the next event.
-- `poll_event(timeout)` waits up to a timeout and reports readiness.
-- `try_read_event()` returns an already-decoded event without blocking.
-- `unread_event(event)` pushes one event back to the front of the queue.
-
-`read_event()` and `try_read_event()` automatically observe the events they
-return. That keeps capability state, window size, terminal name, the recorded
-origin, and render-affecting replies up to date. If you take events from
-`event_stream()` or the shared `event_source()`, pass each event to
-`observe_event(&event)?` yourself.
+Reads through `Program` observe what they return, which is what keeps
+capabilities, the window size, and the renderer current without any bookkeeping
+on your part. If you take events from the shared event source or an async stream
+instead, hand each one to `observe_event` so the same updates still happen. See
+[Events]({{< relref "events.md" >}}).
 
 Observing records, it never queries. Nothing in the read path asks the terminal
-a question, so no reply lands on your event stream that you did not ask for.
-The flip side is that values a terminal only reports on request go stale on
-their own: the pixel sizes and the inline origin are refreshed when you call
-`request_window_pixel_size()`, `request_cell_pixel_size()`, and
-`request_origin()`, and not before.
+a question, so no reply reaches your loop that you did not ask for. The flip
+side is that anything a terminal only reports on request, such as the pixel
+sizes and the inline origin, goes stale until you ask again.
 
 ## Startup options
 
-`ProgramOptions` carries the startup behavior that `init` can emit directly:
-`bracketed_paste` and `mouse`.
+`ProgramOptions` carries the startup behavior that `init` applies for you, so
+things like bracketed paste or mouse reporting are on before your first frame
+rather than being separate calls after it.
 
-Two more options, `prefer_grapheme_clusters` and `prefer_in_band_resize`, act on
-what the terminal reports about itself. Those live with the rest of the
-discovery story in [Capabilities]({{< relref "capabilities.md" >}}), along with
-everything a terminal can tell you and how to ask.
+A couple of options act on what the terminal reports about itself instead of
+being emitted outright, which means they stay dormant until you query. That
+story lives with the rest of discovery in
+[Capabilities]({{< relref "capabilities.md" >}}), along with everything a
+terminal can tell you and how to ask.

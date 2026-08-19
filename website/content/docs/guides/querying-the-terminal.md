@@ -162,6 +162,54 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
+## Asking for a current setting
+
+The queries above ask what a terminal can do. DECRQSS asks what it is doing
+right now: the active text attributes, the current cursor style. That makes it a
+different kind of question, so it sits outside the default capability set and you
+send it as an extra query.
+
+```rust
+use uncurses::ansi::status::write_decrqss;
+use uncurses::event::{Event, SettingReport};
+use uncurses::program::Program;
+
+fn main() -> std::io::Result<()> {
+    let mut program = Program::stdio()?;
+    program.init()?;
+
+    let mut query = Vec::new();
+    write_decrqss(&mut query, "m")?; // "m" is SGR, the active text attributes
+    program.query_capabilities(&query)?;
+
+    let mut sgr = None;
+    loop {
+        match program.read_event()? {
+            // The reply to the only DECRQSS we sent, so it answers "m".
+            Event::SettingReport(SettingReport::Raw(body)) => sgr = Some(body),
+            Event::SettingReport(SettingReport::Refused) => break,
+            Event::PrimaryDeviceAttributes(_) => break,
+            _ => {}
+        }
+    }
+
+    let _ = sgr;
+    program.finish()
+}
+```
+
+This is the one reply the program does not record for you. Every other answer
+says what it is about, so it can be filed on its own: a mode report carries its
+mode, an XTGETTCAP reply its capability names. A DECRPSS reply carries neither.
+A refusal is a bare `Refused` that names nothing at all, and a success is a
+`Raw` holding the whole CSI sequence with the control function and its
+parameters run together, so `">4;2m"` cannot be told apart from an SGR reply by
+inspection alone.
+
+What the reply is about lives in the request, and the request is yours. Send one
+DECRQSS at a time, or track the order you sent them in, and match the replies
+up as they arrive.
+
 ## Asking without a Program
 
 Without `Program`, a request is just bytes you write to the terminal, and the
