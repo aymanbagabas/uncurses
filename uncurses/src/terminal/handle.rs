@@ -1,7 +1,7 @@
 //! [`Terminal`] — a typed input/output handle with raw-mode state.
 //!
 //! A `Terminal<I, O>` bundles a readable input half, a writable output half, a
-//! captured [`Env`], and one optional saved raw-mode [`State`]. It implements
+//! an [`Env`], and one optional saved raw-mode [`State`]. It implements
 //! [`Read`] and [`Write`] by delegating to those halves, so it can be used
 //! directly for byte-level terminal control or split into halves for a
 //! renderer and an event source.
@@ -19,7 +19,7 @@
 //! [`Terminal::stdio`] uses inherited stdin/stdout. [`Terminal::open`] opens
 //! the controlling terminal directly, which keeps terminal I/O available when
 //! stdio is redirected. For custom handles, [`Terminal::new`] pairs any
-//! platform terminal input/output types with an explicit environment snapshot.
+//! platform terminal input/output types with an explicit environment.
 //!
 //! ```rust,ignore
 //! use std::io::Write;
@@ -47,7 +47,7 @@ use std::os::fd::{AsFd, BorrowedFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsHandle, BorrowedHandle};
 
-use super::env::Env;
+use super::env::{Env, ProcessEnv};
 use super::raw::{self, State};
 use super::size::{Winsize, get_window_size};
 use super::stdio::{Stdin, Stdout, stdin, stdout};
@@ -68,14 +68,14 @@ pub struct Terminal<I, O> {
     /// State captured by the most recent [`make_raw`](Self::make_raw),
     /// applied (and cleared) by [`restore`](Self::restore).
     saved: Option<State>,
-    env: Env,
+    env: Box<dyn Env>,
 }
 
 impl Terminal<Stdin, Stdout> {
     /// Create a terminal over inherited standard input and output.
     ///
     /// The returned handle uses [`stdin`] for input, [`stdout`] for output, and
-    /// [`Env::from_process`] for its environment snapshot. Use this when the
+    /// [`ProcessEnv`] for its environment. Use this when the
     /// process is expected to be connected directly to the terminal.
     ///
     /// # Returns
@@ -91,7 +91,7 @@ impl Terminal<Stdin, Stdout> {
     /// If stdin or stdout may be redirected, prefer [`Terminal::open`] to open
     /// the controlling terminal directly.
     pub fn stdio() -> Self {
-        Self::new(stdin(), stdout(), Env::from_process())
+        Self::new(stdin(), stdout(), ProcessEnv)
     }
 }
 
@@ -100,7 +100,7 @@ impl Terminal<TtyInput, TtyOutput> {
     ///
     /// On Unix this opens `/dev/tty` for both input and output. On Windows it
     /// opens `CONIN$` for input and `CONOUT$` for output. The returned
-    /// `Terminal` snapshots the process environment with [`Env::from_process`].
+    /// `Terminal` reads the live process environment through [`ProcessEnv`].
     ///
     /// # Returns
     ///
@@ -116,7 +116,7 @@ impl Terminal<TtyInput, TtyOutput> {
     /// This function does not intentionally panic.
     pub fn open() -> io::Result<Self> {
         let (input, output) = open_tty()?;
-        Ok(Self::new(input, output, Env::from_process()))
+        Ok(Self::new(input, output, ProcessEnv))
     }
 }
 
@@ -128,19 +128,19 @@ impl<I, O> Terminal<I, O> {
     /// fd-bound [`new`](Self::new) cannot apply. No raw-mode state is
     /// captured.
     #[cfg(test)]
-    pub(crate) fn from_parts(input: I, output: O, env: Env) -> Self {
+    pub(crate) fn from_parts(input: I, output: O, env: impl Env + 'static) -> Self {
         Self {
             input,
             output,
             saved: None,
-            env,
+            env: Box::new(env),
         }
     }
 
-    /// Return the captured environment snapshot.
+    /// Return the terminal's environment.
     ///
-    /// The snapshot is taken by the constructor and is not updated if the
-    /// process environment later changes.
+    /// Whether lookups see later changes to the process environment depends on
+    /// the [`Env`] the terminal was built with.
     ///
     /// # Returns
     ///
@@ -149,11 +149,11 @@ impl<I, O> Terminal<I, O> {
     /// # Errors and panics
     ///
     /// This method does not fail or intentionally panic.
-    pub fn env(&self) -> &Env {
-        &self.env
+    pub fn env(&self) -> &dyn Env {
+        self.env.as_ref()
     }
 
-    /// Look up an environment variable in the captured snapshot.
+    /// Look up an environment variable.
     ///
     /// # Parameters
     ///
@@ -161,7 +161,7 @@ impl<I, O> Terminal<I, O> {
     ///
     /// # Returns
     ///
-    /// The last captured value for `key`, or `None` if it is absent.
+    /// The value for `key`, or `None` if it is absent.
     ///
     /// # Errors and panics
     ///
@@ -178,8 +178,7 @@ impl<I, O> Terminal<I, O> {
     ///
     /// # Returns
     ///
-    /// `true` when the captured snapshot contains `key` with a non-empty
-    /// value.
+    /// `true` when `key` is present with a non-empty value.
     ///
     /// # Errors and panics
     ///
@@ -293,7 +292,7 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     ///
     /// The environment is stored exactly as provided and is not required to
     /// describe the given descriptors. Use [`Terminal::stdio`] or
-    /// [`Terminal::open`] to snapshot the process environment automatically.
+    /// [`Terminal::open`] to use the process environment automatically.
     ///
     /// The two descriptors need not refer to the same device. Raw mode is
     /// applied to and restored from each one independently, so pairing two
@@ -304,7 +303,7 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     ///
     /// * `input` — readable terminal descriptor.
     /// * `output` — writable terminal descriptor.
-    /// * `env` — environment snapshot associated with this terminal.
+    /// * `env` — environment this terminal reads variables from.
     ///
     /// # Returns
     ///
@@ -313,12 +312,12 @@ impl<I: AsFd, O: AsFd> Terminal<I, O> {
     /// # Errors and panics
     ///
     /// This constructor does not fail or intentionally panic.
-    pub fn new(input: I, output: O, env: Env) -> Self {
+    pub fn new(input: I, output: O, env: impl Env + 'static) -> Self {
         Self {
             input,
             output,
             saved: None,
-            env,
+            env: Box::new(env),
         }
     }
 
@@ -464,13 +463,13 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     ///
     /// The environment is stored exactly as provided and is not required to
     /// describe the given handles. Use [`Terminal::stdio`] or
-    /// [`Terminal::open`] to snapshot the process environment automatically.
+    /// [`Terminal::open`] to use the process environment automatically.
     ///
     /// # Parameters
     ///
     /// * `input` — readable console handle.
     /// * `output` — writable console handle.
-    /// * `env` — environment snapshot associated with this terminal.
+    /// * `env` — environment this terminal reads variables from.
     ///
     /// # Returns
     ///
@@ -479,12 +478,12 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
     /// # Errors and panics
     ///
     /// This constructor does not fail or intentionally panic.
-    pub fn new(input: I, output: O, env: Env) -> Self {
+    pub fn new(input: I, output: O, env: impl Env + 'static) -> Self {
         Self {
             input,
             output,
             saved: None,
-            env,
+            env: Box::new(env),
         }
     }
 
@@ -626,19 +625,20 @@ impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::EnvList;
 
     #[test]
-    fn env_helpers_delegate_to_snapshot() {
-        let env = Env::from_pairs([("TERM", "xterm-256color"), ("NO_COLOR", "1"), ("EMPTY", "")]);
+    fn env_helpers_delegate_to_env() {
+        let env =
+            EnvList::from_pairs([("TERM", "xterm-256color"), ("NO_COLOR", "1"), ("EMPTY", "")]);
         let term = Terminal::new(stdin(), stdout(), env);
 
         assert_eq!(term.get_env("TERM").as_deref(), Some("xterm-256color"));
         assert!(term.has_env("TERM"));
         assert!(!term.has_env("EMPTY")); // present but empty
         assert!(!term.has_env("MISSING"));
-        // The full snapshot is reachable for richer queries (e.g. bool).
+        // The full environment is reachable for richer queries.
         assert_eq!(term.env().get("NO_COLOR").as_deref(), Some("1"));
-        assert!(term.env().is_truthy("NO_COLOR"));
     }
 
     /// A restore that fails must not consume the cached state: it is the only
@@ -661,7 +661,7 @@ mod tests {
         // a pipe and fails, and the retry lands on the pty again.
         let pipe = std::io::pipe().expect("pipe").0;
         let output = ScriptedFd::new(&[&b as &dyn AsFd, &b, &pipe, &b]);
-        let mut term = Terminal::new(&a, output, Env::from_pairs([("TERM", "dumb")]));
+        let mut term = Terminal::new(&a, output, EnvList::from_pairs([("TERM", "dumb")]));
 
         term.make_raw().expect("raw mode");
         assert!(!opost(&b), "the output half must be raw");

@@ -67,7 +67,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
         size: (u16, u16),
         input: std::io::PipeReader,
     ) -> Self {
-        let env = crate::terminal::Env::from_process();
+        let env = crate::terminal::EnvList::from_process();
         let writer = TestOut(buf);
         let terminal = crate::terminal::Terminal::from_parts(null_input(), writer, env);
         let color_profile = crate::color::Profile::detect_from(terminal.env(), true);
@@ -859,7 +859,7 @@ fn init_grants_tabs_and_bs_after_entering_raw_mode() {
         std::io::Error::last_os_error()
     );
 
-    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::Env::new());
+    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::EnvList::new());
     let mut program = Program::new(term).expect("Program::new over a pty slave");
     // Start from the opposite of what raw mode implies: TABS and BS off, so
     // only the init-time grant can explain their final values. ONLCR on, so
@@ -905,14 +905,14 @@ fn assert_tabs_and_bs_granted(got: Optimizations, primed: Optimizations, phase: 
 #[cfg(all(unix, not(target_os = "l4re")))]
 mod lnm {
     use super::*;
-    use crate::terminal::{Env, Terminal};
+    use crate::terminal::{EnvList, Terminal};
     use crate::testutil::{drain, open_pty_pair};
 
     fn init_bytes_over_pty(f: impl FnOnce(&mut Program<&std::fs::File, &std::fs::File>)) -> String {
         let (Some((_ma, input)), Some((mb, out))) = (open_pty_pair(), open_pty_pair()) else {
             return String::new();
         };
-        let terminal = Terminal::new(&input, &out, Env::from_pairs([("TERM", "xterm")]));
+        let terminal = Terminal::new(&input, &out, EnvList::from_pairs([("TERM", "xterm")]));
         let mut program = Program::new(terminal).expect("program over two ptys");
         f(&mut program);
         String::from_utf8_lossy(&drain(&mb)).into_owned()
@@ -957,7 +957,7 @@ mod lnm {
 #[cfg(all(unix, not(target_os = "l4re")))]
 mod teardown_failure {
     use super::*;
-    use crate::terminal::{Env, Terminal};
+    use crate::terminal::{EnvList, Terminal};
     use crate::testutil::{open_pty_pair, opost, prime};
     use std::cell::Cell;
     use std::fs::File;
@@ -1010,7 +1010,7 @@ mod teardown_failure {
             tty: &out,
             broken: &broken,
         };
-        let terminal = Terminal::new(&input, output, Env::from_pairs([("TERM", "xterm")]));
+        let terminal = Terminal::new(&input, output, EnvList::from_pairs([("TERM", "xterm")]));
         let mut program = Program::new(terminal).expect("program over two ptys");
         program.init().expect("init");
         assert!(!opost(&input) && !opost(&out), "both halves must be raw");

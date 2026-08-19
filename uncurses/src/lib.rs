@@ -83,7 +83,7 @@
 //! | [`color`] | Color types and capability [`Profile`](color::Profile)s with automatic downsampling. |
 //! | [`event`] | The [`EventSource`](event::EventSource) decoder, typed [`Event`](event::Event) values, and (with the `async` feature) an `EventStream`. |
 //! | [`ansi`] | Raw escape-sequence encoders and parsers for the cursor, modes, colors, queries, and the long tail of terminal control. |
-//! | [`terminal`] | The [`Terminal`](terminal::Terminal) handle, raw-mode lifecycle, window-size queries, and environment snapshot. |
+//! | [`terminal`] | The [`Terminal`](terminal::Terminal) handle, raw-mode lifecycle, window-size queries, and environment lookups. |
 //! | [`cell`] | The [`Cell`](cell::Cell) value type. |
 //! | [`unicode`] | Grapheme-cluster segmentation and other Unicode text primitives. |
 //! | [`layout`] | [`Position`](layout::Position), [`Size`](layout::Size), and [`Rect`](layout::Rect) geometry. |
