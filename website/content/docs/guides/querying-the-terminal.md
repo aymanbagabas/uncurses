@@ -21,8 +21,9 @@ flowchart TB
 ```
 
 {{< callout type="info" >}}
-Startup is quiet. `Program::init()` and `Program::init_with()` set up the
-session and leave the terminal alone, so every query is a call you make.
+`Program::init()` and `Program::init_with()` set the session up and ask nothing
+about what the terminal can do. They do write: raw mode, tab stops, and the
+options you turned on. The capability queries below are always a call you make.
 {{< /callout >}}
 
 ## Capability probing

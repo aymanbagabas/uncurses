@@ -104,9 +104,12 @@ terminal and tells the screen; `hide_cursor()` hides the cursor and tells the
 screen. Reach for these rather than setting the screen's half yourself, or the
 two end up disagreeing about what the terminal is actually doing.
 
-Everything else `Program` offers, such as mouse reporting, bracketed paste, and
-the window title, is between it and the terminal. The screen never needs to know
-about any of it. The [`Program` API
+Some of what `Program` learns is between it and the terminal alone: mouse
+reporting, bracketed paste, and the window title change nothing about how a
+frame is drawn, so the screen is never told. Some of it does reach the screen,
+though never as a mode the screen emits: an environment-derived color profile,
+tab and backspace optimizations after raw mode, and synchronized output once a
+mode report proves the terminal understands it. The [`Program` API
 reference](/api/uncurses/program/struct.Program.html) has the full set.
 
 ## Reading events

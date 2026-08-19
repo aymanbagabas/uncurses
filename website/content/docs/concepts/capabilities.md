@@ -33,9 +33,10 @@ fn main() -> std::io::Result<()> {
     let caps = program.capabilities();
 
     match caps.mode(Mode::SYNCHRONIZED_OUTPUT) {
-        Some(ModeSetting::NotRecognized) => {} // a definite no
-        Some(_) => {}                          // supported, in some form
-        None => {}                             // never answered
+        Some(ModeSetting::NotRecognized) => {}    // a definite no
+        Some(ModeSetting::PermanentlyReset) => {} // known, but never usable
+        Some(_) => {}                             // supported, in some form
+        None => {}                                // never answered
     }
 
     // Or just the yes-or-no question.
@@ -44,6 +45,10 @@ fn main() -> std::io::Result<()> {
     program.finish()
 }
 ```
+
+`supports()` collapses the five states into the one answer most callers want.
+It is `true` where the mode is usable, so `PermanentlyReset` reads as a no: the
+terminal knows the mode and will never let it be set.
 
 A few answers are a plain `bool`, because for those the silence is the answer: a
 terminal that does not support the feature simply never responds. The
@@ -65,10 +70,15 @@ here, for when you want to know how that conclusion was reached.
 
 ## What the terminal can tell you
 
-Everything a terminal can say about itself lands here, not just the answers the
+Every reply a terminal sends about itself lands here, not just the answers the
 program acts on, so a question you send yourself is readable afterwards
 alongside the built-in ones. Where there are many answers of a kind, such as
 palette entries, you can read the whole set.
+
+Sizes are the exception, because they keep changing. The window and cell
+dimensions arrive as replies too, but they are superseded by every resize, so
+they live on `Program` as `window_cells()`, `window_pixels()` and
+`cell_pixels()` rather than as a recorded answer.
 
 The other half of what a program knows about its surroundings never arrives as
 an answer at all. `program.env()` is the environment as it stood when the

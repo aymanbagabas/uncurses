@@ -58,8 +58,9 @@ first answer is environment-only.
 
 To go further, ask for it:
 [`program.query_capabilities(&[])?`](/api/uncurses/program/struct.Program.html#method.query_capabilities)
-sends the query set, which includes the terminfo probe for direct color. The
-upgrade to `TrueColor` happens when the reply comes back through your read loop,
+sends the query set, which includes an XTGETTCAP request for the `RGB`
+capability. The upgrade to `TrueColor` happens when the reply comes back
+through your read loop,
 since [`read_event`](/api/uncurses/program/struct.Program.html#method.read_event)
 records capabilities as it goes. Never call `query_capabilities` and nothing is
 sent. The environment conventions the initial guess reads:
