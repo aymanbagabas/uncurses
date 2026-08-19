@@ -214,6 +214,19 @@ impl Capabilities {
     /// The raw Primary DA (`CSI c`) attribute list, or `None` if the terminal
     /// never answered. Entries are `None` where the terminal sent an empty
     /// parameter.
+    ///
+    /// The first parameter is the terminal's architectural service class, not
+    /// a capability: `6` identifies a VT102 and `64` a VT420. Capability
+    /// numbers live in the parameters after it, and only for a VT220-class
+    /// terminal or later (`62`, `63`, `64`, `65`); xterm puts it as "the
+    /// VT100-style response parameters do not mean anything by themselves".
+    /// So `CSI ? 4 ; 6 c` is a VT132 identifying itself, even though `4` is
+    /// also the capability number for Sixel graphics on a VT220-class reply.
+    /// Read the class first and interpret the rest against it, rather than
+    /// searching the list for a number.
+    ///
+    /// The capability numbers are assigned by DEC and extended by terminal
+    /// authors, so they are reported unparsed.
     pub fn primary_device_attributes(&self) -> Option<&[Option<u32>]> {
         self.primary_device_attributes.as_deref()
     }
@@ -230,27 +243,6 @@ impl Capabilities {
     /// terminal never answered.
     pub fn tertiary_device_attributes(&self) -> Option<&str> {
         self.tertiary_device_attributes.as_deref()
-    }
-
-    /// Whether the Primary DA reply advertised `attribute`. `false` both for
-    /// an attribute the terminal did not list and for a terminal that never
-    /// answered; tell them apart with
-    /// [`primary_device_attributes`](Self::primary_device_attributes).
-    ///
-    /// The attribute numbers are assigned by DEC and extended by terminal
-    /// authors, so this takes the number directly rather than an enum that
-    /// would go stale. The commonly probed ones are `4` for Sixel graphics and
-    /// `52` for clipboard access.
-    ///
-    /// ```ignore
-    /// if program.capabilities().supports_primary_device_attribute(4) {
-    ///     // the terminal advertised Sixel graphics
-    /// }
-    /// ```
-    pub fn supports_primary_device_attribute(&self, attribute: u32) -> bool {
-        self.primary_device_attributes
-            .as_ref()
-            .is_some_and(|attrs| attrs.contains(&Some(attribute)))
     }
 
     /// Whether the terminal has answered a Kitty graphics query, which is the
