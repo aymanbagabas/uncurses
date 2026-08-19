@@ -232,21 +232,25 @@ impl Capabilities {
         self.tertiary_device_attributes.as_deref()
     }
 
-    /// Whether the Primary DA reply advertised `attribute`.
-    pub fn da_attribute(&self, attribute: u32) -> bool {
+    /// Whether the Primary DA reply advertised `attribute`. `false` both for
+    /// an attribute the terminal did not list and for a terminal that never
+    /// answered; tell them apart with
+    /// [`primary_device_attributes`](Self::primary_device_attributes).
+    ///
+    /// The attribute numbers are assigned by DEC and extended by terminal
+    /// authors, so this takes the number directly rather than an enum that
+    /// would go stale. The commonly probed ones are `4` for Sixel graphics and
+    /// `52` for clipboard access.
+    ///
+    /// ```ignore
+    /// if program.capabilities().supports_primary_device_attribute(4) {
+    ///     // the terminal advertised Sixel graphics
+    /// }
+    /// ```
+    pub fn supports_primary_device_attribute(&self, attribute: u32) -> bool {
         self.primary_device_attributes
             .as_ref()
             .is_some_and(|attrs| attrs.contains(&Some(attribute)))
-    }
-
-    /// Sixel graphics support (Primary DA attribute 4).
-    pub fn sixel(&self) -> bool {
-        self.da_attribute(4)
-    }
-
-    /// Clipboard access (Primary DA attribute 52).
-    pub fn clipboard(&self) -> bool {
-        self.da_attribute(52)
     }
 
     /// Whether the terminal has answered a Kitty graphics query, which is the
