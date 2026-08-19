@@ -156,6 +156,35 @@ fn set_grapheme_clusters_toggles_width_mode() {
 }
 
 #[test]
+fn changing_the_width_mode_repaints_but_setting_it_again_does_not() {
+    // Whatever is on screen was measured the other way, so the tracked
+    // contents are no longer a valid diff base.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (3, 1));
+        fill(&mut screen, 0, 0, "X");
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        screen.set_grapheme_clusters(true);
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    assert!(s(&buf).matches('X').count() >= 2, "{:?}", s(&buf));
+
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (3, 1));
+        fill(&mut screen, 0, 0, "X");
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        screen.set_grapheme_clusters(false);
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    assert_eq!(s(&buf).matches('X').count(), 1, "{:?}", s(&buf));
+}
+
+#[test]
 fn write_string_widths_follow_current_mode() {
     // 'e' + combining acute: Wc treats the mark as a width-0 follow-up
     // that attaches to the base cell; Grapheme collapses both into a

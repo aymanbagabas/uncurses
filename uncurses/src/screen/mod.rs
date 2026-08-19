@@ -512,10 +512,22 @@ impl<W: Write> Screen<W> {
     /// Measuring differently from the terminal misplaces every cell after the
     /// first cluster on a line, so the two must agree.
     ///
+    /// Changing the mode discards the tracked terminal contents, so the next
+    /// [`render`](Self::render) is a full repaint: what is already on screen
+    /// was measured the other way. Setting the current value is a no-op.
+    ///
     /// [`Program::enable_grapheme_clusters`]: crate::program::Program::enable_grapheme_clusters
     /// [`Program::disable_grapheme_clusters`]: crate::program::Program::disable_grapheme_clusters
     pub fn set_grapheme_clusters(&mut self, enabled: bool) {
+        if self.grapheme_clusters == enabled {
+            return;
+        }
         self.grapheme_clusters = enabled;
+        // Whatever is on screen was measured under the old model, so the
+        // tracked terminal contents no longer describe it. Diffing against
+        // that record would leave the two disagreeing about which column
+        // holds what, so discard it and repaint.
+        self.invalidate();
     }
 
     /// Whether text is measured per extended grapheme cluster. See
