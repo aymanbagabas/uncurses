@@ -1,5 +1,5 @@
 //! Integration-style tests for [`Program`] — terminal/input mode toggles,
-//! save/restore round-trips, capability observation, origin tracking, and
+//! save/restore round-trips, capability observation, origin requests, and
 //! lifecycle over a real pty.
 //!
 //! Most build a [`Program`] over an in-memory buffer via
@@ -712,6 +712,70 @@ fn clip_origin_keeps_area_on_screen() {
         program.clip_origin(Position::new(0, 6)),
         Position::new(0, 0)
     );
+}
+
+/// The purity guarantee: observing an event records, it never queries. A
+/// resize used to fire `CSI 14 t` and `CSI 6n` from inside the read loop.
+#[test]
+fn observing_a_resize_records_the_size_without_writing() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.enable_mouse(MouseTracking::empty()).unwrap();
+    buf.borrow_mut().clear();
+
+    let ws = crate::terminal::Winsize {
+        col: 40,
+        row: 12,
+        xpixel: 0,
+        ypixel: 0,
+    };
+    program.observe_event(&Event::Resize(ws)).unwrap();
+
+    assert_eq!(program.window_cells, Some(Size::new(40, 12)));
+    assert!(!program.origin_query_pending);
+    assert!(written(&buf).is_empty(), "{:?}", written(&buf));
+}
+
+/// Enabling the mouse sets modes and nothing else; the origin is the caller's
+/// to request.
+#[test]
+fn enabling_the_mouse_does_not_query_the_origin() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.enable_mouse(MouseTracking::empty()).unwrap();
+    assert!(!program.origin_query_pending);
+    assert!(!written(&buf).contains("\x1b[6n"), "{:?}", written(&buf));
+}
+
+#[test]
+fn request_origin_parks_the_cursor_and_asks_where_it_landed() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.window_cells = Some(Size::new(10, 20));
+    program.request_origin().unwrap();
+
+    let out = written(&buf);
+    assert!(out.ends_with("\x1b[6n"), "{out:?}");
+    assert!(program.origin_query_pending);
+
+    // The reply is captured as the origin, and observing stays pure.
+    buf.borrow_mut().clear();
+    program
+        .observe_event(&Event::CursorPosition(Position::new(2, 5)))
+        .unwrap();
+    assert_eq!(program.origin(), Position::new(2, 5));
+    assert!(!program.origin_query_pending);
+    assert!(written(&buf).is_empty());
+}
+
+#[test]
+fn request_origin_is_a_no_op_in_fullscreen() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.screen_mut().set_fullscreen(true);
+    program.request_origin().unwrap();
+    assert!(!program.origin_query_pending);
+    assert!(written(&buf).is_empty(), "{:?}", written(&buf));
 }
 
 /// `init` must grant the line-discipline optimizations from the state the
