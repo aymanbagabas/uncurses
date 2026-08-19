@@ -42,7 +42,7 @@ enum AppEvent {
 
 /// How long the main loop waits on terminal input before checking the channel
 /// and repainting. Small enough to feel instant, large enough to idle cheaply.
-// ponytail: fixed poll interval; make it adaptive only if idle wakeups matter.
+// Fixed interval; make it adaptive only if idle wakeups matter.
 const POLL: Duration = Duration::from_millis(50);
 
 fn main() -> std::io::Result<()> {
