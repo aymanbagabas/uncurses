@@ -49,11 +49,10 @@
 //!
 //! [`init`](Program::init) uses [`ProgramOptions::default`];
 //! [`init_with`](Program::init_with) takes an explicit [`ProgramOptions`] to
-//! choose the desired keyboard enhancements, whether to enable mouse
-//! tracking at startup, and the in-band-resize and pixel-size behaviors.
-//! Always-on defaults (such as bracketed paste) take effect immediately;
-//! discovery-driven defaults are applied once the terminal answers the
-//! capability queries (see [`capabilities`](Program::capabilities)).
+//! choose whether to enable bracketed paste and mouse tracking at startup.
+//! They take effect immediately; everything else, capability queries
+//! included, is yours to ask for (see
+//! [`capabilities`](Program::capabilities)).
 //!
 //! [`Terminal`]: crate::terminal::Terminal
 //! [`EventSource`]: crate::event::EventSource
@@ -111,12 +110,10 @@ where
     source: Arc<Mutex<EventSource<I>>>,
     state: state::State,
     /// Terminal capabilities detected by intercepting the replies to the
-    /// queries [`Self::init`] fires.
+    /// queries the application fires.
     caps: Capabilities,
     /// Desired default behaviors, set by [`Self::init_with`].
     options: ProgramOptions,
-    /// Set once the discovery-dependent defaults have been applied (on the
-    /// terminating Primary DA reply), so they are applied at most once.
     /// Last observed full terminal size in cells, from resize and
     /// `WindowCellSize` reports. `None` until first observed.
     window_cells: Option<Size>,
@@ -127,18 +124,18 @@ where
     /// The raw XTVERSION reply identifying the terminal (e.g.
     /// `"XTerm(380)"`). `None` until the reply is observed.
     terminal_name: Option<String>,
-    /// When the [`init`](Self::init) capability queries were written, used
-    /// to bound the teardown drain that consumes their replies. `None`
     /// Physical screen coordinate (0-based, from the terminal's top-left) of
     /// the managed area's top-left cell, tracked for inline sessions. Only
     /// meaningful inline; fullscreen [`origin`](Self::origin) is always
     /// `(0, 0)`. Refreshed by [`request_origin`](Self::request_origin), whose
     /// reply is captured in [`observe_event`](Self::observe_event).
     origin: Position,
-    /// Set while an origin `CSI 6n` request is outstanding, so
-    /// [`observe_event`](Self::observe_event) knows the next
-    /// [`CursorPosition`](Event::CursorPosition) reply is ours to capture.
-    origin_query_pending: bool,
+    /// How many origin `CSI 6n` requests are outstanding, so
+    /// [`observe_event`](Self::observe_event) knows which
+    /// [`CursorPosition`](Event::CursorPosition) replies are ours to capture.
+    /// A count rather than a flag so a burst of requests keeps the last
+    /// reply instead of the first.
+    origin_queries_pending: u16,
 }
 
 /// Defaults applied by [`Program::init_with`].
@@ -371,9 +368,8 @@ where
     /// coordinates, using the last observed window pixel and cell sizes.
     /// Returns `None` when either is unknown or degenerate. Neither is
     /// refreshed on its own: call
-    /// [`request_window_pixel_size`](Self::request_window_pixel_size) and
-    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size) at startup,
-    /// and again after a resize or a font-size change.
+    /// [`request_window_pixel_size`](Self::request_window_pixel_size) at
+    /// startup, and again after a resize or a font-size change.
     pub fn mouse_pixels_to_cells(&self, mouse: crate::event::Mouse) -> Option<crate::event::Mouse> {
         let pixels = self.window_pixels?;
         let cells = self.window_cells?;
@@ -410,7 +406,7 @@ where
     /// A no-op in fullscreen, where the origin is `(0, 0)`, and inline until
     /// [`request_origin`](Self::request_origin) has answered.
     pub fn mouse_to_origin(&self, mouse: crate::event::Mouse) -> crate::event::Mouse {
-        let origin = self.origin;
+        let origin = self.origin();
         crate::event::Mouse::new(
             mouse.x.saturating_sub(origin.x),
             mouse.y.saturating_sub(origin.y),
@@ -451,14 +447,13 @@ where
     /// [`event_stream`](Self::event_stream) or a shared
     /// [`event_source`](Self::event_source).
     ///
-    /// Capability-report replies to the queries [`init`](Self::init) fires are
-    /// recorded into [`capabilities`](Self::capabilities), window-size reports
-    /// update [`window_cells`](Self::window_cells) /
+    /// Capability-report replies to the queries you fire with
+    /// [`query_capabilities`](Self::query_capabilities) and the individual
+    /// `request_*` methods are recorded into
+    /// [`capabilities`](Self::capabilities), window-size reports update
+    /// [`window_cells`](Self::window_cells) /
     /// [`window_pixels`](Self::window_pixels), and the render-affecting reports
-    /// are applied to the [`Screen`]. On the terminating Primary DA reply, the
-    /// discovery-driven defaults from the active [`ProgramOptions`] are applied
-    /// once (enabling mouse, keyboard enhancements, and in-band resize as
-    /// configured), which may emit escapes to the terminal.
+    /// are applied to the [`Screen`].
     ///
     /// Observing never queries. Nothing here asks the terminal a question, so
     /// no reply appears on the event stream that the application did not ask
@@ -513,8 +508,6 @@ where
                 if attrs.contains(&Some(52)) {
                     self.caps.clipboard = true;
                 }
-                // Primary DA is the terminating reply: every capability is
-                // now known, so apply the discovery-driven defaults once.
             }
             Event::TerminalName(ref report) => {
                 self.terminal_name = Some(report.clone());
@@ -533,8 +526,8 @@ where
             // Capture the reply to our own `request_origin`. Observing never
             // consumes, so an application that also queries the cursor still
             // sees this event.
-            Event::CursorPosition(pos) if self.origin_query_pending => {
-                self.origin_query_pending = false;
+            Event::CursorPosition(pos) if self.origin_queries_pending > 0 => {
+                self.origin_queries_pending -= 1;
                 self.origin = self.clip_origin(pos);
             }
             // A successful XTGETTCAP reply for a truecolor capability
@@ -688,7 +681,7 @@ where
             window_pixels: None,
             terminal_name: None,
             origin: Position::ORIGIN,
-            origin_query_pending: false,
+            origin_queries_pending: 0,
         })
     }
 
@@ -831,12 +824,10 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode, apply the always-on defaults from
-    /// `options`, and send the capability queries whose replies the event
-    /// loop consumes. Discovery-driven defaults are applied later, once the
-    /// terminating Primary DA reply confirms the detected capabilities (see
-    /// [`Self::capabilities`]). Call once after [`Self::new`], before
-    /// rendering.
+    /// Begin a session: enter raw mode and apply the defaults from
+    /// `options`. No capability query is sent; discovery is yours to start
+    /// with [`Self::query_capabilities`]. Call once after [`Self::new`],
+    /// before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
@@ -971,12 +962,10 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode, apply the always-on defaults from
-    /// `options`, and send the capability queries whose replies the event
-    /// loop consumes. Discovery-driven defaults are applied later, once the
-    /// terminating Primary DA reply confirms the detected capabilities (see
-    /// [`Self::capabilities`]). Call once after [`Self::new`], before
-    /// rendering.
+    /// Begin a session: enter raw mode and apply the defaults from
+    /// `options`. No capability query is sent; discovery is yours to start
+    /// with [`Self::query_capabilities`]. Call once after [`Self::new`],
+    /// before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
