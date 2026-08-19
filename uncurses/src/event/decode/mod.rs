@@ -567,6 +567,7 @@ mod tests {
     use crate::color::Color;
     use crate::event::ClipboardSelection;
     use crate::event::ColorScheme;
+    use crate::event::SettingReport;
 
     #[test]
     fn test_parse_simple_char() {
@@ -1362,12 +1363,9 @@ mod tests {
         // BEL embedded). The parser must NOT split it on BEL.
         assert_eq!(evs.len(), 1, "expected 1 event, got {:?}", evs);
         match &evs[0] {
-            Event::SettingReport {
-                value, selector, ..
-            } => {
-                assert_eq!(value, "0");
-                assert!(selector.contains('\u{07}'));
-                assert!(selector.ends_with("more"));
+            Event::SettingReport(SettingReport::Raw(body)) => {
+                assert!(body.contains('\u{07}'));
+                assert!(body.ends_with("more"));
             }
             other => panic!("expected SettingReport, got {other:?}"),
         }
@@ -1637,50 +1635,30 @@ mod tests {
     }
 
     #[test]
-    fn test_dcs_decrqss_splits_value_from_selector() {
+    fn test_dcs_decrqss_reports_the_body_verbatim() {
         let mut p = Decoder::new(DecoderFlags::empty());
-        // SGR report: the value keeps its `;`, the selector is the final `m`.
+        // SGR report.
         let evs = p.parse(b"\x1bP1$r0;1m\x1b\\");
         assert_eq!(evs.len(), 1);
         assert_eq!(
             evs[0],
-            Event::SettingReport {
-                recognized: true,
-                value: "0;1".to_string(),
-                selector: "m".to_string(),
-            }
+            Event::SettingReport(SettingReport::Raw("0;1m".to_string()))
         );
-        // DECSCUSR: the selector is two bytes, an intermediate and a final.
+        // DECSCUSR, whose control function is an intermediate and a final.
         let evs = p.parse(b"\x1bP1$r2 q\x1b\\");
         assert_eq!(
             evs[0],
-            Event::SettingReport {
-                recognized: true,
-                value: "2".to_string(),
-                selector: " q".to_string(),
-            }
+            Event::SettingReport(SettingReport::Raw("2 q".to_string()))
         );
-        // XTQMODKEYS: the private prefix belongs to the selector, not the
-        // value, or it would be indistinguishable from an SGR report.
+        // XTQMODKEYS, whose private prefix is what tells it apart from SGR.
         let evs = p.parse(b"\x1bP1$r>4;2m\x1b\\");
         assert_eq!(
             evs[0],
-            Event::SettingReport {
-                recognized: true,
-                value: "4;2".to_string(),
-                selector: ">m".to_string(),
-            }
+            Event::SettingReport(SettingReport::Raw(">4;2m".to_string()))
         );
         // A refusal carries no data at all.
         let evs = p.parse(b"\x1bP0$r\x1b\\");
-        assert_eq!(
-            evs[0],
-            Event::SettingReport {
-                recognized: false,
-                value: String::new(),
-                selector: String::new(),
-            }
-        );
+        assert_eq!(evs[0], Event::SettingReport(SettingReport::Refused));
     }
 
     #[test]

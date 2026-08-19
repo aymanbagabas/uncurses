@@ -21,7 +21,7 @@
 use super::Decoder;
 use super::result::ParseResult;
 use super::util::{decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len};
-use crate::event::Event;
+use crate::event::{Event, SettingReport};
 
 impl Decoder {
     pub(super) fn parse_dcs(&self, buf: &[u8]) -> ParseResult {
@@ -91,32 +91,13 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     // Only 0 and 1 are ever sent, but do not "correct" which is which. The
     // VT510 manual documents 0 as valid and 1 as invalid, and it is wrong:
     // testing a VT420 in 1996 showed the two reversed, and vttest, DEC STD
-    // 070 and xterm all agree that 1 is the valid one. See the "Contents of
-    // this document" notes in xterm's ctlseqs.
-    //
-    // The data is the CSI string for the setting: an optional private
-    // prefix, the parameters, then the intermediates and the final byte.
-    // Prefix and tail together name the control function, so both are the
-    // selector and only the middle is the value. Keeping the prefix out of
-    // the value is what tells SGR (`m`) apart from XTQMODKEYS (`>m`), which
-    // otherwise share a final byte.
-    //
-    // Splitting here rather than in each caller: the ranges are disjoint, so
-    // the split is unambiguous, and nobody should have to know the grammar
-    // to learn which setting was reported.
+    // 070 and xterm all agree that 1 is the valid one.
     if (params_raw == b"1" || params_raw == b"0") && intermediates == b"$" && final_byte == b'r' {
-        let head = usize::from(data.first().is_some_and(|b| (0x3c..=0x3f).contains(b)));
-        let tail = data[head..]
-            .iter()
-            .position(|&b| !(0x30..=0x3b).contains(&b))
-            .map_or(data.len(), |i| head + i);
-        let mut selector = String::from_utf8_lossy(&data[..head]).into_owned();
-        selector.push_str(&String::from_utf8_lossy(&data[tail..]));
-        return Some(Event::SettingReport {
-            recognized: params_raw == b"1",
-            value: String::from_utf8_lossy(&data[head..tail]).into_owned(),
-            selector,
-        });
+        return Some(Event::SettingReport(if params_raw == b"1" {
+            SettingReport::Raw(String::from_utf8_lossy(data).into_owned())
+        } else {
+            SettingReport::Refused
+        }));
     }
 
     // XTVersion reply: DCS > | <name version> ST

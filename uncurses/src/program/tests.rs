@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::event::SettingReport;
 use crate::text::TextSurface;
 
 #[cfg(unix)]
@@ -1748,47 +1749,24 @@ fn capabilities_keep_termcap_values_and_distinguish_a_no_from_silence() {
 }
 
 #[test]
-fn a_setting_report_is_not_recorded_as_a_termcap_capability() {
-    let buf = RefCell::new(Vec::new());
-    let mut program = Program::for_test(&buf, (10, 3));
-
-    // DECRPSS reports a setting, not a capability: the reply names nothing
-    // that could key a record. It shared `Event::Termcap` once, which split
-    // `0;1;4m` into capabilities the terminal never mentioned.
-    program
-        .observe_event(&Event::SettingReport {
-            recognized: true,
-            payload: "1$r0;1;4m".to_string(),
-        })
-        .unwrap();
-
-    assert!(program.capabilities().termcap_reports().is_empty());
-    assert!(!program.capabilities().supports_termcap("1"));
-}
-
-#[test]
 fn a_decrqss_setting_report_is_not_recorded() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (80, 24));
     let before = program.capabilities().clone();
 
-    program
-        .observe_event(&Event::SettingReport {
-            recognized: true,
-            value: "0;1".to_string(),
-            selector: "m".to_string(),
-        })
-        .unwrap();
-    program
-        .observe_event(&Event::SettingReport {
-            recognized: false,
-            value: String::new(),
-            selector: String::new(),
-        })
-        .unwrap();
+    for report in [
+        SettingReport::Raw("0;1m".into()),
+        SettingReport::Raw(">4;2m".into()),
+        SettingReport::Refused,
+    ] {
+        program
+            .observe_event(&Event::SettingReport(report))
+            .unwrap();
+    }
 
     // Which setting a DECRPSS reply is about lives in the DECRQSS request,
-    // not in the reply: a refusal names nothing at all. The request is the
+    // not in the reply: a refusal names nothing at all, and a success runs
+    // the control function together with its parameters. The request is the
     // caller's, so the reply reaches the caller untouched and nothing here
     // tries to file it.
     assert_eq!(program.capabilities(), &before);
