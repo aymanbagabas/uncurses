@@ -125,9 +125,10 @@ where
     /// carries pixel dimensions) and `WindowPixelSize` reports. `None`
     /// until first observed.
     window_pixels: Option<Size>,
-    /// Cell size in pixels as reported by a `CSI 16 t` reply. `None` until
-    /// the terminal answers one; [`cell_pixels`](Self::cell_pixels) falls
-    /// back to dividing the window sizes.
+    /// Cell size in pixels as reported by the last `CSI 16 t` reply, kept
+    /// until another reply replaces it. `None` until the terminal answers
+    /// one; [`cell_pixels`](Self::cell_pixels) falls back to dividing the
+    /// window sizes.
     cell_pixels: Option<Size>,
     /// Physical screen coordinate (0-based, from the terminal's top-left) of
     /// the managed area's top-left cell, tracked for inline sessions. Only
@@ -395,6 +396,12 @@ where
     /// [`window_cells`](Self::window_cells), which only approximates it: the
     /// window pixel size includes any padding the terminal draws around the
     /// grid, so the quotient can be a pixel or two short.
+    ///
+    /// The `CSI 16 t` value is the last one the terminal reported, and it is
+    /// kept until another reply replaces it. A font-size change resizes the
+    /// cell without any reply, so call
+    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size) again after
+    /// a resize to refresh it.
     pub fn cell_pixels(&self) -> Option<Size> {
         if let Some(cell) = self.cell_pixels.filter(|c| c.width > 0 && c.height > 0) {
             return Some(cell);
