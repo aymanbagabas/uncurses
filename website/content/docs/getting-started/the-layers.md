@@ -184,7 +184,7 @@ separate from the drawing and session that `Program` bundles around it.
 ## Terminal
 
 The device handle. `Terminal` owns the connection to the tty: it enters and
-leaves raw mode, queries the window size, snapshots the environment, and exposes
+leaves raw mode, queries the window size, carries the environment, and exposes
 copyable input and output handles you can hand to the other pieces.
 `make_raw()` stashes the prior state so `restore()` can put it back with no
 arguments.

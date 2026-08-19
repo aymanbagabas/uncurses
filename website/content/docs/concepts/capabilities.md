@@ -81,9 +81,8 @@ they live on `Program` as `window_cells()`, `window_pixels()` and
 `cell_pixels()` rather than as a recorded answer.
 
 The other half of what a program knows about its surroundings never arrives as
-an answer at all. `program.env()` is the environment as it stood when the
-session started, so `TERM`, `COLORTERM`, and `TERM_PROGRAM` are readable without
-reaching for `std::env`, and they do not shift underneath you.
+an answer at all. `program.env()` reads the environment, so `TERM`,
+`COLORTERM`, and `TERM_PROGRAM` are readable without reaching for `std::env`.
 `program.terminal()` gets you the terminal itself, for its size. Both are
 read-only, because the program is keeping its own record of what it changed so
 it can put everything back.

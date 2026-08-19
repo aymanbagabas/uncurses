@@ -82,7 +82,7 @@ everything back on the way out.
 
 In uncurses, that borrow-and-restore flow starts with the
 [`terminal`](/api/uncurses/terminal/index.html) module's `Terminal` handle. It
-pairs input and output handles, snapshots the environment, and caches the
+pairs input and output handles, carries the environment, and caches the
 pre-raw state returned by `make_raw` so `restore` can re-apply it:
 
 ```rust
