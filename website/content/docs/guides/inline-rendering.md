@@ -90,7 +90,7 @@ there on their own. Call `clear_cursor_position` to stop steering it. Visibility
 stays separate: `program.show_cursor()` and `program.hide_cursor()` decide
 whether the caret is drawn, while `set_cursor_position` only decides where it
 rests. See
-[placing the cursor]({{< relref "../concepts/screen.md#placing-the-cursor" >}})
+[placing the cursor]({{< relref "../concepts/screen.md#cursor-placement" >}})
 for the full picture.
 
 ## Committing to scrollback

@@ -81,8 +81,11 @@ matches the alternate screen buffer, but it is only a render property.
 
 ## Screen never emits a terminal mode
 
-This is the governing rule: `Screen` never emits a terminal mode. It emits frame
-bytes only. Every render property setter is infallible and writes nothing:
+This is the governing rule: `Screen` never leaves a terminal mode on. It emits
+frame bytes only, and the two modes that do appear in its output, the
+synchronized-output and cursor-visibility markers wrapped around a frame, are
+closed again before `render` returns. Every render property setter is
+infallible and writes nothing:
 
 - `set_fullscreen(bool)`
 - `set_cursor_visible(bool)`

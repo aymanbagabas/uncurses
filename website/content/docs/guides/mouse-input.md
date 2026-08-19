@@ -122,16 +122,23 @@ cells. Once the capability replies have been observed, `program.capabilities()`
 tells you which mode you got:
 
 ```rust
+use uncurses::ansi::mode::Mode;
+
 program.query_capabilities(&[])?;
 // Later, after your read_event loop has observed the replies:
-let pixel_mode = program.capabilities().mouse_sgr_pixel;
+let pixel_mode = program.capabilities().supports(Mode::MOUSE_SGR_PIXEL);
 ```
 
 Second, when `pixel_mode` is true, a mouse event's `x` and `y` are pixels, not
 columns and rows. `program.mouse_pixels_to_cells` converts a pixel `Mouse` back
-to cell coordinates for you, using the window and cell size the program already
-tracks. With the default size tracking, there is nothing else to set up; the
-conversion works once the window pixel size has been observed.
+to cell coordinates for you, using `program.cell_pixels()`. The conversion
+works once the cell size is known.
+
+`cell_pixels()` prefers the terminal's own answer to
+`request_cell_pixel_size()` and otherwise divides the window pixel size by the
+window cell size. The quotient is only an approximation, because the window
+size includes any padding the terminal draws around the grid, so send that
+request once at startup if you need the exact figure.
 
 ```rust
 use uncurses::event::Event;
@@ -153,11 +160,10 @@ observed, your hit testing works in cells whether or not the terminal reports
 pixels.
 
 {{< callout type="info" >}}
-With custom resize settings, make sure the program learns the window pixel size.
-If your resize path does not provide pixel dimensions and
-`request_pixel_size_on_resize` is off, `mouse_pixels_to_cells` returns `None`.
-Request it yourself once with `program.request_window_pixel_size()?`, and the
-conversion starts working when the reply arrives.
+The program never asks for these sizes on its own. Request them yourself with
+`program.request_window_pixel_size()?`, and the conversion starts working when
+the reply arrives. Ask again after a resize or a font-size change, or the
+conversion keeps using the old numbers.
 {{< /callout >}}
 
 See `examples/examples/mouse.rs` for a live readout of motion, buttons, and
@@ -170,9 +176,9 @@ screen, the surface starts partway down the terminal, but the terminal still
 reports clicks in whole-screen coordinates. To hit test against your surface
 you need to know where its top-left cell physically sits.
 
-Enabling the mouse inline turns this on automatically: the program asks the
-terminal for the cursor position, records it as the surface origin, and re-asks
-on resize. Read it with `program.origin()`, or map a whole-screen `Mouse`
+Call `program.request_origin()?` and the program parks the cursor at the
+surface's top-left, asks the terminal where that landed, and records the reply
+as the origin. Read it with `program.origin()`, or map a whole-screen `Mouse`
 straight into surface-local coordinates with `program.mouse_to_origin`, the
 origin analogue of `mouse_pixels_to_cells`:
 
@@ -186,9 +192,17 @@ if let Event::MouseClick(m) = event {
 ```
 
 On the alternate screen the origin is always `(0, 0)`, so `mouse_to_origin` is a
-no-op there and the same hit-testing code works in both modes. Origin tracking
-is on by default; opt out with `ProgramOptions { track_origin: false, .. }` or
-toggle it at runtime with `program.set_origin_tracking(false)?`.
+no-op there and the same hit-testing code works in both modes.
+
+Nothing refreshes the origin for you. Request it once after `enable_mouse`, and
+again on every resize, since either can move the surface:
+
+```rust
+Event::Resize(_) => {
+    program.autoresize()?;
+    program.request_origin()?;
+}
+```
 
 See `examples/examples/calculator.rs` for a mouse-driven, inline calculator that
 maps clicks onto its keypad this way.

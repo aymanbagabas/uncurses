@@ -39,6 +39,14 @@ already been delivered.
 wait with `poll_event(Some(timeout))`. A silent terminal never answers, including
 the sentinel.
 
+Reading those replies is not purely passive. A few of them are adopted as they
+pass through: synchronized output always, and grapheme-cluster mode and in-band
+resize when `ProgramOptions::prefer_grapheme_clusters` and
+`prefer_in_band_resize` are left at their `true` default. Adoption emits the
+mode, so it is recorded in the program's emitted-mode set and undone by
+`finish()`. Set either field to `false` to record the capability without
+enabling it.
+
 ```rust
 use std::time::{Duration, Instant};
 
@@ -69,6 +77,13 @@ Reads on `Program` auto-observe, so the loop above updates `capabilities()` as i
 reads replies. An ordinary event loop gets the same benefit for free: if it keeps
 calling `read_event`, `try_read_event`, or `poll_event` plus a read, capability
 replies are applied as they arrive.
+
+That covers every reply describing the terminal, not only the ones
+`query_capabilities` asks for. A `request_background_color` answered mid-session
+is recorded just the same, so you can read it back from `capabilities()` later
+instead of matching the event and storing it yourself. Sizes are the exception:
+window and cell geometry lives on `Program` as `window_cells()`,
+`window_pixels()`, and `cell_pixels()`, since it changes with every resize.
 
 ## Asking one question
 
@@ -136,15 +151,14 @@ fn main() -> std::io::Result<()> {
         }
         while let Some(ev) = program.try_read_event()? {
             match ev {
-                Event::BackgroundColor(color) => {
-                    let _ = color;
-                }
                 Event::PrimaryDeviceAttributes(_) => break 'wait,
                 _ => {}
             }
         }
     }
 
+    // Recorded on the way through, so there is nothing to match on.
+    let _bg = program.capabilities().background_color();
     program.finish()
 }
 ```

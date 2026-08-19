@@ -71,8 +71,10 @@ with timers or other work. `try_read_event()` pops an already-decoded event
 without doing any I/O.
 
 `read_event()` and `try_read_event()` auto-observe what they return. That means
-ordinary reads update capability state, window size, terminal name, origin
-tracking, and render-affecting replies for you.
+ordinary reads update capability state, window size, terminal name, and
+render-affecting replies for you. Values the terminal only reports on request,
+such as the pixel sizes and the inline origin, are recorded the same way once
+you have asked for them.
 
 ## The lower-level event source
 

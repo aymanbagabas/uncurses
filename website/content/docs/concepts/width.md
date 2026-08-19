@@ -75,8 +75,10 @@ exposes `set_width_mode` and `set_eaw_wide`; a
 [screen]({{< relref "screen.md" >}}) carries the same mode so it measures the
 way the terminal does. Keeping the two in step is the
 [program]({{< relref "program.md" >}})'s job: `enable_grapheme_clusters` emits
-DEC mode 2027 and switches the screen's measurement together. When you do want
-the raw measurement:
+DEC mode 2027 and switches the screen's measurement together. That also happens
+on its own once the terminal reports 2027 as supported, since
+`ProgramOptions::prefer_grapheme_clusters` defaults to `true`; set it to `false`
+to stay on per-code-point measurement. When you do want the raw measurement:
 
 ```rust
 use uncurses::text::grapheme_width;

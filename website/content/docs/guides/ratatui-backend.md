@@ -45,9 +45,11 @@ fn run(_: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
 `try_init` returns an `io::Result`; if you would rather panic on failure, `init`
 gives you the terminal directly. There are `*_with_options` variants when you
 want to pass ratatui `TerminalOptions` and uncurses `ProgramOptions`.
-`ProgramOptions` is re-exported from `uncurses_ratatui`, defined in
-`uncurses::program`, and has exactly four fields: `bracketed_paste`,
-`request_pixel_size_on_resize`, `mouse`, and `track_origin`.
+`ProgramOptions` is re-exported from `uncurses_ratatui` and defined in
+`uncurses::program`. Its fields are `bracketed_paste`, `mouse`,
+`prefer_grapheme_clusters`, and `prefer_in_band_resize`. The last two are the
+only ones that depend on capability detection, so they do nothing unless you
+query and read the replies.
 
 ```rust
 use std::io;
