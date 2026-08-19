@@ -52,6 +52,10 @@ impl<T: Env + ?Sized> Env for Box<T> {
     fn get(&self, key: &str) -> Option<String> {
         (**self).get(key)
     }
+
+    fn has(&self, key: &str) -> bool {
+        (**self).has(key)
+    }
 }
 
 /// The live process environment.
@@ -214,5 +218,25 @@ mod tests {
         let e: Box<dyn Env> = Box::new(EnvList::from_pairs([("TERM", "xterm")]));
         assert_eq!(e.get("TERM").as_deref(), Some("xterm"));
         assert!(e.has("TERM"));
+    }
+
+    #[test]
+    fn boxed_env_forwards_has_override() {
+        // An implementor that treats a set-but-empty value as present, which
+        // is the opposite of the default `has`. Boxing must not silently
+        // reinstate the default.
+        struct EmptyCounts;
+        impl Env for EmptyCounts {
+            fn get(&self, _key: &str) -> Option<String> {
+                Some(String::new())
+            }
+            fn has(&self, _key: &str) -> bool {
+                true
+            }
+        }
+
+        let e: Box<dyn Env> = Box::new(EmptyCounts);
+        assert!(e.has("ANYTHING"));
+        assert!(e.as_ref().has("ANYTHING"));
     }
 }
