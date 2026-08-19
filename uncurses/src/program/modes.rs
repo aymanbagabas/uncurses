@@ -125,16 +125,17 @@ impl<I: Input, O: Write> Program<I, O> {
     /// [`Mouse`](crate::event::Mouse) event's pixel coordinates can be converted
     /// to cells with [`mouse_pixels_to_cells`](Self::mouse_pixels_to_cells).
     ///
+    /// Mouse coordinates are physical screen coordinates. Inline, follow this
+    /// with [`request_origin`](Self::request_origin) to learn where the managed
+    /// area sits, so [`mouse_to_origin`](Self::mouse_to_origin) can map them
+    /// into it.
+    ///
     /// The request is recorded for save/restore.
     pub fn enable_mouse(&mut self, tracking: MouseTracking) -> io::Result<()> {
         // Drop any prior tracking first so modes don't stack ambiguously.
         mode::write_reset_mode(&mut self.screen, MOUSE_MODES)?;
         self.write_mouse_modes(tracking, true)?;
         self.state.mouse = Some(tracking);
-        // Turning the mouse on inline activates origin tracking: stage the
-        // physical-origin request alongside the mode set so it all flushes
-        // once. No-op in the alternate screen or when tracking is disabled.
-        self.write_request_origin()?;
         self.screen.flush()
     }
 
@@ -737,6 +738,38 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn request_cell_pixel_size(&mut self) -> io::Result<()> {
         self.screen
             .write_all(crate::ansi::winop::REQUEST_CELL_PIXEL_SIZE)?;
+        self.screen.flush()
+    }
+
+    /// Request the physical screen coordinate of the managed area's top-left
+    /// cell: park the cursor there and ask the terminal where it landed
+    /// (`CSI 6n`).
+    ///
+    /// The reply arrives asynchronously as a
+    /// [`CursorPosition`](crate::event::Event::CursorPosition) event and is
+    /// recorded (and clipped to keep the managed area on screen) by
+    /// [`observe_event`](Self::observe_event); read the result with
+    /// [`origin`](Self::origin). The event is still delivered to you.
+    ///
+    /// Call this after [`enable_mouse`](Self::enable_mouse) and again whenever
+    /// the terminal resizes, since either can move the managed area. Without
+    /// it the origin stays at `(0, 0)` and
+    /// [`mouse_to_origin`](Self::mouse_to_origin) is an identity.
+    ///
+    /// A no-op in fullscreen, where the origin is always `(0, 0)`.
+    pub fn request_origin(&mut self) -> io::Result<()> {
+        if self.screen.fullscreen() {
+            return Ok(());
+        }
+        // Park the cursor at the surface top-left; in relative-cursor inline
+        // mode that is the physical origin, so the reply *is* the origin.
+        // Stage the move rather than using move_cursor_to, which would flush
+        // before the query is written.
+        self.screen
+            .stage_move_cursor_to(crate::layout::Position::ORIGIN);
+        self.screen
+            .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
+        self.origin_query_pending = true;
         self.screen.flush()
     }
 

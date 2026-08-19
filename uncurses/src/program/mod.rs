@@ -132,9 +132,8 @@ where
     /// Physical screen coordinate (0-based, from the terminal's top-left) of
     /// the managed area's top-left cell, tracked for inline sessions. Only
     /// meaningful inline; fullscreen [`origin`](Self::origin) is always
-    /// `(0, 0)`. Refreshed by a `CSI 6n` request whose reply is captured in
-    /// [`observe_event`](Self::observe_event), when the mouse is on and
-    /// [`ProgramOptions::track_origin`] is set.
+    /// `(0, 0)`. Refreshed by [`request_origin`](Self::request_origin), whose
+    /// reply is captured in [`observe_event`](Self::observe_event).
     origin: Position,
     /// Set while an origin `CSI 6n` request is outstanding, so
     /// [`observe_event`](Self::observe_event) knows the next
@@ -149,37 +148,15 @@ where
 /// the terminal on its own. Call
 /// [`query_capabilities`](Program::query_capabilities) if you want
 /// [`Capabilities`] populated, then act on them yourself.
-///
-/// [`request_pixel_size_on_resize`](Self::request_pixel_size_on_resize) is a
-/// low-level transport knob most applications should leave alone.
 #[derive(Debug, Clone)]
 pub struct ProgramOptions {
     /// Enable bracketed paste at init. Defaults to `true`.
     pub bracketed_paste: bool,
-    /// Request the window pixel size (XTWINOPS `CSI 14 t`) whenever a resize
-    /// is observed that does not itself carry pixel dimensions, keeping
-    /// [`window_pixels`](Program::window_pixels) current on platforms that
-    /// report cell sizes only. Skipped while in-band resize is active, since
-    /// those reports already carry pixel dimensions. Defaults to `true` on
-    /// Windows (whose console resize events carry no pixel size) and `false`
-    /// elsewhere, where resize reports already include pixel dimensions.
-    pub request_pixel_size_on_resize: bool,
     /// Enable mouse tracking at init with the given [`MouseTracking`] extras
     /// (see [`Program::enable_mouse`]). The request is emitted unconditionally;
     /// terminals ignore modes they do not support and degrade gracefully.
     /// Defaults to `None` (mouse tracking off).
     pub mouse: Option<MouseTracking>,
-    /// Track the inline physical cursor origin: the screen coordinate of the
-    /// managed area's top-left cell.
-    ///
-    /// When `true` (the default) and mouse tracking is on in inline mode, the
-    /// program queries the terminal (`CSI 6n`) for its physical origin at
-    /// startup and refreshes it on resize, so mouse coordinates can be mapped
-    /// into the managed area with [`mouse_to_origin`](Program::mouse_to_origin).
-    /// Read the tracked value with [`origin`](Program::origin). Set to `false`
-    /// to opt out; the origin then stays at `(0, 0)`. Has no effect in
-    /// fullscreen, where the origin is always `(0, 0)`.
-    pub track_origin: bool,
 }
 
 bitflags! {
@@ -239,9 +216,7 @@ impl Default for ProgramOptions {
     fn default() -> Self {
         Self {
             bracketed_paste: true,
-            request_pixel_size_on_resize: cfg!(windows),
             mouse: None,
-            track_origin: true,
         }
     }
 }
@@ -394,7 +369,11 @@ where
 
     /// Convert a mouse event carrying pixel coordinates into cell
     /// coordinates, using the last observed window pixel and cell sizes.
-    /// Returns `None` when either is unknown or degenerate.
+    /// Returns `None` when either is unknown or degenerate. Neither is
+    /// refreshed on its own: call
+    /// [`request_window_pixel_size`](Self::request_window_pixel_size) and
+    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size) at startup,
+    /// and again after a resize or a font-size change.
     pub fn mouse_pixels_to_cells(&self, mouse: crate::event::Mouse) -> Option<crate::event::Mouse> {
         let pixels = self.window_pixels?;
         let cells = self.window_cells?;
@@ -415,9 +394,9 @@ where
     }
 
     /// The tracked physical screen coordinate of the managed area's top-left
-    /// cell. Always `(0, 0)` in fullscreen. Inline it is refreshed
-    /// by a `CSI 6n` query when [`ProgramOptions::track_origin`] is set and
-    /// mouse tracking is on; otherwise it stays at `(0, 0)`.
+    /// cell. Always `(0, 0)` in fullscreen. Inline it holds whatever the last
+    /// [`request_origin`](Self::request_origin) reply reported, and stays at
+    /// `(0, 0)` until you make that call.
     pub fn origin(&self) -> Position {
         if self.screen.fullscreen() {
             Position::ORIGIN
@@ -426,32 +405,10 @@ where
         }
     }
 
-    /// Whether inline physical-origin tracking is enabled. See
-    /// [`ProgramOptions::track_origin`].
-    pub fn origin_tracking(&self) -> bool {
-        self.options.track_origin
-    }
-
-    /// Enable or disable inline physical-origin tracking at runtime.
-    ///
-    /// Enabling it requests the origin immediately when the conditions are met
-    /// (inline, mouse on). Disabling it resets the tracked origin to `(0, 0)`.
-    pub fn set_origin_tracking(&mut self, enabled: bool) -> io::Result<()> {
-        self.options.track_origin = enabled;
-        if enabled {
-            if self.write_request_origin()? {
-                self.screen.flush()?;
-            }
-        } else {
-            self.origin = Position::ORIGIN;
-            self.origin_query_pending = false;
-        }
-        Ok(())
-    }
-
     /// Translate a mouse event's screen coordinates into coordinates relative
     /// to the managed area, by subtracting the tracked [`origin`](Self::origin).
-    /// A no-op in fullscreen, where the origin is `(0, 0)`.
+    /// A no-op in fullscreen, where the origin is `(0, 0)`, and inline until
+    /// [`request_origin`](Self::request_origin) has answered.
     pub fn mouse_to_origin(&self, mouse: crate::event::Mouse) -> crate::event::Mouse {
         let origin = self.origin;
         crate::event::Mouse::new(
@@ -462,50 +419,17 @@ where
         )
     }
 
-    /// Cache a fresh terminal size and request the pixel size over the wire
-    /// when the size carried none (e.g. the Windows console, whose
-    /// `get_window_size` reports no pixel dimensions), gated by
-    /// [`request_pixel_size_on_resize`](ProgramOptions::request_pixel_size_on_resize)
-    /// and the absence of in-band resize. The pixel reply arrives later as a
-    /// [`WindowPixelSize`](crate::event::Event::WindowPixelSize) event.
-    fn cache_window_size(&mut self, ws: crate::terminal::Winsize) -> io::Result<()> {
-        let cells = Size::new(ws.col, ws.row);
-        let size_changed = self.window_cells != Some(cells);
-        self.window_cells = Some(cells);
+    /// Cache a fresh terminal size. Pure bookkeeping: nothing is written, and
+    /// the pixel dimensions are only updated when the size carried them. Some
+    /// platforms (the Windows console) report cell sizes only, leaving
+    /// [`window_pixels`](Self::window_pixels) at its last known value; call
+    /// [`request_window_pixel_size`](Self::request_window_pixel_size) to
+    /// refresh it.
+    fn cache_window_size(&mut self, ws: crate::terminal::Winsize) {
+        self.window_cells = Some(Size::new(ws.col, ws.row));
         if ws.xpixel > 0 && ws.ypixel > 0 {
             self.window_pixels = Some(Size::new(ws.xpixel, ws.ypixel));
-        } else if self.options.request_pixel_size_on_resize && !self.state.in_band_resize {
-            self.request_window_pixel_size()?;
         }
-        // A terminal-size change may move the inline origin; re-request it
-        // (the reply is captured in observe_event).
-        if size_changed {
-            self.write_request_origin()?;
-            self.screen.flush()?;
-        }
-        Ok(())
-    }
-
-    /// Stage (without flushing) a request for the inline physical origin:
-    /// park the cursor at the managed area's top-left and ask the terminal
-    /// (`CSI 6n`) where that is. The reply arrives asynchronously as a
-    /// [`CursorPosition`](Event::CursorPosition) event and is captured (and
-    /// clipped) by [`observe_event`](Self::observe_event). Staging (not
-    /// flushing) lets callers that already emit bytes flush once. Returns
-    /// whether anything was staged: `false` (a no-op) in fullscreen, when
-    /// tracking is off, or when the mouse is off.
-    fn write_request_origin(&mut self) -> io::Result<bool> {
-        if self.screen.fullscreen() || !self.options.track_origin || self.state.mouse.is_none() {
-            return Ok(false);
-        }
-        // Park the cursor at the surface top-left; in relative-cursor inline
-        // mode that is the physical origin, so the reply *is* the origin.
-        // Stage the move rather than using move_cursor_to, which would flush.
-        self.screen.stage_move_cursor_to(Position::ORIGIN);
-        self.screen
-            .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
-        self.origin_query_pending = true;
-        Ok(true)
     }
 
     /// Clip a queried origin so the whole managed area stays on screen: when
@@ -535,6 +459,12 @@ where
     /// discovery-driven defaults from the active [`ProgramOptions`] are applied
     /// once (enabling mouse, keyboard enhancements, and in-band resize as
     /// configured), which may emit escapes to the terminal.
+    ///
+    /// Observing never queries. Nothing here asks the terminal a question, so
+    /// no reply appears on the event stream that the application did not ask
+    /// for. Values the terminal only reports on request, such as the pixel
+    /// sizes and the inline [`origin`](Self::origin), go stale until you call
+    /// the matching `request_*` method.
     ///
     /// ```ignore
     /// // Async loop: the stream bypasses the program, so observe explicitly.
@@ -592,7 +522,7 @@ where
             // Cache the full terminal size as it changes. Refitting the
             // managed area is left to the app (call autoresize() as desired).
             Event::Resize(ws) => {
-                self.cache_window_size(ws)?;
+                self.cache_window_size(ws);
             }
             Event::WindowCellSize { width, height } => {
                 self.window_cells = Some(Size::new(width, height));
@@ -600,9 +530,9 @@ where
             Event::WindowPixelSize { width, height } => {
                 self.window_pixels = Some(Size::new(width, height));
             }
-            // Capture the reply to our own origin request (see
-            // `write_request_origin`). Observing never consumes, so an
-            // application that also queries the cursor still sees this event.
+            // Capture the reply to our own `request_origin`. Observing never
+            // consumes, so an application that also queries the cursor still
+            // sees this event.
             Event::CursorPosition(pos) if self.origin_query_pending => {
                 self.origin_query_pending = false;
                 self.origin = self.clip_origin(pos);
@@ -939,18 +869,20 @@ where
 
     /// Re-query the terminal size and resize the managed area to fit: the full
     /// terminal size when fullscreen, or the terminal width with the current
-    /// managed height preserved when inline. Refreshes the
-    /// cached [`window_cells`](Self::window_cells) /
-    /// [`window_pixels`](Self::window_pixels); on platforms whose size
-    /// query reports no pixel size (e.g. the Windows console) the pixel size
-    /// is requested over the wire.
+    /// managed height preserved when inline. Refreshes the cached
+    /// [`window_cells`](Self::window_cells), and
+    /// [`window_pixels`](Self::window_pixels) when the platform reports pixel
+    /// dimensions. Nothing is asked of the terminal: this reads the size the
+    /// operating system already knows. On platforms whose size query carries
+    /// no pixel dimensions (the Windows console), refresh those with
+    /// [`request_window_pixel_size`](Self::request_window_pixel_size).
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than
             // collapsing the managed area to zero.
             return Ok(());
         };
-        self.cache_window_size(ws)?;
+        self.cache_window_size(ws);
         let height = match self.screen.fullscreen() {
             true => ws.row,
             false => self.screen.size().height,
@@ -1077,18 +1009,20 @@ where
 
     /// Re-query the terminal size and resize the managed area to fit: the full
     /// terminal size when fullscreen, or the terminal width with the current
-    /// managed height preserved when inline. Refreshes the
-    /// cached [`window_cells`](Self::window_cells) /
-    /// [`window_pixels`](Self::window_pixels); on platforms whose size
-    /// query reports no pixel size (e.g. the Windows console) the pixel size
-    /// is requested over the wire.
+    /// managed height preserved when inline. Refreshes the cached
+    /// [`window_cells`](Self::window_cells), and
+    /// [`window_pixels`](Self::window_pixels) when the platform reports pixel
+    /// dimensions. Nothing is asked of the terminal: this reads the size the
+    /// operating system already knows. On platforms whose size query carries
+    /// no pixel dimensions (the Windows console), refresh those with
+    /// [`request_window_pixel_size`](Self::request_window_pixel_size).
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than
             // collapsing the managed area to zero.
             return Ok(());
         };
-        self.cache_window_size(ws)?;
+        self.cache_window_size(ws);
         let height = match self.screen.fullscreen() {
             true => ws.row,
             false => self.screen.size().height,
