@@ -739,6 +739,31 @@ fn an_unread_event_is_not_observed_a_second_time() {
     assert_eq!(program.origin_queries_pending, 1);
 }
 
+/// Pixel-to-cell mapping has to scale across the whole grid. Dividing by a
+/// truncated cell width reports columns past the last one whenever the pixel
+/// width is not an exact multiple of the column count.
+#[test]
+fn mouse_pixels_map_to_cells_without_running_past_the_grid() {
+    use crate::event::KeyModifiers;
+    use crate::event::{Mouse, MouseButton};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (80, 25));
+    // 1000 / 80 truncates to 12 pixels per cell, so a naive divide puts the
+    // last pixel column at 83 in an 80-column grid.
+    program.window_pixels = Some(Size::new(1000, 500));
+    program.window_cells = Some(Size::new(80, 25));
+
+    let at = |x, y| {
+        program
+            .mouse_pixels_to_cells(Mouse::new(x, y, MouseButton::Left, KeyModifiers::empty()))
+            .unwrap()
+    };
+    assert_eq!((at(999, 499).x, at(999, 499).y), (79, 24));
+    assert_eq!((at(0, 0).x, at(0, 0).y), (0, 0));
+    assert_eq!(at(500, 250).x, 40);
+}
+
 /// The synchronous reads observe as the event passes through, which is why
 /// applications call [`Program::observe_event`] only on the async stream.
 /// Observing twice would spend two of the requests in flight on one reply.
