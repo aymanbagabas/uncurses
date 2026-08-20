@@ -135,7 +135,7 @@ sizes and the inline origin, goes stale until you ask again.
 things like bracketed paste or mouse reporting are on before your first frame
 rather than being separate calls after it.
 
-A couple of options act on what the terminal reports about itself instead of
+Three options act on what the terminal reports about itself instead of
 being emitted outright, which means they stay dormant until you query. That
 story lives with the rest of discovery in
 [Capabilities]({{< relref "capabilities.md" >}}), along with everything a

@@ -90,8 +90,9 @@ The other half of what a program knows about its surroundings never arrives as
 an answer at all. `program.env()` reads the environment, so `TERM`,
 `COLORTERM`, and `TERM_PROGRAM` are readable without reaching for `std::env`.
 `program.terminal()` gets you the terminal itself, for its size. Both are
-read-only, because the program is keeping its own record of what it changed so
-it can put everything back.
+read-only: an environment is only ever read, and the terminal is the program's
+to change, since it keeps its own record of what it changed so it can put
+everything back.
 
 ## Answers that keep arriving
 
@@ -108,9 +109,11 @@ what the terminal originally told you, while the value you sent is what
 ## Settings that wait for an answer
 
 Some startup settings hold off until the terminal confirms it supports the
-feature, so they do nothing until you ask. Once adopted, they are switched on
-the same way you would switch them on yourself, so teardown puts them back like
-anything else.
+feature, so they do nothing until you ask. The ones that switch on a terminal
+mode are switched on the same way you would switch them on yourself, so
+teardown puts them back like anything else. Synchronized output is the
+exception: adopting it sets a render property rather than a mode, so there is
+nothing to put back.
 
 You can turn this off, in which case the answer is still recorded but acting on
 it is left to you. [Querying the
