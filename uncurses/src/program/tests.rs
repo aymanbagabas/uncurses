@@ -1925,3 +1925,91 @@ fn a_first_mode_report_does_not_undo_an_earlier_explicit_disable() {
     assert!(program.capabilities().supports(Mode::UNICODE_CORE));
     assert!(program.capabilities().supports(Mode::SYNCHRONIZED_OUTPUT));
 }
+
+#[test]
+fn reset_and_restore_round_trip_visibility_reports() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.enable_visibility_reports().unwrap();
+
+        // reset: tracked state is preserved, teardown writes RM
+        program.reset().unwrap();
+        // restore: re-emits SM, so the terminal reports its visibility again
+        program.restore().unwrap();
+        program.screen_mut().flush().unwrap();
+    }
+    let out = written(&buf);
+    assert!(
+        out.matches("\x1b[?2033h").count() >= 2,
+        "expected enable and restore: {out:?}"
+    );
+    assert!(out.contains("\x1b[?2033l"), "expected teardown: {out:?}");
+}
+
+#[test]
+fn disabled_visibility_reports_are_not_reset_or_restored() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.enable_visibility_reports().unwrap();
+        program.disable_visibility_reports().unwrap();
+        buf.borrow_mut().clear();
+        program.reset().unwrap();
+        program.restore().unwrap();
+        program.screen_mut().flush().unwrap();
+    }
+    let out = written(&buf);
+    assert!(
+        !out.contains("\x1b[?2033"),
+        "unexpected 2033 traffic: {out:?}"
+    );
+}
+
+/// A query reports once. Enabling the mode would subscribe to every later
+/// change too, which is a different thing to ask for.
+#[test]
+fn request_visibility_is_a_one_shot_query() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let mut program = Program::for_test(&buf, (80, 24));
+        program.request_visibility().unwrap();
+    }
+    let out = written(&buf);
+    assert_eq!(out, "\x1b[?998n");
+    assert!(!out.contains("\x1b[?2033h"));
+}
+
+/// Visibility support needs no capability field of its own: the mode is
+/// probed at init like any other, and `supports` answers from the report.
+#[test]
+fn visibility_support_comes_from_the_generic_mode_report() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (80, 24));
+    assert!(!program.capabilities().supports(Mode::VISIBILITY_REPORTS));
+
+    program
+        .observe_event(&Event::ModeReport {
+            mode: Mode::VISIBILITY_REPORTS,
+            setting: ModeSetting::Reset,
+        })
+        .unwrap();
+    assert!(program.capabilities().supports(Mode::VISIBILITY_REPORTS));
+
+    // A DECRPM Ps of 0 or 4 means the terminal does not have the mode.
+    for setting in [ModeSetting::NotRecognized, ModeSetting::PermanentlyReset] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (80, 24));
+        program
+            .observe_event(&Event::ModeReport {
+                mode: Mode::VISIBILITY_REPORTS,
+                setting,
+            })
+            .unwrap();
+        assert!(
+            !program.capabilities().supports(Mode::VISIBILITY_REPORTS),
+            "{setting:?} must not count as support"
+        );
+    }
+}
