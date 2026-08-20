@@ -24,6 +24,6 @@ async = ["uncurses/async"]
 
 [dependencies]
 # Version must track workspace.package.version for crates.io publish
-uncurses = { path = "../uncurses", version = "0.0.2", default-features = false }
+uncurses = { path = "../uncurses", version = "0.0.3", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["underline-color", "scrolling-regions"] }
 unicode-width = "0.2"
