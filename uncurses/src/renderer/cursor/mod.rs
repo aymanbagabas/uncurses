@@ -483,6 +483,12 @@ mod tests {
     /// recomputed against the pen that will actually be in effect —
     /// otherwise the move would re-print blue-backed text with a pen
     /// that is no longer blue.
+    ///
+    /// The distance matters: overwrite only competes while
+    /// `n < cuf_cost(n)`, so `n = 3` (against `\x1b[3C`, 4 bytes) keeps
+    /// the pen walk reachable. At `n = 5` the cost floor short-circuits
+    /// before the pen is ever consulted and the test would pass without
+    /// the re-plan.
     #[test]
     fn reset_before_lf_disqualifies_styled_overwrite_cells() {
         let mut r = rel();
@@ -497,18 +503,44 @@ mod tests {
         r.write_optimal_move(
             &mut buf,
             Position { y: 0, x: 0 },
-            Position { y: 2, x: 5 },
+            Position { y: 2, x: 3 },
             Some(&line),
         )
         .unwrap();
 
-        assert!(
-            buf.starts_with(b"\x1b[m"),
-            "expected a pen reset, got {buf:?}"
+        assert_eq!(
+            buf, b"\x1b[m\n\n\x1b[3C",
+            "expected a reset then a plain forward move, got {buf:?}"
         );
         assert!(
-            !buf.windows(5).any(|w| w == b"abcde"),
+            !buf.windows(3).any(|w| w == b"abc"),
             "must not re-print styled cells under a reset pen, got {buf:?}"
         );
+    }
+
+    /// The same move without the scrolling `\n` keeps the pen, so the
+    /// styled cells stay eligible and overwrite still wins. Pins the
+    /// other side of the re-plan: the reset is what disqualifies them,
+    /// not the distance.
+    #[test]
+    fn styled_overwrite_survives_when_no_reset_is_needed() {
+        let mut r = rel();
+        let styled = Style::default().bg(Color::Blue);
+        r.cur.set_style(styled.clone());
+        let line: Vec<Cell> = "abcde"
+            .chars()
+            .map(|c| Cell::narrow(c.to_string()).style(styled.clone()))
+            .collect();
+
+        let mut buf = Vec::new();
+        r.write_optimal_move(
+            &mut buf,
+            Position { y: 0, x: 0 },
+            Position { y: 0, x: 3 },
+            Some(&line),
+        )
+        .unwrap();
+
+        assert_eq!(buf, b"abc", "expected an overwrite move, got {buf:?}");
     }
 }

@@ -178,6 +178,19 @@ impl Renderer {
     ///   background and nothing else — the same rule the deliberate
     ///   scroll path applies through `Cursor::bce_blank` — so a pen that
     ///   only carries `fg` or attributes leaves no trace.
+    ///
+    /// It deliberately stops there rather than trying to prove a given
+    /// `\n` reaches the bottom margin. Since `move_to` clamps the target
+    /// row, a planned `\n` only scrolls while rows below the cursor do
+    /// not exist on screen yet — but that is not just the first frame.
+    /// After [`Renderer::invalidate_cursor`] (shell handoff, a DECSTBM
+    /// bracket) the inline re-anchor in `move_cursor` *assumes* the
+    /// physical row is the top of the surface and steps downward from
+    /// there; when that assumption undershoots, the run scrolls on a
+    /// long-materialised surface. A row watermark would call those safe
+    /// and reintroduce the artifact, so the cost — the reset plus a
+    /// forced pen re-assert on the next row — is paid whenever a
+    /// background is live.
     fn lf_would_bleed_background(&self, best: &Winner) -> bool {
         let Winner::Relative { plan, .. } = best else {
             return false;
