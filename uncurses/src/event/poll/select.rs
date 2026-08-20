@@ -244,7 +244,7 @@ mod tests {
         assert!(!ready[0]);
 
         // After a write the high fd reports readable.
-        let b = [b'x'];
+        let b = *b"x";
         assert_eq!(
             unsafe { libc::write(w, b.as_ptr() as *const _, 1) },
             1,
