@@ -271,16 +271,11 @@ pub enum Event {
         /// `\E[1;2P`), so a joined string could not be split back apart.
         entries: Vec<(String, Option<String>)>,
     },
-    /// DECRQSS setting reply (`DCS 1 $ r` on success, `DCS 0 $ r` on
-    /// failure), carrying the terminal's report of a current setting such as
-    /// the active SGR attributes or cursor style. The payload is the raw
-    /// reply text, which is not structured the way a termcap reply is.
-    SettingReport {
-        /// Whether the terminal recognized the requested setting.
-        recognized: bool,
-        /// Raw reply text.
-        payload: String,
-    },
+    /// DECRPSS setting report (`DCS 1 $ r` on success, `DCS 0 $ r` on
+    /// failure), reporting a current setting such as the active SGR
+    /// attributes or cursor style. Sent in answer to
+    /// [`write_decrqss`](crate::ansi::status::write_decrqss).
+    SettingReport(SettingReport),
 
     // -- Colors --------------------------------------------------------------
     /// OSC 10 default foreground color reply.
@@ -336,6 +331,19 @@ pub enum Event {
     UnknownApc(Vec<u8>),
     /// Catch-all for unrecognized byte sequences.
     Unknown(Vec<u8>),
+}
+
+/// The payload of a DECRPSS reply, [`Event::SettingReport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingReport {
+    /// The terminal did not recognize the requested setting (`DCS 0 $ r ST`).
+    /// The reply carries no data at all, so only the request that provoked it
+    /// says which setting was turned down.
+    Unrecognized,
+    /// The setting as the terminal spelled it: the whole CSI sequence for the
+    /// control function without its introducer, so `0;1m` for SGR, `2 q` for
+    /// `DECSCUSR`, `>4;2m` for xterm's `XTQMODKEYS`.
+    Raw(String),
 }
 
 impl Event {
