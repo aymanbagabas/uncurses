@@ -78,6 +78,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
             terminal,
             screen,
             source: Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap())),
+            unread: VecDeque::new(),
             state: state::State::default(),
             caps: Capabilities::default(),
             options: ProgramOptions::default(),
@@ -710,6 +711,32 @@ fn a_burst_of_origin_requests_keeps_the_last_reply() {
         .unwrap();
     assert_eq!(program.origin_queries_pending, 0);
     assert_eq!(program.origin(), Position::new(0, 9));
+}
+
+/// An unread event was already observed on its way out, so the read path must
+/// hand it back untouched. Routing it through the shared source instead would
+/// spend a second in-flight request on the one reply.
+#[test]
+fn an_unread_event_is_not_observed_a_second_time() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.window_cells = Some(Size::new(10, 20));
+    program.request_origin().unwrap();
+    program
+        .observe_event(&Event::CursorPosition(Position::new(0, 4)))
+        .unwrap();
+    assert_eq!(program.origin_queries_pending, 0);
+
+    // A second request is now in flight, and the app hands the spent reply
+    // back. Reading it again must not consume that request.
+    program.request_origin().unwrap();
+    program.unread_event(Event::CursorPosition(Position::new(0, 4)));
+    assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
+    assert!(matches!(
+        program.read_event().unwrap(),
+        Event::CursorPosition(_)
+    ));
+    assert_eq!(program.origin_queries_pending, 1);
 }
 
 /// The synchronous reads observe as the event passes through, which is why

@@ -66,6 +66,7 @@ mod tests;
 pub use cursor::CursorShape;
 pub use state::Capabilities;
 
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -108,6 +109,11 @@ where
     /// Held in an `Arc<Mutex<_>>`; the lock is uncontended in the common
     /// single-reader case.
     source: Arc<Mutex<EventSource<I>>>,
+    /// Events handed back by [`Self::unread_event`], which the read path
+    /// drains before the source. Kept here rather than in `source` because
+    /// these were already observed: routing them back through the source
+    /// would observe them a second time, and a reply counts once.
+    unread: VecDeque<Event>,
     state: state::State,
     /// Terminal capabilities detected by intercepting the replies to the
     /// queries the application fires.
@@ -264,6 +270,9 @@ where
     /// Drive the input source for up to `timeout`, returning whether any
     /// event became available. See [`EventSource::poll`].
     pub fn poll_event(&self, timeout: Option<Duration>) -> io::Result<bool> {
+        if !self.unread.is_empty() {
+            return Ok(true);
+        }
         let ready = self.source.lock().unwrap().poll(timeout)?;
         Ok(ready)
     }
@@ -271,6 +280,9 @@ where
     /// Take the next queued event without doing I/O, tracking capabilities as
     /// it passes through. See [`EventSource::try_read`].
     pub fn try_read_event(&mut self) -> io::Result<Option<Event>> {
+        if let Some(event) = self.unread.pop_front() {
+            return Ok(Some(event));
+        }
         let Some(event) = self.source.lock().unwrap().try_read() else {
             return Ok(None);
         };
@@ -281,6 +293,9 @@ where
     /// Block until the next event, tracking capabilities as it passes
     /// through. See [`EventSource::read`].
     pub fn read_event(&mut self) -> io::Result<Event> {
+        if let Some(event) = self.unread.pop_front() {
+            return Ok(event);
+        }
         let event = self.source.lock().unwrap().read()?;
         self.observe_event(&event)?;
         Ok(event)
@@ -288,13 +303,17 @@ where
 
     /// Return an event to the front of the input queue, so the next
     /// [`read_event`](Self::read_event) / [`try_read_event`](Self::try_read_event)
-    /// yields it before anything already queued. See [`EventSource::unread`].
+    /// yields it before anything already queued. Restore a batch in original
+    /// order by unreading in reverse.
     ///
     /// The event was observed on its way out and is deliberately not observed
     /// again on the way back in: a reply counts once, and observing it twice
-    /// would match it against two of the requests still in flight.
-    pub fn unread_event(&self, event: Event) {
-        self.source.lock().unwrap().unread(event);
+    /// would match it against two of the requests still in flight. These
+    /// events are therefore held by the program, not returned to the shared
+    /// [`EventSource`] — use [`EventSource::unread`] through
+    /// [`event_source`](Self::event_source) for events the program never saw.
+    pub fn unread_event(&mut self, event: Event) {
+        self.unread.push_front(event);
     }
 
     /// A shared handle to the input source behind
@@ -680,6 +699,7 @@ where
             terminal,
             screen,
             source,
+            unread: VecDeque::new(),
             state: state::State::default(),
             caps: Capabilities::default(),
             options: ProgramOptions::default(),
