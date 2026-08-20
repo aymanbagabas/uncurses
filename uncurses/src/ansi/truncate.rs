@@ -17,12 +17,27 @@
 //!
 //! Truncation does not emulate terminal modes. Mode-dependent sequence semantics
 //! are preserved as bytes but not interpreted.
+//!
+//! Sequence boundaries and widths come from [`crate::ansi::text`];
+//! which byte ends a control string, and when a byte in `0x80..=0x9F`
+//! is a C1 control rather than part of a character, are documented there.
 
 use super::text::{Token, WidthMode, string_width, tokenize};
 
 #[inline]
 fn bs(b: &[u8]) -> &str {
-    // SAFETY: token slices from `&str` input fall on valid UTF-8 boundaries.
+    // The tokenizer never splits a character: text tokens are whole grapheme
+    // clusters, and every sequence scanner steps a whole UTF-8 character at a
+    // time. Nothing enforced that, and when a scanner did split one - 0x9C is
+    // 8-bit ST and also a continuation byte, so an OSC title containing a
+    // check mark ended mid-character - the ill-formed bytes arrived here and
+    // this was undefined behaviour. Checked where checking is free.
+    debug_assert!(
+        std::str::from_utf8(b).is_ok(),
+        "token split a UTF-8 character: {b:?}"
+    );
+    // SAFETY: `b` is a token slice of `&str` input, taken on character
+    // boundaries, as asserted above.
     unsafe { std::str::from_utf8_unchecked(b) }
 }
 
