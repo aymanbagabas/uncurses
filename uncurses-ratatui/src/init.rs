@@ -10,7 +10,7 @@
 //! ## Fullscreen default
 //!
 //! [`try_init`] and [`init`] create a backend over process stdio, initialize
-//! the wrapped [`Program`](uncurses::screen::Screen) with default
+//! the wrapped [`Program`](uncurses::program::Program) with default
 //! [`ProgramOptions`], enter the alternate screen, hide the cursor, and build a
 //! [`Terminal`] with [`Viewport::Fullscreen`].
 //!

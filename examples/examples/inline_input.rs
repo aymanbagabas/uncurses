@@ -223,7 +223,6 @@ impl App {
         self.render()?;
 
         while let Ok(ev) = self.program.read_event() {
-            let _ = self.program.observe_event(&ev);
             match ev {
                 Event::KeyPress(Key {
                     code, modifiers, ..

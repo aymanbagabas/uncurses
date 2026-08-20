@@ -1,13 +1,14 @@
 //! Backend integration between the widget library and
-//! [`uncurses::screen::Screen`].
+//! [`uncurses::program::Program`].
 //!
 //! ## What this backend is
 //!
 //! [`UncursesBackend`] implements [`ratatui::backend::Backend`] by wrapping a
-//! single [`Program`](uncurses::screen::Screen). The screen owns the
-//! terminal handle, its diffing renderer, and the input source. The backend's job is to adapt
+//! single [`Program`](uncurses::program::Program). The program owns the
+//! terminal handle and the input source, and the [`Screen`](uncurses::screen::Screen)
+//! inside it owns the diffing renderer. The backend's job is to adapt
 //! frame drawing, cursor operations, clearing, size queries, and event access
-//! to that one screen.
+//! to that one program.
 //!
 //! ## Rendering path
 //!
@@ -74,22 +75,22 @@
 //!
 //! ## Reading input through the backend
 //!
-//! The backend owns the same input source as the wrapped screen. Synchronous
+//! The backend owns the same input source as the wrapped program. Synchronous
 //! event loops can call [`UncursesBackend::poll_event`],
 //! [`UncursesBackend::try_read_event`], or [`UncursesBackend::read_event`] on
-//! `terminal.backend_mut()`. These reads are pure, like
-//! [`Program`](uncurses::screen::Screen)'s: pass each event to
-//! [`UncursesBackend::observe_event`] to keep capability tracking alive.
+//! `terminal.backend_mut()`. Those reads keep capability tracking alive on
+//! their own.
 //!
-//! With the `async` feature, use [`UncursesBackend::event_stream`] with
-//! [`UncursesBackend::observe_event`] when an asynchronous loop is more
-//! convenient.
+//! With the `async` feature, use [`UncursesBackend::event_stream`] when an
+//! asynchronous loop is more convenient. The stream bypasses the backend, so
+//! that is the one path where you call [`UncursesBackend::observe_event`]
+//! yourself.
 //!
 //! ## Manual setup
 //!
 //! The constructors are inert: they do not enter raw mode, choose a viewport,
 //! enter the alternate screen, or hide the cursor. Use them when you need a
-//! prebuilt [`Program`](uncurses::screen::Screen), a controlling terminal
+//! prebuilt [`Program`](uncurses::program::Program), a controlling terminal
 //! instead of stdio, or custom setup ordering.
 //!
 //! ```rust,ignore

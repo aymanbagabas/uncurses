@@ -110,7 +110,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
 
     loop {
         let ev = program.read_event()?;
-        program.observe_event(&ev)?;
         match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::PasteStart => sink = Some(PasteSink::new()),

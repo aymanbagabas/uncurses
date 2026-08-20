@@ -94,7 +94,6 @@ impl App {
             let mut dirty = false;
             if self.program.poll_event(Some(timeout))? {
                 while let Some(ev) = self.program.try_read_event()? {
-                    self.program.observe_event(&ev)?;
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q') | KeyCode::Escape,

@@ -8,9 +8,8 @@
 A [ratatui](https://ratatui.rs) `Backend` that renders through
 [uncurses](../uncurses/). Write your UI with ratatui widgets and let uncurses
 diff frames and ship the minimal bytes. A single `UncursesBackend` wraps a
-`Screen` and drives rendering, input, and the raw-mode lifecycle. Backend event
-reads are pure, like raw `Screen` reads: call `observe_event` to keep
-capability tracking alive, or skip it and reads still work.
+`Program` and drives rendering, input, and the raw-mode lifecycle. The backend's
+synchronous event reads keep capability tracking alive on their own.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/ratatui_popup.gif" width="440" alt="ratatui popup example">
@@ -38,9 +37,7 @@ fn main() -> std::io::Result<()> {
             );
         })?;
 
-        let backend = terminal.backend_mut();
-        let ev = backend.read_event()?;
-        backend.observe_event(&ev)?;
+        let ev = terminal.backend_mut().read_event()?;
         if matches!(ev, Event::KeyPress(k) if k == q) {
             break;
         }
@@ -51,8 +48,9 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-Backend event reads are pure, like raw `Screen` reads: call `observe_event` to
-keep capability tracking alive, or skip it and reads still work.
+`read_event` tracks capabilities as the event passes through, so there is
+nothing extra to call. Only `event_stream()` bypasses the backend, and that is
+the one path that needs `observe_event`.
 
 That's the shape of it; the full API and guides live at
 [uncurses.org](https://uncurses.org).

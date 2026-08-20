@@ -125,9 +125,9 @@ fn run_scene(
     dur: Option<Duration>,
     mut tick: impl FnMut(&mut Program<Stdin, Stdout>, Duration) -> std::io::Result<()>,
 ) -> std::io::Result<bool> {
-    while let Some(ev) = program.try_read_event()? {
-        let _ = program.observe_event(&ev);
-    }
+    // Drop anything queued by the previous scene. The reads still observe on
+    // their way through, so capability tracking stays current.
+    while program.try_read_event()?.is_some() {}
     let start = Instant::now();
     let end = dur.map(|d| start + d);
     let mut next_frame = start + FRAME;
@@ -149,7 +149,6 @@ fn run_scene(
         };
         if program.poll_event(Some(timeout))? {
             while let Some(ev) = program.try_read_event()? {
-                program.observe_event(&ev)?;
                 match ev {
                     Event::KeyPress(Key {
                         code: KeyCode::Char('q' | 'Q') | KeyCode::Escape,

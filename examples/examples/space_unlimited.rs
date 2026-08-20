@@ -193,7 +193,6 @@ impl App {
                 let Some(ev) = self.program.try_read_event()? else {
                     break;
                 };
-                self.program.observe_event(&ev)?;
                 match ev {
                     Event::KeyPress(Key {
                         code: KeyCode::Char('q'),

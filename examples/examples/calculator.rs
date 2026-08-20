@@ -323,7 +323,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
 
     loop {
         let event = program.read_event()?;
-        program.observe_event(&event)?;
         match event {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::MouseClick(m) if m.button == MouseButton::Left => {

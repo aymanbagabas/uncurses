@@ -97,7 +97,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
 
     loop {
         let event = program.read_event()?;
-        program.observe_event(&event)?;
         match event {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::MouseMove(m) | Event::MouseClick(m) => pointer = Some((m.x, m.y)),

@@ -55,7 +55,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
         // Block up to one frame for input; any key press exits.
         if program.poll_event(Some(FRAME_TIME))? {
             let ev = program.read_event()?;
-            program.observe_event(&ev)?;
             match ev {
                 Event::KeyPress(_) => break,
                 Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
