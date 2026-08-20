@@ -29,7 +29,7 @@ impl<O: Write> Screen<O> {
     /// [`flush`](Screen::flush); inspect it via [`writer`](Screen::writer) (or
     /// the borrowed buffer directly when `O` is `&mut Vec<u8>`).
     fn for_test(writer: O, size: (u16, u16)) -> Self {
-        let env = crate::terminal::Env::from_process();
+        let env = crate::terminal::EnvList::from_process();
         let mut screen = Screen::new(writer, size);
         screen.set_color_profile(crate::color::Profile::detect_from(&env, true));
         screen.set_optimizations(Optimizations::from_env(&env));
