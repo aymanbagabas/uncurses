@@ -263,7 +263,7 @@ where
 
     /// Drive the input source for up to `timeout`, returning whether any
     /// event became available. See [`EventSource::poll`].
-    pub fn poll_event(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+    pub fn poll_event(&self, timeout: Option<Duration>) -> io::Result<bool> {
         let ready = self.source.lock().unwrap().poll(timeout)?;
         Ok(ready)
     }
