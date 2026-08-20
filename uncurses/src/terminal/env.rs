@@ -32,6 +32,10 @@ pub trait Env: Send + Sync {
 
     /// Return whether a variable is present with a non-empty value.
     ///
+    /// Overriding this is only for taking a shortcut, not for changing the
+    /// answer: it must stay equivalent to
+    /// `get(key).is_some_and(|v| !v.is_empty())`.
+    ///
     /// # Parameters
     ///
     /// * `key` — variable name.
@@ -64,6 +68,10 @@ impl<T: Env + ?Sized> Env for Box<T> {
 /// this value was created is visible to the next lookup. This is the
 /// environment a [`Terminal`](crate::terminal::Terminal) uses when built over
 /// process stdio or the controlling terminal.
+///
+/// Two things follow from going through [`std::env::var`], and neither is true
+/// of [`EnvList`]: a value that is not valid Unicode reads as absent rather
+/// than panicking, and on Windows names match case-insensitively.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProcessEnv;
 

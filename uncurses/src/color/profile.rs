@@ -153,9 +153,9 @@ const DUMB_TERM: &str = "dumb";
 
 /// Return whether an environment variable reads as a truthy boolean.
 ///
-/// Accepts `1`, `t`, `T`, `TRUE`, `true`, and `True`, matching Go's
-/// `strconv.ParseBool`, which is what the tools that set these variables use.
-/// Anything else, including an empty or absent value, is false.
+/// Accepts `1`, `t`, `T`, `TRUE`, `true`, and `True` — the values Go's
+/// `strconv.ParseBool` reads as true. Anything else, including an empty or
+/// absent value, is false.
 fn is_truthy(env: &dyn Env, key: &str) -> bool {
     matches!(
         env.get(key).as_deref().unwrap_or_default(),
