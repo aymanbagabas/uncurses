@@ -16,12 +16,12 @@
 //! screen. Press `space` to toggle it back to the hint bar.
 //!
 //! When the terminal reports SGR-pixel mouse support
-//! ([`Capabilities::mouse_sgr_pixel`](uncurses::screen::Capabilities)), the
+//! ([`Capabilities::mouse_sgr_pixel`](uncurses::program::Capabilities)), the
 //! example enables pixel-accurate tracking and resolves *which half* of a cell
 //! the pointer is over, reading the exact sub-pixel color. Otherwise it
 //! degrades seamlessly to cell coordinates and reads the cell's left
-//! sub-pixel. No capability probing is done by hand — the screen reports what
-//! it negotiated and the example adapts.
+//! sub-pixel. The example asks for the capabilities it needs itself, then
+//! adapts to whatever the terminal answers.
 //!
 //! Run with `cargo run --example gradient`. Resize to watch it reflow;
 //! press `q` or `Ctrl-C` to quit.
@@ -59,9 +59,9 @@ fn main() -> std::io::Result<()> {
     program.enter_alt_screen()?;
     program.hide_cursor()?;
     // `init` probes nothing, so ask for the capabilities this example needs.
-    // The replies arrive as ordinary events; the run loop feeds every one back
-    // through `observe_event`, and `resolve` reads `mouse_sgr_pixel` live once
-    // the terminal has answered.
+    // The replies arrive as ordinary events; the run loop's `read_event`
+    // records each one on the way past, and `resolve` reads `mouse_sgr_pixel`
+    // live once the terminal has answered.
     program.query_capabilities(&[])?;
     // Seed the pixel size now, and refresh it on resize.
     program.request_window_pixel_size()?;
