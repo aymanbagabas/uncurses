@@ -1400,6 +1400,25 @@ fn fullscreen_toggle_repaints_and_leaves_modes_to_the_caller() {
 }
 
 #[test]
+fn leaving_fullscreen_repaints_too() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (3, 1));
+        screen.set_alt_screen(true);
+        fill(&mut screen, 0, 0, "A");
+        screen.render().unwrap();
+        // Back to the normal buffer, drawing the same content. The tracked
+        // contents describe the buffer just left, not the one now showing, so
+        // a diff against them would emit nothing and leave the band blank.
+        screen.set_alt_screen(false);
+        fill(&mut screen, 0, 0, "A");
+        screen.render().unwrap();
+    }
+    let out = s(&buf);
+    assert_eq!(out.matches('A').count(), 2, "second frame skipped: {out:?}");
+}
+
+#[test]
 fn renderer_redraws_when_style_changes() {
     let mut buf: Vec<u8> = Vec::new();
     {
