@@ -138,9 +138,11 @@ impl Default for State {
 /// This holds the replies themselves, not a summary of them: the
 /// [`ModeSetting`] reported for every mode that was asked about, the raw
 /// device-attribute lists, the reported colors, and so on. A reply that says
-/// "I do not recognize that" is recorded too, which is why the accessors
-/// return [`Option`] — `None` means the terminal never answered, which is
-/// different from answering no.
+/// "I do not recognize that" is recorded too, so `None` from an accessor
+/// generally means the terminal never answered, which is different from
+/// answering no. [`termcap`](Self::termcap) is the exception, folding both
+/// into `None`; use [`termcap_reports`](Self::termcap_reports) to separate
+/// them.
 ///
 /// Everything here is what the terminal reported, never what the facade told
 /// it. The two are easy to confuse where both exist: a

@@ -840,8 +840,10 @@ where
     /// `&[]` for none.
     ///
     /// The DECRQM, XTVERSION, and XTGETTCAP queries are skipped on Apple's
-    /// `Terminal.app`, which mishandles them; its known support is recorded
-    /// directly instead.
+    /// `Terminal.app`, which mishandles them. Nothing is recorded in their
+    /// place: [`capabilities`](Self::capabilities) keeps reporting only what
+    /// the terminal actually said. Its known direct-color support is applied
+    /// to the renderer's color profile alone.
     ///
     /// # Draining the replies is yours
     ///
