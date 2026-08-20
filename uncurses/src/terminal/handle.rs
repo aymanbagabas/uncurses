@@ -137,20 +137,6 @@ impl<I, O> Terminal<I, O> {
         }
     }
 
-    /// Borrow the output half. Test-only accessor for inspecting bytes
-    /// written to an in-memory sink.
-    #[cfg(test)]
-    pub(crate) fn output_ref(&self) -> &O {
-        &self.output
-    }
-
-    /// Mutably borrow the output half. Test-only accessor used to swap the
-    /// in-memory sink between captured frames.
-    #[cfg(test)]
-    pub(crate) fn output_mut(&mut self) -> &mut O {
-        &mut self.output
-    }
-
     /// Return the captured environment snapshot.
     ///
     /// The snapshot is taken by the constructor and is not updated if the

@@ -1,6 +1,6 @@
 //! Mouse tracking: report clicks, motion, and the scroll wheel.
 //!
-//! Enables mouse reporting through [`ScreenOptions`] and paints whatever
+//! Enables mouse reporting through [`ProgramOptions`] and paints whatever
 //! the pointer is doing: a marker where it last moved, the last button
 //! pressed, and a running tally of wheel ticks. A small example of mixing
 //! input and rendering around a single feature.
@@ -11,7 +11,8 @@
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -24,29 +25,28 @@ struct State {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
+    let mut program = Program::stdio()?;
     // `motion: true` asks for move events (not just press/release); the
     // screen negotiates the best mode and encoding the terminal supports.
-    screen.init_with(ScreenOptions {
+    program.init_with(ProgramOptions {
         mouse: Some(MouseTracking::MOTION),
-        ..ScreenOptions::default()
+        ..ProgramOptions::default()
     })?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    program.enter_alt_screen()?;
+    program.hide_cursor()?;
 
-    let result = run(&mut screen);
-    screen.finish()?;
+    let result = run(&mut program);
+    program.finish()?;
     result
 }
 
-fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
     let mut state = State::default();
-    render(screen, &state);
+    render(program.screen_mut(), &state);
 
     loop {
-        let event = screen.read_event()?;
-        screen.observe_event(&event)?;
+        let event = program.read_event()?;
         match event {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::MouseMove(m) => state.pointer = Some((m.x, m.y)),
@@ -62,15 +62,15 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
                     _ => {}
                 }
             }
-            Event::Resize(ws) => screen.resize((ws.col, ws.row)),
+            Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
             _ => continue,
         }
-        render(screen, &state);
+        render(program.screen_mut(), &state);
     }
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
+fn render(screen: &mut Screen<Stdout>, state: &State) {
     screen.clear();
     let w = screen.width();
     let h = screen.height();

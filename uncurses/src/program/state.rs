@@ -1,11 +1,20 @@
-//! Non-render terminal/input mode state owned by the [`Screen`] facade.
+//! Terminal/input mode state owned by the [`Program`] facade.
 //!
-//! These modes do not affect how the renderer measures, renders, or
-//! presents a frame — they configure the terminal device and the input
-//! reader. The facade tracks them so it can tear them down on a shell
-//! handoff and re-apply them afterwards.
+//! Every field records a mode the facade has *emitted*, so it can tear the
+//! mode down on a shell handoff and re-apply it afterwards.
 //!
-//! [`Screen`]: super::Screen
+//! Three of them — [`alt_screen`](State::alt_screen),
+//! [`cursor_visible`](State::cursor_visible), and
+//! [`grapheme_clusters`](State::grapheme_clusters) — are mirrored by a render
+//! property on the [`Screen`](crate::screen::Screen) the facade draws with.
+//! They are tracked separately on purpose: the screen's copy says how to draw
+//! a frame, this one says what the terminal was told. Since
+//! [`screen_mut`](super::Program::screen_mut) lets an app move the render
+//! property on its own, inferring one from the other would make
+//! [`reset`](super::Program::reset) emit modes that were never set (or skip
+//! ones that were) and leave the terminal wedged after exit.
+//!
+//! [`Program`]: super::Program
 
 use std::collections::BTreeMap;
 
@@ -13,7 +22,6 @@ use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::color::Color;
 use crate::event::ModifyOtherKeysMode;
-use crate::layout::Position;
 
 use super::MouseTracking;
 use super::ProgressState;
@@ -42,16 +50,16 @@ pub(super) struct State {
     pub in_band_resize: bool,
     /// Window title set via [`OSC 2`] (or [`OSC 0`], which sets both this and
     /// [`icon_name`](Self::icon_name)). `None` when no
-    /// [`set_window_title`](super::Screen::set_window_title) or
-    /// [`set_title`](super::Screen::set_title) override has been set.
+    /// [`set_window_title`](super::Program::set_window_title) or
+    /// [`set_title`](super::Program::set_title) override has been set.
     ///
     /// [`OSC 2`]: crate::ansi::title::write_window_title
     /// [`OSC 0`]: crate::ansi::title::write_window_title_and_icon
     pub window_title: Option<String>,
     /// Icon name set via [`OSC 1`] (or [`OSC 0`], which sets both this and
     /// [`window_title`](Self::window_title)). `None` when no
-    /// [`set_icon_title`](super::Screen::set_icon_title) or
-    /// [`set_title`](super::Screen::set_title) override has been set.
+    /// [`set_icon_title`](super::Program::set_icon_title) or
+    /// [`set_title`](super::Program::set_title) override has been set.
     ///
     /// [`OSC 1`]: crate::ansi::title::write_icon_name
     /// [`OSC 0`]: crate::ansi::title::write_window_title_and_icon
@@ -79,32 +87,23 @@ pub(super) struct State {
     /// reported. Drives the `OSC 9;4;0` removal on reset and re-emission on
     /// restore.
     pub progress: Option<ProgressState>,
-    // --- Render-coupled state (formerly tracked by the renderer buffer) -----------
-    /// Whether the alternate screen is currently active.
-    pub alt_screen: bool,
-    /// Cursor visibility.
-    pub cursor_visible: bool,
-    /// Synchronized updates: when `true`, each non-empty frame is wrapped in
-    /// synchronized-output begin/end sequences.
-    pub sync_updates: bool,
-    /// Unicode core / grapheme cluster mode (DEC 2027). When `true`, width is
-    /// calculated per grapheme cluster (UTS-29 + emoji rules); when `false`,
-    /// per code point (wcwidth-style).
-    pub grapheme_clusters: bool,
-    /// Active Kitty keyboard enhancement flag set. The kitty stack is
-    /// per-screen-buffer, so the screen re-emits this onto whichever buffer
+    /// Active Kitty keyboard enhancement flag set. The stack is
+    /// per-screen-buffer, so the program re-emits this onto whichever buffer
     /// becomes active. `NONE` means no frame is set.
     pub kitty_keyboard: KittyKeyboardFlags,
-    /// Declarative resting position for the cursor, applied at the end of
-    /// every [`render`](super::Screen::render) via
-    /// [`set_cursor_position`](super::Screen::set_cursor_position). Sticky:
-    /// it persists across frames and is re-applied each render (a no-op when
-    /// the cursor is already there) until changed or cleared. `None` means no
-    /// declarative resting position, so the cursor is left wherever the cell
-    /// diff ended. Visibility is orthogonal — see
-    /// [`show_cursor`](super::Screen::show_cursor) /
-    /// [`hide_cursor`](super::Screen::hide_cursor).
-    pub desired_cursor: Option<Position>,
+    /// Whether the facade has put the terminal on the alternate screen buffer
+    /// (DECSET 1049). Mirrors [`Screen::fullscreen`](crate::screen::Screen::fullscreen)
+    /// while the app drives the buffer through
+    /// [`enter_alt_screen`](super::Program::enter_alt_screen) /
+    /// [`exit_alt_screen`](super::Program::exit_alt_screen).
+    pub alt_screen: bool,
+    /// Whether the terminal cursor is visible (DECTCEM). Mirrors
+    /// [`Screen::cursor_visible`](crate::screen::Screen::cursor_visible).
+    /// Starts `true`: a terminal shows its cursor until told otherwise.
+    pub cursor_visible: bool,
+    /// Whether grapheme-cluster mode is on (DEC 2027). Mirrors
+    /// [`Screen::grapheme_clusters`](crate::screen::Screen::grapheme_clusters).
+    pub grapheme_clusters: bool,
 }
 
 impl Default for State {
@@ -125,31 +124,33 @@ impl Default for State {
             modify_other_keys: ModifyOtherKeysMode::Disabled,
             pointer_shape: None,
             progress: None,
+            kitty_keyboard: KittyKeyboardFlags::empty(),
             alt_screen: false,
             cursor_visible: true,
-            sync_updates: false,
             grapheme_clusters: false,
-            kitty_keyboard: KittyKeyboardFlags::empty(),
-            desired_cursor: None,
         }
     }
 }
 
-/// Terminal capabilities detected from the replies to the queries
-/// [`Screen::init`](super::Screen::init) fires. Every field answers a
-/// single question: does the terminal support this? The facade intercepts
-/// the reply events as they flow through
-/// [`read_event`](super::Screen::read_event) / [`try_read_event`](super::Screen::try_read_event),
-/// records support here, and applies the render-affecting ones — the app
-/// never sees the reply events. Read back with
-/// [`Screen::capabilities`](super::Screen::capabilities).
+/// Terminal capabilities, as reported by the replies the terminal has sent.
+/// Every field answers a single question: does the terminal support this?
+/// Nothing is queried at startup, so the replies arrive because the caller
+/// asked, with [`query_capabilities`](super::Program::query_capabilities) or
+/// an individual `request_*` method. Reading with
+/// [`read_event`](super::Program::read_event) /
+/// [`try_read_event`](super::Program::try_read_event) records support here and
+/// applies the few noted below as `Applied:` on the way past; the event is
+/// still handed back to the application. Read back with
+/// [`Program::capabilities`](super::Program::capabilities).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
     /// Synchronized output (DEC private mode 2026). Applied: frames are
     /// wrapped in begin/end-synchronized-update markers.
     pub synchronized_output: bool,
     /// Unicode core / grapheme-cluster mode (DEC private mode 2027).
-    /// Applied: cell widths are measured per grapheme cluster.
+    /// Detected only: call
+    /// [`enable_grapheme_clusters`](super::Program::enable_grapheme_clusters)
+    /// to act on it.
     pub grapheme_clusters: bool,
     /// In-band resize notifications (DEC private mode 2048).
     pub in_band_resize: bool,
