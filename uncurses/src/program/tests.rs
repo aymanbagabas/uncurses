@@ -767,6 +767,12 @@ fn mouse_pixels_map_to_cells_without_running_past_the_grid() {
 /// The synchronous reads observe as the event passes through, which is why
 /// applications call [`Program::observe_event`] only on the async stream.
 /// Observing twice would spend two of the requests in flight on one reply.
+///
+/// Unix-only because it feeds real bytes through the source. The Windows
+/// source reads console records, so a pipe handle is not something it can
+/// ever read: `GetNumberOfConsoleInputEvents` rejects it as an invalid
+/// handle. The behaviour under test is platform-independent.
+#[cfg(unix)]
 #[test]
 fn a_synchronous_read_observes_without_a_second_call() {
     let (reader, mut writer) = std::io::pipe().unwrap();
