@@ -11,6 +11,7 @@ use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Rect;
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -22,36 +23,35 @@ const MODAL_W: u16 = 36;
 const MODAL_H: u16 = 7;
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     modal_open: bool,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        let w = SURFACE_W.min(screen.width().max(1));
-        let h = SURFACE_H.min(screen.height().max(1));
-        screen.resize((w, h));
-        screen.hide_cursor()?;
+        let mut program = Program::stdio()?;
+        program.init()?;
+        let w = SURFACE_W.min(program.screen().width().max(1));
+        let h = SURFACE_H.min(program.screen().height().max(1));
+        program.screen_mut().resize((w, h));
+        program.hide_cursor()?;
 
         Ok(Self {
-            screen,
+            program,
             modal_open: false,
         })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, self.modal_open);
-        self.screen.render()
+        redraw(&mut self.program, self.modal_open);
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
         loop {
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(Key {
@@ -85,7 +85,7 @@ impl App {
                 Event::Resize(ws) => {
                     let nw = SURFACE_W.min(ws.col.max(1));
                     let nh = SURFACE_H.min(ws.row.max(1));
-                    self.screen.resize((nw, nh));
+                    self.program.screen_mut().resize((nw, nh));
                     dirty = true;
                 }
                 _ => {}
@@ -98,7 +98,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -109,18 +109,18 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw(screen: &mut Screen<Stdin, Stdout>, modal_open: bool) {
-    screen.clear();
-    paint_content(screen);
+fn redraw(program: &mut Program<Stdin, Stdout>, modal_open: bool) {
+    program.screen_mut().clear();
+    paint_content(program.screen_mut());
     if modal_open {
-        paint_scrim(screen);
-        if let Some(rect) = modal_rect(screen) {
-            paint_modal(screen, rect);
+        paint_scrim(program.screen_mut());
+        if let Some(rect) = modal_rect(program.screen_mut()) {
+            paint_modal(program.screen_mut(), rect);
         }
     }
 }
 
-fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
+fn paint_content(screen: &mut Screen<Stdout>) {
     let cyan = Style::default().fg(Color::BrightCyan);
     let plain = Style::default();
     let bullet_color = Style::default().fg(Color::Yellow);
@@ -138,7 +138,7 @@ fn paint_content(screen: &mut Screen<Stdin, Stdout>) {
     }
 }
 
-fn paint_scrim(screen: &mut Screen<Stdin, Stdout>) {
+fn paint_scrim(screen: &mut Screen<Stdout>) {
     // Dim the surface with a uniform gray fill so the modal stands
     // out. The cells behind keep their content but the scrim's bg
     // wins because we overwrite each cell.
@@ -147,7 +147,7 @@ fn paint_scrim(screen: &mut Screen<Stdin, Stdout>) {
     screen.fill_rect(bounds, &Cell::narrow(" ").style(scrim));
 }
 
-fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
+fn modal_rect(screen: &Screen<Stdout>) -> Option<Rect> {
     let w = screen.width();
     let h = screen.height();
     if w < MODAL_W || h < MODAL_H {
@@ -158,7 +158,7 @@ fn modal_rect(screen: &Screen<Stdin, Stdout>) -> Option<Rect> {
     Some(Rect::new(x, y, MODAL_W, MODAL_H))
 }
 
-fn paint_modal(screen: &mut Screen<Stdin, Stdout>, rect: Rect) {
+fn paint_modal(screen: &mut Screen<Stdout>, rect: Rect) {
     let frame = Style::default()
         .fg(Color::BrightWhite)
         .bg(Color::Blue)

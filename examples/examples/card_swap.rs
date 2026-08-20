@@ -4,6 +4,7 @@
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -15,37 +16,36 @@ const CARD_H: u16 = 10;
 const VIEW_H: u16 = 15;
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     flip: bool,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.hide_cursor()?;
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.hide_cursor()?;
         // Inline view: keep the terminal width but only as tall as the
         // two stacked cards plus the footer.
-        let w = screen.width();
-        screen.resize((w, VIEW_H));
+        let w = program.screen().width();
+        program.screen_mut().resize((w, VIEW_H));
 
         Ok(Self {
-            screen,
+            program,
             flip: false,
         })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, self.flip);
-        self.screen.render()
+        redraw(&mut self.program, self.flip);
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
         loop {
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(Key {
@@ -63,7 +63,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize((ws.col, VIEW_H));
+                    self.program.screen_mut().resize((ws.col, VIEW_H));
                     dirty = true;
                 }
                 _ => {}
@@ -76,7 +76,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -87,15 +87,17 @@ fn main() -> std::io::Result<()> {
     result
 }
 
-fn redraw(screen: &mut Screen<Stdin, Stdout>, flip: bool) {
-    screen.clear();
-    let w = screen.width();
-    let h = screen.height();
+fn redraw(program: &mut Program<Stdin, Stdout>, flip: bool) {
+    program.screen_mut().clear();
+    let w = program.screen().width();
+    let h = program.screen().height();
 
     let footer = Style::default().fg(Color::BrightBlack);
     let footer_text = "Press any key to swap the cards, or q to quit.";
     if h >= 2 {
-        screen.set_str((2, h.saturating_sub(2)), footer_text, footer);
+        program
+            .screen_mut()
+            .set_str((2, h.saturating_sub(2)), footer_text, footer);
     }
 
     if w < CARD_W + 14 || h < CARD_H + 4 {
@@ -112,15 +114,15 @@ fn redraw(screen: &mut Screen<Stdin, Stdout>, flip: bool) {
     let by = ay + 2;
 
     if flip {
-        draw_card(screen, ax, ay, "Hello", border_a);
-        draw_card(screen, bx, by, "Goodbye", border_b);
+        draw_card(program.screen_mut(), ax, ay, "Hello", border_a);
+        draw_card(program.screen_mut(), bx, by, "Goodbye", border_b);
     } else {
-        draw_card(screen, bx, by, "Goodbye", border_b);
-        draw_card(screen, ax, ay, "Hello", border_a);
+        draw_card(program.screen_mut(), bx, by, "Goodbye", border_b);
+        draw_card(program.screen_mut(), ax, ay, "Hello", border_a);
     }
 }
 
-fn draw_card(screen: &mut Screen<Stdin, Stdout>, x: u16, y: u16, label: &str, border: Style) {
+fn draw_card(screen: &mut Screen<Stdout>, x: u16, y: u16, label: &str, border: Style) {
     let w = CARD_W;
     let h = CARD_H;
 

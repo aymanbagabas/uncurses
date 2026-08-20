@@ -3,7 +3,7 @@
 //! A scrolling field of half-block "stars" rendered at one cell per
 //! two vertical pixels via the `▀` glyph (background = lower pixel).
 //! The frame loop runs at ~60 Hz: between frames the loop blocks on
-//! `Screen::poll` so input is consumed without busy-waiting.
+//! `Program::poll_event` so input is consumed without busy-waiting.
 //!
 //! Run with `cargo run --release --example space`. Press `q` or
 //! `Ctrl-C` to quit.
@@ -14,6 +14,7 @@ use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
@@ -114,7 +115,7 @@ impl Field {
 }
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     rng: Rng,
     field: Field,
     fps: Fps,
@@ -123,17 +124,17 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
         let rng = Rng::new(seed_from_clock());
         let field = Field::new();
         let fps = Fps::new();
 
         Ok(Self {
-            screen,
+            program,
             rng,
             field,
             fps,
@@ -143,13 +144,13 @@ impl App {
 
     fn render(&mut self) -> std::io::Result<()> {
         draw(
-            &mut self.screen,
+            self.program.screen_mut(),
             &mut self.field,
             &mut self.rng,
             &self.fps,
             self.frame_count,
         );
-        self.screen.render()
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
@@ -161,9 +162,8 @@ impl App {
             let remaining = next_frame.saturating_duration_since(now);
             let mut quit = false;
 
-            if !remaining.is_zero() && self.screen.poll_event(Some(remaining))? {
-                while let Some(ev) = self.screen.try_read_event() {
-                    self.screen.observe_event(&ev)?;
+            if !remaining.is_zero() && self.program.poll_event(Some(remaining))? {
+                while let Some(ev) = self.program.try_read_event()? {
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),
@@ -176,7 +176,7 @@ impl App {
                             ..
                         }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
                         Event::Resize(ws) => {
-                            self.screen.resize((ws.col, ws.row));
+                            self.program.screen_mut().resize((ws.col, ws.row));
                             self.field = Field::new();
                             needs_redraw = true;
                         }
@@ -209,7 +209,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -221,7 +221,7 @@ fn main() -> std::io::Result<()> {
 }
 
 fn draw(
-    screen: &mut Screen<Stdin, Stdout>,
+    screen: &mut Screen<Stdout>,
     field: &mut Field,
     rng: &mut Rng,
     fps: &Fps,

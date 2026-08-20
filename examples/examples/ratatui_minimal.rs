@@ -19,12 +19,10 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         terminal.draw(|frame| frame.render_widget("Hello World!", frame.area()))?;
         let events = terminal.backend_mut();
         if events.poll_event(None)?
-            && let Some(ev) = events.try_read_event()
+            && let Some(ev) = events.try_read_event()?
+            && let Event::KeyPress(_) = ev
         {
-            events.observe_event(&ev)?;
-            if let Event::KeyPress(_) = ev {
-                break;
-            }
+            break;
         }
     }
 

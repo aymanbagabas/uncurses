@@ -8,7 +8,7 @@ use uncurses::buffer::Bounded;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 
@@ -72,7 +72,7 @@ fn build_patterns(width: u16, height: u16, rng: &mut Rng) -> Vec<Vec<Cell>> {
 }
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     rng: Rng,
     w: u16,
     h: u16,
@@ -84,17 +84,17 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
         let mut rng = Rng::new(seed_from_clock());
-        let (w, h) = (screen.width(), screen.height());
+        let (w, h) = (program.screen().width(), program.screen().height());
         let patterns = build_patterns(w, h, &mut rng);
 
         Ok(Self {
-            screen,
+            program,
             rng,
             w,
             h,
@@ -110,23 +110,22 @@ impl App {
         for y in 0..self.h {
             for x in 0..self.w {
                 let idx = y as usize * self.w as usize + x as usize;
-                self.screen.set_cell((x, y), &pattern[idx]);
+                self.program.screen_mut().set_cell((x, y), &pattern[idx]);
             }
         }
-        self.screen.render()
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         loop {
             let mut quit = false;
             while let Some(ev) = {
-                if self.screen.poll_event(Some(std::time::Duration::ZERO))? {
-                    self.screen.try_read_event()
+                if self.program.poll_event(Some(std::time::Duration::ZERO))? {
+                    self.program.try_read_event()?
                 } else {
                     None
                 }
             } {
-                self.screen.observe_event(&ev)?;
                 match ev {
                     Event::KeyPress(Key {
                         code: KeyCode::Escape,
@@ -138,9 +137,9 @@ impl App {
                         ..
                     }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
                     Event::Resize(ws) => {
-                        self.screen.resize((ws.col, ws.row));
-                        self.w = self.screen.width();
-                        self.h = self.screen.height();
+                        self.program.screen_mut().resize((ws.col, ws.row));
+                        self.w = self.program.screen().width();
+                        self.h = self.program.screen().height();
                         self.patterns = build_patterns(self.w, self.h, &mut self.rng);
                     }
                     _ => {}
@@ -166,7 +165,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 

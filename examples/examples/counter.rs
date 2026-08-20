@@ -6,17 +6,18 @@
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
 
-/// Click-counter app: owns a self-managing [`Screen`] plus its own UI
+/// Click-counter app: owns a self-managing [`Program`] plus its own UI
 /// state. `start` enters the alternate screen and enables mouse tracking,
 /// `run` drives the event loop, and teardown is handled by
-/// [`Screen::finish`].
+/// [`Program::finish`].
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     count: u32,
     button_rect: Option<(u16, u16, u16)>,
     quit_keys: [Key; 3],
@@ -25,21 +26,21 @@ struct App {
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
+        let mut program = Program::stdio()?;
         // Begin a session and enable plain (click) mouse tracking; the
         // screen picks the best mode and encoding the terminal supports.
-        screen.init_with(ScreenOptions {
+        program.init_with(ProgramOptions {
             mouse: Some(MouseTracking::empty()),
-            ..ScreenOptions::default()
+            ..ProgramOptions::default()
         })?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
         // Parse key bindings once. `Key: FromStr`, and `==` compares on
         // the canonical chord identity — so plain equality is the right
         // operator for keyboard-shortcut matching.
         Ok(Self {
-            screen,
+            program,
             count: 0,
             button_rect: None,
             quit_keys: ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap()),
@@ -48,17 +49,16 @@ impl App {
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, self.count);
-        self.button_rect = button_bounds(&self.screen, self.count);
-        self.screen.render()
+        redraw(self.program.screen_mut(), self.count);
+        self.button_rect = button_bounds(self.program.screen(), self.count);
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
         self.render()?;
 
         loop {
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
             let mut dirty = false;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -73,7 +73,7 @@ impl App {
                     dirty = true;
                 }
                 Event::Resize(ws) => {
-                    self.screen.resize((ws.col, ws.row));
+                    self.program.screen_mut().resize((ws.col, ws.row));
                     dirty = true;
                 }
                 _ => {}
@@ -86,7 +86,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -106,7 +106,7 @@ fn button_label(count: u32) -> String {
     format!("[ {label} ]")
 }
 
-fn button_bounds(screen: &Screen<Stdin, Stdout>, count: u32) -> Option<(u16, u16, u16)> {
+fn button_bounds(screen: &Screen<Stdout>, count: u32) -> Option<(u16, u16, u16)> {
     let w = screen.width();
     let h = screen.height();
     if w < 20 || h < 5 {
@@ -126,7 +126,7 @@ fn hit(rect: Option<(u16, u16, u16)>, mx: u16, my: u16) -> bool {
     my == y && mx >= x && mx < x + w
 }
 
-fn redraw(screen: &mut Screen<Stdin, Stdout>, count: u32) {
+fn redraw(screen: &mut Screen<Stdout>, count: u32) {
     screen.clear();
     let w = screen.width();
     let h = screen.height();

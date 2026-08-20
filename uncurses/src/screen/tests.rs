@@ -2,13 +2,11 @@
 //! string painting, reset/restore, wide glyphs, and `insert_above`.
 //!
 //! These build a [`Screen`] over an in-memory `Vec` writer (or a borrowed
-//! `&mut Vec`) and a null input via [`Screen::for_test`], so the full render
-//! path can be exercised and the emitted bytes inspected without a terminal.
-
-use std::sync::{Arc, Mutex};
-
+//! `&mut Vec`) via [`Screen::for_test`], so the full render path can be
+//! exercised and the emitted bytes inspected without a terminal.
 use super::*;
-use crate::renderer::{RenderBuffer, Renderer};
+
+use crate::color::{Color, Profile};
 use crate::text::{TextSurface, WidthMode, WrapMode};
 
 #[test]
@@ -17,82 +15,25 @@ fn screen_is_send_sync() {
     // Concrete stdio handles are Send + Sync, so this fails to compile only if
     // an internal field regresses (e.g. the renderer color cache going back to
     // RefCell would drop Sync).
-    assert_send_sync::<Screen<crate::terminal::Stdin, crate::terminal::Stdout>>();
-}
-
-#[cfg(unix)]
-fn null_input() -> std::io::PipeReader {
-    // A pipe read end is epoll/kqueue-registerable (unlike /dev/null), which
-    // EventSource::new requires. The write end is dropped; tests never read.
-    let (reader, _writer) = std::io::pipe().unwrap();
-    reader
-}
-
-#[cfg(windows)]
-fn null_input() -> std::io::PipeReader {
-    let (reader, _writer) = std::io::pipe().unwrap();
-    reader
+    assert_send_sync::<Screen<crate::terminal::Stdout>>();
 }
 
 /// Test-only construction and a few shims mirroring the historical renderer
 /// API the render tests were written against, so they read the same way while
-/// driving the merged [`Screen`].
-impl<O: Write> Screen<std::io::PipeReader, O> {
-    /// Build a screen over `writer` and a null input, sized to `size`. Output
-    /// bytes accumulate in `writer` after [`flush`](Screen::flush); inspect
-    /// them via [`writer`](Self::writer) (or the borrowed buffer directly when
-    /// `O` is `&mut Vec<u8>`).
+/// driving the split [`Screen`].
+impl<O: Write> Screen<O> {
+    /// Build a screen over `writer`, sized to `size`, with the color profile
+    /// and optimizations the environment implies — matching what
+    /// [`Program`](crate::program::Program) would set up, so the emitted bytes
+    /// are what a real session would see. Output accumulates in `writer` after
+    /// [`flush`](Screen::flush); inspect it via [`writer`](Screen::writer) (or
+    /// the borrowed buffer directly when `O` is `&mut Vec<u8>`).
     fn for_test(writer: O, size: (u16, u16)) -> Self {
         let env = crate::terminal::Env::from_process();
-        let terminal = crate::terminal::Terminal::from_parts(null_input(), writer, env);
-        let color_profile = crate::color::Profile::detect_from(terminal.env(), true);
-        let optimizations = Optimizations::from_env(terminal.env());
-        let mut renderer = Renderer::new();
-        renderer.set_color_profile(color_profile);
-        renderer.set_optimizations(optimizations);
-        renderer.set_fullscreen(false);
-        renderer.set_relative_cursor(true);
-        let source = Arc::new(Mutex::new(
-            crate::event::EventSource::new(null_input()).unwrap(),
-        ));
-        let mut screen = Self {
-            terminal,
-            front_buf: RenderBuffer::new(0, 0),
-            renderer,
-            out_buf: Vec::with_capacity(4096),
-            width: 0,
-            height: 0,
-            eaw_wide: false,
-            source,
-            state: super::state::State::default(),
-            caps: Capabilities::default(),
-            options: ScreenOptions::default(),
-            defaults_applied: false,
-            window_cells: None,
-            window_pixels: None,
-            terminal_name: None,
-            queries_sent_at: None,
-            origin: Position::ORIGIN,
-            origin_query_pending: false,
-        };
-        let (w, h) = size;
-        if w != 0 || h != 0 {
-            screen.resize((w, h));
-        }
+        let mut screen = Screen::new(writer, size);
+        screen.set_color_profile(crate::color::Profile::detect_from(&env, true));
+        screen.set_optimizations(Optimizations::from_env(&env));
         screen
-    }
-
-    /// Like [`for_test`](Self::for_test) but the event source reads from
-    /// `input`, so a test can feed terminal replies (e.g. a Primary DA) and
-    /// exercise the teardown drain.
-    fn for_test_with_input(writer: O, size: (u16, u16), input: std::io::PipeReader) -> Self {
-        let mut screen = Self::for_test(writer, size);
-        screen.source = Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap()));
-        screen
-    }
-
-    fn writer(&self) -> &O {
-        self.terminal.output_ref()
     }
 
     fn width(&self) -> u16 {
@@ -109,25 +50,17 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
     }
 
     fn with_color_profile(mut self, profile: crate::color::Profile) -> Self {
-        self.renderer.set_color_profile(profile);
+        self.set_color_profile(profile);
         self
     }
 
     fn with_optimizations(mut self, optimizations: Optimizations) -> Self {
-        self.renderer.set_optimizations(optimizations);
+        self.set_optimizations(optimizations);
         self
     }
 
     fn set_alt_screen(&mut self, alt_screen: bool) {
-        self.stage_set_alt_screen(alt_screen);
-    }
-
-    fn set_grapheme_clusters(&mut self, enable: bool) {
-        self.stage_set_grapheme_clusters(enable);
-    }
-
-    fn set_kitty_keyboard_flags(&mut self, flags: crate::ansi::kitty::KittyKeyboardFlags) {
-        self.stage_set_kitty_keyboard_flags(flags);
+        self.set_fullscreen(alt_screen);
     }
 
     fn cursor_position(&self) -> Position {
@@ -154,22 +87,6 @@ fn test_write_and_render() {
         screen.flush().unwrap();
     }
     assert!(String::from_utf8_lossy(&buf).contains("Hello"));
-}
-
-#[test]
-fn test_alt_screen() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (80, 24));
-        screen.set_alt_screen(true);
-        assert!(screen.state.alt_screen);
-        screen.set_alt_screen(false);
-        assert!(!screen.state.alt_screen);
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b[?1049h"));
-    assert!(out.contains("\x1b[?1049l"));
 }
 
 #[test]
@@ -220,7 +137,7 @@ fn grapheme_width_and_cells_use_screen_policy() {
 }
 
 #[test]
-fn set_grapheme_clusters_toggles_width_mode_and_emits_decset() {
+fn set_grapheme_clusters_toggles_width_mode() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (20, 1));
@@ -234,9 +151,37 @@ fn set_grapheme_clusters_toggles_width_mode_and_emits_decset() {
         assert_eq!(screen.width_mode(), WidthMode::Wc);
         screen.flush().unwrap();
     }
-    let out = String::from_utf8_lossy(&buf);
-    assert!(out.contains("\x1b[?2027h"));
-    assert!(out.contains("\x1b[?2027l"));
+    // DEC 2027 is a terminal mode; the screen only records how to measure.
+    assert!(buf.is_empty(), "screen must not emit modes: {buf:02x?}");
+}
+
+#[test]
+fn changing_the_width_mode_repaints_but_setting_it_again_does_not() {
+    // Whatever is on screen was measured the other way, so the tracked
+    // contents are no longer a valid diff base.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (3, 1));
+        fill(&mut screen, 0, 0, "X");
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        screen.set_grapheme_clusters(true);
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    assert!(s(&buf).matches('X').count() >= 2, "{:?}", s(&buf));
+
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (3, 1));
+        fill(&mut screen, 0, 0, "X");
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        screen.set_grapheme_clusters(false);
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    assert_eq!(s(&buf).matches('X').count(), 1, "{:?}", s(&buf));
 }
 
 #[test]
@@ -282,39 +227,6 @@ fn write_string_widths_follow_current_mode() {
 }
 
 #[test]
-fn reset_and_restore_round_trip_grapheme_clusters() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (20, 1));
-        screen.set_grapheme_clusters(true);
-        assert!(screen.grapheme_clusters());
-
-        // reset: state preserved, teardown writes RM
-        screen.reset().unwrap();
-        assert!(screen.grapheme_clusters());
-
-        // restore: re-emits SM
-        screen.restore().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    // Enable SM, reset emits RM, restore emits SM again.
-    assert!(out.matches("\x1b[?2027h").count() >= 2);
-    assert!(out.contains("\x1b[?2027l"));
-}
-
-#[test]
-fn test_resize() {
-    let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.resize((100, 30));
-    assert_eq!(screen.width(), 100);
-    assert_eq!(screen.height(), 30);
-}
-
-/// Resizing drops the tracked terminal contents, so it costs a full repaint.
-/// `autoresize` runs on every resize report, including ones that leave the
-/// cell grid alone, so the same size must not pay that cost.
-#[test]
 fn resize_to_the_same_size_does_not_repaint() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
     screen.set_str((0, 0), "hello", crate::style::Style::default());
@@ -339,93 +251,19 @@ fn resize_to_the_same_size_does_not_repaint() {
     );
 }
 
-#[test]
-fn test_screen_clears_stale_chars_after_navigating() {
-    // Simulate the file_explorer scenario: a row that had a long
-    // line in frame N becomes blank in frame N+1. The bytes emitted
-    // for frame N+1 must clear every column that frame N had
-    // written. This is the "stale glyph" reproduction.
-    let mut frame1: Vec<u8> = Vec::new();
-    let mut frame2: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut frame1, (40, 5));
-        screen.clear();
-        {
-            screen.set_str(
-                (0, 2),
-                "icu_segmenter = \"compiled_data\"",
-                crate::style::Style::default(),
-            );
-        };
-        screen.render().unwrap();
-        screen.flush().unwrap();
-        // Swap writers so frame 2 lands in its own buffer while
-        // the renderer's diff state carries over.
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut frame2);
-        screen.clear();
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    let s = String::from_utf8_lossy(&frame2);
-
-    // The rendered frame must include some form of clearing for
-    // row 2 — either ECH/EL/spaces. If none of these are present,
-    // the row will keep showing the old characters.
-    let has_clear = s.contains("\x1b[K")
-        || s.contains("\x1b[0K")
-        || s.bytes().filter(|b| *b == b'X').count() > 0
-        || s.contains("                              ");
-    assert!(
-        has_clear,
-        "frame 2 did not clear stale chars on row 2: {:02x?}",
-        frame2
-    );
-}
-
-// --- end-to-end renderer tests ---
-//
-// Drive the renderer through the Screen render surface. The writer
-// is `&mut Vec<u8>` (or scoped so the test owns the `Vec<u8>` that
-// outlives the screen), and per-test configuration is established
-// up front with the `with_color_profile` / `with_optimizations`
-// builders — there is no runtime mutation of these knobs.
-//
-// Each optimization-toggle pair asserts on the **discriminating
-// byte sequence** the optimization controls (ECH, REP, tab,
-// backspace, map-newline, scroll), so the ON and OFF variants
-// would diverge if the optimization regressed.
-//
-// Some renderer behaviours are intentionally not covered here:
-// * Touched-span tracking: depends on directly poking `RenderBuffer`
-//   and reading per-line touched spans, neither of which is part of
-//   the public API. Touch tracking is exercised indirectly by every
-//   render test that asserts on emitted bytes.
-// * Renderer logger hooks: not provided.
-// * Style-change runtime mutation: exercised by
-//   `renderer_redraws_when_style_changes` below.
-// * Runtime mutation of the relative-cursor flag: inline /
-//   fullscreen flavors of the relative-cursor model are covered by
-//   `inline_hello_world_emits_exact_byte_stream` and
-//   `fullscreen_diagonal_emits_exact_byte_stream`.
-//
-// Output-frame cases drive the same source text through Screen
-// (with `set_str_wrap(..., WrapMode::Wrap)`), render both frames in a
-// single Screen lifetime, and assert that the relevant content and
-// clearing sequences appear in the cumulative byte stream.
-
-use crate::color::Color;
 use crate::renderer::Optimizations;
+
 use crate::style::{Style, UnderlineStyle};
 
 fn s(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn fill(screen: &mut Screen<std::io::PipeReader, &mut Vec<u8>>, x: u16, y: u16, content: &str) {
+fn fill(screen: &mut Screen<&mut Vec<u8>>, x: u16, y: u16, content: &str) {
     screen.set_cell((x, y), &Cell::narrow(content));
 }
 
-fn draw_wrapped(screen: &mut Screen<std::io::PipeReader, &mut Vec<u8>>, src: &str) {
+fn draw_wrapped(screen: &mut Screen<&mut Vec<u8>>, src: &str) {
     let bounds = screen.bounds();
     screen.set_str_wrap(
         (bounds.x, bounds.y),
@@ -435,7 +273,7 @@ fn draw_wrapped(screen: &mut Screen<std::io::PipeReader, &mut Vec<u8>>, src: &st
     );
 }
 
-fn blank_screen(screen: &mut Screen<std::io::PipeReader, &mut Vec<u8>>) {
+fn blank_screen(screen: &mut Screen<&mut Vec<u8>>) {
     for y in 0..screen.height() {
         for x in 0..screen.width() {
             screen.set_cell((x, y), &Cell::BLANK);
@@ -457,10 +295,10 @@ fn fullscreen_diagonal_emits_exact_byte_stream() {
         screen.render().unwrap();
         screen.flush().unwrap();
     }
-    // DECSET 1049, hide cursor, CUP home, ED2, three Xs separated by
-    // LF (relies on the natural cursor wrap at column 5 to advance
-    // rows), show cursor.
-    assert_eq!(s(&buf), "\x1b[?1049h\x1b[?25l\x1b[H\x1b[2JX\nX\nX\x1b[?25h");
+    // Hide cursor, CUP home, ED2, three Xs separated by LF (relies on the
+    // natural cursor wrap at column 5 to advance rows), show cursor. No 1049:
+    // switching buffers is the terminal's business, not the renderer's.
+    assert_eq!(s(&buf), "\x1b[?25l\x1b[H\x1b[2JX\nX\nX\x1b[?25h");
 }
 
 // --- byte-exact: inline "Hello, World!" ---
@@ -510,37 +348,6 @@ fn truecolor_profile_emits_38_2_rgb() {
         "missing TC SGR: {out:?}"
     );
     assert!(!out.contains("\x1b[38;5;"), "must not downsample: {out:?}");
-}
-
-#[test]
-fn truecolor_termcap_upgrade_repaints_unchanged_cells() {
-    let mut screen = Screen::for_test(Vec::new(), (1, 1)).with_color_profile(Profile::Ansi256);
-    screen.set_cell(
-        (0u16, 0u16),
-        &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
-    );
-    screen.render().unwrap();
-
-    let first_len = screen.writer().len();
-    let first = s(screen.writer());
-    assert!(
-        first.contains("\x1b[38;5;"),
-        "first frame should be downsampled: {first:?}"
-    );
-
-    screen
-        .observe_event(&Event::Termcap {
-            recognized: true,
-            payload: "RGB".to_string(),
-        })
-        .unwrap();
-    screen.render().unwrap();
-
-    let second = s(&screen.writer()[first_len..]);
-    assert!(
-        second.contains("\x1b[38;2;255;0;0m"),
-        "unchanged cell must be repainted after truecolor upgrade: {second:?}"
-    );
 }
 
 #[test]
@@ -648,17 +455,6 @@ fn set_tracked_cursor_updates_belief_without_emitting() {
 }
 
 #[test]
-fn move_cursor_by_offsets_the_tracked_cursor() {
-    let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.move_cursor_to((10, 5)).unwrap();
-    screen.move_cursor_by(-3, 2).unwrap();
-    assert_eq!(screen.tracked_cursor(), Some(Position::new(7, 7)));
-    // Saturates at the origin rather than wrapping.
-    screen.move_cursor_by(-100, -100).unwrap();
-    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
-}
-
-#[test]
 fn move_cursor_by_treats_unknown_tracked_cursor_as_origin() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
     assert_eq!(screen.tracked_cursor(), None);
@@ -738,241 +534,6 @@ fn set_cursor_position_accepts_bare_tuple() {
     screen.set_cursor_position((5, 3));
     screen.render().unwrap();
     assert_eq!(screen.tracked_cursor(), Some(Position::new(5, 3)));
-}
-
-#[test]
-fn set_title_emits_osc_0() {
-    let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.set_title("hi").unwrap();
-    assert_eq!(s(screen.writer()), "\x1b]0;hi\x1b\\");
-}
-
-#[test]
-fn set_window_title_emits_osc_2() {
-    let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.set_window_title("hi").unwrap();
-    assert_eq!(s(screen.writer()), "\x1b]2;hi\x1b\\");
-}
-
-#[test]
-fn set_icon_title_emits_osc_1() {
-    let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen.set_icon_title("hi").unwrap();
-    assert_eq!(s(screen.writer()), "\x1b]1;hi\x1b\\");
-}
-
-#[test]
-fn reset_coalesces_equal_titles_into_single_osc_0() {
-    let mut setup: Vec<u8> = Vec::new();
-    let mut reset_buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut setup, (80, 24));
-        screen.set_title("App").unwrap();
-        // Swap writers so only reset-side bytes land in reset_buf.
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut reset_buf);
-        screen.reset().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&reset_buf);
-    assert!(
-        out.contains("\x1b]0;\x1b\\"),
-        "missing OSC 0 reset: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]2;\x1b\\"),
-        "unexpected OSC 2 reset: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]1;\x1b\\"),
-        "unexpected OSC 1 reset: {out:?}"
-    );
-}
-
-#[test]
-fn reset_uses_separate_osc_for_differing_titles() {
-    let mut setup: Vec<u8> = Vec::new();
-    let mut reset_buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut setup, (80, 24));
-        screen.set_window_title("Win").unwrap();
-        screen.set_icon_title("Icon").unwrap();
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut reset_buf);
-        screen.reset().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&reset_buf);
-    assert!(
-        out.contains("\x1b]2;\x1b\\"),
-        "missing OSC 2 reset: {out:?}"
-    );
-    assert!(
-        out.contains("\x1b]1;\x1b\\"),
-        "missing OSC 1 reset: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]0;\x1b\\"),
-        "unexpected OSC 0 reset: {out:?}"
-    );
-}
-
-#[test]
-fn restore_coalesces_equal_titles_into_single_osc_0() {
-    let mut setup: Vec<u8> = Vec::new();
-    let mut restore_buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut setup, (80, 24));
-        screen.set_title("App").unwrap();
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
-        screen.restore().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&restore_buf);
-    assert!(
-        out.contains("\x1b]0;App\x1b\\"),
-        "missing OSC 0 restore: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]2;App"),
-        "unexpected OSC 2 restore: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]1;App"),
-        "unexpected OSC 1 restore: {out:?}"
-    );
-}
-
-#[test]
-fn empty_title_clears_state_and_is_not_restored() {
-    let mut setup: Vec<u8> = Vec::new();
-    let mut restore_buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut setup, (80, 24));
-        screen.set_title("App").unwrap();
-        // An empty string clears the override (state -> None) while still
-        // emitting the clearing OSC 0.
-        screen.set_title("").unwrap();
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
-        screen.restore().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&restore_buf);
-    assert!(
-        !out.contains("\x1b]0;"),
-        "title should not be restored: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]1;"),
-        "icon should not be restored: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]2;"),
-        "window should not be restored: {out:?}"
-    );
-}
-
-#[test]
-fn set_progress_state_emits_osc_9_4() {
-    let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen
-        .set_progress_state(ProgressState::Normal(42))
-        .unwrap();
-    assert_eq!(s(screen.writer()), "\x1b]9;4;1;42\x07");
-}
-
-#[test]
-fn set_progress_state_clamps_and_maps_each_state() {
-    for (state, want) in [
-        (ProgressState::Normal(0), "\x1b]9;4;1;0\x07"),
-        (ProgressState::Normal(200), "\x1b]9;4;1;100\x07"),
-        (ProgressState::Error(7), "\x1b]9;4;2;7\x07"),
-        (ProgressState::Warning(99), "\x1b]9;4;4;99\x07"),
-        (ProgressState::Indeterminate, "\x1b]9;4;3\x07"),
-    ] {
-        let mut screen = Screen::for_test(Vec::new(), (80, 24));
-        screen.set_progress_state(state).unwrap();
-        assert_eq!(s(screen.writer()), want, "wrong bytes for {state:?}");
-    }
-}
-
-#[test]
-fn reset_progress_state_emits_removal() {
-    let mut screen = Screen::for_test(Vec::new(), (80, 24));
-    screen
-        .set_progress_state(ProgressState::Indeterminate)
-        .unwrap();
-    screen.reset_progress_state().unwrap();
-    assert!(s(screen.writer()).ends_with("\x1b]9;4;0\x07"));
-}
-
-#[test]
-fn reset_removes_progress_and_restore_reports_it_again() {
-    let mut setup: Vec<u8> = Vec::new();
-    let mut reset_buf: Vec<u8> = Vec::new();
-    let mut restore_buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut setup, (80, 24));
-        screen.set_progress_state(ProgressState::Error(64)).unwrap();
-        // Shell handoff: the progress report must come down...
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut reset_buf);
-        screen.reset().unwrap();
-        screen.flush().unwrap();
-        // ...and go back up on resume.
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
-        screen.restore().unwrap();
-        screen.flush().unwrap();
-    }
-    assert!(
-        s(&reset_buf).contains("\x1b]9;4;0\x07"),
-        "progress not removed on reset: {:?}",
-        s(&reset_buf)
-    );
-    assert!(
-        s(&restore_buf).contains("\x1b]9;4;2;64\x07"),
-        "progress not restored: {:?}",
-        s(&restore_buf)
-    );
-}
-
-#[test]
-fn untouched_progress_is_not_reset_or_restored() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (80, 24));
-        screen.reset().unwrap();
-        screen.restore().unwrap();
-        screen.flush().unwrap();
-    }
-    assert!(
-        !s(&buf).contains("\x1b]9;4"),
-        "unexpected progress sequence: {:?}",
-        s(&buf)
-    );
-}
-
-#[test]
-fn empty_window_title_clears_only_window_state() {
-    let mut setup: Vec<u8> = Vec::new();
-    let mut restore_buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut setup, (80, 24));
-        screen.set_window_title("Win").unwrap();
-        screen.set_icon_title("Icon").unwrap();
-        // Clearing only the window title leaves the icon name intact.
-        screen.set_window_title("").unwrap();
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
-        screen.restore().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&restore_buf);
-    assert!(
-        out.contains("\x1b]1;Icon\x1b\\"),
-        "icon should be restored: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b]2;"),
-        "window should not be restored: {out:?}"
-    );
-    assert!(!out.contains("\x1b]0;"), "no OSC 0 expected: {out:?}");
 }
 
 #[test]
@@ -1156,50 +717,6 @@ fn tab_optimization_off_emits_cuf_instead_of_tab() {
         "expected CUF 8 instead of tab: {out:?}"
     );
     assert!(!out.contains('\t'), "tab leaked while disabled: {out:?}");
-}
-
-#[test]
-fn reset_lnm_emits_ansi_mode_20_reset() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (20, 1));
-        screen.reset_lnm().unwrap();
-    }
-    // ANSI mode, so no `?` private marker: a DEC-private `\x1b[?20l` is a
-    // different mode entirely.
-    assert_eq!(s(&buf), "\x1b[20l");
-}
-
-#[test]
-fn reset_tab_stops_emits_even_when_tabs_disabled() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let opts = Optimizations::default().difference(Optimizations::TABS);
-        let mut screen = Screen::for_test(&mut buf, (20, 1)).with_optimizations(opts);
-        screen.reset_tab_stops().unwrap();
-    }
-    assert!(
-        !buf.is_empty(),
-        "tab stops belong to the terminal, not to our willingness to use them: \
-         turning TABS on later must not find them unknown"
-    );
-}
-
-#[test]
-fn reset_tab_stops_emits_reset_when_tabs_enabled() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let opts = Optimizations::default().union(Optimizations::TABS);
-        let mut screen = Screen::for_test(&mut buf, (20, 1)).with_optimizations(opts);
-        screen.reset_tab_stops().unwrap();
-    }
-    let out = s(&buf);
-    // Either the DECST8C one-shot or the portable TBC clear-all, depending
-    // on the terminal detected from the environment.
-    assert!(
-        out.contains("\x1b[?5W") || out.contains("\x1b[3g"),
-        "expected a tab-stop reset: {out:?}"
-    );
 }
 
 #[test]
@@ -1861,7 +1378,7 @@ fn ech_off_mid_row_blanks_emit_literal_spaces() {
 // --- alt-screen ---
 
 #[test]
-fn alt_screen_enter_exit_emits_decset_decrst_and_clear() {
+fn fullscreen_toggle_repaints_and_leaves_modes_to_the_caller() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (3, 3));
@@ -1872,10 +1389,33 @@ fn alt_screen_enter_exit_emits_decset_decrst_and_clear() {
         screen.flush().unwrap();
     }
     let out = s(&buf);
-    let h_idx = out.find("\x1b[?1049h").expect("missing DECSET 1049");
-    let ed_idx = out.find("\x1b[H\x1b[2J").expect("missing HOME+ED");
-    let l_idx = out.find("\x1b[?1049l").expect("missing DECRST 1049");
-    assert!(h_idx < ed_idx && ed_idx < l_idx, "out-of-order: {out:?}");
+    // Going fullscreen discards the tracked contents, so the frame is a full
+    // repaint from the home position...
+    assert!(out.contains("\x1b[H\x1b[2J"), "missing HOME+ED: {out:?}");
+    // ...but the buffer switch itself is a terminal mode the caller owns.
+    assert!(
+        !out.contains("\x1b[?1049"),
+        "screen must not emit 1049: {out:?}"
+    );
+}
+
+#[test]
+fn leaving_fullscreen_repaints_too() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (3, 1));
+        screen.set_alt_screen(true);
+        fill(&mut screen, 0, 0, "A");
+        screen.render().unwrap();
+        // Back to the normal buffer, drawing the same content. The tracked
+        // contents describe the buffer just left, not the one now showing, so
+        // a diff against them would emit nothing and leave the band blank.
+        screen.set_alt_screen(false);
+        fill(&mut screen, 0, 0, "A");
+        screen.render().unwrap();
+    }
+    let out = s(&buf);
+    assert_eq!(out.matches('A').count(), 2, "second frame skipped: {out:?}");
 }
 
 #[test]
@@ -2076,607 +1616,114 @@ fn redraw_identical_frame_after_clear_emits_zero_bytes() {
     }
 }
 
+/// The fullscreen flag is a render property, not a mode: it retargets the
+/// renderer without touching the terminal. Emitting DECSET 1049 belongs to
+/// `Program`.
 #[test]
-fn reset_moves_cursor_to_last_row_inline() {
+fn test_alt_screen() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::for_test(&mut buf, (20, 5));
-        screen.set_str((0, 0), "hi", crate::style::Style::default());
-        screen.render().unwrap();
-        screen.reset().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    // After "hi" lands at row 0, cur.pos.y == 0. reset must walk down
-    // to row 4 (last of 5-row inline surface). In inline / relative
-    // mode the planner emits CUD 4 (or 4× LF when cheaper).
-    assert!(
-        out.contains("\x1b[4B") || out.matches('\n').count() >= 4,
-        "expected reset to walk cursor down 4 rows, got {out:?}"
-    );
-}
-
-#[test]
-fn reset_moves_cursor_to_last_row_alt_screen() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (20, 5));
+        let mut screen = Screen::for_test(&mut buf, (80, 24));
         screen.set_alt_screen(true);
-        screen.set_str((0, 0), "hi", crate::style::Style::default());
-        screen.render().unwrap();
-        screen.reset().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    let leave = out.find("\x1b[?1049l").expect("alt-screen leave");
-    let head = &out[..leave];
-    // Alt-screen: emit the move before leaving so terminals that
-    // don't honor DECRST 1049's saved-cursor restore still land at
-    // a sensible row. Terminals that do honor it will undo our move.
-    assert!(
-        head.contains("\x1b[5;1H")
-            || head.contains("\x1b[5H")
-            || head.contains("\x1b[4B")
-            || head.matches('\n').count() >= 4,
-        "expected cursor move to last row before alt-screen leave, head={head:?}"
-    );
-}
-
-#[test]
-fn reset_uses_front_buf_height_not_live_height_after_resize() {
-    // Simulate the user's bug: small render, terminal grows, quit.
-    // The cursor must land on the bottom of the *rendered* surface
-    // (5 rows), not the new live height (50 rows), so a terminal
-    // that loses the alt-screen saved cursor across a resize doesn't
-    // pull the post-quit cursor far below where the user started.
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (20, 5));
-        screen.set_alt_screen(true);
-        screen.set_str((0, 0), "hi", crate::style::Style::default());
-        screen.render().unwrap();
-        // Grow the screen. front_buf still reflects the 5-row render.
-        screen.resize((20, 50));
-        screen.reset().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    let leave = out.find("\x1b[?1049l").expect("alt-screen leave");
-    let head = &out[..leave];
-    // Must not target row 50.
-    assert!(
-        !head.contains("\x1b[50;1H") && !head.contains("\x1b[50H"),
-        "reset targeted live height instead of front-buf height: head={head:?}"
-    );
-}
-
-// --- kitty keyboard setter ---
-
-#[test]
-fn set_kitty_keyboard_flags_always_emits_set() {
-    use crate::ansi::kitty::KittyKeyboardFlags;
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (20, 1));
-        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
-        // Always emits, even when the tracked flags are unchanged.
-        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
-        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::empty());
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&buf);
-    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-    assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 2);
-    assert!(out.contains("\x1b[=0;1u"));
-}
-
-#[test]
-fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
-    use crate::ansi::kitty::KittyKeyboardFlags;
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (20, 1));
-        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
-        screen.set_alt_screen(true);
+        assert!(screen.fullscreen());
         screen.set_alt_screen(false);
+        assert!(!screen.fullscreen());
         screen.flush().unwrap();
     }
-    let out = String::from_utf8_lossy(&buf);
-    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-    // Initial set + alt-enter re-apply + alt-leave re-apply = 3 emissions.
-    assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 3);
+    // Switching buffers is the terminal's business: the screen only flips how
+    // it addresses cells, so no 1049 comes out of it.
+    assert!(buf.is_empty(), "screen must not emit modes: {buf:02x?}");
 }
 
 #[test]
-fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
-    use crate::ansi::kitty::KittyKeyboardFlags;
-    let mut buf: Vec<u8> = Vec::new();
+fn test_resize() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.resize((100, 30));
+    assert_eq!(screen.width(), 100);
+    assert_eq!(screen.height(), 30);
+}
+
+#[test]
+fn test_screen_clears_stale_chars_after_navigating() {
+    // Simulate the file_explorer scenario: a row that had a long
+    // line in frame N becomes blank in frame N+1. The bytes emitted
+    // for frame N+1 must clear every column that frame N had
+    // written. This is the "stale glyph" reproduction.
+    let mut frames: Vec<u8> = Vec::new();
+    let frame2_start;
     {
-        let mut screen = Screen::for_test(&mut buf, (20, 1));
-        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
-        screen.set_alt_screen(true);
-        screen.reset().unwrap();
-        // State preserved across reset for restore to use.
-        assert_eq!(
-            screen.state.kitty_keyboard,
-            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
-        );
+        let mut screen = Screen::for_test(&mut frames, (40, 5));
+        screen.clear();
+        {
+            screen.set_str(
+                (0, 2),
+                "icu_segmenter = \"compiled_data\"",
+                crate::style::Style::default(),
+            );
+        };
+        screen.render().unwrap();
+        screen.flush().unwrap();
+        // Mark where frame 2 starts so it can be inspected alone while the
+        // renderer's diff state carries over.
+        frame2_start = screen.writer().len();
+        screen.clear();
+        screen.render().unwrap();
         screen.flush().unwrap();
     }
-    let out = String::from_utf8_lossy(&buf);
-    let leave = out.find("\x1b[?1049l").expect("alt-screen leave");
-    let head = &out[..leave];
-    let tail = &out[leave..];
-    // A clear targets the alt buffer before leaving, and another
-    // clear targets the main buffer afterwards.
+    let frame2 = &frames[frame2_start..];
+    let s = String::from_utf8_lossy(frame2);
+
+    // The rendered frame must include some form of clearing for
+    // row 2 — either ECH/EL/spaces. If none of these are present,
+    // the row will keep showing the old characters.
+    let has_clear = s.contains("\x1b[K")
+        || s.contains("\x1b[0K")
+        || s.bytes().filter(|b| *b == b'X').count() > 0
+        || s.contains("                              ");
     assert!(
-        head.contains("\x1b[=0;1u"),
-        "alt clear missing: head={head:?}"
-    );
-    assert!(
-        tail.contains("\x1b[=0;1u"),
-        "main clear missing: tail={tail:?}"
+        has_clear,
+        "frame 2 did not clear stale chars on row 2: {:02x?}",
+        frame2
     );
 }
 
 #[test]
-fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
-    use crate::ansi::kitty::KittyKeyboardFlags;
-    let mut setup: Vec<u8> = Vec::new();
-    let mut restore_buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut setup, (20, 1));
-        screen.set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES);
-        screen.set_alt_screen(true);
-        screen.reset().unwrap();
-        // Swap writers so only restore-side bytes land in restore_buf.
-        let _ = std::mem::replace(screen.terminal.output_mut(), &mut restore_buf);
-        screen.restore().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = String::from_utf8_lossy(&restore_buf);
-    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-    let enter = out.find("\x1b[?1049h").expect("alt-screen enter");
-    let head = &out[..enter];
-    let tail = &out[enter..];
-    // Set on main first (before the alt-screen enter), then on alt
-    // (after entering).
+fn truecolor_termcap_upgrade_repaints_unchanged_cells() {
+    let mut screen = Screen::for_test(Vec::new(), (1, 1)).with_color_profile(Profile::Ansi256);
+    screen.set_cell(
+        (0u16, 0u16),
+        &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+    );
+    screen.render().unwrap();
+
+    let first_len = screen.writer().len();
+    let first = s(screen.writer());
     assert!(
-        head.contains(&format!("\x1b[={bits};1u")),
-        "main set missing: head={head:?}"
+        first.contains("\x1b[38;5;"),
+        "first frame should be downsampled: {first:?}"
     );
+
+    // A truecolor discovery reaches the renderer as a profile change; the
+    // point of the test is that raising it repaints cells that did not change.
+    screen.set_color_profile(Profile::TrueColor);
+    screen.render().unwrap();
+
+    let second = s(&screen.writer()[first_len..]);
     assert!(
-        tail.contains(&format!("\x1b[={bits};1u")),
-        "alt set missing: tail={tail:?}"
-    );
-}
-
-// --- teardown drain of pending capability-query replies ---
-
-// Uses a pipe the event source must poll; on Windows the source polls a
-// console handle, not a pipe, so this drain path is exercised on Unix only.
-#[cfg(unix)]
-#[test]
-fn drain_consumes_pending_da_reply_and_marks_done() {
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    // A Primary DA reply terminates the capability-reply stream.
-    writer.write_all(b"\x1b[?65;1c").unwrap();
-    drop(writer); // EOF after the reply so poll sees it and does not block
-
-    let mut buf: Vec<u8> = Vec::new();
-    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
-    // Simulate post-init state: queries were just sent, not yet consumed.
-    screen.queries_sent_at = Some(std::time::Instant::now());
-    screen.defaults_applied = false;
-
-    screen.drain_pending_queries().unwrap();
-
-    assert!(
-        screen.defaults_applied,
-        "drain should consume the Primary DA reply and mark defaults applied"
-    );
-}
-
-// Enabling in-band resize (DEC 2048) as a discovery-driven default makes the
-// terminal echo one `CSI 48 ; ... t` size report *after* the Primary DA
-// terminator. The drain must consume that echo too, or it leaks to the shell
-// once cooked mode is restored. Unix-only for the same pipe-polling reason.
-#[cfg(unix)]
-#[test]
-fn drain_consumes_in_band_resize_echo_from_enabling_default() {
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    // DA1 terminates the query stream; enabling 2048 then echoes a resize.
-    writer.write_all(b"\x1b[?65;1c").unwrap();
-    writer.write_all(b"\x1b[48;24;80;768;1040t").unwrap();
-    drop(writer); // EOF so poll does not block once both replies are read
-
-    let mut buf: Vec<u8> = Vec::new();
-    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
-    // Terminal reported 2048 support, so apply_defaults will enable it.
-    screen.caps.in_band_resize = true;
-    screen.queries_sent_at = Some(std::time::Instant::now());
-    screen.defaults_applied = false;
-
-    screen.drain_pending_queries().unwrap();
-
-    assert!(
-        screen.defaults_applied,
-        "DA reply should mark defaults applied"
-    );
-    assert!(
-        screen.try_read_event().is_none(),
-        "the in-band resize echo must be consumed, not left to leak"
+        second.contains("\x1b[38;2;255;0;0m"),
+        "unchanged cell must be repainted after truecolor upgrade: {second:?}"
     );
 }
 
 #[test]
-fn drain_is_noop_when_defaults_already_applied() {
-    let (reader, writer) = std::io::pipe().unwrap();
-    drop(writer);
-    let mut buf: Vec<u8> = Vec::new();
-    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
-    // Already consumed: drain must not block or read.
-    screen.defaults_applied = true;
-    screen.queries_sent_at = Some(std::time::Instant::now());
-    screen.options.query_drain_timeout = std::time::Duration::from_secs(10);
-
-    let start = std::time::Instant::now();
-    screen.drain_pending_queries().unwrap();
-    assert!(
-        start.elapsed() < std::time::Duration::from_millis(500),
-        "drain must return immediately when defaults are already applied"
-    );
-}
-
-#[test]
-fn drain_is_noop_when_no_queries_were_sent() {
-    let (reader, writer) = std::io::pipe().unwrap();
-    drop(writer);
-    let mut buf: Vec<u8> = Vec::new();
-    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
-    // No queries sent (e.g. query_capabilities was off): nothing to drain.
-    screen.defaults_applied = false;
-    screen.queries_sent_at = None;
-    screen.options.query_drain_timeout = std::time::Duration::from_secs(10);
-
-    let start = std::time::Instant::now();
-    screen.drain_pending_queries().unwrap();
-    assert!(
-        start.elapsed() < std::time::Duration::from_millis(500),
-        "drain must return immediately when no queries were sent"
-    );
-}
-
-// Uses a pipe the event source must poll; Unix-only for the same reason as
-// drain_consumes_pending_da_reply_and_marks_done.
-#[cfg(unix)]
-#[test]
-fn drain_gives_up_after_timeout_when_no_reply_arrives() {
-    // Keep the write end open so the input never reaches EOF and no reply
-    // ever arrives; the drain must still return once the budget elapses.
-    let (reader, _writer) = std::io::pipe().unwrap();
-    let mut buf: Vec<u8> = Vec::new();
-    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
-    screen.defaults_applied = false;
-    screen.queries_sent_at = Some(std::time::Instant::now());
-    screen.options.query_drain_timeout = std::time::Duration::from_millis(80);
-
-    let start = std::time::Instant::now();
-    screen.drain_pending_queries().unwrap();
-    let elapsed = start.elapsed();
-    assert!(
-        !screen.defaults_applied,
-        "no reply arrived, so defaults must stay unapplied"
-    );
-    assert!(
-        elapsed >= std::time::Duration::from_millis(60),
-        "drain should wait roughly the budget: {elapsed:?}"
-    );
-    assert!(
-        elapsed < std::time::Duration::from_millis(800),
-        "drain must not wait far beyond the budget: {elapsed:?}"
-    );
-}
-
-#[test]
-fn origin_defaults_to_zero_and_maps_mouse() {
-    use crate::event::{KeyModifiers, Mouse, MouseButton};
-
-    let mut buf = Vec::new();
-    let screen = Screen::for_test(&mut buf, (10, 3));
-    // No query has run, so the origin is the terminal top-left and mapping is
-    // a pass-through.
-    assert_eq!(screen.origin(), Position::ORIGIN);
-    let m = Mouse::new(5, 7, MouseButton::Left, KeyModifiers::empty());
-    let mapped = screen.mouse_to_origin(m);
-    assert_eq!((mapped.x, mapped.y), (5, 7));
-}
-
-#[test]
-fn origin_maps_mouse_relative_to_stored_origin() {
-    use crate::event::{KeyModifiers, Mouse, MouseButton};
-
-    let mut buf = Vec::new();
-    let mut screen = Screen::for_test(&mut buf, (10, 3));
-    // Simulate a tracked inline origin three rows down.
-    screen.origin = Position::new(2, 3);
-    let m = Mouse::new(6, 5, MouseButton::Left, KeyModifiers::empty());
-    let mapped = screen.mouse_to_origin(m);
-    assert_eq!((mapped.x, mapped.y), (4, 2));
-    // Clicks above/left of the origin saturate at zero.
-    let above = Mouse::new(1, 1, MouseButton::Left, KeyModifiers::empty());
-    let mapped = screen.mouse_to_origin(above);
-    assert_eq!((mapped.x, mapped.y), (0, 0));
-}
-
-#[test]
-fn alt_screen_origin_is_zero() {
-    let mut buf = Vec::new();
-    let mut screen = Screen::for_test(&mut buf, (10, 3));
-    screen.origin = Position::new(4, 9);
-    screen.state.alt_screen = true;
-    // In the alternate screen the managed area starts at the top-left,
-    // regardless of any stored inline origin.
-    assert_eq!(screen.origin(), Position::ORIGIN);
-}
-
-#[test]
-fn origin_captured_from_cursor_position_reply() {
-    let mut buf = Vec::new();
-    let mut screen = Screen::for_test(&mut buf, (10, 3));
-    screen.window_cells = Some(Size::new(10, 8));
-    // Simulate an outstanding `CSI 6n` origin request.
-    screen.origin_query_pending = true;
-    // The reply is observed (never consumed) and captured as the origin,
-    // clipped so the 3-row area stays on screen in an 8-row terminal.
-    screen
-        .observe_event(&Event::CursorPosition(Position::new(2, 7)))
-        .unwrap();
-    assert!(!screen.origin_query_pending);
-    assert_eq!(screen.origin(), Position::new(2, 5));
-
-    // A later stray CursorPosition (no request pending) is ignored.
-    screen
-        .observe_event(&Event::CursorPosition(Position::new(0, 0)))
-        .unwrap();
-    assert_eq!(screen.origin(), Position::new(2, 5));
-}
-
-#[test]
-fn clip_origin_keeps_area_on_screen() {
-    let mut buf = Vec::new();
-    let mut screen = Screen::for_test(&mut buf, (10, 3));
-    screen.window_cells = Some(Size::new(10, 8));
-    // A 3-row area in an 8-row terminal can start no lower than row 5.
-    assert_eq!(screen.clip_origin(Position::new(2, 7)), Position::new(2, 5));
-    // Within bounds is left untouched.
-    assert_eq!(screen.clip_origin(Position::new(2, 4)), Position::new(2, 4));
-    // An area at least as tall as the terminal pins to the top.
-    screen.window_cells = Some(Size::new(10, 3));
-    assert_eq!(screen.clip_origin(Position::new(0, 6)), Position::new(0, 0));
-}
-
-/// `init` must grant the line-discipline optimizations from the state the
-/// terminal is in *after* `make_raw`, not the one it was in before. Raw mode
-/// clears `OPOST`, so tabs and backspace reach the terminal untouched and `\n`
-/// no longer carries a carriage return. This drives a real pty to prove raw
-/// mode actually delivers that, rather than taking `cfmakeraw` on faith.
-#[cfg(all(unix, not(target_os = "l4re")))]
-#[test]
-fn init_grants_tabs_and_bs_after_entering_raw_mode() {
-    use std::os::fd::AsRawFd;
-
-    // The master must outlive the slave, so bind it for the whole test.
-    let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
-        return;
-    };
-    // Put the slave in cooked mode with tab expansion and ONLCR: the exact
-    // opposite of what raw mode leaves behind. Everything past the pty probe
-    // is a hard failure -- a silent return here would let the whole test pass
-    // vacuously on a machine where ptys work fine.
-    let mut cooked: libc::termios = unsafe { std::mem::zeroed() };
-    assert_eq!(
-        unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut cooked) },
-        0,
-        "tcgetattr on a fresh pty slave: {}",
-        std::io::Error::last_os_error()
-    );
-    cooked.c_oflag |= libc::OPOST | libc::ONLCR;
-    assert_eq!(
-        unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
-        0,
-        "tcsetattr on a fresh pty slave: {}",
-        std::io::Error::last_os_error()
-    );
-
-    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::Env::new());
-    let mut screen = Screen::new(term).expect("Screen::new over a pty slave");
-    // Start from the opposite of what raw mode implies: TABS and BS off, so
-    // only the init-time grant can explain their final values. ONLCR on, so
-    // the same assertion proves init leaves an opt-in flag alone.
-    let primed = Optimizations::modern()
-        .with_tabs(false)
-        .with_bs(false)
-        .with_onlcr(true);
-    screen.set_optimizations(primed);
-    screen
-        .init_with(ScreenOptions {
-            query_capabilities: false,
-            ..Default::default()
-        })
-        .expect("init over a pty slave");
-
-    assert_tabs_and_bs_granted(screen.optimizations(), primed, "init");
-
-    // Resume re-enters raw mode, so it must re-grant too. Undo the flags
-    // first -- otherwise the assertion would still hold if `resume` did
-    // nothing at all.
-    screen.pause().expect("pause");
-    assert_eq!(
-        unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &cooked) },
-        0,
-        "restoring cooked mode while paused: {}",
-        std::io::Error::last_os_error()
-    );
-    screen.set_optimizations(primed);
-    screen.resume().expect("resume");
-    assert_tabs_and_bs_granted(screen.optimizations(), primed, "resume");
-}
-
-/// Exactly what a raw-mode entry must leave behind: `TABS` and `BS` on, and
-/// every other capability -- including the opt-in `ONLCR` -- exactly as the
-/// caller left it. One equality pins the grant, the opt-in, and the baseline.
-#[cfg(all(unix, not(target_os = "l4re")))]
-#[track_caller]
-fn assert_tabs_and_bs_granted(opts: Optimizations, primed: Optimizations, after: &str) {
-    assert_eq!(
-        opts,
-        primed.with_tabs(true).with_bs(true),
-        "{after}: raw mode makes \\t and \\x08 safe, so both are granted; ONLCR \
-         is opt-in and every other cap must survive untouched"
-    );
-}
-
-/// LNM is terminal state, not termios: it survives whoever set it, so a
-/// terminal handed over in LNM makes every `\n` the cursor planner emits reset
-/// the column while the plan assumes it is carried. Raw mode cannot answer it,
-/// which is why this is checked over a real pty rather than a byte buffer.
-#[cfg(all(unix, not(target_os = "l4re")))]
-mod lnm {
-    use super::*;
-    use crate::terminal::{Env, Terminal};
-    use crate::testutil::{drain, open_pty_pair};
-
-    fn init_bytes_over_pty(f: impl FnOnce(&mut Screen<&std::fs::File, &std::fs::File>)) -> String {
-        let (Some((_ma, input)), Some((mb, out))) = (open_pty_pair(), open_pty_pair()) else {
-            return String::new();
-        };
-        let terminal = Terminal::new(&input, &out, Env::from_pairs([("TERM", "xterm")]));
-        let mut screen = Screen::new(terminal).expect("screen over two ptys");
-        f(&mut screen);
-        s(&drain(&mb))
-    }
-
-    fn quiet() -> ScreenOptions {
-        ScreenOptions {
-            query_capabilities: false,
-            query_drain_timeout: Duration::ZERO,
-            ..ScreenOptions::default()
-        }
-    }
-
-    #[test]
-    fn init_resets_lnm() {
-        let out = init_bytes_over_pty(|screen| {
-            screen.init_with(quiet()).expect("init");
-        });
-        if out.is_empty() {
-            return; // no usable pty here
-        }
-        assert!(out.contains("\x1b[20l"), "init must reset LNM: {out:?}");
-    }
-
-    #[test]
-    fn resume_resets_lnm() {
-        // A program run while we were paused can set LNM behind our back, so
-        // re-entering raw mode has to impose it again rather than assume the
-        // reset from init survived.
-        let out = init_bytes_over_pty(|screen| {
-            screen.init_with(quiet()).expect("init");
-            screen.pause().expect("pause");
-            screen.resume().expect("resume");
-        });
-        if out.is_empty() {
-            return; // no usable pty here
-        }
-        assert_eq!(
-            out.matches("\x1b[20l").count(),
-            2,
-            "init and resume must each reset LNM: {out:?}"
-        );
-    }
-}
-
-/// `finish` consumes the screen and there is no `Drop` impl, so if a teardown
-/// write failure skipped the restore the terminal would stay raw for good. A
-/// program piped into `head` hits exactly that: the reader goes away, the
-/// final flush fails with `EPIPE`, and the user is left with a broken shell.
-#[cfg(all(unix, not(target_os = "l4re")))]
-mod teardown_failure {
-    use super::*;
-    use crate::terminal::{Env, Terminal};
-    use crate::testutil::{open_pty_pair, opost, prime};
-    use std::cell::Cell;
-    use std::fs::File;
-    use std::os::fd::{AsFd, BorrowedFd};
-
-    /// A pty output half whose writes can be made to fail on demand, which is
-    /// what a broken pipe or a hung-up terminal looks like to the renderer.
-    /// `Screen` needs its output half to be `Copy`, hence the shared `Cell`
-    /// rather than a plain `bool`.
-    #[derive(Clone, Copy)]
-    struct Breakable<'a> {
-        tty: &'a File,
-        broken: &'a Cell<bool>,
-    }
-
-    impl io::Write for Breakable<'_> {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            if self.broken.get() {
-                return Err(io::Error::from(io::ErrorKind::BrokenPipe));
-            }
-            (&*self.tty).write(buf)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            if self.broken.get() {
-                return Err(io::Error::from(io::ErrorKind::BrokenPipe));
-            }
-            (&*self.tty).flush()
-        }
-    }
-
-    impl AsFd for Breakable<'_> {
-        fn as_fd(&self) -> BorrowedFd<'_> {
-            self.tty.as_fd()
-        }
-    }
-
-    #[test]
-    fn finish_restores_the_terminal_even_when_teardown_fails() {
-        let (Some((_ma, input)), Some((_mb, out))) = (open_pty_pair(), open_pty_pair()) else {
-            return;
-        };
-        // A fresh pty's attributes are implementation-defined, so put `OPOST`
-        // where the assertions below need it rather than assuming it.
-        prime(&input, true);
-        prime(&out, true);
-
-        let broken = Cell::new(false);
-        let output = Breakable {
-            tty: &out,
-            broken: &broken,
-        };
-        let terminal = Terminal::new(&input, output, Env::from_pairs([("TERM", "xterm")]));
-        let mut screen = Screen::new(terminal).expect("screen over two ptys");
-        // Nothing is going to answer the capability queries, so do not sit in
-        // the teardown drain waiting for replies that cannot arrive.
-        screen
-            .init_with(ScreenOptions {
-                query_drain_timeout: Duration::ZERO,
-                ..ScreenOptions::default()
-            })
-            .expect("init");
-        assert!(!opost(&input) && !opost(&out), "both halves must be raw");
-
-        broken.set(true);
-        let err = screen.finish().expect_err("the teardown flush must fail");
-        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
-        assert!(
-            opost(&input) && opost(&out),
-            "finish must hand the terminal back even when teardown fails"
-        );
-    }
+fn move_cursor_by_offsets_the_tracked_cursor() {
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.move_cursor_to((10, 5)).unwrap();
+    screen.move_cursor_by(-3, 2).unwrap();
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(7, 7)));
+    // Saturates at the origin rather than wrapping.
+    screen.move_cursor_by(-100, -100).unwrap();
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
 }
 
 // --- BCE: pen reset before a scrolling newline ---

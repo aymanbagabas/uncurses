@@ -10,7 +10,7 @@
 //! - handles keyboard navigation, mouse clicks, mouse-wheel scrolling,
 //!   and terminal resize events.
 //!
-//! Input is read synchronously with [`Screen::read_event`], which blocks
+//! Input is read synchronously with [`Program::read_event`], which blocks
 //! until the next event and runs terminal capability detection for you.
 //!
 //! Run with `cargo run --example file_explorer [directory]`. If no
@@ -36,7 +36,8 @@ use std::path::PathBuf;
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, MouseButton};
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -255,7 +256,7 @@ fn hex_dump(bytes: &[u8]) -> String {
 
 // -- Rendering ---------------------------------------------------------------
 
-fn draw(app: &ExplorerState, screen: &mut Screen<Stdin, Stdout>) {
+fn draw(app: &ExplorerState, screen: &mut Screen<Stdout>) {
     let w = screen.width();
     let h = screen.height();
     if w < 20 || h < 5 {
@@ -411,7 +412,7 @@ fn unicode_char_width(ch: char) -> usize {
 // -- Main loop ---------------------------------------------------------------
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     state: ExplorerState,
     quit_keys: [Key; 3],
     up_keys: [Key; 2],
@@ -435,15 +436,15 @@ impl App {
 
         let state = ExplorerState::new(start_dir);
 
-        let mut screen = Screen::stdio()?;
+        let mut program = Program::stdio()?;
         // Begin a session with SGR-encoded mouse tracking (clicks + wheel);
         // the screen picks the best mode and encoding the terminal supports.
-        screen.init_with(ScreenOptions {
+        program.init_with(ProgramOptions {
             mouse: Some(MouseTracking::empty()),
-            ..ScreenOptions::default()
+            ..ProgramOptions::default()
         })?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
         // Parse key bindings once. `Key` implements `FromStr`, so
         // `"ctrl+c".parse::<Key>()` produces a canonical `Key` value, and
@@ -466,7 +467,7 @@ impl App {
         let refresh_key: Key = "r".parse().unwrap();
 
         Ok(Self {
-            screen,
+            program,
             state,
             quit_keys,
             up_keys,
@@ -482,16 +483,15 @@ impl App {
     }
 
     fn render(&mut self) -> io::Result<()> {
-        draw(&self.state, &mut self.screen);
-        self.screen.render()
+        draw(&self.state, self.program.screen_mut());
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> io::Result<()> {
         self.render()?;
 
         loop {
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
             let mut dirty = true;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
@@ -523,11 +523,11 @@ impl App {
                 }
 
                 Event::MouseClick(m) => {
-                    let list_w = self.screen.width() / 3;
+                    let list_w = self.program.screen().width() / 3;
                     if m.x < list_w && m.y >= 1 {
                         let row = (m.y - 1) as usize;
                         // Recompute scroll the same way draw() does so clicks land.
-                        let body_h = self.screen.height().saturating_sub(2) as usize;
+                        let body_h = self.program.screen().height().saturating_sub(2) as usize;
                         let scroll = self
                             .state
                             .selected
@@ -556,7 +556,7 @@ impl App {
                     MouseButton::WheelRight => {
                         // Bound so the longest line's end can't scroll past
                         // the right edge of the preview pane.
-                        let w = self.screen.width();
+                        let w = self.program.screen().width();
                         let preview_w = w.saturating_sub(w / 3 + 1) as usize;
                         let longest = self
                             .state
@@ -573,7 +573,7 @@ impl App {
                 },
 
                 Event::Resize(ws) => {
-                    self.screen.resize((ws.col, ws.row));
+                    self.program.screen_mut().resize((ws.col, ws.row));
                 }
 
                 _ => dirty = false,
@@ -591,7 +591,7 @@ impl App {
         // `finish` tears down every staged mode (alt screen, mouse, cursor),
         // flushes, and restores the terminal. The event stream stops and
         // joins its reader thread when the screen drops.
-        self.screen.finish()
+        self.program.finish()
     }
 }
 

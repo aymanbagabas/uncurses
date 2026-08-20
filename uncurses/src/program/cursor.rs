@@ -1,4 +1,4 @@
-//! Cursor shape selection for the [`Screen`](super::Screen) facade.
+//! Cursor shape selection for the [`Program`](super::Program) facade.
 //!
 //! The facade exposes the cursor as a shape plus a separate blinking flag,
 //! rather than the underlying DECSCUSR codes which interleave the two. A

@@ -26,57 +26,58 @@ ships changed cells, `finish()` restores it.
 
 ```rust,no_run
 use uncurses::event::Event;
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?;
-    screen.enter_alt_screen()?; // take over the full screen
-    screen.set_str((0, 0), "hello, uncurses", Style::new());
-    screen.render()?;
-    while !matches!(screen.read_event()?, Event::KeyPress(_)) {} // wait for a key
-    screen.finish()
+    let mut program = Program::stdio()?;
+    program.init()?;
+    program.enter_alt_screen()?; // take over the full screen
+    program.screen_mut().set_str((0, 0), "hello, uncurses", Style::new());
+    program.screen_mut().render()?;
+    while !matches!(program.read_event()?, Event::KeyPress(_)) {} // wait for a key
+    program.finish()
 }
 ```
 
-Add an event loop to react to input. A `Screen` session starts inline (drawing
-in the normal buffer) with the cursor visible; the alternate screen and a
-hidden cursor are opt-in.
+`Program` owns the terminal and the input source; the `Screen` inside it owns
+the drawing. Add an event loop to react to input. A session starts inline
+(drawing in the normal buffer) with the cursor visible; the alternate screen
+and a hidden cursor are opt-in.
 
 ```rust,no_run
 use uncurses::buffer::Bounded;
 use uncurses::event::{Event, Key};
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?; // raw mode + capability detection; inline, cursor visible
-    let w = screen.width();
-    screen.resize((w, 2)); // inline: one text row plus a trailing blank line
+    let mut program = Program::stdio()?;
+    program.init()?; // raw mode, inline, cursor visible
+    let w = program.screen().width();
+    program.screen_mut().resize((w, 2)); // one text row plus a trailing blank line
 
+    let screen = program.screen_mut();
     screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
     screen.render()?;
 
     let q: Key = "q".parse().unwrap();
     loop {
-        let ev = screen.read_event()?;
-        screen.observe_event(&ev)?;
+        let ev = program.read_event()?;
         if matches!(ev, Event::KeyPress(k) if k == q) {
             break;
         }
     }
 
-    screen.finish() // restore the terminal, always, one call
+    program.finish() // restore the terminal, always, one call
 }
 ```
 
-`observe_event` is opt-in. Skip it and reads still work; you only forgo
-capability tracking for mouse, kitty keyboard, in-band resize, truecolor, and
-grapheme support.
+`read_event` tracks capabilities as the event passes through, so a synchronous
+loop has nothing extra to call. Only the async `event_stream()` bypasses the
+program, and that is the one path that needs `observe_event`.
 
 That's the shape of it; the full API and guides live at
 [uncurses.org](https://uncurses.org).

@@ -12,7 +12,8 @@ use std::time::Duration;
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
 use uncurses::event::Event;
-use uncurses::screen::{Screen, ScreenOptions};
+use uncurses::program::{Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -24,40 +25,39 @@ const TEXT: &str = "Hello, World! ";
 const FRAME_TIME: Duration = Duration::from_millis(120);
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init_with(ScreenOptions::default())?;
-    screen.enter_alt_screen()?;
+    let mut program = Program::stdio()?;
+    program.init_with(ProgramOptions::default())?;
+    program.enter_alt_screen()?;
     // The cursor stays visible: it is the resting point below the marquee.
-    screen.show_cursor()?;
+    program.show_cursor()?;
 
-    let result = run(&mut screen);
+    let result = run(&mut program);
 
-    screen.finish()?;
+    program.finish()?;
     result
 }
 
-fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let glyphs: Vec<char> = TEXT.chars().collect();
     let mut offset: usize = 0;
-    screen.set_title("Marquee Hello")?;
+    program.set_title("Marquee Hello")?;
 
     loop {
-        let cursor_row = draw(screen, &glyphs, offset);
+        let cursor_row = draw(program.screen_mut(), &glyphs, offset);
 
         // Park the cursor below the marquee at column 0 after every frame.
         // The diff render would otherwise leave the physical cursor at the end
         // of the marquee write; staging it here lets render() place it as part
         // of the frame.
-        screen.set_cursor_position((0, cursor_row));
-        screen.render()?;
+        program.screen_mut().set_cursor_position((0, cursor_row));
+        program.screen_mut().render()?;
 
         // Block up to one frame for input; any key press exits.
-        if screen.poll_event(Some(FRAME_TIME))? {
-            let ev = screen.read_event()?;
-            screen.observe_event(&ev)?;
+        if program.poll_event(Some(FRAME_TIME))? {
+            let ev = program.read_event()?;
             match ev {
                 Event::KeyPress(_) => break,
-                Event::Resize(ws) => screen.resize((ws.col, ws.row)),
+                Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
                 _ => {}
             }
         }
@@ -68,7 +68,7 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn draw(screen: &mut Screen<Stdin, Stdout>, glyphs: &[char], offset: usize) -> u16 {
+fn draw(screen: &mut Screen<Stdout>, glyphs: &[char], offset: usize) -> u16 {
     screen.clear();
 
     let w = screen.width();
