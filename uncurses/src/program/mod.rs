@@ -281,10 +281,12 @@ where
 
     /// Borrow the [`Terminal`] this program drives.
     ///
-    /// Read-only on purpose. The program tracks the modes and raw-mode state
-    /// it has emitted so it can restore them, and handing out a mutable
-    /// terminal would let that record drift from the terminal it describes.
-    /// Everything the program itself changes has a method here.
+    /// Shared on purpose: the program keeps ownership, so its record of the
+    /// modes and raw-mode state it emitted stays the authority for
+    /// [`finish`](Self::finish). Everything the program itself changes has a
+    /// method here. The borrow is not a seal, though. `Terminal::set_state`
+    /// takes `&self`, so a caller holding this can still change raw mode
+    /// behind the program's back, and the restore record will not know.
     pub fn terminal(&self) -> &Terminal<I, O> {
         &self.terminal
     }
