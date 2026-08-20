@@ -290,8 +290,9 @@ where
     /// [`read_event`](Self::read_event) / [`try_read_event`](Self::try_read_event)
     /// yields it before anything already queued. See [`EventSource::unread`].
     ///
-    /// The event has already been observed on its way out, and observing is
-    /// idempotent for everything that matters, so it is not observed again.
+    /// The event was observed on its way out and is deliberately not observed
+    /// again on the way back in: a reply counts once, and observing it twice
+    /// would match it against two of the requests still in flight.
     pub fn unread_event(&self, event: Event) {
         self.source.lock().unwrap().unread(event);
     }
@@ -446,6 +447,11 @@ where
     /// need it when you take events from somewhere else, namely the async
     /// [`event_stream`](Self::event_stream) or a shared
     /// [`event_source`](Self::event_source).
+    ///
+    /// Observe each event exactly once. A second call on an event a read
+    /// already observed is not harmless: replies are matched against the
+    /// requests still in flight, so observing one reply twice consumes two
+    /// requests and the answer to the second goes unrecorded.
     ///
     /// Capability-report replies to the queries you fire with
     /// [`query_capabilities`](Self::query_capabilities) and the individual

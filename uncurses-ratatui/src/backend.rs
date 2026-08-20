@@ -113,9 +113,9 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 /// Use [`poll_event`](Self::poll_event),
 /// [`try_read_event`](Self::try_read_event), and [`read_event`](Self::read_event)
 /// for synchronous loops, or [`event_stream`](Self::event_stream) with the
-/// `async` feature. Every read is pure, exactly like [`Program`]'s: call
-/// [`observe_event`](Self::observe_event) on each event to keep capability
-/// tracking alive, or skip it and reads still work.
+/// `async` feature. The synchronous reads keep capability tracking alive on
+/// their own; only the stream needs
+/// [`observe_event`](Self::observe_event) called by hand.
 ///
 /// ## Setup
 ///
@@ -376,9 +376,9 @@ where
 
     /// Try to read the next queued event without blocking.
     ///
-    /// This delegates to the wrapped [`Program`]'s pure read. Feed the returned
-    /// event to [`observe_event`](Self::observe_event) if you want capability
-    /// tracking; skipping it still reads fine.
+    /// This delegates to the wrapped [`Program`], which tracks capabilities as
+    /// the event passes through. Do not also pass the event to
+    /// [`observe_event`](Self::observe_event); it would count twice.
     ///
     /// ## Returns
     ///
@@ -398,9 +398,9 @@ where
 
     /// Block until the next event is available.
     ///
-    /// This delegates to the wrapped [`Program`]'s pure read. Feed the returned
-    /// event to [`observe_event`](Self::observe_event) if you want capability
-    /// tracking; skipping it still reads fine.
+    /// This delegates to the wrapped [`Program`], which tracks capabilities as
+    /// the event passes through. Do not also pass the event to
+    /// [`observe_event`](Self::observe_event); it would count twice.
     ///
     /// ## Returns
     ///
@@ -426,12 +426,11 @@ where
     /// Feed an event back through the wrapped [`Program`] for capability
     /// tracking.
     ///
-    /// Reads on this backend are pure, exactly like [`Program`]'s. Call this once
-    /// per event, on both the sync ([`read_event`](Self::read_event),
-    /// [`try_read_event`](Self::try_read_event)) and async
-    /// ([`event_stream`](Self::event_stream)) paths, to keep capability
-    /// detection, window-size tracking, and render properties in sync. Skip it
-    /// and reads still work, you just forgo those updates.
+    /// Only the async [`event_stream`](Self::event_stream) needs this: it
+    /// bypasses the backend, so nothing has observed what it yields. The
+    /// synchronous reads ([`read_event`](Self::read_event),
+    /// [`try_read_event`](Self::try_read_event)) already observe on your
+    /// behalf, and observing one of their events again would count it twice.
     ///
     /// ## Errors
     ///
@@ -444,8 +443,8 @@ where
     /// wrapped screen's input.
     ///
     /// The stream shares the screen's decoder, so it does not race the sync read
-    /// methods on the same file descriptor. Like every read on this backend it
-    /// yields events without observing them; pair it with
+    /// methods on the same file descriptor. Unlike those, it yields events
+    /// without observing them; pair it with
     /// [`observe_event`](Self::observe_event) in your `select!` loop to keep
     /// capability tracking alive.
     ///

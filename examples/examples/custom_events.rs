@@ -76,7 +76,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
         // everything decoded so far as `AppEvent::Term`.
         if program.poll_event(Some(POLL))? {
             while let Some(ev) = program.try_read_event()? {
-                program.observe_event(&ev)?;
                 if let Event::KeyPress(ref k) = ev
                     && quit.contains(k)
                 {

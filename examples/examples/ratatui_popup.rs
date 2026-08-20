@@ -28,14 +28,12 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         let events = terminal.backend_mut();
         if events.poll_event(None)?
             && let Some(ev) = events.try_read_event()?
+            && let Event::KeyPress(key) = ev
         {
-            events.observe_event(&ev)?;
-            if let Event::KeyPress(key) = ev {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('p') => show_popup = !show_popup,
-                    _ => {}
-                }
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Char('p') => show_popup = !show_popup,
+                _ => {}
             }
         }
     }

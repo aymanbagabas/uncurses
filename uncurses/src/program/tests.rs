@@ -712,6 +712,30 @@ fn a_burst_of_origin_requests_keeps_the_last_reply() {
     assert_eq!(program.origin(), Position::new(0, 9));
 }
 
+/// The synchronous reads observe as the event passes through, which is why
+/// applications call [`Program::observe_event`] only on the async stream.
+/// Observing twice would spend two of the requests in flight on one reply.
+#[test]
+fn a_synchronous_read_observes_without_a_second_call() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test_with_input(&buf, (10, 3), reader);
+    program.window_cells = Some(Size::new(10, 20));
+    program.request_origin().unwrap();
+
+    writer.write_all(b"\x1b[5;3R").unwrap();
+    drop(writer);
+
+    let ev = program.read_event().unwrap();
+    assert!(matches!(ev, Event::CursorPosition(_)), "{ev:?}");
+    // No observe_event call here on purpose.
+    assert_eq!(
+        program.origin_queries_pending, 0,
+        "the read did not observe"
+    );
+    assert_eq!(program.origin(), Position::new(2, 4));
+}
+
 #[test]
 fn mouse_to_origin_is_an_identity_in_fullscreen() {
     use crate::event::{KeyModifiers, Mouse, MouseButton};

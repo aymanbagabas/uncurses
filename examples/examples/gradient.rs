@@ -82,7 +82,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
 
     loop {
         let ev = program.read_event()?;
-        program.observe_event(&ev)?;
         match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::KeyPress(ref k) if *k == space => state.show_box = !state.show_box,

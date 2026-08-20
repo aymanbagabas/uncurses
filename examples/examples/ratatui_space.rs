@@ -174,7 +174,6 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
             let events = terminal.backend_mut();
             if events.poll_event(Some(remaining))? {
                 while let Some(ev) = events.try_read_event()? {
-                    events.observe_event(&ev)?;
                     match ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),

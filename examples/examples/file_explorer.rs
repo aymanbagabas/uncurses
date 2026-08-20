@@ -492,7 +492,6 @@ impl App {
 
         loop {
             let ev = self.program.read_event()?;
-            self.program.observe_event(&ev)?;
             let mut dirty = true;
             match ev {
                 Event::KeyPress(ref key) if self.quit_keys.contains(key) => break,
