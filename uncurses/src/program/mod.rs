@@ -396,16 +396,12 @@ where
         if pixels.width == 0 || pixels.height == 0 || cells.width == 0 || cells.height == 0 {
             return None;
         }
-        let cell_w = pixels.width / cells.width;
-        let cell_h = pixels.height / cells.height;
-        if cell_w == 0 || cell_h == 0 {
-            return None;
-        }
-        Some(crate::event::Mouse::new(
-            mouse.x / cell_w,
-            mouse.y / cell_h,
-            mouse.button,
-            mouse.modifiers,
+        Some(crate::event::mouse_pixel_to_cell(
+            mouse,
+            pixels.width,
+            pixels.height,
+            cells.width,
+            cells.height,
         ))
     }
 
