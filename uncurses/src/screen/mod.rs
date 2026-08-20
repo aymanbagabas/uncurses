@@ -465,10 +465,14 @@ impl<W: Write> Screen<W> {
         self.renderer.set_relative_cursor(!fullscreen);
         if fullscreen {
             self.renderer.save_cursor();
-            self.renderer.request_clear();
         } else {
             self.renderer.restore_cursor();
         }
+        // Either direction swaps which screen buffer the managed area lives
+        // on, and the other buffer holds something this renderer never wrote.
+        // Diffing against the record from the buffer being left would skip
+        // every cell the two happen to agree on, so discard it and repaint.
+        self.renderer.request_clear();
     }
 
     /// Whether the managed area is the whole viewport rather than a band in
