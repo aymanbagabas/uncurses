@@ -261,8 +261,10 @@ pub enum Event {
     Termcap {
         /// Whether the requested capabilities were recognized.
         recognized: bool,
-        /// Decoded `(name, value)` pairs. The value is `None` for a boolean
-        /// capability, which is reported as a bare name.
+        /// Decoded `(name, value)` pairs. The value is `None` when the entry
+        /// carried no `=`: either a boolean capability, reported as a bare
+        /// name, or a failure reply echoing a name it does not support.
+        /// `recognized` is what tells those apart.
         ///
         /// Kept as pairs because only the hex wire form is delimiter-safe:
         /// decoded values commonly contain `;` and `=` (`kf13` is
