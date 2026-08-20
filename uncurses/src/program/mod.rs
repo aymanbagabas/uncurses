@@ -557,8 +557,11 @@ where
             // renderer's color profile.
             Event::Termcap {
                 recognized: true,
-                ref payload,
-            } if payload.contains("RGB") || payload.contains("Tc") => {
+                ref entries,
+            } if entries
+                .iter()
+                .any(|(name, _)| name == "RGB" || name == "Tc") =>
+            {
                 self.caps.true_color = true;
                 self.screen
                     .set_color_profile(crate::color::Profile::TrueColor);
