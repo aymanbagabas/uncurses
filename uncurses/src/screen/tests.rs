@@ -2678,3 +2678,65 @@ mod teardown_failure {
         );
     }
 }
+
+// --- BCE: pen reset before a scrolling newline ---
+
+/// Inline downward moves are emitted as literal `\n`, which scrolls the
+/// host when the destination row does not exist yet. Under back-color
+/// erase that scroll paints the exposed row with the active pen's
+/// background, and no later diff repairs it — so every newline the
+/// renderer emits has to leave the pen at the default first.
+#[test]
+fn inline_render_resets_pen_before_every_newline() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (10, 3));
+        // `for_test` derives capabilities and colour from `$TERM`, and BCE
+        // is exactly what decides whether the reset is needed. Pin both so
+        // the assertion means the same thing on every platform.
+        screen.set_optimizations(Optimizations::modern().with_bce(true));
+        screen.set_color_profile(crate::color::Profile::Ansi);
+        let bg = Style::default().bg(Color::Blue);
+        for y in 0..3u16 {
+            screen.set_str((0, y), "abcdefghij", bg.clone());
+        }
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&buf);
+    assert!(
+        out.contains("\u{1b}[44m"),
+        "expected a painted background: {out:?}"
+    );
+    for (i, _) in out.match_indices('\n') {
+        assert!(
+            out[..i].ends_with("\u{1b}[m"),
+            "newline at byte {i} is not preceded by a pen reset: {out:?}"
+        );
+    }
+}
+
+/// The reset is only worth its bytes when the pen carries a background:
+/// back-color erase paints nothing else, so an unstyled frame must not
+/// pay for it. Pinned to the same capabilities as the test above, so
+/// this proves the background is what gates the reset — not a missing
+/// BCE flag.
+#[test]
+fn inline_render_without_background_emits_no_pen_resets() {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut screen = Screen::for_test(&mut buf, (10, 3));
+        screen.set_optimizations(Optimizations::modern().with_bce(true));
+        screen.set_color_profile(crate::color::Profile::Ansi);
+        for y in 0..3u16 {
+            screen.set_str((0, y), "abcdefghij", Style::default());
+        }
+        screen.render().unwrap();
+        screen.flush().unwrap();
+    }
+    let out = s(&buf);
+    assert!(
+        !out.contains("\u{1b}[m"),
+        "an unstyled frame should need no pen reset: {out:?}"
+    );
+}

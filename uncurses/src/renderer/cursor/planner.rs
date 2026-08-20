@@ -5,6 +5,14 @@
 //! materialised to bytes. Candidate enumeration order matches the
 //! historical emit order so ties resolve identically (strict `<`
 //! comparison keeps the earlier candidate).
+//!
+//! One emission sits outside the cost model: the pen reset that has to
+//! precede a `\n` which can scroll (see
+//! [`Renderer::lf_would_bleed_background`]). Pricing it would not change
+//! any decision — an inline downward move picks `\n` regardless of cost
+//! — and its length depends on the pen rather than the geometry, so the
+//! per-shape "predicted cost equals emitted bytes" invariant is kept on
+//! the shapes themselves.
 
 use std::io::{self, Write};
 
@@ -14,7 +22,9 @@ use crate::layout::Position;
 use crate::renderer::Renderer;
 use crate::renderer::caps::Optimizations;
 
+use super::axis::VerticalShape;
 use super::relative::RelativePlan;
+use crate::renderer::frame::emit::PenPolicy;
 
 /// Prefix prepended to a relative-move candidate.
 #[derive(Clone, Copy, Debug)]
@@ -61,6 +71,8 @@ impl Renderer {
     /// - `overwrite_line`: optional destination row cells. When present,
     ///   re-emitting matching cells can compete as a forward horizontal
     ///   move.
+    /// - `pen`: whether the move may reset the pen before a `\n` that
+    ///   can scroll. See [`PenPolicy`].
     ///
     /// # Behavior
     ///
@@ -87,6 +99,24 @@ impl Renderer {
         to: Position,
         overwrite_line: Option<&[Cell]>,
     ) -> io::Result<()> {
+        self.write_optimal_move_with_pen(
+            out,
+            from,
+            to,
+            overwrite_line,
+            PenPolicy::ResetBeforeScroll,
+        )
+    }
+
+    /// [`Renderer::write_optimal_move`] with an explicit pen policy.
+    pub(crate) fn write_optimal_move_with_pen(
+        &mut self,
+        out: &mut Vec<u8>,
+        from: Position,
+        to: Position,
+        overwrite_line: Option<&[Cell]>,
+        pen: PenPolicy,
+    ) -> io::Result<()> {
         if from.y == to.y && from.x == to.x && self.cur.known() {
             return Ok(());
         }
@@ -102,6 +132,80 @@ impl Renderer {
             return cursor::write_cup(out, to.y, to.x);
         }
 
+        let mut best = self.plan_move(from, to, overwrite_line);
+
+        // A `\n` that scrolls the host carries the active pen into the
+        // row it exposes (see [`Renderer::lf_would_bleed_background`]).
+        // Reset the pen first, then re-plan: the horizontal leg's
+        // overwrite candidate is only eligible for cells matching the
+        // active pen, so it has to be judged against the pen that will
+        // actually be in effect when the bytes land.
+        if pen == PenPolicy::ResetBeforeScroll && self.lf_would_bleed_background(&best) {
+            self.reset_pen(out)?;
+            best = self.plan_move(from, to, overwrite_line);
+        }
+
+        match best {
+            Winner::Cup { .. } => cursor::write_cup(out, to.y, to.x),
+            Winner::Relative { prefix, plan, .. } => {
+                prefix.emit(out)?;
+                self.emit_relative_plan(out, &plan, overwrite_line)
+            }
+        }
+    }
+
+    /// Whether emitting `best` would drag a non-default background into
+    /// a row exposed by scrolling.
+    ///
+    /// Inline downward moves are emitted as literal `\n` regardless of
+    /// byte cost (see [`Renderer::plan_vertical_cost`]) so the host
+    /// scrolls when the target row does not exist yet. On a terminal
+    /// with back-color erase that scroll paints the freshly exposed row
+    /// with the pen's background, and — unlike the deliberate scrolls in
+    /// [`crate::renderer::scroll`], which record the painted blank in
+    /// `cur_buf` — nothing here tells the frame model that the row
+    /// changed. The next diff therefore sees no work to do and the
+    /// stray background never gets repaired.
+    ///
+    /// Three conditions narrow it to the rows that can actually bleed:
+    ///
+    /// - **Inline only.** A fullscreen surface is sized to the screen and
+    ///   [`Renderer::move_to`] clamps the target row, so `\n` never
+    ///   reaches the bottom margin there.
+    /// - **BCE only.** Without it the terminal erases with its own
+    ///   default background and the pen is irrelevant.
+    /// - **Non-default background only.** Back-color erase paints the
+    ///   background and nothing else — the same rule the deliberate
+    ///   scroll path applies through `Cursor::bce_blank` — so a pen that
+    ///   only carries `fg` or attributes leaves no trace.
+    ///
+    /// It deliberately stops there rather than trying to prove a given
+    /// `\n` reaches the bottom margin. Since `move_to` clamps the target
+    /// row, a planned `\n` only scrolls while rows below the cursor do
+    /// not exist on screen yet — but that is not just the first frame.
+    /// After [`Renderer::invalidate_cursor`] (shell handoff, a DECSTBM
+    /// bracket) the inline re-anchor in `move_cursor` *assumes* the
+    /// physical row is the top of the surface and steps downward from
+    /// there; when that assumption undershoots, the run scrolls on a
+    /// long-materialised surface. A row watermark would call those safe
+    /// and reintroduce the artifact, so the cost — the reset plus a
+    /// forced pen re-assert on the next row — is paid whenever a
+    /// background is live.
+    fn lf_would_bleed_background(&self, best: &Winner) -> bool {
+        let Winner::Relative { plan, .. } = best else {
+            return false;
+        };
+        !self.fullscreen
+            && matches!(plan.vertical.shape, VerticalShape::Lf { .. })
+            && self.opts.contains(Optimizations::BCE)
+            && self.cur.style().bg.is_some()
+    }
+
+    /// Enumerate the move candidates and return the cheapest.
+    ///
+    /// Pure: no bytes are materialised, so the caller can plan, change
+    /// the pen, and plan again to keep the two in agreement.
+    fn plan_move(&self, from: Position, to: Position, overwrite_line: Option<&[Cell]>) -> Winner {
         // Seed the candidate list with CUP in absolute mode so it
         // wins ties against any relative shape.
         let mut best: Option<Winner> = None;
@@ -160,13 +264,7 @@ impl Renderer {
             try_trial(use_tabs, use_backspace, &mut best);
         }
 
-        match best.expect("planner enumerates at least one candidate") {
-            Winner::Cup { .. } => cursor::write_cup(out, to.y, to.x),
-            Winner::Relative { prefix, plan, .. } => {
-                prefix.emit(out)?;
-                self.emit_relative_plan(out, &plan, overwrite_line)
-            }
-        }
+        best.expect("planner enumerates at least one candidate")
     }
 }
 

@@ -40,15 +40,15 @@ pub(super) fn scroll_up(
     max_y: usize,
 ) -> io::Result<bool> {
     if n == 1 && top == min_y && bot == max_y {
-        renderer.move_to(out, new_buf, bot as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, bot as u16, 0)?;
         out.push(b'\n');
         Ok(true)
     } else if n == 1 && bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
-        renderer.move_to(out, new_buf, top as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, top as u16, 0)?;
         ansi::screen::write_delete_lines(out, 1)?;
         Ok(true)
     } else if top == min_y && bot == max_y {
-        renderer.move_to(out, new_buf, bot as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, bot as u16, 0)?;
         if renderer.opts.contains(Optimizations::SU_SD) {
             ansi::screen::write_scroll_up(out, n)?;
         } else {
@@ -58,7 +58,7 @@ pub(super) fn scroll_up(
         }
         Ok(true)
     } else if bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
-        renderer.move_to(out, new_buf, top as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, top as u16, 0)?;
         ansi::screen::write_delete_lines(out, n)?;
         Ok(true)
     } else {
@@ -83,15 +83,15 @@ pub(super) fn scroll_down(
     max_y: usize,
 ) -> io::Result<bool> {
     if n == 1 && top == min_y && bot == max_y {
-        renderer.move_to(out, new_buf, top as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, top as u16, 0)?;
         ansi::cursor::write_reverse_index(out)?;
         Ok(true)
     } else if n == 1 && bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
-        renderer.move_to(out, new_buf, top as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, top as u16, 0)?;
         ansi::screen::write_insert_lines(out, 1)?;
         Ok(true)
     } else if top == min_y && bot == max_y {
-        renderer.move_to(out, new_buf, top as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, top as u16, 0)?;
         if renderer.opts.contains(Optimizations::SU_SD) {
             ansi::screen::write_scroll_down(out, n)?;
         } else {
@@ -101,7 +101,7 @@ pub(super) fn scroll_down(
         }
         Ok(true)
     } else if bot == max_y && renderer.opts.contains(Optimizations::IL_DL) {
-        renderer.move_to(out, new_buf, top as u16, 0)?;
+        renderer.move_to_keeping_pen(out, new_buf, top as u16, 0)?;
         ansi::screen::write_insert_lines(out, n)?;
         Ok(true)
     } else {
@@ -121,9 +121,9 @@ pub(super) fn scroll_idl(
     del: usize,
     ins: usize,
 ) -> io::Result<bool> {
-    renderer.move_to(out, new_buf, del as u16, 0)?;
+    renderer.move_to_keeping_pen(out, new_buf, del as u16, 0)?;
     ansi::screen::write_delete_lines(out, n)?;
-    renderer.move_to(out, new_buf, ins as u16, 0)?;
+    renderer.move_to_keeping_pen(out, new_buf, ins as u16, 0)?;
     ansi::screen::write_insert_lines(out, n)?;
     Ok(true)
 }
