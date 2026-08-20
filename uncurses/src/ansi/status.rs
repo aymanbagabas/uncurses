@@ -56,16 +56,16 @@ pub fn write_request_light_dark_report<W: Write>(w: &mut W) -> io::Result<()> {
 /// `DECSCUSR` (cursor style), `"r"` for `DECSTBM` (scrolling region),
 /// `"\"q"` for `DECSCA`, `"$|"` for `DECSCPP`. xterm's private requests take
 /// a parameter too, as in `">4m"` for `XTQMODKEYS`. An empty selector is
-/// written like any other and the terminal refuses it, which keeps one
-/// request paired with one reply.
+/// written like any other and the terminal reports it as unrecognized, which
+/// keeps one request paired with one reply.
 ///
 /// The terminal answers with DECRPSS: `ESC P 1 $ r <D...D> ESC \` when it
 /// recognizes the request, where the data string is the setting spelled out
 /// as a CSI sequence without its introducer, and `ESC P 0 $ r ESC \` when it
 /// does not. Both decode as
-/// [`Event::SettingReport`](crate::event::Event::SettingReport). Because a
-/// refusal echoes nothing back, only the request says which setting it
-/// refused. Use [`write_decrpss`] to encode either reply.
+/// [`Event::SettingReport`](crate::event::Event::SettingReport). Because the
+/// unrecognized form echoes nothing back, only the request says which setting
+/// it was about. Use [`write_decrpss`] to encode either reply.
 pub fn write_decrqss<W: Write>(w: &mut W, selector: &str) -> io::Result<()> {
     write!(w, "\x1bP$q{selector}\x1b\\")
 }

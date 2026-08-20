@@ -596,9 +596,10 @@ where
     /// A reply is recorded only when it says what it is about: a mode report
     /// carries its mode, an XTGETTCAP reply its capability names, a palette
     /// reply its index. The DECRPSS setting report
-    /// ([`Event::SettingReport`]) is the one reply that does not. A refusal
-    /// names nothing at all, and a success spells the setting out as one CSI
-    /// string, with the control function and its parameters run together.
+    /// ([`Event::SettingReport`]) is the one reply that does not. An
+    /// unrecognized reply names nothing at all, and a success spells the
+    /// setting out as one CSI string, with the control function and its
+    /// parameters run together.
     /// Which setting was asked about is knowable only from the DECRQSS
     /// request, and that request is yours, so the report reaches you
     /// unchanged and nothing is stored.

@@ -1656,7 +1656,7 @@ mod tests {
             evs[0],
             Event::SettingReport(SettingReport::Raw(">4;2m".to_string()))
         );
-        // A refusal carries no data at all.
+        // The unrecognized form carries no data at all.
         let evs = p.parse(b"\x1bP0$r\x1b\\");
         assert_eq!(evs[0], Event::SettingReport(SettingReport::Unrecognized));
     }

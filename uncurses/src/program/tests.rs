@@ -1765,10 +1765,10 @@ fn a_decrqss_setting_report_is_not_recorded() {
     }
 
     // Which setting a DECRPSS reply is about lives in the DECRQSS request,
-    // not in the reply: a refusal names nothing at all, and a success runs
-    // the control function together with its parameters. The request is the
-    // caller's, so the reply reaches the caller untouched and nothing here
-    // tries to file it.
+    // not in the reply: an unrecognized reply names nothing at all, and a
+    // success runs the control function together with its parameters. The
+    // request is the caller's, so the reply reaches the caller untouched and
+    // nothing here tries to file it.
     assert_eq!(program.capabilities(), &before);
 }
 
