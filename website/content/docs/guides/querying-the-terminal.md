@@ -15,43 +15,112 @@ the same event stream as keystrokes. There is no separate "query" channel.
 
 ```mermaid
 flowchart TB
-  req["screen.request_background_color()"]
+  req["program.request_background_color()"]
   req --> term["terminal"]
   term --> ev["Event::BackgroundColor(color) in your event loop"]
 ```
 
 {{< callout type="info" >}}
-By default, `Screen::init()` sends a fixed capability probe set. Reads are pure:
-`read_event`, `try_read_event`, `poll_event`, and `event_stream` do not detect
-capabilities by themselves. The replies land in `capabilities()` once you pass
-each event to `screen.observe_event(&ev)?`, so on a raw `Screen` that call is how
-the probe results take effect. Skip it and reads still work, the replies just
-never get applied. Opt out of the startup probes entirely with
-`ScreenOptions { query_capabilities: false, ..Default::default() }`. The ratatui
-`UncursesBackend` follows the same pure-read contract, so call `observe_event`
-there too.
+`Program::init()` and `Program::init_with()` set the session up and ask nothing
+about what the terminal can do. They do write: raw mode, tab stops, and the
+options you turned on. The capability queries below are always a call you make.
 {{< /callout >}}
 
-## Asking from a Screen
+## Capability probing
 
-`Screen` has a `request_*` method for each common query. Each one sends the
+Call `program.query_capabilities(&extra_bytes)?` when you want uncurses to ask
+for its standard capability set. It writes the default queries, then your extra
+bytes, then Primary Device Attributes last, and flushes. The Primary DA reply is
+the sentinel: because its request was sent last, seeing
+`Event::PrimaryDeviceAttributes` means every earlier reply in that batch has
+already been delivered.
+
+`query_capabilities` only writes. Consuming the replies is your job, so bound the
+wait with `poll_event(Some(timeout))`. A silent terminal never answers, including
+the sentinel.
+
+Reading those replies is not purely passive. A few are adopted as they pass
+through, each gated by a `ProgramOptions` field that defaults to `true`:
+`prefer_synchronized_output`, `prefer_grapheme_clusters` and
+`prefer_in_band_resize`. Set any of them to `false` to record the capability
+without acting on it.
+
+What adoption does differs by capability. Grapheme-cluster mode and in-band
+resize are terminal modes, so adopting one emits the mode, records it in the
+program's emitted-mode set, and `finish()` undoes it. Synchronized output is a
+render property: adoption only tells the screen to start wrapping frames in the
+2026 markers, so nothing is written at adoption time and there is nothing for
+`finish()` to undo.
+
+```rust
+use std::time::{Duration, Instant};
+
+use uncurses::event::Event;
+use uncurses::program::Program;
+
+fn main() -> std::io::Result<()> {
+    let mut program = Program::stdio()?;
+    program.init()?;
+    program.query_capabilities(&[])?;
+
+    let deadline = Instant::now() + Duration::from_millis(300);
+    while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
+        if !program.poll_event(Some(timeout))? {
+            break;
+        }
+        if matches!(program.try_read_event()?, Some(Event::PrimaryDeviceAttributes(_))) {
+            break;
+        }
+    }
+
+    let _caps = program.capabilities();
+    program.finish()
+}
+```
+
+Reads on `Program` auto-observe, so the loop above updates `capabilities()` as it
+reads replies. An ordinary event loop gets the same benefit for free: if it keeps
+calling `read_event`, `try_read_event`, or `poll_event` plus a read, capability
+replies are applied as they arrive.
+
+That covers every reply describing the terminal, not only the ones
+`query_capabilities` asks for. A `request_background_color` answered mid-session
+is recorded just the same, so you can read it back from `capabilities()` later
+instead of matching the event and storing it yourself. Sizes are the exception:
+window and cell geometry lives on `Program` as `window_cells()`,
+`window_pixels()`, and `cell_pixels()`, since it changes with every resize.
+
+## Asking one question
+
+`Program` also has `request_*` methods for common queries. Each one sends the
 request and flushes; the reply shows up later as an `Event` you match on in your
 loop.
 
 ```rust
+use std::time::{Duration, Instant};
+
 use uncurses::event::Event;
+use uncurses::program::Program;
 
-screen.request_background_color()?;
-screen.request_cell_pixel_size()?;
+fn main() -> std::io::Result<()> {
+    let mut program = Program::stdio()?;
+    program.init()?;
+    program.request_background_color()?;
 
-// ... later, in the event loop:
-let ev = screen.read_event()?;
-screen.observe_event(&ev)?;
+    let deadline = Instant::now() + Duration::from_millis(300);
+    'wait: while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
+        if !program.poll_event(Some(timeout))? {
+            break;
+        }
+        while let Some(ev) = program.try_read_event()? {
+            if let Event::BackgroundColor(color) = ev {
+                let _ = color;
+                break 'wait;
+            }
+        }
+    }
 
-match ev {
-    Event::BackgroundColor(color) => { /* use it */ }
-    Event::CellPixelSize { width, height } => { /* pixels per cell */ }
-    _ => {}
+    program.finish()
 }
 ```
 
@@ -59,59 +128,103 @@ These cover the everyday questions: the foreground, background, cursor, and
 palette colors; the cell and window pixel size; the cursor position; the color
 scheme (dark or light); mode state; clipboard contents; and feature probes like
 kitty keyboard and modify-other-keys. For the complete set, scan the `request_*`
-methods on [`Screen`](/api/uncurses/screen/struct.Screen.html) in the API
+methods on [`Program`](/api/uncurses/program/struct.Program.html) in the API
 reference; each one documents the exact `Event` variant used for its reply.
-If you are using the async `event_stream()` API, use the same pattern: await an
-event, call `observe_event(&ev)?`, then handle it.
 
-## Asking without a Screen
+## Extra queries in the capability batch
 
-Without `Screen`, a request is just bytes you write to the terminal, and the
-reply comes back through an `EventSource`. The
-[`ansi`](/api/uncurses/ansi/index.html) module has named constants for the common
-requests, but any escape you write works the same way. Send the Primary Device
-Attributes (DA1) request last, as a terminator: it is near-universal, and for
-these probes its reply tells you the earlier replies have had their chance.
-uncurses uses the same pattern for the `Screen` capability probe.
+If you want your own query to share the Primary DA sentinel, pass its bytes as
+`extra`. uncurses writes them after the default capability queries and before the
+sentinel, so the same drain loop covers both the built-in replies and yours.
 
 ```rust
-use uncurses::ansi::color::REQUEST_BACKGROUND_COLOR;
-use uncurses::ansi::ctrl::REQUEST_PRIMARY_DA;
-use uncurses::event::{Event, EventSource};
-use uncurses::terminal::Terminal;
-use std::io::Write;
 use std::time::{Duration, Instant};
 
-let mut term = Terminal::stdio();
-term.make_raw()?;
-let mut out = term.output();
-let mut events = EventSource::new(term.input())?;
+use uncurses::ansi::color::REQUEST_BACKGROUND_COLOR;
+use uncurses::event::Event;
+use uncurses::program::Program;
 
-out.write_all(REQUEST_BACKGROUND_COLOR)?;
-out.write_all(REQUEST_PRIMARY_DA)?; // sent last: the terminator
-out.flush()?;
+fn main() -> std::io::Result<()> {
+    let mut program = Program::stdio()?;
+    program.init()?;
+    program.query_capabilities(REQUEST_BACKGROUND_COLOR)?;
 
-let deadline = Instant::now() + Duration::from_millis(300);
-'wait: loop {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() || !events.poll(Some(remaining))? {
-        break;
+    let deadline = Instant::now() + Duration::from_millis(300);
+    'wait: while let Some(timeout) = deadline.checked_duration_since(Instant::now()) {
+        if !program.poll_event(Some(timeout))? {
+            break;
+        }
+        while let Some(ev) = program.try_read_event()? {
+            match ev {
+                Event::PrimaryDeviceAttributes(_) => break 'wait,
+                _ => {}
+            }
+        }
     }
-    while let Some(ev) = events.try_read() {
-        match ev {
-            Event::BackgroundColor(c) => { /* use it */ }
-            Event::PrimaryDeviceAttributes(_) => break 'wait, // done
+
+    // Recorded on the way through, so there is nothing to match on.
+    let _bg = program.capabilities().background_color();
+    program.finish()
+}
+```
+
+## Asking for a current setting
+
+The queries above ask what a terminal can do. DECRQSS asks what it is doing
+right now: the active text attributes, the current cursor style. That makes it a
+different kind of question, so it sits outside the default capability set and you
+send it as an extra query.
+
+```rust
+use uncurses::ansi::status::write_decrqss;
+use uncurses::event::{Event, SettingReport};
+use uncurses::program::Program;
+
+fn main() -> std::io::Result<()> {
+    let mut program = Program::stdio()?;
+    program.init()?;
+
+    let mut query = Vec::new();
+    write_decrqss(&mut query, "m")?; // "m" is SGR, the active text attributes
+    program.query_capabilities(&query)?;
+
+    let mut sgr = None;
+    loop {
+        match program.read_event()? {
+            // The reply to the only DECRQSS we sent, so it answers "m".
+            Event::SettingReport(SettingReport::Raw(body)) => sgr = Some(body),
+            Event::SettingReport(SettingReport::Refused) => break,
+            Event::PrimaryDeviceAttributes(_) => break,
             _ => {}
         }
     }
-}
 
-term.restore()?;
+    let _ = sgr;
+    program.finish()
+}
 ```
 
-The deadline is the fallback for the rare terminal that ignores even DA1: if
-that reply never comes, the poll times out and you move on. Most terminals
-answer DA1, so the loop exits early.
+This is the one reply the program does not record for you. Every other answer
+says what it is about, so it can be filed on its own: a mode report carries its
+mode, an XTGETTCAP reply its capability names. A DECRPSS reply carries neither.
+A refusal is a bare `Refused` that names nothing at all, and a success is a
+`Raw` holding the whole CSI sequence with the control function and its
+parameters run together, so `">4;2m"` cannot be told apart from an SGR reply by
+inspection alone.
 
-See the `query` example (`cargo run --example query`) for a runnable version
-that prints the background color, cursor position, and cell size.
+What the reply is about lives in the request, and the request is yours. Send one
+DECRQSS at a time, or track the order you sent them in, and match the replies
+up as they arrive.
+
+## Asking without a Program
+
+Without `Program`, a request is just bytes you write to the terminal, and the
+reply comes back through an `EventSource`. The
+[`ansi`](/api/uncurses/ansi/index.html) module has named constants for common
+requests, but any escape you write works the same way. Send Primary DA last if
+you want a terminator, and use a deadline for terminals that do not answer.
+
+The `query` example (`cargo run --example query`) shows this raw-byte pattern.
+The `gradient` example shows the usual app pattern: call
+`program.query_capabilities(&[])?`, keep reading events in the normal loop, and
+let Program's auto-observation update capabilities as replies arrive.

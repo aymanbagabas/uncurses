@@ -1,29 +1,124 @@
-//! Environment variable snapshots for terminal configuration.
+//! Environment variables for terminal configuration.
 //!
-//! [`Env`] wraps a captured set of `(key, value)` pairs so that code which
-//! depends on the process environment can be exercised with deterministic
-//! inputs in tests, and so that callers can build synthetic environments
-//! (for example, from a configuration file) without mutating the
-//! process-global state managed by [`std::env`](mod@std::env).
+//! [`Env`] is a read-only view of a set of environment variables.
+//! [`ProcessEnv`] reads the live process environment, and [`EnvList`] holds a
+//! fixed list of variables. `EnvList` covers both testing with deterministic
+//! inputs and environments that arrive from somewhere other than this process,
+//! such as the variable list an SSH client forwards.
 
-/// A snapshot of environment variables.
+/// A read-only view of environment variables.
 ///
-/// `Env` stores an ordered list of `(key, value)` pairs. Duplicate keys are
-/// allowed; lookups return the **last** matching value. This makes it useful
-/// both for capturing the process environment and for constructing
-/// deterministic terminal environments in tests.
-#[derive(Debug, Clone, Default)]
-pub struct Env {
-    vars: Vec<(String, String)>,
-}
-
-impl Env {
-    /// Capture the current process environment.
+/// Implementations decide where the variables come from and whether they can
+/// change: [`ProcessEnv`] reads the live process environment on every lookup,
+/// while [`EnvList`] answers from a fixed list.
+///
+/// Only [`get`](Self::get) needs implementing; [`has`](Self::has) is derived
+/// from it.
+pub trait Env: Send + Sync {
+    /// Return a variable's value.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` — variable name.
     ///
     /// # Returns
     ///
-    /// An [`Env`] containing all variables yielded by [`std::env::vars`] at the
-    /// time of the call.
+    /// The value, or `None` if `key` is absent.
+    ///
+    /// # Errors and panics
+    ///
+    /// Implementations should not panic for an absent or malformed variable.
+    fn get(&self, key: &str) -> Option<String>;
+
+    /// Return whether a variable is present with a non-empty value.
+    ///
+    /// Overriding this is only for taking a shortcut, not for changing the
+    /// answer: it must stay equivalent to
+    /// `get(key).is_some_and(|v| !v.is_empty())`.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` — variable name.
+    ///
+    /// # Returns
+    ///
+    /// `true` if `key` is present and its value is not empty.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
+    fn has(&self, key: &str) -> bool {
+        self.get(key).is_some_and(|v| !v.is_empty())
+    }
+}
+
+impl<T: Env + ?Sized> Env for Box<T> {
+    fn get(&self, key: &str) -> Option<String> {
+        (**self).get(key)
+    }
+
+    fn has(&self, key: &str) -> bool {
+        (**self).has(key)
+    }
+}
+
+/// The live process environment.
+///
+/// Every lookup reads through to [`std::env::var`], so a variable changed after
+/// this value was created is visible to the next lookup. This is the
+/// environment a [`Terminal`](crate::terminal::Terminal) uses when built over
+/// process stdio or the controlling terminal.
+///
+/// Two things follow from going through [`std::env::var`], and neither is true
+/// of [`EnvList`]: a value that is not valid Unicode reads as absent rather
+/// than panicking, and on Windows names match case-insensitively.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProcessEnv;
+
+impl Env for ProcessEnv {
+    fn get(&self, key: &str) -> Option<String> {
+        std::env::var(key).ok()
+    }
+}
+
+/// A fixed list of environment variables.
+///
+/// Use this for an environment that does not come from this process, such as
+/// the variables an SSH client forwards or a set read from a configuration
+/// file, and for tests that need deterministic lookups.
+///
+/// Variables are stored as an ordered list of `(key, value)` pairs, matching
+/// how an environment is passed around at the process boundary. Duplicate keys
+/// are allowed, and lookups return the last matching value.
+#[derive(Debug, Clone, Default)]
+pub struct EnvList {
+    vars: Vec<(String, String)>,
+}
+
+impl EnvList {
+    /// Build an empty environment.
+    ///
+    /// # Returns
+    ///
+    /// An [`EnvList`] with no variables.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Capture the current process environment.
+    ///
+    /// The result is a snapshot: later changes to the process environment are
+    /// not visible to it. Use [`ProcessEnv`] to read through to the live
+    /// environment instead.
+    ///
+    /// # Returns
+    ///
+    /// An [`EnvList`] containing all variables yielded by [`std::env::vars`] at
+    /// the time of the call.
     ///
     /// # Errors and panics
     ///
@@ -35,24 +130,10 @@ impl Env {
         }
     }
 
-    /// Build an empty environment.
-    ///
-    /// # Returns
-    ///
-    /// An [`Env`] with no variables.
-    ///
-    /// # Errors and panics
-    ///
-    /// This method does not fail or intentionally panic.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Build an environment from `(key, value)` pairs.
     ///
     /// Pair order and duplicate keys are preserved. Later duplicates shadow
-    /// earlier values for [`get`](Self::get), [`has`](Self::has), and
-    /// [`is_truthy`](Self::is_truthy).
+    /// earlier values for [`get`](Env::get) and [`has`](Env::has).
     ///
     /// # Parameters
     ///
@@ -60,7 +141,7 @@ impl Env {
     ///
     /// # Returns
     ///
-    /// An [`Env`] containing the supplied variables.
+    /// An [`EnvList`] containing the supplied variables.
     ///
     /// # Errors and panics
     ///
@@ -80,11 +161,10 @@ impl Env {
         }
     }
 
-    /// Append a variable to the snapshot.
+    /// Append a variable to the list.
     ///
-    /// If `key` already exists, the new value shadows earlier values for
-    /// [`get`](Self::get), [`is_truthy`](Self::is_truthy), and [`has`](Self::has)
-    /// lookups. Existing entries are not removed.
+    /// If `key` is already present, the new value shadows earlier values for
+    /// [`get`](Env::get) and [`has`](Env::has).
     ///
     /// # Parameters
     ///
@@ -103,73 +183,15 @@ impl Env {
         self.vars.push((key.into(), value.into()));
         self
     }
+}
 
-    /// Return whether a variable is present with a non-empty value.
-    ///
-    /// # Parameters
-    ///
-    /// * `key` — variable name.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the last value for `key` exists and is not empty.
-    ///
-    /// # Errors and panics
-    ///
-    /// This method does not fail or intentionally panic.
-    pub fn has(&self, key: &str) -> bool {
-        self.lookup(key).is_some_and(|v| !v.is_empty())
-    }
-
-    /// Return a variable's value.
-    ///
-    /// If duplicate keys are present, the last value is returned.
-    ///
-    /// # Parameters
-    ///
-    /// * `key` — variable name.
-    ///
-    /// # Returns
-    ///
-    /// A newly allocated copy of the value, or `None` if `key` is absent.
-    ///
-    /// # Errors and panics
-    ///
-    /// This method does not return errors. It may panic only if allocation for
-    /// the returned string fails.
-    pub fn get(&self, key: &str) -> Option<String> {
-        self.lookup(key).map(str::to_owned)
-    }
-
-    /// Return whether a variable parses as a truthy boolean.
-    ///
-    /// Accepts `1`, `t`, `T`, `TRUE`, `true`, and `True`. Anything else,
-    /// including an empty or absent value, is false.
-    ///
-    /// # Parameters
-    ///
-    /// * `key` — variable name.
-    ///
-    /// # Returns
-    ///
-    /// `true` for the accepted truthy values.
-    ///
-    /// # Errors and panics
-    ///
-    /// This method does not fail or intentionally panic.
-    pub fn is_truthy(&self, key: &str) -> bool {
-        matches!(
-            self.lookup(key).unwrap_or_default(),
-            "1" | "t" | "T" | "TRUE" | "true" | "True"
-        )
-    }
-
-    fn lookup(&self, key: &str) -> Option<&str> {
+impl Env for EnvList {
+    fn get(&self, key: &str) -> Option<String> {
         self.vars
             .iter()
             .rev()
             .find(|(k, _)| k == key)
-            .map(|(_, v)| v.as_str())
+            .map(|(_, v)| v.clone())
     }
 }
 
@@ -179,47 +201,50 @@ mod tests {
 
     #[test]
     fn duplicate_keys_last_wins() {
-        let e = Env::from_pairs([("FOO", "a"), ("BAR", "x"), ("FOO", "b")]);
+        let e = EnvList::from_pairs([("FOO", "a"), ("BAR", "x"), ("FOO", "b")]);
         assert_eq!(e.get("FOO").as_deref(), Some("b"));
         assert_eq!(e.get("BAR").as_deref(), Some("x"));
     }
 
     #[test]
     fn set_shadows_earlier_value() {
-        let mut e = Env::from_pairs([("K", "first")]);
+        let mut e = EnvList::from_pairs([("K", "first")]);
         e.set("K", "second");
         assert_eq!(e.get("K").as_deref(), Some("second"));
     }
 
     #[test]
     fn has_requires_non_empty() {
-        let e = Env::from_pairs([("EMPTY", ""), ("SET", "v")]);
+        let e = EnvList::from_pairs([("EMPTY", ""), ("SET", "v")]);
         assert!(!e.has("EMPTY"));
         assert!(e.has("SET"));
         assert!(!e.has("MISSING"));
     }
 
     #[test]
-    fn bool_truthy_values() {
-        let e = Env::from_pairs([
-            ("A", "1"),
-            ("B", "true"),
-            ("C", "TRUE"),
-            ("D", "True"),
-            ("E", "t"),
-            ("F", "T"),
-        ]);
-        for k in ["A", "B", "C", "D", "E", "F"] {
-            assert!(e.is_truthy(k), "{k} should be truthy");
-        }
+    fn boxed_env_forwards() {
+        let e: Box<dyn Env> = Box::new(EnvList::from_pairs([("TERM", "xterm")]));
+        assert_eq!(e.get("TERM").as_deref(), Some("xterm"));
+        assert!(e.has("TERM"));
     }
 
     #[test]
-    fn bool_falsy_values() {
-        let e = Env::from_pairs([("A", "0"), ("B", "false"), ("C", ""), ("D", "yes")]);
-        for k in ["A", "B", "C", "D"] {
-            assert!(!e.is_truthy(k), "{k} should be falsy");
+    fn boxed_env_forwards_has_override() {
+        // An implementor that treats a set-but-empty value as present, which
+        // is the opposite of the default `has`. Boxing must not silently
+        // reinstate the default.
+        struct EmptyCounts;
+        impl Env for EmptyCounts {
+            fn get(&self, _key: &str) -> Option<String> {
+                Some(String::new())
+            }
+            fn has(&self, _key: &str) -> bool {
+                true
+            }
         }
-        assert!(!e.is_truthy("MISSING"));
+
+        let e: Box<dyn Env> = Box::new(EmptyCounts);
+        assert!(e.has("ANYTHING"));
+        assert!(e.as_ref().has("ANYTHING"));
     }
 }

@@ -1,7 +1,7 @@
 //! NEON ARCADE, tokio and uncurses sharing one task through an async event
 //! stream.
 //!
-//! [`Screen::event_stream`] hands you a real `futures_core::Stream` over the
+//! [`Program::event_stream`] hands you a real `futures_core::Stream` over the
 //! screen's own decoder, so terminal input, a frame timer, and the game's
 //! async tasks all merge in a single `tokio::select!`, and that same task
 //! renders. No UI thread, no event channel: the `Screen` lives right here in
@@ -17,9 +17,8 @@
 //! collide), the starfield, and the glow/pulse selection effects.
 //!
 //! The stream is pure: reading an event does not touch capability tracking.
-//! Feed each event back through [`Screen::observe_event`] so resize handling
-//! and the discovery-driven defaults (mouse, keyboard, in-band resize) still
-//! apply. That one line is the whole contract.
+//! Feed each event back through [`Program::observe_event`] so capability
+//! tracking and resize handling still apply. That one line is the whole contract.
 //!
 //! Controls: up/down (or k/j) move the selector, Enter fires a burst on the
 //! current item, Space drops an orb, q / Esc / Ctrl-C quit.
@@ -38,7 +37,8 @@ use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode};
 use uncurses::layout::Position;
-use uncurses::screen::{Screen, ScreenOptions};
+use uncurses::program::{Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -120,27 +120,30 @@ async fn main() -> io::Result<()> {
     // dies.
     drop(ui_tx);
 
-    let mut screen = Screen::stdio()?;
-    screen.init_with(ScreenOptions::default())?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
+    let mut program = Program::stdio()?;
+    program.init_with(ProgramOptions::default())?;
+    program.enter_alt_screen()?;
+    program.hide_cursor()?;
 
-    let result = render_loop(&mut screen, ui_rx).await;
-    let finish = screen.finish();
+    let result = render_loop(&mut program, ui_rx).await;
+    let finish = program.finish();
     result.and(finish)
 }
 
 /// Owns `Screen`, merges terminal input, async world messages, and the frame
 /// timer in one `select!`, and renders every tick.
 async fn render_loop(
-    screen: &mut Screen<Stdin, Stdout>,
+    program: &mut Program<Stdin, Stdout>,
     mut ui_rx: UnboundedReceiver<UiMsg>,
 ) -> io::Result<()> {
-    let mut world = World::new(screen.size().width, screen.size().height);
+    let mut world = World::new(
+        program.screen().size().width,
+        program.screen().size().height,
+    );
 
     // The async input stream over the screen's own decoder. Owned, so it does
     // not borrow the screen: render and observe freely while it is live.
-    let mut events = screen.event_stream();
+    let mut events = program.event_stream();
     let mut ticker = tokio::time::interval(FRAME);
 
     loop {
@@ -151,12 +154,12 @@ async fn render_loop(
             maybe = events.next() => {
                 let Some(ev) = maybe else { break };
                 let ev = ev?;
-                screen.observe_event(&ev)?;
+                program.observe_event(&ev)?;
                 match ev {
                     Event::KeyPress(ref k) if world.quit_key(k) => break,
                     Event::KeyPress(key) => world.on_key(&key),
                     Event::Resize(ws) => {
-                        screen.resize((ws.col, ws.row));
+                        program.screen_mut().resize((ws.col, ws.row));
                         world.resize(ws.col, ws.row);
                     }
                     _ => {}
@@ -174,8 +177,8 @@ async fn render_loop(
             // Source C: the frame timer. Steps physics and renders on cadence.
             _ = ticker.tick() => {
                 world.step();
-                world.draw(screen);
-                screen.render()?;
+                world.draw(program);
+                program.screen_mut().render()?;
             }
         }
     }
@@ -552,31 +555,37 @@ impl World {
         }
     }
 
-    fn draw(&self, screen: &mut Screen<Stdin, Stdout>) {
-        screen.clear();
-        self.draw_stars(screen);
-        self.draw_orbs(screen);
-        self.draw_banner(screen);
-        self.draw_menu(screen);
+    fn draw(&self, program: &mut Program<Stdin, Stdout>) {
+        program.screen_mut().clear();
+        self.draw_stars(program);
+        self.draw_orbs(program);
+        self.draw_banner(program);
+        self.draw_menu(program);
         // Sparks/bursts render last, on top, but preserve whatever background
         // they land on (see `put`), so a firework over the menu bar doesn't
         // punch black holes in it.
-        self.draw_sparks(screen);
-        self.draw_hud(screen);
+        self.draw_sparks(program);
+        self.draw_hud(program);
     }
 
-    fn draw_stars(&self, screen: &mut Screen<Stdin, Stdout>) {
+    fn draw_stars(&self, program: &mut Program<Stdin, Stdout>) {
         for s in &self.stars {
             let (glyph, shade) = match s.phase {
                 0..=90 => (".", Color::BrightBlack),
                 91..=180 => ("+", Color::Blue),
                 _ => ("*", Color::BrightBlue),
             };
-            put(screen, s.x, s.y, glyph, Style::default().fg(shade));
+            put(
+                program.screen_mut(),
+                s.x,
+                s.y,
+                glyph,
+                Style::default().fg(shade),
+            );
         }
     }
 
-    fn draw_orbs(&self, screen: &mut Screen<Stdin, Stdout>) {
+    fn draw_orbs(&self, program: &mut Program<Stdin, Stdout>) {
         for orb in &self.orbs {
             let len = orb.trail.len();
             for (i, &(tx, ty)) in orb.trail.iter().enumerate() {
@@ -584,10 +593,16 @@ impl World {
                 // color and brighter glyph, older ones fade toward black.
                 let faded = dim(orb.color, i as u16 + 1, len as u16 + 1);
                 let glyph = if i + 2 >= len { "•" } else { "·" };
-                put(screen, tx, ty, glyph, Style::default().fg(faded));
+                put(
+                    program.screen_mut(),
+                    tx,
+                    ty,
+                    glyph,
+                    Style::default().fg(faded),
+                );
             }
             put(
-                screen,
+                program.screen_mut(),
                 orb.x as u16,
                 orb.y as u16,
                 "●",
@@ -596,7 +611,7 @@ impl World {
         }
     }
 
-    fn draw_sparks(&self, screen: &mut Screen<Stdin, Stdout>) {
+    fn draw_sparks(&self, program: &mut Program<Stdin, Stdout>) {
         for sp in &self.sparks {
             let glyph = if sp.life > 16 {
                 "✦"
@@ -606,7 +621,7 @@ impl World {
                 "·"
             };
             put(
-                screen,
+                program.screen_mut(),
                 sp.x as u16,
                 sp.y as u16,
                 glyph,
@@ -615,7 +630,7 @@ impl World {
         }
     }
 
-    fn draw_banner(&self, screen: &mut Screen<Stdin, Stdout>) {
+    fn draw_banner(&self, program: &mut Program<Stdin, Stdout>) {
         const ART: [&str; 5] = [
             r"    _    ____   ____    _    ____  _____ ",
             r"   / \  |  _ \ / ___|  / \  |  _ \| ____|",
@@ -627,11 +642,15 @@ impl World {
         for (i, line) in ART.iter().enumerate() {
             // Cycle the banner hue over time for a marquee glow.
             let hue = ((self.frame / 2) as u8).wrapping_add(i as u8 * 24);
-            screen.set_str((cx, i as u16), line, Style::default().fg(wheel(hue)).bold());
+            program.screen_mut().set_str(
+                (cx, i as u16),
+                line,
+                Style::default().fg(wheel(hue)).bold(),
+            );
         }
     }
 
-    fn draw_menu(&self, screen: &mut Screen<Stdin, Stdout>) {
+    fn draw_menu(&self, program: &mut Program<Stdin, Stdout>) {
         let top = self.menu_top();
         let box_w = 24u16;
         let cx = self.w.saturating_sub(box_w) / 2;
@@ -662,14 +681,20 @@ impl World {
             let marker = if is_sel { "▶" } else { " " };
             let star = if is_special { "★" } else { " " };
             let text = format!("{marker} {label:<14} {star}");
-            screen.set_str((cx, y), &text, style);
+            program.screen_mut().set_str((cx, y), &text, style);
 
             // Twinkle a few sparkles around a special item.
             if is_special && self.frame % 6 < 3 {
                 let sx = cx.saturating_sub(2);
-                put(screen, sx, y, "✧", Style::default().fg(Color::BrightYellow));
                 put(
-                    screen,
+                    program.screen_mut(),
+                    sx,
+                    y,
+                    "✧",
+                    Style::default().fg(Color::BrightYellow),
+                );
+                put(
+                    program.screen_mut(),
                     cx + box_w,
                     y,
                     "✧",
@@ -679,7 +704,7 @@ impl World {
         }
     }
 
-    fn draw_hud(&self, screen: &mut Screen<Stdin, Stdout>) {
+    fn draw_hud(&self, program: &mut Program<Stdin, Stdout>) {
         let combo = if self.combo > 1 {
             format!("  x{} combo", self.combo)
         } else {
@@ -692,21 +717,25 @@ impl World {
             self.orbs.len(),
         );
         let y = self.h.saturating_sub(1);
-        screen.set_str((0, y), &hud, Style::default().fg(Color::BrightBlack));
+        program
+            .screen_mut()
+            .set_str((0, y), &hud, Style::default().fg(Color::BrightBlack));
 
         // FRENZY banner flashes across the top while the runtime's frenzy runs.
         if self.frenzy > 0 && self.frame % 8 < 5 {
             let tag = "★ F R E N Z Y ★";
             let cx = self.w.saturating_sub(tag.len() as u16) / 2;
             let hue = wheel((self.frame as u8).wrapping_mul(9));
-            screen.set_str((cx, 6), tag, Style::default().fg(hue).bold());
+            program
+                .screen_mut()
+                .set_str((cx, 6), tag, Style::default().fg(hue).bold());
         }
     }
 }
 
 /// Write a single-cell glyph, ignoring out-of-bounds. Keeps the background of
 /// the cell it lands on so sparks/orbs don't clobber the menu bar's fill.
-fn put(screen: &mut Screen<Stdin, Stdout>, x: u16, y: u16, glyph: &str, style: Style) {
+fn put(screen: &mut Screen<Stdout>, x: u16, y: u16, glyph: &str, style: Style) {
     let pos = Position { x, y };
     let style = if style.bg.is_none() {
         match screen.cell_mut(pos).and_then(|c| c.style.bg) {

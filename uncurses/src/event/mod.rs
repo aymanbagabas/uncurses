@@ -255,15 +255,27 @@ pub enum Event {
     },
     /// XTGETTCAP / termcap capability reply. `recognized` is `true` for a
     /// successful reply (`DCS 1 + r`) and `false` for a failure
-    /// (`DCS 0 + r`); `payload` is the decoded `;`-joined `cap[=value]`
-    /// string, decoded the same way in both cases (a failure echoes the
-    /// requested, now known-unsupported, capability names).
+    /// (`DCS 0 + r`); the entries are decoded the same way in both cases (a
+    /// failure echoes the requested, now known-unsupported, capability
+    /// names).
     Termcap {
-        /// Whether the requested capability was recognized.
+        /// Whether the requested capabilities were recognized.
         recognized: bool,
-        /// Decoded capability payload.
-        payload: String,
+        /// Decoded `(name, value)` pairs. The value is `None` when the entry
+        /// carried no `=`: either a boolean capability, reported as a bare
+        /// name, or a failure reply echoing a name it does not support.
+        /// `recognized` is what tells those apart.
+        ///
+        /// Kept as pairs because only the hex wire form is delimiter-safe:
+        /// decoded values commonly contain `;` and `=` (`kf13` is
+        /// `\E[1;2P`), so a joined string could not be split back apart.
+        entries: Vec<(String, Option<String>)>,
     },
+    /// DECRPSS setting report (`DCS 1 $ r` on success, `DCS 0 $ r` on
+    /// failure), reporting a current setting such as the active SGR
+    /// attributes or cursor style. Sent in answer to
+    /// [`write_decrqss`](crate::ansi::status::write_decrqss).
+    SettingReport(SettingReport),
 
     // -- Colors --------------------------------------------------------------
     /// OSC 10 default foreground color reply.
@@ -319,6 +331,19 @@ pub enum Event {
     UnknownApc(Vec<u8>),
     /// Catch-all for unrecognized byte sequences.
     Unknown(Vec<u8>),
+}
+
+/// The payload of a DECRPSS reply, [`Event::SettingReport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingReport {
+    /// The terminal did not recognize the requested setting (`DCS 0 $ r ST`).
+    /// The reply carries no data at all, so only the request that provoked it
+    /// says which setting was turned down.
+    Unrecognized,
+    /// The setting as the terminal spelled it: the whole CSI sequence for the
+    /// control function without its introducer, so `0;1m` for SGR, `2 q` for
+    /// `DECSCUSR`, `>4;2m` for xterm's `XTQMODKEYS`.
+    Raw(String),
 }
 
 impl Event {

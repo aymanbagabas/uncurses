@@ -3,11 +3,11 @@
 //! The terminal module provides the building blocks used by renderers and
 //! event sources: [`Terminal`] for pairing input and output handles,
 //! raw-mode save/restore helpers, direct stdio handles, controlling-terminal
-//! opening, and environment snapshots.
+//! opening, and environment lookups.
 //!
 //! ## The `Terminal<I, O>` handle
 //!
-//! [`Terminal`] owns an input half, an output half, an [`Env`] snapshot, and an
+//! [`Terminal`] owns an input half, an output half, an [`Env`], and an
 //! optional saved raw-mode [`State`]. It implements [`std::io::Read`] by
 //! reading from the input half and [`std::io::Write`] by writing to the output
 //! half. Use [`Terminal::stdio`] for inherited stdin/stdout, or
@@ -69,7 +69,7 @@ mod size;
 mod stdio;
 mod tty;
 
-pub use env::Env;
+pub use env::{Env, EnvList, ProcessEnv};
 pub use handle::Terminal;
 pub use raw::State;
 pub use size::Winsize;

@@ -20,7 +20,7 @@ fn main() -> io::Result<()> {
         TerminalOptions {
             viewport: Viewport::Inline(INLINE_HEIGHT),
         },
-        uncurses_ratatui::ScreenOptions::default(),
+        uncurses_ratatui::ProgramOptions::default(),
     )?;
     let result = run(&mut terminal);
     uncurses_ratatui::restore(&mut terminal);
@@ -39,12 +39,10 @@ fn run(terminal: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
         })?;
         let events = terminal.backend_mut();
         if events.poll_event(None)?
-            && let Some(ev) = events.try_read_event()
+            && let Some(ev) = events.try_read_event()?
+            && let Event::KeyPress(_) = ev
         {
-            events.observe_event(&ev)?;
-            if let Event::KeyPress(_) = ev {
-                break;
-            }
+            break;
         }
     }
 
