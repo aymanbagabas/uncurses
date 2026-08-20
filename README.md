@@ -28,6 +28,33 @@ Linux, macOS, and Windows.
 
 Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
 
+## Features
+
+Nothing is read from terminfo. `Program` asks the terminal what it supports,
+reads the reply, and uses only what is actually there.
+
+- Capability discovery by querying the terminal
+- Diffing renderer: only changed cells are written
+- Inline or [alternate screen](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html), with suspend and resume
+- Truecolor that degrades to [256-color, ANSI, or mono](https://github.com/termstandard/colors)
+- [Styled underlines](https://sw.kovidgoyal.net/kitty/underlines/): curly, dotted, dashed, double
+- [Clickable hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) (OSC 8)
+- [Unicode core](https://contour-terminal.org/vt-extensions/unicode-core/) (Mode 2027): width by grapheme cluster
+- Unambiguous keys, with release: [kitty keyboard](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) or [`modifyOtherKeys`](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Alt-and-Meta-Keys)
+- [Mouse](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking) clicks, motion, wheel, and [pixel positions](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Extended-coordinates)
+- [Pointer shapes](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 22)
+- [Bracketed paste](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-ordered-by-the-final-character_s_) (Mode 2004)
+- [Focus events](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-ordered-by-the-final-character_s_) (Mode 1004)
+- [Visibility reports](https://rockorager.dev/misc/visibility-reports/) (Mode 2033): idle when off screen
+- [In-band resize](https://rockorager.dev/misc/in-band-resize-notifications/) (Mode 2048): no signal handler
+- [Synchronized output](https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036) (Mode 2026): frames without tearing
+- Terminal colors: read, set, reset (OSC 4/10/11/12)
+- [Color scheme updates](https://contour-terminal.org/vt-extensions/color-palette-update-notifications/) (Mode 2031): follow light and dark
+- [Clipboard](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 52), system and primary
+- Window title and icon name (OSC 0/1/2)
+- [Taskbar progress](https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC) (OSC 9;4)
+- Typed key, mouse, paste, focus, and resize events
+
 ## Quickstart
 
 `Program` owns the session: raw mode, terminal modes, input, and teardown.
