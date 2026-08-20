@@ -38,7 +38,11 @@ mod tests {
     use super::super::Renderer;
     use super::super::caps::Optimizations;
     use super::super::tabstops::TabStops;
+    use crate::cell::Cell;
+    use crate::color::Color;
     use crate::layout::Position;
+    use crate::renderer::frame::emit::PenPolicy;
+    use crate::style::Style;
 
     fn renderer() -> Renderer {
         let mut r = Renderer::new();
@@ -379,5 +383,132 @@ mod tests {
         )
         .unwrap();
         assert!(!buf.is_empty());
+    }
+
+    // --- BCE: pen reset before a scrolling `\n` ----------------------
+    //
+    // Inline downward moves are emitted as literal line feeds no matter
+    // the byte cost, so the host scrolls when the destination row does
+    // not exist yet. On a terminal with back-color erase that scroll
+    // paints the freshly exposed row with the active pen's background,
+    // and nothing records it in `cur_buf` — so the stray colour is
+    // never diffed away. The planner resets the pen first.
+
+    /// The reset lands before the line feeds, and leaves the tracked
+    /// pen at the default so the next glyph run re-asserts what it
+    /// needs.
+    #[test]
+    fn inline_scrolling_lf_resets_pen_first() {
+        let mut r = rel();
+        r.cur.set_style(Style::default().bg(Color::Blue));
+        let out = moved(&mut r, Position { y: 0, x: 0 }, Position { y: 2, x: 0 });
+        assert_eq!(out, b"\x1b[m\n\n");
+        assert!(
+            r.cur.style().is_empty(),
+            "pen must be tracked as reset, got {:?}",
+            r.cur.style()
+        );
+    }
+
+    /// A fullscreen surface is sized to the screen and `move_to` clamps
+    /// the target row, so `\n` never reaches the bottom margin and the
+    /// pen can ride along untouched.
+    #[test]
+    fn fullscreen_lf_keeps_pen() {
+        let mut r = rel();
+        r.fullscreen = true;
+        r.cur.set_style(Style::default().bg(Color::Blue));
+        let out = moved(&mut r, Position { y: 0, x: 0 }, Position { y: 1, x: 0 });
+        assert_eq!(out, b"\n");
+    }
+
+    /// Without BCE the terminal erases with its own default background,
+    /// so the pen cannot bleed and the reset would be dead bytes.
+    #[test]
+    fn inline_lf_without_bce_keeps_pen() {
+        let mut r = rel();
+        r.opts = r.opts.with_bce(false);
+        r.cur.set_style(Style::default().bg(Color::Blue));
+        let out = moved(&mut r, Position { y: 0, x: 0 }, Position { y: 2, x: 0 });
+        assert_eq!(out, b"\n\n");
+    }
+
+    /// Back-color erase paints the background and nothing else, so a
+    /// pen carrying only a foreground leaves no trace on the exposed
+    /// row. Matches what `Cursor::bce_blank` records for a deliberate
+    /// scroll.
+    #[test]
+    fn inline_lf_with_foreground_only_pen_keeps_pen() {
+        let mut r = rel();
+        r.cur.set_style(Style::default().fg(Color::Blue));
+        let out = moved(&mut r, Position { y: 0, x: 0 }, Position { y: 2, x: 0 });
+        assert_eq!(out, b"\n\n");
+    }
+
+    /// Upward moves use CUU / RI, which never scroll a row into
+    /// existence.
+    #[test]
+    fn inline_upward_move_keeps_pen() {
+        let mut r = rel();
+        r.cur.set_style(Style::default().bg(Color::Blue));
+        let out = moved(&mut r, Position { y: 3, x: 0 }, Position { y: 1, x: 0 });
+        assert!(
+            !out.starts_with(b"\x1b[m"),
+            "upward move must not reset the pen, got {out:?}"
+        );
+    }
+
+    /// `PenPolicy::Keep` is how the scroll emitters and `clear_below`
+    /// opt out: they erase with the active pen deliberately and record
+    /// that fill themselves.
+    #[test]
+    fn keep_policy_skips_the_reset() {
+        let mut r = rel();
+        r.cur.set_style(Style::default().bg(Color::Blue));
+        let mut buf = Vec::new();
+        r.write_optimal_move_with_pen(
+            &mut buf,
+            Position { y: 0, x: 0 },
+            Position { y: 2, x: 0 },
+            None,
+            PenPolicy::Keep,
+        )
+        .unwrap();
+        assert_eq!(buf, b"\n\n");
+    }
+
+    /// The horizontal leg can move forward by re-printing destination
+    /// cells, but only cells matching the active pen qualify. Resetting
+    /// for the scroll changes which cells those are, so the plan is
+    /// recomputed against the pen that will actually be in effect —
+    /// otherwise the move would re-print blue-backed text with a pen
+    /// that is no longer blue.
+    #[test]
+    fn reset_before_lf_disqualifies_styled_overwrite_cells() {
+        let mut r = rel();
+        let styled = Style::default().bg(Color::Blue);
+        r.cur.set_style(styled.clone());
+        let line: Vec<Cell> = "abcde"
+            .chars()
+            .map(|c| Cell::narrow(c.to_string()).style(styled.clone()))
+            .collect();
+
+        let mut buf = Vec::new();
+        r.write_optimal_move(
+            &mut buf,
+            Position { y: 0, x: 0 },
+            Position { y: 2, x: 5 },
+            Some(&line),
+        )
+        .unwrap();
+
+        assert!(
+            buf.starts_with(b"\x1b[m"),
+            "expected a pen reset, got {buf:?}"
+        );
+        assert!(
+            !buf.windows(5).any(|w| w == b"abcde"),
+            "must not re-print styled cells under a reset pen, got {buf:?}"
+        );
     }
 }

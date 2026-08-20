@@ -128,7 +128,10 @@ impl Renderer {
         new_buf: &RenderBuffer,
         row: u16,
     ) -> io::Result<()> {
-        self.move_to(out, new_buf, row, 0)?;
+        // `clear_to_bottom` erases with the active pen and records that
+        // fill in `cur_buf`, so the move must not reset it — the caller
+        // also picked `row` on the strength of that pen.
+        self.move_to_keeping_pen(out, new_buf, row, 0)?;
         self.clear_to_bottom(out)
     }
 
