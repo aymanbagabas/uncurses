@@ -51,9 +51,14 @@
 //! [`init`](Program::init) uses [`ProgramOptions::default`];
 //! [`init_with`](Program::init_with) takes an explicit [`ProgramOptions`] to
 //! choose whether to enable bracketed paste and mouse tracking at startup.
-//! They take effect immediately; everything else, capability queries
-//! included, is yours to ask for (see
-//! [`capabilities`](Program::capabilities)).
+//! Those take effect immediately at init.
+//!
+//! The three `prefer_*` fields are discovery-driven instead: they enable
+//! grapheme-cluster mode, in-band resize, and synchronized output only once
+//! the terminal reports the mode as available. Since a program never probes
+//! on its own, that means calling
+//! [`query_capabilities`](Program::query_capabilities) and
+//! reading the replies (see [`capabilities`](Program::capabilities)).
 //!
 //! [`Terminal`]: crate::terminal::Terminal
 //! [`EventSource`]: crate::event::EventSource
@@ -84,7 +89,7 @@ use crate::screen::Screen;
 use crate::terminal::Terminal;
 
 /// An interactive terminal session composing a [`Terminal`], an
-/// [`EventSource`], and a [`Screen`] with the terminal and input modes. See
+/// [`EventSource`], and a [`Screen`] to render with. See
 /// the [module documentation](self) for the lifecycle.
 ///
 /// `Program` is [`Send`] and [`Sync`] whenever its input and output handles
@@ -116,8 +121,9 @@ where
     /// would observe them a second time, and a reply counts once.
     unread: VecDeque<Event>,
     state: state::State,
-    /// Terminal capabilities detected by intercepting the replies to the
-    /// queries the application fires.
+    /// Terminal capabilities, recorded by intercepting replies as they pass
+    /// through the read path. Empty until [`Self::query_capabilities`] is
+    /// called and the replies are read.
     caps: Capabilities,
     /// Desired default behaviors, set by [`Self::init_with`].
     options: ProgramOptions,
@@ -128,9 +134,11 @@ where
     /// carries pixel dimensions) and `WindowPixelSize` reports. `None`
     /// until first observed.
     window_pixels: Option<Size>,
-    /// The raw XTVERSION reply identifying the terminal (e.g.
-    /// `"XTerm(380)"`). `None` until the reply is observed.
-    terminal_name: Option<String>,
+    /// Cell size in pixels as reported by the last `CSI 16 t` reply, kept
+    /// until another reply replaces it. `None` until the terminal answers
+    /// one; [`cell_pixels`](Self::cell_pixels) falls back to dividing the
+    /// window sizes.
+    cell_pixels: Option<Size>,
     /// Physical screen coordinate (0-based, from the terminal's top-left) of
     /// the managed area's top-left cell, tracked for inline sessions. Only
     /// meaningful inline; fullscreen [`origin`](Self::origin) is always
@@ -147,11 +155,13 @@ where
 
 /// Defaults applied by [`Program::init_with`].
 ///
-/// Every field here takes effect at init unconditionally — nothing in this
-/// struct depends on capability detection, because a [`Program`] never probes
-/// the terminal on its own. Call
-/// [`query_capabilities`](Program::query_capabilities) if you want
-/// [`Capabilities`] populated, then act on them yourself.
+/// Most fields take effect at init unconditionally. The three `prefer_*`
+/// fields are the exception: they depend on capability detection, so they do
+/// nothing until the terminal reports the matching mode as available. A
+/// [`Program`] never probes on its own, so that report only arrives if you
+/// call
+/// [`query_capabilities`](Program::query_capabilities) and read the replies.
+/// Without it these two fields stay dormant and the modes are never enabled.
 #[derive(Debug, Clone)]
 pub struct ProgramOptions {
     /// Enable bracketed paste at init. Defaults to `true`.
@@ -161,6 +171,40 @@ pub struct ProgramOptions {
     /// terminals ignore modes they do not support and degrade gracefully.
     /// Defaults to `None` (mouse tracking off).
     pub mouse: Option<MouseTracking>,
+    /// Enable grapheme-cluster mode (DEC mode 2027) once the terminal reports
+    /// it as available, so the terminal and the [`Screen`] measure text the
+    /// same way. Defaults to `true`.
+    ///
+    /// Nothing is emitted until that report arrives, which requires
+    /// [`query_capabilities`](Program::query_capabilities) and a read loop.
+    /// Set to `false` to keep per-code-point measurement, or call
+    /// [`enable_grapheme_clusters`](Program::enable_grapheme_clusters)
+    /// yourself to opt in without waiting for a report.
+    pub prefer_grapheme_clusters: bool,
+    /// Enable in-band resize notifications (DEC mode 2048) once the terminal
+    /// reports them as available, so resizes arrive on the event stream with
+    /// pixel dimensions instead of through `SIGWINCH`. Defaults to `true`.
+    ///
+    /// Nothing is emitted until that report arrives, which requires
+    /// [`query_capabilities`](Program::query_capabilities) and a read loop.
+    /// Set to `false` to stay on the signal path, or call
+    /// [`enable_in_band_resize`](Program::enable_in_band_resize) yourself to
+    /// opt in without waiting for a report.
+    pub prefer_in_band_resize: bool,
+    /// Wrap each frame in synchronized-output markers (DEC mode 2026) once the
+    /// terminal reports them as available, so a frame is presented in one
+    /// piece instead of tearing. Defaults to `true`.
+    ///
+    /// Unlike the two above this emits nothing of its own: synchronized output
+    /// is a render property, so adopting it only tells the [`Screen`] to start
+    /// bracketing frames. Set to `false` to keep frames unwrapped for the whole
+    /// session. [`Screen::set_synchronized_output`] drives the same property
+    /// directly, but the program cannot see a choice made there, so a call made
+    /// before the terminal's first report is still overridden by adoption; use
+    /// this field when the decision has to hold from the start.
+    ///
+    /// [`Screen::set_synchronized_output`]: crate::screen::Screen::set_synchronized_output
+    pub prefer_synchronized_output: bool,
 }
 
 bitflags! {
@@ -221,6 +265,9 @@ impl Default for ProgramOptions {
         Self {
             bracketed_paste: true,
             mouse: None,
+            prefer_grapheme_clusters: true,
+            prefer_in_band_resize: true,
+            prefer_synchronized_output: true,
         }
     }
 }
@@ -359,11 +406,14 @@ where
 
     // --- Capabilities and geometry ---------------------------------------
 
-    /// Terminal capabilities detected so far from intercepted query
-    /// replies. Populated as the relevant reports arrive through the event
-    /// delegates after [`Self::init`].
-    pub fn capabilities(&self) -> Capabilities {
-        self.caps
+    /// What the terminal has told us about itself so far, as the replies
+    /// themselves rather than a summary. Empty until the terminal has answered
+    /// something, whichever way the question was put:
+    /// [`query_capabilities`](Self::query_capabilities), an individual
+    /// `request_*` method, or a report the terminal sends unprompted, such as a
+    /// color-scheme change under DEC mode 2031.
+    pub fn capabilities(&self) -> &Capabilities {
+        &self.caps
     }
 
     /// Last observed full terminal size in cells, or `None` before the first
@@ -379,19 +429,60 @@ where
         self.window_pixels
     }
 
+    /// Size of one character cell in pixels, or `None` when the terminal has
+    /// reported nothing to derive it from.
+    ///
+    /// Prefers the terminal's own `CSI 16 t` reply (see
+    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size)) and
+    /// otherwise divides [`window_pixels`](Self::window_pixels) by
+    /// [`window_cells`](Self::window_cells), which only approximates it: the
+    /// window pixel size includes any padding the terminal draws around the
+    /// grid, so the quotient can be a pixel or two short.
+    ///
+    /// The `CSI 16 t` value is the last one the terminal reported, and it is
+    /// kept until another reply replaces it. A font-size change resizes the
+    /// cell without any reply, so call
+    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size) again after
+    /// a resize to refresh it.
+    pub fn cell_pixels(&self) -> Option<Size> {
+        if let Some(cell) = self.cell_pixels.filter(|c| c.width > 0 && c.height > 0) {
+            return Some(cell);
+        }
+        let pixels = self.window_pixels?;
+        let cells = self.window_cells?;
+        if cells.width == 0 || cells.height == 0 {
+            return None;
+        }
+        let cell = Size::new(pixels.width / cells.width, pixels.height / cells.height);
+        (cell.width > 0 && cell.height > 0).then_some(cell)
+    }
+
     /// The terminal's self-reported name from its XTVERSION reply (e.g.
-    /// `"XTerm(380)"`), or `None` when it has not answered.
+    /// `"XTerm(380)"`), or `None` when it has not answered. Shorthand for
+    /// [`Capabilities::terminal_name`].
     pub fn terminal_name(&self) -> Option<&str> {
-        self.terminal_name.as_deref()
+        self.caps.terminal_name()
     }
 
     /// Convert a mouse event carrying pixel coordinates into cell
-    /// coordinates, using the last observed window pixel and cell sizes.
-    /// Returns `None` when either is unknown or degenerate. Neither is
-    /// refreshed on its own: call
-    /// [`request_window_pixel_size`](Self::request_window_pixel_size) at
-    /// startup, and again after a resize or a font-size change.
+    /// coordinates, using [`cell_pixels`](Self::cell_pixels). Returns `None`
+    /// when the cell size is unknown. It is not refreshed on its own: call
+    /// [`request_cell_pixel_size`](Self::request_cell_pixel_size) at startup,
+    /// and again after a resize or a font-size change.
     pub fn mouse_pixels_to_cells(&self, mouse: crate::event::Mouse) -> Option<crate::event::Mouse> {
+        // A cell size the terminal reported is exact, so dividing by it lands
+        // in the right cell. The derived one is a truncated quotient and is
+        // narrower than the real cell whenever the pixel size is not an exact
+        // multiple of the grid, so dividing by that drifts right across the
+        // row and runs off the end. Scale across the grid in that case.
+        if let Some(cell) = self.cell_pixels.filter(|c| c.width > 0 && c.height > 0) {
+            return Some(crate::event::Mouse::new(
+                mouse.x / cell.width,
+                mouse.y / cell.height,
+                mouse.button,
+                mouse.modifiers,
+            ));
+        }
         let pixels = self.window_pixels?;
         let cells = self.window_cells?;
         if pixels.width == 0 || pixels.height == 0 || cells.width == 0 || cells.height == 0 {
@@ -474,8 +565,18 @@ where
     /// `request_*` methods are recorded into
     /// [`capabilities`](Self::capabilities), window-size reports update
     /// [`window_cells`](Self::window_cells) /
-    /// [`window_pixels`](Self::window_pixels), and the render-affecting reports
-    /// are applied to the [`Screen`].
+    /// [`window_pixels`](Self::window_pixels), and the render-affecting
+    /// reports are applied to the [`Screen`].
+    ///
+    /// Observing is otherwise passive, with one class of exception: a mode
+    /// report proving support for grapheme clusters or in-band resize enables
+    /// that mode when the matching
+    /// [`ProgramOptions`] `prefer_*` field is set, which writes to the
+    /// terminal. That adoption happens only while the application has taken no
+    /// position of its own: calling the mode's `enable_*` or `disable_*`
+    /// method, in either direction and at any point, settles it for good, and
+    /// adoption itself counts as settling it. So each mode is adopted at most
+    /// once, and never against an explicit choice.
     ///
     /// Observing never queries. Nothing here asks the terminal a question, so
     /// no reply appears on the event stream that the application did not ask
@@ -498,42 +599,73 @@ where
     pub fn observe_event(&mut self, event: &Event) -> io::Result<()> {
         use crate::ansi::mode::Mode;
         match *event {
-            Event::ModeReport { mode, setting } if setting.is_available() => match mode {
-                // Render-affecting and free to adopt: the screen emits the
-                // 2026 markers per frame, so knowing the terminal understands
-                // them is all it takes. Override with
-                // [`Screen::set_synchronized_output`].
-                Mode::SYNCHRONIZED_OUTPUT => {
-                    self.caps.synchronized_output = true;
-                    self.screen.set_synchronized_output(true);
+            Event::ModeReport { mode, setting } => {
+                // Record every report, including "not recognized": a definite
+                // no is information an app may want, and is not the same as
+                // the terminal staying silent.
+                self.caps.modes.insert(mode, setting);
+                // Adopt a preferred mode only while the application has taken
+                // no position on it. Calling enable_* or disable_* records the
+                // position, and adopting records it too, so a mode is adopted
+                // at most once and an explicit choice is never overridden --
+                // including one made before the terminal ever reported, when
+                // the mode field alone still reads as its default. The
+                // caller's options are only read, never rewritten.
+                if setting.is_available() && !self.state.chosen.contains(&mode) {
+                    match mode {
+                        // Render-affecting and free to adopt: the screen emits
+                        // the 2026 markers per frame, so knowing the terminal
+                        // understands them is all it takes. Turn it off for the
+                        // session with `prefer_synchronized_output`, or per
+                        // frame with [`Screen::set_synchronized_output`].
+                        Mode::SYNCHRONIZED_OUTPUT => {
+                            if self.options.prefer_synchronized_output {
+                                self.screen.set_synchronized_output(true);
+                            }
+                            self.state.chosen.insert(mode);
+                        }
+                        Mode::UNICODE_CORE if self.options.prefer_grapheme_clusters => {
+                            self.enable_grapheme_clusters()?;
+                        }
+                        Mode::IN_BAND_RESIZE if self.options.prefer_in_band_resize => {
+                            self.enable_in_band_resize()?;
+                        }
+                        _ => {}
+                    }
                 }
-                Mode::UNICODE_CORE => self.caps.grapheme_clusters = true,
-                // Recorded only; enabling is the app's choice.
-                Mode::IN_BAND_RESIZE => self.caps.in_band_resize = true,
-                Mode::MOUSE_NORMAL => self.caps.mouse_normal = true,
-                Mode::MOUSE_BUTTON => self.caps.mouse_button = true,
-                Mode::MOUSE_ANY => self.caps.mouse_any = true,
-                Mode::MOUSE_SGR => self.caps.mouse_sgr = true,
-                Mode::MOUSE_SGR_PIXEL => self.caps.mouse_sgr_pixel = true,
-                _ => {}
-            },
-            Event::KittyKeyboardEnhancements(_) => self.caps.kitty_keyboard = true,
+            }
+            Event::KittyKeyboardEnhancements(flags) => self.caps.kitty_keyboard = Some(flags),
             // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
             // query, so a reply means the terminal recognizes the feature.
-            Event::ModifyOtherKeys(_) => self.caps.modify_other_keys = true,
+            Event::ModifyOtherKeys(mode) => self.caps.modify_other_keys = Some(mode),
             Event::PrimaryDeviceAttributes(ref attrs) => {
-                // These come for free in the DA1 reply, which is sent as the
-                // capability-query terminator regardless.
-                if attrs.contains(&Some(4)) {
-                    self.caps.sixel = true;
-                }
-                if attrs.contains(&Some(52)) {
-                    self.caps.clipboard = true;
-                }
+                // Stored unparsed: the attribute numbers are a terminal-author
+                // extension point, so callers test the ones they care about.
+                self.caps.primary_device_attributes = Some(attrs.clone());
+            }
+            Event::SecondaryDeviceAttributes(ref attrs) => {
+                self.caps.secondary_device_attributes = Some(attrs.clone());
+            }
+            Event::TertiaryDeviceAttributes(ref id) => {
+                self.caps.tertiary_device_attributes = Some(id.clone());
             }
             Event::TerminalName(ref report) => {
-                self.terminal_name = Some(report.clone());
+                self.caps.terminal_name = Some(report.clone());
             }
+            // A graphics response is the Kitty protocol's own support test:
+            // terminals that do not implement it stay silent.
+            Event::KittyGraphics { .. } => self.caps.kitty_graphics = true,
+            // The terminal's own colors, as distinct from the overrides the
+            // facade installs (tracked in `state`).
+            Event::ForegroundColor(color) => self.caps.foreground_color = Some(color),
+            Event::BackgroundColor(color) => self.caps.background_color = Some(color),
+            Event::CursorColor(color) => self.caps.cursor_color = Some(color),
+            Event::PaletteColor { index, color } => {
+                self.caps.palette.insert(index, color);
+            }
+            // Mode 2031 keeps sending these as the scheme changes, so the
+            // record is the current scheme rather than a one-time answer.
+            Event::ColorScheme(scheme) => self.caps.color_scheme = Some(scheme),
             // Cache the full terminal size as it changes. Refitting the
             // managed area is left to the app (call autoresize() as desired).
             Event::Resize(ws) => {
@@ -545,6 +677,9 @@ where
             Event::WindowPixelSize { width, height } => {
                 self.window_pixels = Some(Size::new(width, height));
             }
+            Event::CellPixelSize { width, height } => {
+                self.cell_pixels = Some(Size::new(width, height));
+            }
             // Capture the reply to our own `request_origin`. Observing never
             // consumes, so an application that also queries the cursor still
             // sees this event.
@@ -552,19 +687,27 @@ where
                 self.origin_queries_pending -= 1;
                 self.origin = self.clip_origin(pos);
             }
-            // A successful XTGETTCAP reply for a truecolor capability
-            // confirms direct-color support: record and upgrade the
-            // renderer's color profile.
             Event::Termcap {
-                recognized: true,
+                recognized,
                 ref entries,
-            } if entries
-                .iter()
-                .any(|(name, _)| name == "RGB" || name == "Tc") =>
-            {
-                self.caps.true_color = true;
-                self.screen
-                    .set_color_profile(crate::color::Profile::TrueColor);
+            } => {
+                // A failure reply echoes the requested names, so it is
+                // recorded as an explicit "not supported" rather than
+                // dropped.
+                for (name, value) in entries {
+                    self.caps.termcap.insert(
+                        name.clone(),
+                        recognized.then(|| value.clone().unwrap_or_default()),
+                    );
+                }
+                // A truecolor capability upgrades the renderer's profile.
+                // The profile, not this record, is the answer to "can I send
+                // 24-bit color": the environment can establish it just as
+                // well, without any terminal reply to record here.
+                if self.caps.supports_termcap("RGB") || self.caps.supports_termcap("Tc") {
+                    self.screen
+                        .set_color_profile(crate::color::Profile::TrueColor);
+                }
             }
             _ => {}
         }
@@ -705,7 +848,7 @@ where
             options: ProgramOptions::default(),
             window_cells: None,
             window_pixels: None,
-            terminal_name: None,
+            cell_pixels: None,
             origin: Position::ORIGIN,
             origin_queries_pending: 0,
         })
@@ -725,8 +868,10 @@ where
     /// `&[]` for none.
     ///
     /// The DECRQM, XTVERSION, and XTGETTCAP queries are skipped on Apple's
-    /// `Terminal.app`, which mishandles them; its known support is recorded
-    /// directly instead.
+    /// `Terminal.app`, which mishandles them. Nothing is recorded in their
+    /// place: [`capabilities`](Self::capabilities) keeps reporting only what
+    /// the terminal actually said. Its known direct-color support is applied
+    /// to the renderer's color profile alone.
     ///
     /// # Draining the replies is yours
     ///
@@ -803,22 +948,13 @@ where
                 write_xtgettcap(&mut self.screen, &["Tc"])?;
             }
         } else {
-            // Terminal.app mishandles the capability queries, but its
-            // support for these features is known, so record them directly:
-            // mouse tracking (normal/button/any) and the SGR encoding (no
-            // pixel reporting). Bracketed paste is enabled unconditionally,
-            // so it needs no capability flag.
-            self.caps.mouse_normal = true;
-            self.caps.mouse_button = true;
-            self.caps.mouse_any = true;
-            self.caps.mouse_sgr = true;
             // Terminal.app gained direct-color support in the build shipped
-            // with macOS Tahoe; record it and upgrade the renderer when the
-            // env-derived profile hasn't already.
+            // with macOS Tahoe. It does not answer capability queries, so the
+            // renderer is upgraded from the version alone; `capabilities()`
+            // keeps reporting only what the terminal actually said.
             if profile < Profile::TrueColor
                 && self.apple_terminal_version().is_some_and(|v| v >= 470)
             {
-                self.caps.true_color = true;
                 self.screen.set_color_profile(Profile::TrueColor);
             }
         }
@@ -850,10 +986,11 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the defaults from
-    /// `options`. No capability query is sent; discovery is yours to start
-    /// with [`Self::query_capabilities`]. Call once after [`Self::new`],
-    /// before rendering.
+    /// Begin a session: enter raw mode and apply the always-on defaults from
+    /// `options`. This never probes the terminal; the `prefer_*` defaults
+    /// stay dormant until you call
+    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;
@@ -988,10 +1125,11 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the defaults from
-    /// `options`. No capability query is sent; discovery is yours to start
-    /// with [`Self::query_capabilities`]. Call once after [`Self::new`],
-    /// before rendering.
+    /// Begin a session: enter raw mode and apply the always-on defaults from
+    /// `options`. This never probes the terminal; the `prefer_*` defaults
+    /// stay dormant until you call
+    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
         self.terminal.make_raw()?;

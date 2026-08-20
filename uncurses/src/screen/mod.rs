@@ -41,7 +41,10 @@
 //!   [optimizations](Screen::set_optimizations).
 //!
 //! Every one of these is a plain setter: it cannot fail and it writes nothing.
-//! A `Screen` never emits a terminal mode. Turning a mode on is
+//! A `Screen` never *persists* a terminal mode: the only modes it emits are
+//! the synchronized-output and cursor-visibility markers it wraps a single
+//! frame in, and it closes both before [`render`](Screen::render) returns.
+//! Leaving a mode on is
 //! [`Program`](crate::program::Program)'s job, and it pushes the render
 //! consequence down here with the matching setter — so
 //! [`Program::enter_alt_screen`](crate::program::Program::enter_alt_screen)
