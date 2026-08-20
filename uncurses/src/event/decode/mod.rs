@@ -1658,7 +1658,7 @@ mod tests {
         );
         // A refusal carries no data at all.
         let evs = p.parse(b"\x1bP0$r\x1b\\");
-        assert_eq!(evs[0], Event::SettingReport(SettingReport::Refused));
+        assert_eq!(evs[0], Event::SettingReport(SettingReport::Unrecognized));
     }
 
     #[test]

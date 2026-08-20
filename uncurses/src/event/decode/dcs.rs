@@ -96,7 +96,7 @@ fn recognize(payload: &[u8]) -> Option<Event> {
         return Some(Event::SettingReport(if params_raw == b"1" {
             SettingReport::Raw(String::from_utf8_lossy(data).into_owned())
         } else {
-            SettingReport::Refused
+            SettingReport::Unrecognized
         }));
     }
 

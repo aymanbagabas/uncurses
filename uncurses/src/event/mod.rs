@@ -337,9 +337,9 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingReport {
     /// The terminal did not recognize the requested setting (`DCS 0 $ r ST`).
-    /// A refusal carries no data at all, so only the request that provoked it
-    /// says which setting was refused.
-    Refused,
+    /// The reply carries no data at all, so only the request that provoked it
+    /// says which setting was turned down.
+    Unrecognized,
     /// The setting as the terminal spelled it: the whole CSI sequence for the
     /// control function without its introducer, so `0;1m` for SGR, `2 q` for
     /// `DECSCUSR`, `>4;2m` for xterm's `XTQMODKEYS`.

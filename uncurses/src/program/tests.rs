@@ -1757,7 +1757,7 @@ fn a_decrqss_setting_report_is_not_recorded() {
     for report in [
         SettingReport::Raw("0;1m".into()),
         SettingReport::Raw(">4;2m".into()),
-        SettingReport::Refused,
+        SettingReport::Unrecognized,
     ] {
         program
             .observe_event(&Event::SettingReport(report))
