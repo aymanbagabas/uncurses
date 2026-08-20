@@ -139,8 +139,8 @@ impl Default for State {
 /// an individual `request_*` method. Reading with
 /// [`read_event`](super::Program::read_event) /
 /// [`try_read_event`](super::Program::try_read_event) records support here and
-/// applies the render-affecting ones on the way past; the event is still
-/// handed back to the application. Read back with
+/// applies the few noted below as `Applied:` on the way past; the event is
+/// still handed back to the application. Read back with
 /// [`Program::capabilities`](super::Program::capabilities).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
@@ -148,7 +148,9 @@ pub struct Capabilities {
     /// wrapped in begin/end-synchronized-update markers.
     pub synchronized_output: bool,
     /// Unicode core / grapheme-cluster mode (DEC private mode 2027).
-    /// Applied: cell widths are measured per grapheme cluster.
+    /// Detected only: call
+    /// [`enable_grapheme_clusters`](super::Program::enable_grapheme_clusters)
+    /// to act on it.
     pub grapheme_clusters: bool,
     /// In-band resize notifications (DEC private mode 2048).
     pub in_band_resize: bool,

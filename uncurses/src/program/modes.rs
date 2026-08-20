@@ -391,9 +391,9 @@ impl<I: Input, O: Write> Program<I, O> {
     /// `Some(flags)` enables the selected progressive-enhancement bits;
     /// `None` disables every enhancement.
     ///
-    /// The Kitty stack is per-screen-buffer, so the flags are re-applied
-    /// automatically after a screen-buffer switch, the
-    /// next time this program reads an event.
+    /// The Kitty stack is per-screen-buffer, so the flags are re-applied on
+    /// the newly active buffer by [`enter_alt_screen`](Self::enter_alt_screen)
+    /// / [`exit_alt_screen`](Self::exit_alt_screen), as part of the switch.
     pub fn set_kitty_keyboard(
         &mut self,
         flags: Option<kitty::KittyKeyboardFlags>,

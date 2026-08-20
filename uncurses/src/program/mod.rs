@@ -8,7 +8,8 @@
 //! - the terminal and input modes (mouse, bracketed paste, focus reporting,
 //!   in-band resize, titles, colors, cursor style, keyboard enhancements),
 //!   tracked so they can be torn down on a shell handoff and re-applied after,
-//! - the [`Capabilities`] discovered by querying the terminal at startup.
+//! - the [`Capabilities`] the terminal has reported, recorded from replies as
+//!   they pass through the read path.
 //!
 //! Drawing is not on `Program`. Reach the renderer with
 //! [`screen_mut`](Program::screen_mut) and call
