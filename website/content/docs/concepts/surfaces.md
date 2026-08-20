@@ -79,10 +79,11 @@ and let it draw within those bounds. The widget still uses the wrapped surface's
 coordinates; the view clips reads and writes, but does not translate them.
 `RenderBuffer` adds dirty tracking for the renderer.
 
-`TextBuffer` and `Screen` implement `TextSurface`, and `Painter` wraps a text
-surface when inline SGR or OSC 8 should become style instead of literal text.
-Those are the destinations where the `set_str` family works.
+`TextBuffer` and [`Screen`]({{< relref "screen.md" >}}) implement `TextSurface`,
+and `Painter` wraps a text surface when inline SGR or OSC 8 should become style
+instead of literal text. Those are the destinations where the `set_str` family
+works.
 
-The most important surface of all is the live [Screen]({{< relref "screen.md" >}}):
-you paint into it exactly like any other grid, and it takes care of getting the
-changes onto the terminal.
+In an interactive app, [`Program`]({{< relref "program.md" >}}) owns the live
+`Screen` and you borrow it with `program.screen_mut()`. In output-only code,
+construct `Screen<W>` yourself over any writer.

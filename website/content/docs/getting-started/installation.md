@@ -67,5 +67,5 @@ normal `cargo build` is all it takes.
 
 ## Next steps
 
-With the crate added, the next page writes the smallest complete program:
-[Hello, terminal]({{< relref "hello-world.md" >}}).
+With the crate added, the next page writes the smallest complete interactive
+program: [Hello, terminal]({{< relref "hello-world.md" >}}).

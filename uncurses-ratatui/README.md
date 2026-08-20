@@ -8,8 +8,8 @@
 A [ratatui](https://ratatui.rs) `Backend` that renders through
 [uncurses](../uncurses/). Write your UI with ratatui widgets and let uncurses
 diff frames and ship the minimal bytes. A single `UncursesBackend` wraps a
-`Program` and drives rendering, input, and the raw-mode lifecycle. The backend's
-synchronous event reads keep capability tracking alive on their own.
+`Program`, which owns input, terminal modes, and the renderer reached through
+`program().screen()`.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/ratatui_popup.gif" width="440" alt="ratatui popup example">
@@ -48,9 +48,12 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`read_event` tracks capabilities as the event passes through, so there is
-nothing extra to call. Only `event_stream()` bypasses the backend, and that is
-the one path that needs `observe_event`.
+The backend exposes the wrapped program as `program()` and `program_mut()`.
+Synchronous reads go through `Program`, so capability replies are observed for
+you. `try_read_event()` returns `io::Result<Option<Event>>`; use
+`observe_event` only for async streams or events read outside the program.
+Setup does not probe the terminal; call
+`backend.program_mut().query_capabilities(&[])?` when you want discovery.
 
 That's the shape of it; the full API and guides live at
 [uncurses.org](https://uncurses.org).

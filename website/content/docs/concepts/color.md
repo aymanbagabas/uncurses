@@ -51,15 +51,19 @@ but still has structure, and one that is plain text.
 
 ## Detection follows your reads
 
-A `Screen` picks an initial profile when you call `init`. It starts from the
-environment, the same way other CLI tools decide whether to emit color. With
-[`ScreenOptions::query_capabilities`](/api/uncurses/screen/struct.ScreenOptions.html#structfield.query_capabilities)
-left `true`, it also probes the terminal once for direct-color support. The
-upgrade to `TrueColor` happens when your read loop feeds the terminal's
-XTGETTCAP reply through
-[`screen.observe_event(&ev)?`](/api/uncurses/screen/struct.Screen.html#method.observe_event).
-You can suppress that probe by setting the field to `false`. The environment
-conventions it reads:
+A [`Program`]({{< relref "program.md" >}}) picks an initial profile when you
+call `init`. It starts from the environment, the same way other CLI tools decide
+whether to emit color. `init` never probes the terminal on its own, so that
+first answer is environment-only.
+
+To go further, ask for it:
+[`program.query_capabilities(&[])?`](/api/uncurses/program/struct.Program.html#method.query_capabilities)
+sends the query set, which includes an XTGETTCAP request for the `RGB`
+capability. The upgrade to `TrueColor` happens when the reply comes back
+through your read loop,
+since [`read_event`](/api/uncurses/program/struct.Program.html#method.read_event)
+records capabilities as it goes. Never call `query_capabilities` and nothing is
+sent. The environment conventions the initial guess reads:
 
 - Output that is not a TTY is `Disabled`, unless `TTY_FORCE` makes it follow TTY
   rules or `CLICOLOR_FORCE` forces color.
@@ -71,14 +75,20 @@ conventions it reads:
 - `CLICOLOR` raises a non-dumb TTY to at least `Ansi`; `CLICOLOR_FORCE` raises any
   output to at least `Ansi`.
 
-Read the result with `screen.color_profile()`, and override it with
-`screen.set_color_profile(..)` when you want to force a level regardless of the
-environment.
+The profile is a render property, so it lives on the screen: read it with
+`program.screen().color_profile()` and override it with
+`program.screen_mut().set_color_profile(..)` when you want to force a level
+regardless of the environment. `set_color_profile` cannot fail and writes
+nothing; it only changes how the next frame is encoded.
 
 {{< callout type="info" >}}
-Raw `Screen` reads are pure. Calling `screen.observe_event(&ev)?` on each event
-is optional; it keeps capability tracking alive, and skipping it still reads
-fine. The ratatui `UncursesBackend` follows the same pure-read contract.
+`Program`'s own reads record capabilities for you, so a normal
+`read_event` loop picks up the direct-color reply with no extra work. The same
+holds for the ratatui `UncursesBackend`, whose synchronous reads go through
+`Program`. Feeding events through
+[`observe_event`](/api/uncurses/program/struct.Program.html#method.observe_event)
+by hand is only needed when the events reach you some other way, such as the
+async `event_stream()`.
 {{< /callout >}}
 
 ## Choosing a profile yourself

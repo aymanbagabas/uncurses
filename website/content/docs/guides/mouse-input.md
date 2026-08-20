@@ -15,15 +15,16 @@ tracking: `MouseTracking::MOTION` adds pointer movement with no button held, and
 `MouseTracking::PIXELS` asks for pixel-accurate coordinates. An empty set
 (`MouseTracking::empty()`) is basic tracking with no extras.
 
-To start tracking at init, set `ScreenOptions::mouse` and pass it to `init_with`:
+To start tracking at init, set `ProgramOptions::mouse` and pass it to
+`init_with`:
 
 ```rust
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
 
-let mut screen = Screen::stdio()?;
-screen.init_with(ScreenOptions {
+let mut program = Program::stdio()?;
+program.init_with(ProgramOptions {
     mouse: Some(MouseTracking::MOTION),
-    ..ScreenOptions::default()
+    ..ProgramOptions::default()
 })?;
 ```
 
@@ -31,13 +32,13 @@ To turn it on and off during a session, call `enable_mouse` with the flags you
 want, and `disable_mouse` to stop:
 
 ```rust
-screen.enable_mouse(MouseTracking::MOTION)?; // motion on, pixels off
+program.enable_mouse(MouseTracking::MOTION)?; // motion on, pixels off
 
 // ... later, to stop tracking:
-screen.disable_mouse()?;
+program.disable_mouse()?;
 ```
 
-Either way, the screen does not gate mouse setup on detected capabilities. It
+Either way, the program does not gate mouse setup on detected capabilities. It
 always requests 1000 + 1002 tracking and 1006 SGR encoding; `MOTION` also asks
 for 1003, and `PIXELS` also asks for 1016. Terminals ignore unsupported modes,
 so a terminal that cannot report pixels keeps reporting cells.
@@ -52,8 +53,7 @@ and modifiers. A mouse event's `x` and `y` are plain `u16`, so build a
 use uncurses::event::{Event, MouseButton};
 use uncurses::layout::Position;
 
-let ev = screen.read_event()?;
-screen.observe_event(&ev)?;
+let ev = program.read_event()?;
 
 match ev {
     Event::MouseClick(m) => {
@@ -80,12 +80,11 @@ Positions are 0-based: `(0, 0)` is the top-left cell, `x` is the column and `y`
 is the row.
 
 {{< callout type="info" >}}
-Raw `Screen` reads are pure. After `read_event` or `try_read_event` gives you an
-event, passing it to `screen.observe_event(&ev)?` is optional; it keeps
-capability detection, resize tracking, and discovery defaults alive, and skipping
-it still reads fine. `query_capabilities` is the `ScreenOptions` field that
-controls whether init sends those probes. The ratatui backend follows the same
-pure-read contract.
+`Program` sync reads observe events automatically. If you explicitly call
+`program.query_capabilities(&[])?`, the replies arrive as ordinary events. Keep
+reading until `Event::PrimaryDeviceAttributes` if you need to know discovery is
+complete, or let your normal `read_event` loop observe the replies as they
+arrive. `init()` does not probe the terminal.
 {{< /callout >}}
 
 ## Hit testing
@@ -114,22 +113,32 @@ if let Event::MouseClick(m) = event {
 
 When you ask for `MouseTracking::PIXELS`, a capable terminal reports the pointer
 in pixel offsets instead of cells, which is what you want for sub-cell precision
-like dragging a graphic. Two things change, and the screen helps with both.
+like dragging a graphic. Two things change, and the program helps with both.
 
-First, find out whether you are actually getting pixels. The terminal may not
-support the request, in which case you quietly keep getting cells.
-After the capability replies have been observed, `screen.capabilities()` tells
-you which you got:
+First, find out whether you are actually getting pixels. `init()` does not probe
+the terminal, so ask for capabilities when you need this answer. The
+terminal may not support the request, in which case you quietly keep getting
+cells. Once the capability replies have been observed, `program.capabilities()`
+tells you which mode you got:
 
 ```rust
-let pixel_mode = screen.capabilities().mouse_sgr_pixel;
+use uncurses::ansi::mode::Mode;
+
+program.query_capabilities(&[])?;
+// Later, after your read_event loop has observed the replies:
+let pixel_mode = program.capabilities().supports(Mode::MOUSE_SGR_PIXEL);
 ```
 
 Second, when `pixel_mode` is true, a mouse event's `x` and `y` are pixels, not
-columns and rows. `screen.mouse_pixels_to_cells` converts a pixel `Mouse` back
-to cell coordinates for you, using the window and cell size the screen already
-tracks. With the default size tracking, there is nothing else to set up; the
-conversion works once the window pixel size has been observed.
+columns and rows. `program.mouse_pixels_to_cells` converts a pixel `Mouse` back
+to cell coordinates for you, using `program.cell_pixels()`. The conversion
+works once the cell size is known.
+
+`cell_pixels()` prefers the terminal's own answer to
+`request_cell_pixel_size()` and otherwise divides the window pixel size by the
+window cell size. The quotient is only an approximation, because the window
+size includes any padding the terminal draws around the grid, so send that
+request once at startup if you need the exact figure.
 
 ```rust
 use uncurses::event::Event;
@@ -137,7 +146,7 @@ use uncurses::layout::Position;
 
 if let Event::MouseClick(m) = event {
     let m = if pixel_mode {
-        screen.mouse_pixels_to_cells(m).unwrap_or(m)
+        program.mouse_pixels_to_cells(m).unwrap_or(m)
     } else {
         m // already in cells
     };
@@ -151,11 +160,10 @@ observed, your hit testing works in cells whether or not the terminal reports
 pixels.
 
 {{< callout type="info" >}}
-With custom resize settings, make sure the screen learns the window pixel size.
-If your resize path does not provide pixel dimensions and
-`request_pixel_size_on_resize` is off, `mouse_pixels_to_cells` returns `None`.
-Request it yourself once with `screen.request_window_pixel_size()?`, and the
-conversion starts working when the reply arrives.
+The program never asks for these sizes on its own. Request them yourself with
+`program.request_window_pixel_size()?`, and the conversion starts working when
+the reply arrives. Ask again after a resize or a font-size change, or the
+conversion keeps using the old numbers.
 {{< /callout >}}
 
 See `examples/examples/mouse.rs` for a live readout of motion, buttons, and
@@ -168,25 +176,33 @@ screen, the surface starts partway down the terminal, but the terminal still
 reports clicks in whole-screen coordinates. To hit test against your surface
 you need to know where its top-left cell physically sits.
 
-Enabling the mouse inline turns this on automatically: the screen asks the
-terminal for the cursor position, records it as the surface origin, and re-asks
-on resize. Read it with `screen.origin()`, or map a whole-screen `Mouse`
-straight into surface-local coordinates with `screen.mouse_to_origin`, the
+Call `program.request_origin()?` and the program parks the cursor at the
+surface's top-left, asks the terminal where that landed, and records the reply
+as the origin. Read it with `program.origin()`, or map a whole-screen `Mouse`
+straight into surface-local coordinates with `program.mouse_to_origin`, the
 origin analogue of `mouse_pixels_to_cells`:
 
 ```rust
 use uncurses::event::Event;
 
 if let Event::MouseClick(m) = event {
-    let local = screen.mouse_to_origin(m); // relative to the surface's top-left
+    let local = program.mouse_to_origin(m); // relative to the surface's top-left
     // hit test `local.x` / `local.y` against your layout
 }
 ```
 
 On the alternate screen the origin is always `(0, 0)`, so `mouse_to_origin` is a
-no-op there and the same hit-testing code works in both modes. Origin tracking
-is on by default; opt out with `ScreenOptions { track_origin: false, .. }` or
-toggle it at runtime with `screen.set_origin_tracking(false)?`.
+no-op there and the same hit-testing code works in both modes.
+
+Nothing refreshes the origin for you. Request it once after `enable_mouse`, and
+again on every resize, since either can move the surface:
+
+```rust
+Event::Resize(_) => {
+    program.autoresize()?;
+    program.request_origin()?;
+}
+```
 
 See `examples/examples/calculator.rs` for a mouse-driven, inline calculator that
 maps clicks onto its keypad this way.
