@@ -350,15 +350,12 @@ pub fn wrap_mode(
     // pass that used to decide whether to run it.
     let (wrapped, over) = wordwrap_inner(s, limit, breakpoints, mode, eaw_wide);
     if !over {
-        // The word wrap's per-line widths and a fresh measurement of its
-        // output must agree; if they ever did not, this would silently return
-        // lines wider than the limit. Free to check where it is affordable.
-        debug_assert!(
-            wrapped
-                .split('\n')
-                .all(|l| string_width(l.as_bytes(), mode, eaw_wide) <= limit),
-            "word wrapping reported every line within {limit}, and one is not"
-        );
+        // No cross-check of `over` against a fresh measurement of the output
+        // here. Measuring line by line restarts the parser at every newline,
+        // so a control string spanning one - an unterminated APC, say - reads
+        // as visible text on the lines after it, which is why the two
+        // disagree on output that is correct. The word wrap carries that
+        // state across newlines and is the one that can see it.
         return wrapped;
     }
     // Some line is over. Measure to find which - the output is allocated
@@ -493,5 +490,18 @@ mod tests {
     #[test]
     fn wordwrap_zero_limit_returns_input() {
         assert_eq!(wordwrap("anything", 0, " "), "anything");
+    }
+
+    /// An unterminated control string swallows everything after it, newlines
+    /// included, so the text on the following lines is never visible and the
+    /// input needs no wrapping at all. Measuring the output one line at a time
+    /// cannot see that - the parser restarts at each newline and reads the
+    /// payload as ordinary text - which is why `wrap` trusts the width the
+    /// word wrap carried across the newline instead of measuring again.
+    #[test]
+    fn wrap_leaves_a_control_string_spanning_a_newline_alone() {
+        let s = "\x1b_\nworld\u{4e00}\u{1f1fa}\x07\u{1f1fa}";
+        assert_eq!(string_width(s.as_bytes(), WidthMode::default(), false), 0);
+        assert_eq!(wrap(s, 8, " \t-"), s);
     }
 }
