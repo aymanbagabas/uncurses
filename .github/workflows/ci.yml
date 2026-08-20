@@ -36,6 +36,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+  # The benchmark modules are behind `--cfg uncurses_bench`, so nothing else
+  # in CI compiles them and a type error in one would sit unnoticed until
+  # somebody ran `cargo bench`. Building them is enough; running them on a
+  # shared runner would measure the runner.
+  bench:
+    name: bench (compile only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo bench --workspace --no-run --locked
+        env:
+          RUSTFLAGS: --cfg uncurses_bench
+
   # Tier-1 platforms with native runners: build and test across the width
   # backends. `default` exercises the pure-Rust backend; `all-features`
   # exercises the ICU backend plus async.
