@@ -110,6 +110,8 @@ impl Mode {
     pub const UNICODE_CORE: Mode = Mode::Dec(2027);
     /// DEC private mode 2031: light/dark color-scheme notifications.
     pub const LIGHT_DARK: Mode = Mode::Dec(2031);
+    /// DEC private mode 2033: terminal visibility reports.
+    pub const VISIBILITY_REPORTS: Mode = Mode::Dec(2033);
     /// DEC private mode 2048: in-band resize reports.
     pub const IN_BAND_RESIZE: Mode = Mode::Dec(2048);
     /// DEC private mode 9001: Win32-input reporting on supporting terminals.
@@ -438,5 +440,6 @@ mod tests {
         assert_eq!(Mode::WIN32_INPUT, Mode::Dec(9001));
         assert_eq!(Mode::ALT_SCREEN_LEGACY, Mode::Dec(47));
         assert_eq!(Mode::LIGHT_DARK, Mode::Dec(2031));
+        assert_eq!(Mode::VISIBILITY_REPORTS, Mode::Dec(2033));
     }
 }

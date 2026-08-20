@@ -126,9 +126,10 @@ fn main() -> std::io::Result<()> {
 
 These cover the everyday questions: the foreground, background, cursor, and
 palette colors; the cell and window pixel size; the cursor position; the color
-scheme (dark or light); mode state; clipboard contents; and feature probes like
-kitty keyboard and modify-other-keys. For the complete set, scan the `request_*`
-methods on [`Program`](/api/uncurses/program/struct.Program.html) in the API
+scheme (dark or light); terminal visibility; mode state; clipboard contents; and
+feature probes like kitty keyboard and modify-other-keys. For the complete set,
+scan the `request_*` methods on
+[`Program`](/api/uncurses/program/struct.Program.html) in the API
 reference; each one documents the exact `Event` variant used for its reply.
 
 ## Extra queries in the capability batch

@@ -96,9 +96,10 @@ everything back.
 
 ## Answers that keep arriving
 
-Most questions are answered once. Two keep updating. The color scheme follows
-the user switching between dark and light mode, for as long as you leave those
-updates turned on, and graphics support is confirmed by any graphics response,
+Most questions are answered once. Three keep updating. The color scheme follows
+the user switching between dark and light mode, and terminal visibility follows
+the view being covered or uncovered, for as long as you leave those updates
+turned on, and graphics support is confirmed by any graphics response,
 including the ones a terminal sends back while you are transmitting an image.
 
 The colors recorded here are the terminal's own, which is the opposite of what

@@ -12,7 +12,7 @@
 
 use std::io::{self, Write};
 
-use crate::ansi::{self, color, cursor, kitty, mode, progress, xterm};
+use crate::ansi::{self, color, cursor, kitty, mode, progress, status, xterm};
 use crate::color::Color;
 use crate::event::Input;
 
@@ -218,6 +218,53 @@ impl<I: Input, O: Write> Program<I, O> {
         mode::Mode::LIGHT_DARK.reset(&mut self.screen)?;
         self.state.color_scheme_updates = false;
         self.screen.flush()
+    }
+
+    /// Enable terminal visibility reports (DEC private mode 2033) and flush.
+    /// The terminal then sends a `CSI ? 999 ; {1|2} n` report whenever the
+    /// view stops being observable or becomes observable again, which the
+    /// decoder surfaces as [`Event::Visibility`]. Being covered by another
+    /// window, scrolled out of a tab, or on a minimized window all count.
+    ///
+    /// The report is advisory and asymmetric: [`Visibility::Hidden`] means
+    /// the terminal knows nothing can be seen, so a render can be skipped,
+    /// while [`Visibility::Visible`] only means it may be observable. A
+    /// terminal that never reports is therefore treated as visible, which is
+    /// what makes ignoring this mode safe.
+    ///
+    /// Visibility is independent of focus: an unfocused window is usually
+    /// still visible.
+    ///
+    /// [`Event::Visibility`]: crate::event::Event::Visibility
+    /// [`Visibility::Hidden`]: crate::event::Visibility::Hidden
+    /// [`Visibility::Visible`]: crate::event::Visibility::Visible
+    pub fn enable_visibility_reports(&mut self) -> io::Result<()> {
+        mode::Mode::VISIBILITY_REPORTS.set(&mut self.screen)?;
+        self.state.visibility_reports = true;
+        self.screen.flush()
+    }
+
+    /// Disable terminal visibility reports (DEC private mode 2033) and flush.
+    pub fn disable_visibility_reports(&mut self) -> io::Result<()> {
+        mode::Mode::VISIBILITY_REPORTS.reset(&mut self.screen)?;
+        self.state.visibility_reports = false;
+        self.screen.flush()
+    }
+
+    /// Ask the terminal to report its visibility once and flush.
+    ///
+    /// The reply arrives as [`Event::Visibility`], the same event the
+    /// unsolicited reports use. This does not enable or disable
+    /// [`enable_visibility_reports`](Self::enable_visibility_reports), so it
+    /// is the way to read visibility without subscribing to changes. A
+    /// terminal that does not implement DEC private mode 2033 answers
+    /// nothing at all, so never block waiting for this reply.
+    ///
+    /// [`Event::Visibility`]: crate::event::Event::Visibility
+    pub fn request_visibility(&mut self) -> io::Result<()> {
+        self.screen
+            .write_all(status::REQUEST_VISIBILITY_REPORT)
+            .and_then(|()| self.screen.flush())
     }
 
     /// Enable in-band resize notifications (DEC private mode 2048) and
@@ -536,6 +583,9 @@ impl<I: Input, O: Write> Program<I, O> {
         if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.reset(&mut self.screen)?;
         }
+        if self.state.visibility_reports {
+            mode::Mode::VISIBILITY_REPORTS.reset(&mut self.screen)?;
+        }
         if self.state.in_band_resize {
             mode::Mode::IN_BAND_RESIZE.reset(&mut self.screen)?;
         }
@@ -656,6 +706,9 @@ impl<I: Input, O: Write> Program<I, O> {
         }
         if self.state.color_scheme_updates {
             mode::Mode::LIGHT_DARK.set(&mut self.screen)?;
+        }
+        if self.state.visibility_reports {
+            mode::Mode::VISIBILITY_REPORTS.set(&mut self.screen)?;
         }
         if self.state.in_band_resize {
             mode::Mode::IN_BAND_RESIZE.set(&mut self.screen)?;

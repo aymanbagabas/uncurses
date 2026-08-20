@@ -46,6 +46,12 @@ pub(super) struct State {
     /// dark/light scheme. Reports the dark/light preference only, not the
     /// actual colors.
     pub color_scheme_updates: bool,
+    /// Terminal visibility reports (DEC 2033). When `true`, the terminal
+    /// sends an unsolicited report whenever the view becomes observable or
+    /// stops being observable, surfaced as [`Event::Visibility`].
+    ///
+    /// [`Event::Visibility`]: crate::event::Event::Visibility
+    pub visibility_reports: bool,
     /// In-band resize notifications (DEC 2048). When `true`, the
     /// terminal sends a `CSI 48 ; … t` report whenever the surface
     /// changes size, surfaced as [`Event::Resize`].
@@ -127,6 +133,7 @@ impl Default for State {
             bracketed_paste: false,
             focus_events: false,
             color_scheme_updates: false,
+            visibility_reports: false,
             in_band_resize: false,
             window_title: None,
             icon_name: None,

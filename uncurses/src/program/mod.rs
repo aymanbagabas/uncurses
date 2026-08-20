@@ -966,6 +966,7 @@ where
                 Mode::SYNCHRONIZED_OUTPUT,
                 Mode::UNICODE_CORE,
                 Mode::IN_BAND_RESIZE,
+                Mode::VISIBILITY_REPORTS,
                 Mode::MOUSE_NORMAL,
                 Mode::MOUSE_BUTTON,
                 Mode::MOUSE_ANY,

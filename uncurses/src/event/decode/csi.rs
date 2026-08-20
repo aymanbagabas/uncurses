@@ -39,7 +39,7 @@ use super::util::{
 use crate::event::mouse::{
     decode_sgr_mouse, decode_urxvt_mouse, decode_utf8_mouse, decode_x10_mouse,
 };
-use crate::event::{ColorScheme, Event, Key, KeyCode, KeyModifiers};
+use crate::event::{ColorScheme, Event, Key, KeyCode, KeyModifiers, Visibility};
 
 impl Decoder {
     pub(super) fn parse_csi(&self, buf: &[u8]) -> ParseResult {
@@ -232,6 +232,22 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
         return match params.get_or(1, 0) {
             1 => Some(Event::ColorScheme(ColorScheme::Dark)),
             2 => Some(Event::ColorScheme(ColorScheme::Light)),
+            _ => None,
+        };
+    }
+
+    // Terminal visibility report: CSI ? 999 ; {1|2} n.
+    // Sent both as reply to `CSI ? 998 n` and unsolicited when DEC mode
+    // 2033 is enabled. Exactly two params and no intermediate.
+    if final_byte == b'n'
+        && view.private == Some(b'?')
+        && no_intermediate
+        && params.len() == 2
+        && params.get_or(0, 0) == 999
+    {
+        return match params.get_or(1, 0) {
+            1 => Some(Event::Visibility(Visibility::Visible)),
+            2 => Some(Event::Visibility(Visibility::Hidden)),
             _ => None,
         };
     }

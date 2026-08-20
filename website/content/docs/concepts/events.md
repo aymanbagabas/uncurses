@@ -31,7 +31,8 @@ Events cover everything the terminal reports, not just keys:
 - **Input**: `KeyPress`, `KeyRepeat`, `KeyRelease`, and the mouse family
   (`MouseClick`, `MouseRelease`, `MouseWheel`, `MouseMove`).
 - **Lifecycle**: `Resize` when the window changes, `FocusIn` and `FocusOut`,
-  and bracketed-paste events: `PasteStart`, `PasteChunk`, and `PasteEnd`.
+  `Visibility` when the view becomes observable or hidden, and
+  bracketed-paste events: `PasteStart`, `PasteChunk`, and `PasteEnd`.
 - **Replies**: answers to questions you asked the terminal, like
   `CursorPosition`, `BackgroundColor`, `PrimaryDeviceAttributes`, or
   `ColorScheme`. Capability probing is opt-in through
