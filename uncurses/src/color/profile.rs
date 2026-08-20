@@ -118,8 +118,10 @@ impl Profile {
         let envp = env_color_profile(env, &term);
         let mut p = if !is_tty { Profile::Disabled } else { envp };
 
-        // NO_COLOR: clamp to Ascii (decoration still allowed).
-        if is_truthy(env, "NO_COLOR") && is_tty {
+        // NO_COLOR: clamp to Ascii (decoration still allowed). The spec is
+        // presence-based, not boolean: any non-empty value disables color,
+        // including `0` and `false`. `has` is exactly that test.
+        if env.has("NO_COLOR") && is_tty {
             if p > Profile::Ascii {
                 p = Profile::Ascii;
             }
@@ -300,6 +302,27 @@ mod tests {
     fn no_color_clamps_to_ascii() {
         let e = env(&[("TERM", "xterm-256color"), ("NO_COLOR", "1")]);
         assert_eq!(Profile::detect_from(&e, true), Profile::Ascii);
+    }
+
+    /// NO_COLOR is presence-based: any non-empty value disables color,
+    /// however little it reads as a boolean. Only an absent or empty value
+    /// leaves color on.
+    #[test]
+    fn no_color_clamps_for_any_non_empty_value() {
+        for v in ["1", "0", "false", "no", "yes", "please", " "] {
+            let e = env(&[("TERM", "xterm-256color"), ("NO_COLOR", v)]);
+            assert_eq!(
+                Profile::detect_from(&e, true),
+                Profile::Ascii,
+                "NO_COLOR={v:?} should disable color"
+            );
+        }
+        for e in [
+            env(&[("TERM", "xterm-256color"), ("NO_COLOR", "")]),
+            env(&[("TERM", "xterm-256color")]),
+        ] {
+            assert!(Profile::detect_from(&e, true) > Profile::Ascii);
+        }
     }
 
     #[test]
