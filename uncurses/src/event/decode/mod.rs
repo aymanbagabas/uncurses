@@ -678,6 +678,46 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_visibility_report() {
+        use crate::event::Visibility;
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        assert_eq!(
+            parser.parse(b"\x1b[?999;1n"),
+            vec![Event::Visibility(Visibility::Visible)]
+        );
+        assert_eq!(
+            parser.parse(b"\x1b[?999;2n"),
+            vec![Event::Visibility(Visibility::Hidden)]
+        );
+        // Round-trips against the writer used to produce these reports.
+        let mut buf = Vec::new();
+        crate::ansi::status::write_visibility_report(&mut buf, true).unwrap();
+        crate::ansi::status::write_visibility_report(&mut buf, false).unwrap();
+        assert_eq!(
+            parser.parse(&buf),
+            vec![
+                Event::Visibility(Visibility::Visible),
+                Event::Visibility(Visibility::Hidden),
+            ]
+        );
+        // Unknown sub-report value: branch returns None; consumer may see a
+        // fallthrough unknown event but never a Visibility.
+        let evs = parser.parse(b"\x1b[?999;9n");
+        assert!(!evs.iter().any(|e| matches!(e, Event::Visibility(_))));
+        // 998 is the query we send, never something the terminal reports back.
+        let evs = parser.parse(b"\x1b[?998;1n");
+        assert!(!evs.iter().any(|e| matches!(e, Event::Visibility(_))));
+        // Wrong number of params (1 or 3) is rejected.
+        let evs = parser.parse(b"\x1b[?999n");
+        assert!(!evs.iter().any(|e| matches!(e, Event::Visibility(_))));
+        let evs = parser.parse(b"\x1b[?999;1;0n");
+        assert!(!evs.iter().any(|e| matches!(e, Event::Visibility(_))));
+        // Missing the private marker is not a visibility report either.
+        let evs = parser.parse(b"\x1b[999;1n");
+        assert!(!evs.iter().any(|e| matches!(e, Event::Visibility(_))));
+    }
+
+    #[test]
     fn test_parse_cursor_position() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[5;10R");
