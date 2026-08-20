@@ -55,8 +55,9 @@ pub fn write_request_light_dark_report<W: Write>(w: &mut W) -> io::Result<()> {
 /// prefix, intermediates and final byte: `"m"` for SGR, `" q"` for
 /// `DECSCUSR` (cursor style), `"r"` for `DECSTBM` (scrolling region),
 /// `"\"q"` for `DECSCA`, `"$|"` for `DECSCPP`. xterm's private requests take
-/// a parameter too, as in `">4m"` for `XTQMODKEYS`. An empty selector emits
-/// nothing.
+/// a parameter too, as in `">4m"` for `XTQMODKEYS`. An empty selector is
+/// written like any other and the terminal refuses it, which keeps one
+/// request paired with one reply.
 ///
 /// The terminal answers with DECRPSS: `ESC P 1 $ r <D...D> ESC \` when it
 /// recognizes the request, where the data string is the setting spelled out
@@ -66,9 +67,6 @@ pub fn write_request_light_dark_report<W: Write>(w: &mut W) -> io::Result<()> {
 /// refusal echoes nothing back, only the request says which setting it
 /// refused. Use [`write_decrpss`] to encode either reply.
 pub fn write_decrqss<W: Write>(w: &mut W, selector: &str) -> io::Result<()> {
-    if selector.is_empty() {
-        return Ok(());
-    }
     write!(w, "\x1bP$q{selector}\x1b\\")
 }
 
@@ -161,8 +159,10 @@ mod tests {
         let mut buf = Vec::new();
         write_decrqss(&mut buf, "m").unwrap();
         write_decrqss(&mut buf, " q").unwrap();
+        // Replies carry nothing that names the request, so they are matched by
+        // order. An empty selector still goes out, so the counts stay level.
         write_decrqss(&mut buf, "").unwrap();
-        assert_eq!(buf, b"\x1bP$qm\x1b\\\x1bP$q q\x1b\\");
+        assert_eq!(buf, b"\x1bP$qm\x1b\\\x1bP$q q\x1b\\\x1bP$q\x1b\\");
     }
 
     #[test]
@@ -171,6 +171,8 @@ mod tests {
         // The two examples the VT510 manual gives for DECRPSS.
         write_decrpss(&mut buf, true, "0;4;5;7m").unwrap();
         write_decrpss(&mut buf, true, "1;24r").unwrap();
+        // Not from the manual: xterm's private XTQMODKEYS, here to prove a
+        // private prefix survives the encoder.
         write_decrpss(&mut buf, true, ">4;2m").unwrap();
         // An invalid request gets no data string, whatever it is handed.
         write_decrpss(&mut buf, false, "0;1m").unwrap();
