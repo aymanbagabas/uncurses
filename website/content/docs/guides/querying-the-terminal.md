@@ -39,13 +39,18 @@ already been delivered.
 wait with `poll_event(Some(timeout))`. A silent terminal never answers, including
 the sentinel.
 
-Reading those replies is not purely passive. A few of them are adopted as they
-pass through: synchronized output always, and grapheme-cluster mode and in-band
-resize when `ProgramOptions::prefer_grapheme_clusters` and
-`prefer_in_band_resize` are left at their `true` default. Adoption emits the
-mode, so it is recorded in the program's emitted-mode set and undone by
-`finish()`. Set either field to `false` to record the capability without
-enabling it.
+Reading those replies is not purely passive. A few are adopted as they pass
+through, each gated by a `ProgramOptions` field that defaults to `true`:
+`prefer_synchronized_output`, `prefer_grapheme_clusters` and
+`prefer_in_band_resize`. Set any of them to `false` to record the capability
+without acting on it.
+
+What adoption does differs by capability. Grapheme-cluster mode and in-band
+resize are terminal modes, so adopting one emits the mode, records it in the
+program's emitted-mode set, and `finish()` undoes it. Synchronized output is a
+render property: adoption only tells the screen to start wrapping frames in the
+2026 markers, so nothing is written at adoption time and there is nothing for
+`finish()` to undo.
 
 ```rust
 use std::time::{Duration, Instant};

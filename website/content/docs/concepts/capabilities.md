@@ -70,12 +70,18 @@ here, for when you want to know how that conclusion was reached.
 
 ## What the terminal can tell you
 
-Every reply a terminal sends about itself lands here, not just the answers the
+Every reply that says what it is about lands here, not just the answers the
 program acts on, so a question you send yourself is readable afterwards
 alongside the built-in ones. Where there are many answers of a kind, such as
 palette entries, you can read the whole set.
 
-Sizes are the exception, because they keep changing. The window and cell
+A DECRQSS setting report is the reply that cannot. A success repeats the setting
+and its parameters together, so `0;1m` and `>4;2m` carry nothing that could key
+a record, and a refusal is empty. Only the request you sent says what was asked.
+`Program` never sends DECRQSS, so it has no request to match against and hands
+the reply through as `Event::SettingReport` untouched.
+
+Sizes are the other exception, because they keep changing. The window and cell
 dimensions arrive as replies too, but they are superseded by every resize, so
 they live on `Program` as `window_cells()`, `window_pixels()` and
 `cell_pixels()` rather than as a recorded answer.

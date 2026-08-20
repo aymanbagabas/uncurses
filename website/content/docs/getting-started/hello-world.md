@@ -171,6 +171,6 @@ the cursor back, and leaves the alternate screen for you.
 ## Next steps
 
 You have met `Program`, the front-door entry point for interactive apps. It owns
-a pure `Screen` renderer, but `Screen` is not the whole session anymore. The
-next page maps out [the layers]({{< relref "the-layers.md" >}})
+a pure `Screen` renderer, and the smaller pieces underneath are usable on their
+own. The next page maps out [the layers]({{< relref "the-layers.md" >}})
 and when to reach for each.

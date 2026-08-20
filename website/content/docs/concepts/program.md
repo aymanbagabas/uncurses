@@ -60,7 +60,8 @@ its own, so call `finish()` when you are done.
 
 `pause()` hands the terminal back temporarily, which is what you want before
 running something like an editor, while keeping your program alive. `resume()`
-takes it back and repaints. On Unix, `suspend()` pauses and then stops the
+takes it back and forgets what was on screen, so your next `render()` draws
+everything. On Unix, `suspend()` pauses and then stops the
 process the way Ctrl+Z does; call `resume()` once it starts again.
 
 ## Drawing through the screen
