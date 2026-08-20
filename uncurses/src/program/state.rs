@@ -158,11 +158,14 @@ impl Default for State {
 ///
 /// The facade records these as reply events flow through
 /// [`read_event`](super::Program::read_event) /
-/// [`try_read_event`](super::Program::try_read_event). Nothing lands here
-/// unless you ask: see
+/// [`try_read_event`](super::Program::try_read_event), whichever way the
+/// question was put: see
 /// [`query_capabilities`](super::Program::query_capabilities), which asks for
-/// only some of this, and takes extra bytes so you can ask for the rest. Read
-/// it back with [`Program::capabilities`](super::Program::capabilities).
+/// only some of this, and takes extra bytes so you can ask for the rest. An
+/// individual `request_*` method fills a single entry, and a few reports
+/// arrive unprompted once their mode is on, such as a color-scheme change
+/// under DEC mode 2031. Read it back with
+/// [`Program::capabilities`](super::Program::capabilities).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Capabilities {
     pub(super) modes: BTreeMap<Mode, ModeSetting>,

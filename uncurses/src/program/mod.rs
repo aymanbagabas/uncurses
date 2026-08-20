@@ -389,8 +389,11 @@ where
     // --- Capabilities and geometry ---------------------------------------
 
     /// What the terminal has told us about itself so far, as the replies
-    /// themselves rather than a summary. Empty until you call
-    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// themselves rather than a summary. Empty until the terminal has answered
+    /// something, whichever way the question was put:
+    /// [`query_capabilities`](Self::query_capabilities), an individual
+    /// `request_*` method, or a report the terminal sends unprompted, such as a
+    /// color-scheme change under DEC mode 2031.
     pub fn capabilities(&self) -> &Capabilities {
         &self.caps
     }
