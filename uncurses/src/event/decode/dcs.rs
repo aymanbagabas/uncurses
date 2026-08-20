@@ -3,7 +3,7 @@
 //! ## Purpose
 //!
 //! DCS sequences carry terminal-control reply strings. This decoder recognizes
-//! capability replies, DECRQSS-style status replies, terminal-name replies, and
+//! capability replies, DECRPSS status replies, terminal-name replies, and
 //! tertiary device attributes, while preserving unknown payloads as
 //! [`Event::UnknownDcs`].
 //!
@@ -21,7 +21,7 @@
 use super::Decoder;
 use super::result::ParseResult;
 use super::util::{decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len};
-use crate::event::Event;
+use crate::event::{Event, SettingReport};
 
 impl Decoder {
     pub(super) fn parse_dcs(&self, buf: &[u8]) -> ParseResult {
@@ -41,7 +41,7 @@ impl Decoder {
     }
 }
 
-/// Builtin DCS recogniser: XTGETTCAP, DECRQSS, XTVersion, tertiary DA.
+/// Builtin DCS recogniser: XTGETTCAP, DECRPSS, XTVersion, tertiary DA.
 ///
 /// Splits the payload into its private prefix / parameter / intermediate /
 /// final-byte / data regions and matches the known reply shapes. Returns
@@ -80,21 +80,24 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     if intermediates == b"+" && final_byte == b'r' && (params_raw == b"1" || params_raw == b"0") {
         return Some(Event::Termcap {
             recognized: params_raw == b"1",
-            payload: decode_termcap_payload(data),
+            entries: decode_termcap_payload(data),
         });
     }
 
-    // DECRQSS response: DCS 1$r ... ST (valid) or DCS 0$r ... ST (invalid).
-    // We expose these as a capability reply as well.
-    if (params_raw == b"1" || params_raw == b"0")
-        && intermediates == b"$"
-        && final_byte == b'r'
-        && let Ok(s) = std::str::from_utf8(payload)
-    {
-        return Some(Event::Termcap {
-            recognized: params_raw == b"1",
-            payload: s.to_string(),
-        });
+    // DECRPSS, the reply to DECRQSS: DCS 1$r <D...D> ST (valid) or
+    // DCS 0$r ST (invalid). Reported separately from XTGETTCAP: the data is
+    // a settings string, not `cap=value` pairs.
+    //
+    // Only 0 and 1 are ever sent, but do not "correct" which is which. The
+    // VT510 manual documents 0 as valid and 1 as invalid, and it is wrong:
+    // testing a VT420 in 1996 showed the two reversed, and vttest, DEC STD
+    // 070 and xterm all agree that 1 is the valid one.
+    if (params_raw == b"1" || params_raw == b"0") && intermediates == b"$" && final_byte == b'r' {
+        return Some(Event::SettingReport(if params_raw == b"1" {
+            SettingReport::Raw(String::from_utf8_lossy(data).into_owned())
+        } else {
+            SettingReport::Unrecognized
+        }));
     }
 
     // XTVersion reply: DCS > | <name version> ST

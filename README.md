@@ -30,30 +30,47 @@ Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
 
 ## Quickstart
 
-`Screen` is the core: it owns raw mode, a diffed back buffer, and input. Draw
-into it, call `render()` to ship only the changed cells, and `finish()` to
-restore the terminal.
+`Program` owns the session: raw mode, terminal modes, input, and teardown.
+`Screen` is the renderer it draws with: a cell grid that ships only the cells
+that changed. Reach for the screen through `screen_mut()`.
 
 ```rust,no_run
 use uncurses::event::Event;
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
-    screen.init()?;
-    screen.enter_alt_screen()?; // take over the full screen
+    let mut program = Program::stdio()?;
+    program.init()?;
+    program.enter_alt_screen()?; // take over the full screen
+
+    let screen = program.screen_mut();
     screen.set_str((0, 0), "hello, uncurses!", Style::new());
     screen.render()?;
-    while !matches!(screen.read_event()?, Event::KeyPress(_)) {} // wait for a key
-    screen.finish() // restores the main screen
+
+    while !matches!(program.read_event()?, Event::KeyPress(_)) {} // wait for a key
+    program.finish() // restores the main screen
 }
+```
+
+Only need output? A `Screen` stands alone over any `Write`, with no terminal
+session at all:
+
+```rust
+use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
+
+let mut screen = Screen::new(Vec::new(), (20, 1));
+screen.set_str((0, 0), "hello, uncurses!", Style::new());
+screen.render().unwrap();
+assert!(!screen.writer().is_empty());
 ```
 
 Per-crate guides and more examples:
 
-- [`uncurses`](uncurses/): screen, rendering, input, and the event loop.
+- [`uncurses`](uncurses/): program, screen, rendering, input, and the event loop.
 - [`uncurses-ratatui`](uncurses-ratatui/): drive ratatui widgets through uncurses.
 
 ### Examples
@@ -112,7 +129,7 @@ For more, browse the [`examples/`](examples/examples) directory.
 ## Crates
 
 - [`uncurses`](uncurses/): the core library: screen, renderer, input, ANSI, terminal.
-- [`uncurses-ratatui`](uncurses-ratatui/): a [ratatui](https://ratatui.rs) `Backend` built on the `Screen` facade.
+- [`uncurses-ratatui`](uncurses-ratatui/): a [ratatui](https://ratatui.rs) `Backend` built on the `Program` facade.
 
 ## Install
 

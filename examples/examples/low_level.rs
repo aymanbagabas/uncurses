@@ -1,6 +1,6 @@
 //! The low-level building blocks, without the `Screen` facade.
 //!
-//! The high-level [`Screen`](uncurses::screen::Screen) wraps a `Terminal`,
+//! The high-level [`Program`](uncurses::program::Program) wraps a `Terminal`,
 //! a diff renderer, and an `EventSource` and manages the lifecycle for you.
 //! This example wires the pieces by hand to show what the layers below
 //! `Screen` look like: enter raw mode and the alternate screen with the

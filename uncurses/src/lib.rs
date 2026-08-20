@@ -9,39 +9,44 @@
 //!
 //! # Where to start
 //!
-//! Two routes cover most needs. Pick the one that fits your use case.
+//! Three routes cover most needs. Pick the one that fits your use case.
 //!
-//! - **[`screen::Screen`]** is the facade and the home of the
-//!   diffing renderer. It owns a terminal and an [`event::EventSource`],
-//!   tracks the live terminal across frames, and emits only the cells that
-//!   changed. It also manages raw mode, capability detection, sane default
-//!   modes, and teardown. Reach for it to drive an interactive app, in
-//!   either inline or fullscreen layout. See the [`screen`] module docs for
-//!   the full lifecycle.
+//! - **[`program::Program`]** is the interactive facade. It owns a terminal,
+//!   an [`event::EventSource`], and a `Screen` to draw with. It manages raw
+//!   mode, terminal modes, capability tracking, and teardown, and hands you
+//!   the screen through [`screen`](program::Program::screen) /
+//!   [`screen_mut`](program::Program::screen_mut). Reach for it to drive an
+//!   interactive app, inline or fullscreen. See the [`program`] module docs
+//!   for the full lifecycle.
+//! - **[`screen::Screen`]** is the diffing renderer on its own: a cell grid, a
+//!   renderer, and any [`Write`](std::io::Write). You paint cells and call
+//!   [`render`](screen::Screen::render); it emits only what changed. It reads
+//!   no input and touches no terminal mode, so it stands alone for
+//!   output-only programs, tests, and offscreen rendering.
 //! - **[`buffer::TextBuffer`]** (and any [`buffer::Surface`]) is the
 //!   stateless route. Paint a full frame into an in-memory grid and
 //!   serialize it to escape bytes with the [`text::Encode`] trait. There is
 //!   no renderer and no terminal session, which makes it the tool for
 //!   one-shot frames, snapshot tests, transcripts, and append-style output.
 //!
-//! # Quick start with `Screen`
+//! # Quick start with `Program`
 //!
 //! ```no_run
-//! use uncurses::buffer::SurfaceMut;
 //! use uncurses::color::Color;
-//! use uncurses::screen::Screen;
+//! use uncurses::program::Program;
 //! use uncurses::style::Style;
 //! use uncurses::text::TextSurface;
 //!
 //! # fn main() -> std::io::Result<()> {
-//! let mut screen = Screen::stdio()?;
-//! screen.init()?; // raw mode + capability detection
+//! let mut program = Program::stdio()?;
+//! program.init()?; // raw mode
 //!
 //! let style = Style::default().bold().fg(Color::Green);
+//! let screen = program.screen_mut();
 //! screen.set_str((0, 0), "Hello, terminal!", style);
 //! screen.render()?; // stage the diff and flush it
 //!
-//! screen.finish() // tear down modes and restore the terminal
+//! program.finish() // tear down modes and restore the terminal
 //! # }
 //! ```
 //!
@@ -78,7 +83,7 @@
 //! | [`color`] | Color types and capability [`Profile`](color::Profile)s with automatic downsampling. |
 //! | [`event`] | The [`EventSource`](event::EventSource) decoder, typed [`Event`](event::Event) values, and (with the `async` feature) an `EventStream`. |
 //! | [`ansi`] | Raw escape-sequence encoders and parsers for the cursor, modes, colors, queries, and the long tail of terminal control. |
-//! | [`terminal`] | The [`Terminal`](terminal::Terminal) handle, raw-mode lifecycle, window-size queries, and environment snapshot. |
+//! | [`terminal`] | The [`Terminal`](terminal::Terminal) handle, raw-mode lifecycle, window-size queries, and environment lookups. |
 //! | [`cell`] | The [`Cell`](cell::Cell) value type. |
 //! | [`unicode`] | Grapheme-cluster segmentation and other Unicode text primitives. |
 //! | [`layout`] | [`Position`](layout::Position), [`Size`](layout::Size), and [`Rect`](layout::Rect) geometry. |
@@ -120,6 +125,7 @@ pub mod cell;
 pub mod color;
 pub mod event;
 pub mod layout;
+pub mod program;
 pub mod screen;
 pub mod style;
 pub mod terminal;

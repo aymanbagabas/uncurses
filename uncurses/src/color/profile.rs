@@ -34,7 +34,7 @@
 //! ```
 
 use super::Color;
-use crate::terminal::Env;
+use crate::terminal::{Env, ProcessEnv};
 
 /// Terminal color capability profile.
 ///
@@ -95,19 +95,18 @@ impl Profile {
     /// This assumes the output stream is a TTY. For explicit TTY state or
     /// deterministic tests, use [`Profile::detect_from`].
     pub fn detect() -> Self {
-        let env = Env::from_process();
-        Self::detect_from(&env, true)
+        Self::detect_from(&ProcessEnv, true)
     }
 
-    /// Detect the color profile from an explicit environment snapshot.
+    /// Detect the color profile from an explicit environment.
     ///
     /// `is_tty` should be `true` if the output stream is a terminal. A false
     /// value clamps to [`Profile::Disabled`] unless `TTY_FORCE` makes the
     /// stream act like a TTY or `CLICOLOR_FORCE` forces color. `TERM=dumb` and,
     /// on non-Windows platforms, an empty `TERM` start as disabled before other
     /// forcing/upgrading rules are applied.
-    pub fn detect_from(env: &Env, is_tty: bool) -> Self {
-        let is_tty = is_tty || env.is_truthy("TTY_FORCE");
+    pub fn detect_from(env: &dyn Env, is_tty: bool) -> Self {
+        let is_tty = is_tty || is_truthy(env, "TTY_FORCE");
         let term = env.get("TERM").unwrap_or_default();
 
         // `env_color_profile` is responsible for translating the
@@ -119,8 +118,10 @@ impl Profile {
         let envp = env_color_profile(env, &term);
         let mut p = if !is_tty { Profile::Disabled } else { envp };
 
-        // NO_COLOR: clamp to Ascii (decoration still allowed).
-        if env.is_truthy("NO_COLOR") && is_tty {
+        // NO_COLOR: clamp to Ascii (decoration still allowed). The spec is
+        // presence-based, not boolean: any non-empty value disables color,
+        // including `0` and `false`. `has` is exactly that test.
+        if env.has("NO_COLOR") && is_tty {
             if p > Profile::Ascii {
                 p = Profile::Ascii;
             }
@@ -128,7 +129,7 @@ impl Profile {
         }
 
         // CLICOLOR_FORCE: at least Ansi, take max of env-derived.
-        if env.is_truthy("CLICOLOR_FORCE") {
+        if is_truthy(env, "CLICOLOR_FORCE") {
             if p < Profile::Ansi {
                 p = Profile::Ansi;
             }
@@ -140,7 +141,7 @@ impl Profile {
 
         let is_dumb = term.is_empty() || term == DUMB_TERM;
         // CLICOLOR: bump non-dumb TTY to at least Ansi.
-        if env.is_truthy("CLICOLOR") && is_tty && !is_dumb && p < Profile::Ansi {
+        if is_truthy(env, "CLICOLOR") && is_tty && !is_dumb && p < Profile::Ansi {
             p = Profile::Ansi;
         }
 
@@ -150,8 +151,20 @@ impl Profile {
 
 const DUMB_TERM: &str = "dumb";
 
+/// Return whether an environment variable reads as a truthy boolean.
+///
+/// Accepts `1`, `t`, `T`, `TRUE`, `true`, and `True` — the values Go's
+/// `strconv.ParseBool` reads as true. Anything else, including an empty or
+/// absent value, is false.
+fn is_truthy(env: &dyn Env, key: &str) -> bool {
+    matches!(
+        env.get(key).as_deref().unwrap_or_default(),
+        "1" | "t" | "T" | "TRUE" | "true" | "True"
+    )
+}
+
 /// Environment-driven profile inference. Knows nothing about TTY-ness.
-fn env_color_profile(env: &Env, term: &str) -> Profile {
+fn env_color_profile(env: &dyn Env, term: &str) -> Profile {
     let mut p = if term == DUMB_TERM {
         // An explicit `dumb` terminal opts out of styling everywhere.
         Profile::Disabled
@@ -190,13 +203,13 @@ fn env_color_profile(env: &Env, term: &str) -> Profile {
         return Profile::TrueColor;
     }
 
-    if env.is_truthy("GOOGLE_CLOUD_SHELL") {
+    if is_truthy(env, "GOOGLE_CLOUD_SHELL") {
         return Profile::TrueColor;
     }
 
     // CI runners advertise themselves with CI=true and render ANSI
     // color in their logs even though TERM is usually unset or `dumb`.
-    if env.is_truthy("CI") {
+    if is_truthy(env, "CI") {
         return Profile::TrueColor;
     }
 
@@ -230,7 +243,7 @@ const KNOWN_TRUECOLOR_TERMS: &[&str] = &[
     "wezterm",
 ];
 
-fn colorterm_says_truecolor(env: &Env) -> bool {
+fn colorterm_says_truecolor(env: &dyn Env) -> bool {
     let v = env
         .get("COLORTERM")
         .unwrap_or_default()
@@ -239,7 +252,7 @@ fn colorterm_says_truecolor(env: &Env) -> bool {
 }
 
 #[cfg(windows)]
-fn windows_color_profile(env: &Env) -> Option<Profile> {
+fn windows_color_profile(env: &dyn Env) -> Option<Profile> {
     // Windows 10+ conhost and Windows Terminal both support virtual
     // terminal sequences. WT_SESSION pins TrueColor; otherwise assume
     // ANSI256 (conhost's legacy floor) — TrueColor support arrived in
@@ -254,9 +267,10 @@ fn windows_color_profile(env: &Env) -> Option<Profile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::EnvList;
 
-    fn env(pairs: &[(&str, &str)]) -> Env {
-        Env::from_pairs(pairs.iter().map(|(k, v)| (*k, *v)))
+    fn env(pairs: &[(&str, &str)]) -> EnvList {
+        EnvList::from_pairs(pairs.iter().map(|(k, v)| (*k, *v)))
     }
 
     #[test]
@@ -288,6 +302,27 @@ mod tests {
     fn no_color_clamps_to_ascii() {
         let e = env(&[("TERM", "xterm-256color"), ("NO_COLOR", "1")]);
         assert_eq!(Profile::detect_from(&e, true), Profile::Ascii);
+    }
+
+    /// NO_COLOR is presence-based: any non-empty value disables color,
+    /// however little it reads as a boolean. Only an absent or empty value
+    /// leaves color on.
+    #[test]
+    fn no_color_clamps_for_any_non_empty_value() {
+        for v in ["1", "0", "false", "no", "yes", "please", " "] {
+            let e = env(&[("TERM", "xterm-256color"), ("NO_COLOR", v)]);
+            assert_eq!(
+                Profile::detect_from(&e, true),
+                Profile::Ascii,
+                "NO_COLOR={v:?} should disable color"
+            );
+        }
+        for e in [
+            env(&[("TERM", "xterm-256color"), ("NO_COLOR", "")]),
+            env(&[("TERM", "xterm-256color")]),
+        ] {
+            assert!(Profile::detect_from(&e, true) > Profile::Ascii);
+        }
     }
 
     #[test]
@@ -443,7 +478,7 @@ mod tests {
         ];
         for (v, want) in cases {
             let e = env(&[("X", v)]);
-            assert_eq!(e.is_truthy("X"), want, "bool({v:?})");
+            assert_eq!(is_truthy(&e, "X"), want, "bool({v:?})");
         }
     }
 

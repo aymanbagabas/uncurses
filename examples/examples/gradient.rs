@@ -16,21 +16,23 @@
 //! screen. Press `space` to toggle it back to the hint bar.
 //!
 //! When the terminal reports SGR-pixel mouse support
-//! ([`Capabilities::mouse_sgr_pixel`](uncurses::screen::Capabilities)), the
+//! ([`Capabilities::supports`](uncurses::program::Capabilities)), the
 //! example enables pixel-accurate tracking and resolves *which half* of a cell
 //! the pointer is over, reading the exact sub-pixel color. Otherwise it
 //! degrades seamlessly to cell coordinates and reads the cell's left
-//! sub-pixel. No capability probing is done by hand — the screen reports what
-//! it negotiated and the example adapts.
+//! sub-pixel. The example asks for the capabilities it needs itself, then
+//! adapts to whatever the terminal answers.
 //!
 //! Run with `cargo run --example gradient`. Resize to watch it reflow;
 //! press `q` or `Ctrl-C` to quit.
 
+use uncurses::ansi::mode::Mode;
 use uncurses::buffer::Bounded;
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, Mouse};
-use uncurses::screen::{MouseTracking, Screen, ScreenOptions};
+use uncurses::program::{MouseTracking, Program, ProgramOptions};
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -47,38 +49,40 @@ struct State {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut screen = Screen::stdio()?;
+    let mut program = Program::stdio()?;
     // Request motion tracking and pixel-accurate coordinates. The screen only
     // turns pixels on when the terminal actually supports SGR-pixel encoding,
     // so this degrades to cell coordinates on its own.
-    screen.init_with(ScreenOptions {
+    program.init_with(ProgramOptions {
         mouse: Some(MouseTracking::MOTION | MouseTracking::PIXELS),
-        ..ScreenOptions::default()
+        ..ProgramOptions::default()
     })?;
-    screen.enter_alt_screen()?;
-    screen.hide_cursor()?;
-    // Capability replies arrive asynchronously *after* init, so we can't read
-    // `mouse_sgr_pixel` yet. Seed the pixel size now (and refresh it on resize);
-    // `resolve` reads the capability live once the terminal has answered.
-    screen.request_window_pixel_size()?;
+    program.enter_alt_screen()?;
+    program.hide_cursor()?;
+    // `init` probes nothing, so ask for the capabilities this example needs.
+    // The replies arrive as ordinary events; the run loop's `read_event`
+    // records each one on the way past, and `resolve` reads `mouse_sgr_pixel`
+    // live once the terminal has answered.
+    program.query_capabilities(&[])?;
+    // Seed the pixel size now, and refresh it on resize.
+    program.request_window_pixel_size()?;
 
-    let result = run(&mut screen);
-    screen.finish()?;
+    let result = run(&mut program);
+    program.finish()?;
     result
 }
 
-fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
+fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
     let space: Key = "space".parse().unwrap();
     let mut state = State {
         pointer: None,
         show_box: false,
     };
-    render(screen, &state);
+    render(program, &state);
 
     loop {
-        let ev = screen.read_event()?;
-        screen.observe_event(&ev)?;
+        let ev = program.read_event()?;
         match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::KeyPress(ref k) if *k == space => state.show_box = !state.show_box,
@@ -89,45 +93,45 @@ fn run(screen: &mut Screen<Stdin, Stdout>) -> std::io::Result<()> {
                 state.show_box = true;
             }
             Event::Resize(ws) => {
-                screen.resize((ws.col, ws.row));
+                program.screen_mut().resize((ws.col, ws.row));
                 // The cell↔pixel ratio changed; refresh the pixel size so the
                 // converter stays accurate.
-                screen.request_window_pixel_size()?;
+                program.request_window_pixel_size()?;
             }
             _ => continue,
         }
-        render(screen, &state);
+        render(program, &state);
     }
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
-    let w = screen.width();
-    let h = screen.height();
+fn render(program: &mut Program<Stdin, Stdout>, state: &State) {
+    let w = program.screen().width();
+    let h = program.screen().height();
     if w == 0 || h == 0 {
         return;
     }
 
-    draw_gradient(screen, w, h);
+    draw_gradient(program.screen_mut(), w, h);
 
     // The panel and the hint bar are mutually exclusive: when the panel is up,
     // it stands in for the hint.
     let mut panel_shown = false;
     if state.show_box
-        && let Some((cx, cy, sub)) = resolve(screen, state)
+        && let Some((cx, cy, sub)) = resolve(program, state)
         && cx < w
         && cy < h
         && let Some((bx, by)) = place_box(cx, cy, w, h)
     {
         let color = color_at(sub.min(w * 2 - 1), cy, w, h);
-        draw_info_box(screen, bx, by, color);
+        draw_info_box(program.screen_mut(), bx, by, color);
         panel_shown = true;
     }
     if !panel_shown {
         // While the inspector is off, the hint bar reports the live pointer
         // cell (resolved from pixels when available, raw otherwise).
         let coords = state.pointer.map(|m| {
-            resolve(screen, state)
+            resolve(program, state)
                 .map(|(cx, cy, _)| (cx, cy))
                 .unwrap_or((m.x, m.y))
         });
@@ -139,21 +143,21 @@ fn render(screen: &mut Screen<Stdin, Stdout>, state: &State) {
             .bold()
             .fg(Color::Black)
             .bg(Color::BrightWhite);
-        screen.set_str(
+        program.screen_mut().set_str(
             (2, 1),
             &format!(" gradient {where_} — click: inspect · space: toggle · q: quit "),
             label,
         );
     }
 
-    let _ = screen.render();
+    let _ = program.screen_mut().render();
 }
 
 /// Paint the half-block color field. Each cell is a left-half block `▌`: its
 /// foreground is the left sub-pixel and its background the right one, so a grid
 /// of `w` cells spans `2 * w` color columns. Hue sweeps across the (doubled)
 /// columns; lightness sweeps down the rows.
-fn draw_gradient(screen: &mut Screen<Stdin, Stdout>, w: u16, h: u16) {
+fn draw_gradient(screen: &mut Screen<Stdout>, w: u16, h: u16) {
     for y in 0..h {
         for x in 0..w {
             let left = color_at(x * 2, y, w, h);
@@ -175,25 +179,23 @@ fn color_at(sub: u16, y: u16, w: u16, h: u16) -> Color {
 /// Resolve the pointer to a `(cell_x, cell_y, sub_pixel_column)`.
 ///
 /// With pixel-accurate mouse the raw event is in pixels. The screen's converter
-/// floors it to a cell; the cell's *pixel* width — `window_pixels / window_cells`
-/// — then tells which half of that cell the pointer sits in, selecting the left
-/// or right sub-pixel column. Without pixel mouse the event is already a cell,
-/// so the inspector falls back to the cell's left sub-pixel. Returns `None`
-/// while pixel mouse is on but the pixel size is not known yet.
-fn resolve(screen: &Screen<Stdin, Stdout>, state: &State) -> Option<(u16, u16, u16)> {
+/// floors it to a cell; the cell's *pixel* width from `cell_pixels` then tells
+/// which half of that cell the pointer sits in, selecting the left or right
+/// sub-pixel column. Without pixel mouse the event is already a cell, so the
+/// inspector falls back to the cell's left sub-pixel. Returns `None` while
+/// pixel mouse is on but the pixel size is not known yet.
+fn resolve(program: &Program<Stdin, Stdout>, state: &State) -> Option<(u16, u16, u16)> {
     let m = state.pointer?;
     // Read the capability live: it is detected asynchronously after init, so a
     // value cached at startup would be wrong. Mouse events only arrive once
     // tracking is enabled (which happens after detection), so by the time we
     // get here the capability reflects the encoding actually in use.
-    if !screen.capabilities().mouse_sgr_pixel {
+    if !program.capabilities().supports(Mode::MOUSE_SGR_PIXEL) {
         return Some((m.x, m.y, m.x.saturating_mul(2)));
     }
-    let cell = screen.mouse_pixels_to_cells(m)?;
-    let pixels = screen.window_pixels()?;
-    let cells = screen.window_cells().unwrap_or_else(|| screen.size());
+    let cell = program.mouse_pixels_to_cells(m)?;
     // Cell width in pixels, then the pointer's offset within its cell.
-    let cell_w = (pixels.width / cells.width.max(1)).max(1);
+    let cell_w = program.cell_pixels()?.width;
     let within = m.x.saturating_sub(cell.x * cell_w);
     let right = within >= cell_w / 2;
     let sub = cell.x * 2 + u16::from(right);
@@ -225,7 +227,7 @@ fn place_box(px: u16, py: u16, w: u16, h: u16) -> Option<(u16, u16)> {
 }
 
 /// Draw the floating color-info panel at `(bx, by)` for `color`.
-fn draw_info_box(screen: &mut Screen<Stdin, Stdout>, bx: u16, by: u16, color: Color) {
+fn draw_info_box(screen: &mut Screen<Stdout>, bx: u16, by: u16, color: Color) {
     let (r, g, b) = color.to_rgb();
     let (hue, sat, light) = color.to_hsl();
 

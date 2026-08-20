@@ -9,7 +9,7 @@ use uncurses::buffer::SurfaceMut;
 use uncurses::cell::Cell as CzCell;
 use uncurses::event::{Event, Input};
 use uncurses::layout::Position;
-use uncurses::screen::{Screen, ScreenOptions};
+use uncurses::program::{Program, ProgramOptions};
 use uncurses::terminal::{Stdin, Stdout, TtyInput, TtyOutput};
 
 use crate::convert::cell_from_ratatui;
@@ -63,7 +63,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 }
 
 /// Backend implementation that drives rendering, input, and lifecycle through
-/// one [`Screen`].
+/// one [`Program`].
 ///
 /// ## What it wraps
 ///
@@ -76,7 +76,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 ///
 /// [`Backend::draw`] converts each concrete buffer cell to an uncurses cell and
 /// writes it into the screen's buffer, staging the frame without any I/O.
-/// [`Backend::flush`] then calls [`Screen::render`], which diffs the buffer,
+/// [`Backend::flush`] then calls [`Screen::render`](uncurses::screen::Screen::render), which diffs the buffer,
 /// stages the minimal escape bytes, and flushes them through the screen.
 ///
 /// ```text
@@ -113,9 +113,9 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 /// Use [`poll_event`](Self::poll_event),
 /// [`try_read_event`](Self::try_read_event), and [`read_event`](Self::read_event)
 /// for synchronous loops, or [`event_stream`](Self::event_stream) with the
-/// `async` feature. Every read is pure, exactly like [`Screen`]'s: call
-/// [`observe_event`](Self::observe_event) on each event to keep capability
-/// tracking alive, or skip it and reads still work.
+/// `async` feature. The synchronous reads keep capability tracking alive on
+/// their own; only the stream needs
+/// [`observe_event`](Self::observe_event) called by hand.
 ///
 /// ## Setup
 ///
@@ -125,7 +125,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 /// use the crate-level setup helpers for process stdio. Call
 /// [`restore`](Self::restore) when the session ends.
 pub struct UncursesBackend<I: Input, O: Write> {
-    screen: Screen<I, O>,
+    program: Program<I, O>,
     /// The widget-library viewport, set via [`set_viewport`](Self::set_viewport)
     /// (by `init_with_options`). Determines the screen buffer height
     /// (inline height vs full terminal height) and whether `draw` /
@@ -162,7 +162,7 @@ pub struct UncursesBackend<I: Input, O: Write> {
 impl UncursesBackend<Stdin, Stdout> {
     /// Build a backend over process standard input and output.
     ///
-    /// This constructs a [`Screen`] with `stdin` and `stdout`, then wraps it in
+    /// This constructs a [`Program`] with `stdin` and `stdout`, then wraps it in
     /// [`UncursesBackend::new`]. It does not enter raw mode, hide the cursor,
     /// enter the alternate screen, or apply screen options.
     ///
@@ -173,7 +173,7 @@ impl UncursesBackend<Stdin, Stdout> {
     ///
     /// ## Errors
     ///
-    /// Returns errors from [`Screen::stdio`], including failures to inspect the
+    /// Returns errors from [`Program::stdio`], including failures to inspect the
     /// terminal size or initialize the input event source.
     ///
     /// ## Panics
@@ -185,7 +185,7 @@ impl UncursesBackend<Stdin, Stdout> {
     /// Prefer crate-level setup helpers when process stdio and conventional
     /// setup are sufficient.
     pub fn stdio() -> io::Result<Self> {
-        Ok(Self::new(Screen::stdio()?))
+        Ok(Self::new(Program::stdio()?))
     }
 }
 
@@ -193,7 +193,7 @@ impl UncursesBackend<TtyInput, TtyOutput> {
     /// Build a backend over the controlling terminal instead of process stdio.
     ///
     /// This opens the platform controlling terminal (`/dev/tty` on Unix,
-    /// console handles on Windows), constructs a [`Screen`], and wraps it in
+    /// console handles on Windows), constructs a [`Program`], and wraps it in
     /// [`UncursesBackend::new`]. It is useful when standard input or output is
     /// redirected but the application still needs an interactive terminal.
     ///
@@ -217,7 +217,7 @@ impl UncursesBackend<TtyInput, TtyOutput> {
     /// [`init`](UncursesBackend::init) or
     /// [`init_with`](UncursesBackend::init_with) before interactive use.
     pub fn open() -> io::Result<Self> {
-        Ok(Self::new(Screen::open()?))
+        Ok(Self::new(Program::open()?))
     }
 }
 
@@ -226,7 +226,7 @@ where
     I: Input,
     O: Write,
 {
-    /// Build a backend over an existing [`Screen`].
+    /// Build a backend over an existing [`Program`].
     ///
     /// Use this when the screen has been constructed by the caller, or when the
     /// terminal handles are not process stdio or the controlling terminal. The
@@ -248,11 +248,11 @@ where
     ///
     /// ## Usage note
     ///
-    /// This does not call [`Screen::init`]. Initialize the screen through the
+    /// This does not call [`Program::init`]. Initialize the screen through the
     /// backend or manually before starting an interactive session.
-    pub fn new(screen: Screen<I, O>) -> Self {
+    pub fn new(program: Program<I, O>) -> Self {
         Self {
-            screen,
+            program,
             viewport: Viewport::Fullscreen,
             inline_origin: 0,
             last_size: std::cell::Cell::new((0, 0)),
@@ -294,18 +294,18 @@ where
     /// screen in step with the current full size.
     pub fn set_viewport(&mut self, viewport: Viewport) {
         if let Viewport::Inline(height) = viewport {
-            let size = self.screen.size();
+            let size = self.program.screen().size();
             let h = height.min(size.height);
-            self.screen.resize((size.width, h));
+            self.program.screen_mut().resize((size.width, h));
         }
         self.viewport = viewport;
     }
 
-    /// Borrow the wrapped [`Screen`] facade.
+    /// Borrow the wrapped [`Program`] facade.
     ///
     /// Use this for read-only access to screen state such as cached capability
     /// or size information. Rendering and input operations that mutate the
-    /// screen require [`screen_mut`](Self::screen_mut).
+    /// screen require [`program_mut`](Self::program_mut).
     ///
     /// ## Returns
     ///
@@ -314,11 +314,11 @@ where
     /// ## Panics
     ///
     /// Does not panic.
-    pub fn screen(&self) -> &Screen<I, O> {
-        &self.screen
+    pub fn program(&self) -> &Program<I, O> {
+        &self.program
     }
 
-    /// Mutably borrow the wrapped [`Screen`] facade.
+    /// Mutably borrow the wrapped [`Program`] facade.
     ///
     /// Use this for screen operations not surfaced by the backend: setting
     /// screen modes, using the alternate screen directly, configuring renderer
@@ -338,13 +338,13 @@ where
     ///
     /// Avoid mixing manual buffer writes with normal backend drawing unless the
     /// ordering is deliberate; both paths affect the same buffer.
-    pub fn screen_mut(&mut self) -> &mut Screen<I, O> {
-        &mut self.screen
+    pub fn program_mut(&mut self) -> &mut Program<I, O> {
+        &mut self.program
     }
 
     /// Poll the wrapped screen's input source.
     ///
-    /// This delegates to [`Screen::poll_event`], which drives the underlying
+    /// This delegates to [`Program::poll_event`], which drives the underlying
     /// event source for at most `timeout`. It does not remove an event from the
     /// queue; call [`try_read_event`](Self::try_read_event) or
     /// [`read_event`](Self::read_event) after it reports availability.
@@ -370,15 +370,15 @@ where
     ///
     /// Polling through the backend keeps capability detection and application
     /// input on the same event source.
-    pub fn poll_event(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
-        self.screen.poll_event(timeout)
+    pub fn poll_event(&self, timeout: Option<Duration>) -> io::Result<bool> {
+        self.program.poll_event(timeout)
     }
 
     /// Try to read the next queued event without blocking.
     ///
-    /// This delegates to the wrapped [`Screen`]'s pure read. Feed the returned
-    /// event to [`observe_event`](Self::observe_event) if you want capability
-    /// tracking; skipping it still reads fine.
+    /// This delegates to the wrapped [`Program`], which tracks capabilities as
+    /// the event passes through. Do not also pass the event to
+    /// [`observe_event`](Self::observe_event); it would count twice.
     ///
     /// ## Returns
     ///
@@ -392,15 +392,15 @@ where
     /// ## Usage note
     ///
     /// Pair this with [`poll_event`](Self::poll_event) for timeout-based loops.
-    pub fn try_read_event(&mut self) -> Option<Event> {
-        self.screen.try_read_event()
+    pub fn try_read_event(&mut self) -> io::Result<Option<Event>> {
+        self.program.try_read_event()
     }
 
     /// Block until the next event is available.
     ///
-    /// This delegates to the wrapped [`Screen`]'s pure read. Feed the returned
-    /// event to [`observe_event`](Self::observe_event) if you want capability
-    /// tracking; skipping it still reads fine.
+    /// This delegates to the wrapped [`Program`], which tracks capabilities as
+    /// the event passes through. Do not also pass the event to
+    /// [`observe_event`](Self::observe_event); it would count twice.
     ///
     /// ## Returns
     ///
@@ -420,33 +420,31 @@ where
     /// [`event_stream`](Self::event_stream) instead when the `async` feature is
     /// enabled and the application is already asynchronous.
     pub fn read_event(&mut self) -> io::Result<Event> {
-        self.screen.read_event()
+        self.program.read_event()
     }
 
-    /// Feed an event back through the wrapped [`Screen`] for capability
+    /// Feed an event back through the wrapped [`Program`] for capability
     /// tracking.
     ///
-    /// Reads on this backend are pure, exactly like [`Screen`]'s. Call this once
-    /// per event, on both the sync ([`read_event`](Self::read_event),
-    /// [`try_read_event`](Self::try_read_event)) and async
-    /// ([`event_stream`](Self::event_stream)) paths, to keep capability
-    /// detection, resize handling, and discovery-driven defaults alive. Skip it
-    /// and reads still work, you just forgo those upgrades.
+    /// Only the async [`event_stream`](Self::event_stream) needs this: it
+    /// bypasses the backend, so nothing has observed what it yields. The
+    /// synchronous reads ([`read_event`](Self::read_event),
+    /// [`try_read_event`](Self::try_read_event)) already observe on your
+    /// behalf, and observing one of their events again would count it twice.
     ///
     /// ## Errors
     ///
-    /// Returns I/O errors from applying discovery-driven screen defaults
-    /// triggered by capability replies.
+    /// Returns the errors [`Program::observe_event`] reports.
     pub fn observe_event(&mut self, event: &Event) -> io::Result<()> {
-        self.screen.observe_event(event)
+        self.program.observe_event(event)
     }
 
     /// Build an async [`EventStream`](uncurses::event::EventStream) over the
     /// wrapped screen's input.
     ///
     /// The stream shares the screen's decoder, so it does not race the sync read
-    /// methods on the same file descriptor. Like every read on this backend it
-    /// yields events without observing them; pair it with
+    /// methods on the same file descriptor. Unlike those, it yields events
+    /// without observing them; pair it with
     /// [`observe_event`](Self::observe_event) in your `select!` loop to keep
     /// capability tracking alive.
     ///
@@ -459,7 +457,7 @@ where
     where
         I: 'static,
     {
-        self.screen.event_stream()
+        self.program.event_stream()
     }
 }
 
@@ -468,10 +466,10 @@ where
     I: Input + Copy,
     O: Output,
 {
-    /// Begin an interactive session with default [`ScreenOptions`].
+    /// Begin an interactive session with default [`ProgramOptions`].
     ///
-    /// This delegates to [`Screen::init`]: the screen enters raw mode, applies
-    /// always-on defaults, and stages its terminal capability queries. It does
+    /// This delegates to [`Program::init`]: the program enters raw mode and
+    /// applies the always-on defaults. It sends no capability query, and does
     /// not enter the alternate screen or hide the cursor by itself; the
     /// crate-level setup helpers perform those additional steps.
     ///
@@ -481,8 +479,8 @@ where
     ///
     /// ## Errors
     ///
-    /// Returns errors from raw-mode setup, autoresizing, bracketed paste setup,
-    /// or staging capability queries.
+    /// Returns errors from raw-mode setup, autoresizing, or bracketed paste
+    /// setup.
     ///
     /// ## Panics
     ///
@@ -492,15 +490,14 @@ where
     ///
     /// Pair successful manual initialization with [`restore`](Self::restore).
     pub fn init(&mut self) -> io::Result<()> {
-        self.screen.init()
+        self.program.init()
     }
 
-    /// Begin an interactive session with explicit [`ScreenOptions`].
+    /// Begin an interactive session with explicit [`ProgramOptions`].
     ///
-    /// This delegates to [`Screen::init_with`], allowing the caller to choose
-    /// bracketed paste, keyboard enhancements, mouse tracking, in-band resize
-    /// preference, and pixel-size behavior before capability queries are staged.
-    /// It does not enter the alternate screen or hide the cursor by itself.
+    /// This delegates to [`Program::init_with`], allowing the caller to choose
+    /// bracketed paste and mouse tracking. It sends no capability queries, and
+    /// does not enter the alternate screen or hide the cursor by itself.
     ///
     /// ## Parameters
     ///
@@ -512,8 +509,8 @@ where
     ///
     /// ## Errors
     ///
-    /// Returns errors from raw-mode setup, autoresizing, always-on mode setup,
-    /// or staging capability queries.
+    /// Returns errors from raw-mode setup, autoresizing, or always-on mode
+    /// setup.
     ///
     /// ## Panics
     ///
@@ -522,13 +519,13 @@ where
     /// ## Usage note
     ///
     /// Pair successful manual initialization with [`restore`](Self::restore).
-    pub fn init_with(&mut self, options: ScreenOptions) -> io::Result<()> {
-        self.screen.init_with(options)
+    pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
+        self.program.init_with(options)
     }
 
     /// Restore terminal state after a backend-managed session.
     ///
-    /// This delegates to [`Screen::pause`]. It tears down staged modes, resets
+    /// This delegates to [`Program::pause`]. It tears down staged modes, resets
     /// buffer-controlled state such as alternate screen and cursor visibility,
     /// flushes pending output, and restores the terminal mode while keeping the
     /// screen available for future use.
@@ -549,7 +546,7 @@ where
     ///
     /// Treat this as the single teardown entry point for backend-managed setup.
     pub fn restore(&mut self) -> io::Result<()> {
-        self.screen.pause()
+        self.program.pause()
     }
 }
 
@@ -559,11 +556,11 @@ where
     O: Write,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.screen.write(buf)
+        self.program.screen_mut().write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Write::flush(&mut self.screen)
+        Write::flush(self.program.screen_mut())
     }
 }
 
@@ -603,9 +600,9 @@ where
         // For an inline viewport the buffer is only the inline height and
         // the widget library's absolute rows are translated down by the viewport top;
         // otherwise it tracks the full terminal size.
-        let size = self.screen.size();
+        let size = self.program.screen().size();
         let (full_w, full_h) = self
-            .screen
+            .program
             .get_window_size()
             .ok()
             .map(|s| (s.col, s.row))
@@ -624,41 +621,43 @@ where
         // same, e.g. an inline viewport on a vertical-only resize).
         self.note_size((full_w, full_h));
         if self.size_dirty.take() {
-            self.screen.invalidate();
+            self.program.screen_mut().invalidate();
         }
         if (w, h) != (size.width, size.height) {
-            self.screen.invalidate();
-            self.screen.resize((w, h));
+            self.program.screen_mut().invalidate();
+            self.program.screen_mut().resize((w, h));
         }
         for (x, y, rc) in content {
             let cell = cell_from_ratatui(rc);
-            self.screen.set_cell((x, y.saturating_sub(top)), &cell);
+            self.program
+                .screen_mut()
+                .set_cell((x, y.saturating_sub(top)), &cell);
         }
         Ok(())
     }
 
     /// Hide the terminal cursor immediately.
     ///
-    /// Delegates to [`Screen::hide_cursor`], which stages cursor visibility on
+    /// Delegates to [`Program::hide_cursor`], which stages cursor visibility on
     /// the buffer and flushes before returning.
     ///
     /// ## Errors
     ///
     /// Returns output errors from flushing the visibility change.
     fn hide_cursor(&mut self) -> io::Result<()> {
-        self.screen.hide_cursor()
+        self.program.hide_cursor()
     }
 
     /// Show the terminal cursor immediately.
     ///
-    /// Delegates to [`Screen::show_cursor`], which stages cursor visibility on
+    /// Delegates to [`Program::show_cursor`], which stages cursor visibility on
     /// the buffer and flushes before returning.
     ///
     /// ## Errors
     ///
     /// Returns output errors from flushing the visibility change.
     fn show_cursor(&mut self) -> io::Result<()> {
-        self.screen.show_cursor()
+        self.program.show_cursor()
     }
 
     /// Query the terminal for its current cursor position.
@@ -690,7 +689,7 @@ where
         // coordinate space (the same space `set_cursor_position` writes
         // absolute moves into), so it needs no translation. Fall back to the
         // origin if the terminal does not answer.
-        self.screen.request_cursor_position()?;
+        self.program.request_cursor_position()?;
         let deadline = Instant::now() + CURSOR_QUERY_TIMEOUT;
         // Events read while waiting for the report are not ours to consume;
         // stash them and put them back (in original order) so the app's loop
@@ -700,10 +699,10 @@ where
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 break None;
             };
-            if !self.screen.poll_event(Some(remaining))? {
+            if !self.program.poll_event(Some(remaining))? {
                 break None;
             }
-            match self.screen.try_read_event() {
+            match self.program.try_read_event()? {
                 Some(ev) => match cursor_position_report(&ev) {
                     Some(pos) => break Some(pos),
                     None => stash.push(ev),
@@ -712,7 +711,7 @@ where
             }
         };
         for ev in stash.into_iter().rev() {
-            self.screen.unread_event(ev);
+            self.program.unread_event(ev);
         }
         let pos = found.unwrap_or(Position::new(0, 0));
         // the widget library calls this to anchor an inline viewport at the cursor row,
@@ -757,7 +756,7 @@ where
         // renderer's cost-optimized (possibly relative) move: ratatui calls
         // this to place its own cursor, so the move must be unconditional
         // and absolute.
-        uncurses::ansi::cursor::write_cup(&mut self.screen, p.y, p.x)?;
+        uncurses::ansi::cursor::write_cup(self.program.screen_mut(), p.y, p.x)?;
         // Keep the renderer's cursor bookkeeping in step with the move we
         // just made, translated into the (inline) buffer. In relative-cursor
         // mode merely invalidating would lose the absolute row — the next
@@ -768,9 +767,10 @@ where
             Viewport::Inline(_) => self.inline_origin,
             _ => 0,
         };
-        self.screen
+        self.program
+            .screen_mut()
             .set_tracked_cursor((p.x, p.y.saturating_sub(top)));
-        Write::flush(&mut self.screen)
+        Write::flush(self.program.screen_mut())
     }
 
     /// Clear the entire backend surface immediately.
@@ -806,10 +806,10 @@ where
     /// Clearing is immediate by backend contract; unlike [`Backend::draw`], this
     /// method does not wait for a later flush call to make output visible.
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
-        let size = self.screen.size();
+        let size = self.program.screen().size();
         let w = size.width;
         let h = size.height;
-        let cursor = self.screen.tracked_cursor().unwrap_or_default();
+        let cursor = self.program.screen().tracked_cursor().unwrap_or_default();
         if w == 0 || h == 0 {
             return Ok(());
         }
@@ -833,7 +833,7 @@ where
             ClearType::AfterCursor => {
                 if cursor.y < h {
                     let tail_x = cursor.x.min(w);
-                    self.screen.fill_rect(
+                    self.program.screen_mut().fill_rect(
                         uncurses::layout::Rect::new(tail_x, cursor.y, w - tail_x, 1),
                         &CzCell::BLANK,
                     );
@@ -843,7 +843,7 @@ where
             }
             ClearType::BeforeCursor => {
                 if cursor.y > 0 {
-                    self.screen.fill_rect(
+                    self.program.screen_mut().fill_rect(
                         uncurses::layout::Rect::new(0, 0, w, cursor.y),
                         &CzCell::BLANK,
                     );
@@ -860,12 +860,12 @@ where
                 .then(|| uncurses::layout::Rect::new(cursor.x, cursor.y, w - cursor.x, 1)),
         };
         if let Some(region) = region {
-            self.screen.fill_rect(region, &CzCell::BLANK);
+            self.program.screen_mut().fill_rect(region, &CzCell::BLANK);
         }
-        self.screen.invalidate_tracked_cursor();
+        self.program.screen_mut().invalidate_tracked_cursor();
         // Push the staged blanks to the wire so the clear takes effect
         // before this call returns, matching the immediate-clear contract.
-        self.screen.render()
+        self.program.screen_mut().render()
     }
 
     /// Return the current terminal size in cells.
@@ -887,9 +887,9 @@ where
         // The full terminal size: the widget library needs it to anchor inline
         // viewports and to detect resizes. Fall back to the screen's
         // buffer size if the query fails (e.g. output is not a tty).
-        let size = self.screen.size();
+        let size = self.program.screen().size();
         let (width, height) = self
-            .screen
+            .program
             .get_window_size()
             .ok()
             .map(|s| (s.col, s.row))
@@ -918,8 +918,8 @@ where
     fn window_size(&mut self) -> io::Result<WindowSize> {
         // One query reports both cell and pixel dimensions; fall back to
         // the screen's buffer size for cells if it fails.
-        let size = self.screen.size();
-        let ws = self.screen.get_window_size().ok();
+        let size = self.program.screen().size();
+        let ws = self.program.get_window_size().ok();
         let (width, height) = ws
             .as_ref()
             .map(|w| (w.col, w.row))
@@ -945,7 +945,7 @@ where
     ///
     /// Returns renderer or output errors from the wrapped screen.
     fn flush(&mut self) -> io::Result<()> {
-        self.screen.render()
+        self.program.screen_mut().render()
     }
 
     /// Append blank lines to the underlying output.
@@ -962,9 +962,9 @@ where
     /// Returns output errors from writing or flushing the lines.
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
         for _ in 0..n {
-            let _ = writeln!(self.screen);
+            let _ = writeln!(self.program.screen_mut());
         }
-        Write::flush(&mut self.screen)
+        Write::flush(self.program.screen_mut())
     }
 
     /// Handle a request to scroll a region upward.

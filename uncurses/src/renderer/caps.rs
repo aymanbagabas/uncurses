@@ -388,7 +388,7 @@ impl Optimizations {
     /// This keeps callers with no environment information (CI harnesses,
     /// embedded sinks, tests) on the xterm baseline rather than
     /// collapsing to [`Self::none`].
-    pub fn from_env(env: &Env) -> Self {
+    pub fn from_env(env: &dyn Env) -> Self {
         match env.get("TERM") {
             Some(term) => Self::from_term(&term),
             None => Self::default(),
@@ -404,7 +404,7 @@ impl Optimizations {
     /// TBC-then-HTS reset, so a false negative only costs a few extra
     /// bytes, never correctness. This inspects the environment only and
     /// never probes the terminal.
-    pub(crate) fn supports_decst8c(env: &Env) -> bool {
+    pub(crate) fn supports_decst8c(env: &dyn Env) -> bool {
         // Windows Terminal announces itself with a session token rather
         // than through $TERM.
         if env.has("WT_SESSION") {
@@ -461,9 +461,10 @@ mod tests {
         .union(Optimizations::ONLCR);
 
     use super::*;
+    use crate::terminal::EnvList;
 
-    fn env_with(pairs: &[(&str, &str)]) -> Env {
-        Env::from_pairs(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+    fn env_with(pairs: &[(&str, &str)]) -> EnvList {
+        EnvList::from_pairs(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())))
     }
 
     #[test]
@@ -837,25 +838,25 @@ mod tests {
 
     #[test]
     fn from_env_uses_term_when_set() {
-        let env = Env::from_pairs([("TERM", "xterm-kitty")]);
+        let env = EnvList::from_pairs([("TERM", "xterm-kitty")]);
         assert_eq!(Optimizations::from_env(&env), Optimizations::modern());
     }
 
     #[test]
     fn from_env_dumb_collapses_to_none() {
-        let env = Env::from_pairs([("TERM", "dumb")]);
+        let env = EnvList::from_pairs([("TERM", "dumb")]);
         assert_eq!(Optimizations::from_env(&env), Optimizations::none());
     }
 
     #[test]
     fn from_env_empty_term_collapses_to_none() {
-        let env = Env::from_pairs([("TERM", "")]);
+        let env = EnvList::from_pairs([("TERM", "")]);
         assert_eq!(Optimizations::from_env(&env), Optimizations::none());
     }
 
     #[test]
     fn from_env_missing_term_falls_back_to_default() {
-        let env = Env::new();
+        let env = EnvList::new();
         assert_eq!(Optimizations::from_env(&env), Optimizations::default());
     }
 

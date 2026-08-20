@@ -32,47 +32,59 @@ Events cover everything the terminal reports, not just keys:
   (`MouseClick`, `MouseRelease`, `MouseWheel`, `MouseMove`).
 - **Lifecycle**: `Resize` when the window changes, `FocusIn` and `FocusOut`,
   and bracketed-paste events: `PasteStart`, `PasteChunk`, and `PasteEnd`.
-- **Replies**: answers to questions you or `Screen` asked the terminal, like
-  `CursorPosition`, `BackgroundColor`, or `ColorScheme`. Capability probing is
-  on by default through `ScreenOptions::query_capabilities`, so these arrive on
-  the same stream as user input.
+- **Replies**: answers to questions you asked the terminal, like
+  `CursorPosition`, `BackgroundColor`, `PrimaryDeviceAttributes`, or
+  `ColorScheme`. Capability probing is opt-in through
+  `program.query_capabilities(&[])?`; replies arrive on the same stream as user
+  input.
 - **Unknown**: anything the decoder recognizes the shape of but not the meaning,
   handed back as raw bytes rather than dropped.
 
-## The event source
+## Reading through Program
 
-An `EventSource` wraps an input handle and owns the decoder. Its blocking API
-gives you three ways to read, depending on how much control you want:
-
-- `read` blocks until the next event and returns it. The simplest loop.
-- `poll(timeout)` waits up to a timeout and reports whether something is ready,
-  so you can interleave events with timers or other work.
-- `try_read` pops an already-decoded event without doing any I/O.
+Most apps read events from [`Program`]({{< relref "program.md" >}}), because it
+owns the terminal session and the event source.
 
 ```rust
-use uncurses::event::{Event, EventSource, KeyCode};
-use uncurses::terminal::Terminal;
+use uncurses::event::{Event, KeyCode};
+use uncurses::program::Program;
 
 fn main() -> std::io::Result<()> {
-    let mut term = Terminal::stdio();
-    term.make_raw()?;
+    let mut program = Program::stdio()?;
+    program.init()?;
 
-    let result = (|| -> std::io::Result<()> {
-        let mut events = EventSource::new(term.input())?;
-        loop {
-            match events.read()? {
-                Event::KeyPress(key) if key.code == KeyCode::Char('q') => break,
-                Event::KeyPress(key) => println!("pressed {:?}", key.code),
-                _ => {}
-            }
+    loop {
+        match program.read_event()? {
+            Event::KeyPress(key) if key.code == KeyCode::Char('q') => break,
+            Event::KeyPress(key) => println!("pressed {:?}", key.code),
+            _ => {}
         }
-        Ok(())
-    })();
+    }
 
-    term.restore()?;
-    result
+    program.finish()
 }
 ```
+
+`read_event()` blocks until the next event. `poll_event(timeout)` waits up to a
+timeout and reports whether something is ready, so you can interleave events
+with timers or other work. `try_read_event()` pops an already-decoded event
+without doing any I/O.
+
+`read_event()` and `try_read_event()` auto-observe what they return. That means
+ordinary reads update capability state, window size, terminal name, and
+render-affecting replies for you. Values the terminal only reports on request,
+such as the pixel sizes and the inline origin, are recorded the same way once
+you have asked for them.
+
+## The lower-level event source
+
+An `EventSource` wraps an input handle and owns the decoder. Use it directly
+when you are managing the terminal yourself, or when you need to share one
+decoder with async code through `Program::event_source()`.
+
+A read from a raw `EventSource`, a shared source, or `Program::event_stream()`
+bypasses the program's automatic observation. If you want tracking to stay
+current, feed each event to `program.observe_event(&event)?` yourself.
 
 ## Waking a blocked read
 
@@ -83,28 +95,15 @@ cleanly. No signals, no polling spin.
 
 ## Async, when you want it
 
-If you would rather `await` events than block a thread, turn the source into an
-`EventStream` (behind the `async` feature). It implements the standard
-`futures_core::Stream` trait, so events fit into a `select!` alongside your
-other futures. Same decoder, same events, just delivered as a stream.
-
-Input is one half of an interactive program; drawing into a
-[surface]({{< relref "surfaces.md" >}}) is the other. The
-[Screen]({{< relref "screen.md" >}}) owns an event source and a drawing
-surface together, so most apps use `read_event`, `poll_event`, and
-`try_read_event` on `Screen`.
-
-{{< callout type="info" >}}
-`Screen` reads are pure. Passing each event to `screen.observe_event(&ev)?` is
-optional; it keeps runtime capability tracking for mouse defaults, kitty
-keyboard, in-band resize, truecolor, and grapheme handling. Skipping it still
-reads fine. The ratatui backend follows the same pure-read contract: read
-events, then call `backend.observe_event(&ev)?` yourself if you want tracking.
-{{< /callout >}}
-
-With the `async` feature, `Screen::event_stream()` returns a
-`futures_core::Stream` over the screen's own decoder, so it works with any
-executor. `Screen::event_source()` returns `Arc<Mutex<EventSource<_>>>` when you
-want the lower-level shared source. See the
+If you would rather `await` events than block a thread, use
+`Program::event_stream()` behind the `async` feature. It returns a
+`futures_core::Stream` over the program's shared decoder, so events fit into a
+`select!` alongside your other futures. Pass each event to `observe_event` if
+you want the same tracking that `read_event()` gives you automatically. See the
 [`EventStream` guide]({{< relref "../guides/async-events.md" >}}) for the full
 async pattern.
+
+Input is one half of an interactive program; drawing into a
+[surface]({{< relref "surfaces.md" >}}) is the other. The program's
+[`Screen`]({{< relref "screen.md" >}}) is the pure renderer you paint, and the
+program is where input and rendering meet.

@@ -43,15 +43,31 @@ underline color.
 Colors come in three representations, and you can use them freely:
 
 ```rust
-Style::new().fg(Color::Green);        // 16-color
-Style::new().fg(Color::Indexed(208));      // 256-color palette
+use uncurses::color::Color;
+use uncurses::style::Style;
+
+Style::new().fg(Color::Green);         // 16-color
+Style::new().fg(Color::Indexed(208));  // 256-color palette
 Style::new().fg(Color::Rgb(255, 105, 180)); // 24-bit truecolor
 ```
 
-You always specify the color you mean. When the screen renders to a terminal
+You always specify the color you mean. When a `Screen` renders to a terminal
 that cannot do truecolor, the renderer downsamples to the nearest supported
 color through its [color profile]({{< relref "../concepts/color.md" >}}); you do
 not branch on terminal capability yourself.
+
+A `Program` detects the color profile during initialization and applies it to its
+screen. If you construct a bare `Screen` with `Screen::new`, choose the profile
+yourself when you need deterministic output. `set_color_profile` is a plain,
+infallible setter on `Screen`; it writes nothing and affects later renders.
+
+```rust
+use uncurses::color::Profile;
+use uncurses::screen::Screen;
+
+let mut screen = Screen::new(Vec::new(), (20, 1));
+screen.set_color_profile(Profile::Ansi256);
+```
 
 ## Painting styled text
 
@@ -59,7 +75,13 @@ On a `Screen`, `TextBuffer`, or any other `TextSurface`, pass the style as the
 third argument to `set_str`:
 
 ```rust
+use uncurses::screen::Screen;
+use uncurses::style::Style;
 use uncurses::text::TextSurface;
+
+let mut screen = Screen::new(Vec::new(), (20, 4));
+let heading = Style::new().bold();
+let warning = Style::new().italic();
 
 screen.set_str((2, 1), "Heading", heading);
 screen.set_str((2, 3), "be careful", warning);
@@ -80,9 +102,11 @@ Wrap any `TextSurface`, such as a `Screen` or `TextBuffer`, in a `Painter` and
 paint through it:
 
 ```rust
+use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::text::{Painter, TextSurface};
 
+let mut screen = Screen::new(Vec::new(), (40, 2));
 Painter::new(&mut screen).set_str(
     (2, 1),
     "plain \x1b[1;32mbold green\x1b[0m back to plain",
@@ -107,6 +131,12 @@ A `Style` can carry an OSC 8 hyperlink with `Style::link`. Any rendered cell
 whose style has a link becomes clickable in terminals that support OSC 8.
 
 ```rust
+use uncurses::color::Color;
+use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
+
+let mut screen = Screen::new(Vec::new(), (30, 6));
 let docs = Style::new()
     .underline()
     .fg(Color::BrightBlue)
@@ -128,6 +158,8 @@ link. The alternate form `{style:#}` writes that style's closer, so styled
 `println!` follows an open/close pattern with a single value:
 
 ```rust
+use uncurses::style::Style;
+
 let bold = Style::new().bold();
 println!("{bold}important{bold:#}");
 ```
@@ -145,7 +177,15 @@ not restore an outer style or the terminal's previous state.
 This works with any `io::Write` too, since `write!` forwards `Display`:
 
 ```rust
-write!(out, "{bold}important{bold:#}")?;
+use std::io::Write;
+use uncurses::style::Style;
+
+fn main() -> std::io::Result<()> {
+    let mut out = Vec::new();
+    let bold = Style::new().bold();
+    write!(out, "{bold}important{bold:#}")?;
+    Ok(())
+}
 ```
 
 See the `styles` example in `examples/examples/styles.rs` for a full tour of

@@ -3,7 +3,7 @@
 //! Run with `cargo run --example interactive`. Press any key to see events;
 //! press `q` or Ctrl-C to exit. Resize the terminal to see Resize events.
 //!
-//! Demonstrates the non-blocking [`Screen::poll`] / [`Screen::try_read`]
+//! Demonstrates the non-blocking [`Program::poll_event`] / [`Program::try_read_event`]
 //! style: every 500 ms the main loop wakes up to advance a clock in the
 //! header, even when no input has arrived.
 
@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
+use uncurses::program::Program;
 use uncurses::screen::Screen;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
@@ -21,27 +22,27 @@ const TICK: Duration = Duration::from_millis(500);
 /// Event-polling demo app. `start` enters raw mode + alternate screen,
 /// `run` polls on a 500 ms tick to advance the clock even when idle.
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     started: Instant,
     log: VecDeque<String>,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
         Ok(Self {
-            screen,
+            program,
             started: Instant::now(),
             log: VecDeque::with_capacity(64),
         })
     }
 
     fn render(&mut self) -> std::io::Result<()> {
-        redraw(&mut self.screen, &self.log, self.started.elapsed())?;
-        self.screen.render()
+        redraw(self.program.screen_mut(), &self.log, self.started.elapsed())?;
+        self.program.screen_mut().render()
     }
 
     fn run(&mut self) -> std::io::Result<()> {
@@ -50,12 +51,11 @@ impl App {
         let mut next_tick = Instant::now() + TICK;
         loop {
             let remaining = next_tick.saturating_duration_since(Instant::now());
-            let got = self.screen.poll_event(Some(remaining))?;
+            let got = self.program.poll_event(Some(remaining))?;
             let mut dirty = false;
 
             if got {
-                while let Some(ev) = self.screen.try_read_event() {
-                    self.screen.observe_event(&ev)?;
+                while let Some(ev) = self.program.try_read_event()? {
                     match &ev {
                         Event::KeyPress(Key {
                             code: KeyCode::Char('q'),
@@ -68,12 +68,12 @@ impl App {
                             ..
                         }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(()),
                         Event::Resize(ws) => {
-                            self.screen.resize((ws.col, ws.row));
-                            let h = self.screen.height();
+                            self.program.screen_mut().resize((ws.col, ws.row));
+                            let h = self.program.screen().height();
                             push(&mut self.log, format!("Resize {}x{}", ws.col, ws.row), h);
                         }
                         _ => {
-                            let h = self.screen.height();
+                            let h = self.program.screen().height();
                             push(&mut self.log, format!("{:?}", ev), h);
                         }
                     }
@@ -98,7 +98,7 @@ impl App {
     }
 
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -117,7 +117,7 @@ fn push(log: &mut VecDeque<String>, line: String, height: u16) {
 }
 
 fn redraw(
-    screen: &mut Screen<Stdin, Stdout>,
+    screen: &mut Screen<Stdout>,
     log: &VecDeque<String>,
     uptime: Duration,
 ) -> std::io::Result<()> {
