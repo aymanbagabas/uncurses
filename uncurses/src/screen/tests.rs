@@ -74,6 +74,7 @@ impl<O: Write> Screen<std::io::PipeReader, O> {
             queries_sent_at: None,
             origin: Position::ORIGIN,
             origin_query_pending: false,
+            terminal_palette: TerminalPalette::default(),
         };
         let (w, h) = size;
         if w != 0 || h != 0 {
@@ -2376,6 +2377,95 @@ fn drain_gives_up_after_timeout_when_no_reply_arrives() {
         elapsed < std::time::Duration::from_millis(800),
         "drain must not wait far beyond the budget: {elapsed:?}"
     );
+}
+
+// --- opt-in terminal palette query (OSC 10/11/4) -----------------------------
+
+// With the palette option on, init stages the OSC 10/11/4 requests in the same
+// batch as the capability queries, before the terminating Primary DA. This is
+// the whole safety argument: the requests carry no terminator of their own, so
+// they must ride *inside* the DA-terminated init batch to be covered by it.
+#[test]
+fn palette_query_rides_the_init_batch_before_the_da() {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test(&mut buf, (20, 1));
+    screen.options.query_terminal_palette = true;
+    screen.send_init_queries().unwrap();
+
+    let out = &buf;
+    let da = find_sub(out, b"\x1b[c").or_else(|| find_sub(out, b"\x1b[0c"));
+    let da = da.expect("init batch must end with a Primary DA request");
+    let fg = find_sub(out, b"\x1b]10;?").expect("foreground query present");
+    let bg = find_sub(out, b"\x1b]11;?").expect("background query present");
+    let idx = find_sub(out, b"\x1b]4;").expect("indexed palette query present");
+    assert!(fg < da && bg < da && idx < da, "palette queries must precede the DA terminator");
+}
+
+// The default is off: an application that does not opt in gets no palette
+// escapes on the wire, so nothing new can leak.
+#[test]
+fn palette_query_absent_by_default() {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test(&mut buf, (20, 1));
+    assert!(!screen.options.query_terminal_palette);
+    screen.send_init_queries().unwrap();
+    assert!(find_sub(&buf, b"\x1b]10;?").is_none(), "no fg query without opt-in");
+    assert!(find_sub(&buf, b"\x1b]11;?").is_none(), "no bg query without opt-in");
+    assert!(find_sub(&buf, b"\x1b]4;").is_none(), "no indexed query without opt-in");
+}
+
+// The leak test the reviewer asked for, at the layer the terminator lives:
+// palette replies still outstanding when teardown runs must be CONSUMED by the
+// drain (covered by the shared Primary DA), never left in the input for the
+// shell to read once cooked mode is restored. A delayed reply is queued so it
+// is pending at drain time, exactly the "delayed OSC reply after handoff"
+// case. Unix-only for the same pipe-polling reason as the other drain tests.
+#[cfg(unix)]
+#[test]
+fn drain_consumes_pending_palette_replies_then_da() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    // The terminal answers the palette query and THEN sends the DA terminator,
+    // exactly the order init requested them in. All of it is still pending
+    // when teardown runs.
+    writer.write_all(b"\x1b]10;rgb:1a1a/1b1b/1c1c\x07").unwrap();
+    writer.write_all(b"\x1b]11;rgb:2a2a/2b2b/2c2c\x07").unwrap();
+    for i in 0..16u8 {
+        write!(writer, "\x1b]4;{i};rgb:0f0f/0f0f/0f0f\x07").unwrap();
+    }
+    writer.write_all(b"\x1b[?65;1c").unwrap();
+    drop(writer); // EOF after the replies so poll sees them and does not block
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut screen = Screen::for_test_with_input(&mut buf, (20, 1), reader);
+    screen.options.query_terminal_palette = true;
+    // Simulate post-init state: queries were sent, nothing consumed yet.
+    screen.queries_sent_at = Some(std::time::Instant::now());
+    screen.defaults_applied = false;
+
+    screen.drain_pending_queries().unwrap();
+
+    assert!(
+        screen.defaults_applied,
+        "the DA reply terminating the palette batch must be drained"
+    );
+    assert!(
+        screen.try_read_event().is_none(),
+        "every palette reply must be consumed, not left to leak to the shell"
+    );
+    // And the drain folded them into the accumulator, so the app can read them.
+    let pal = screen.terminal_palette();
+    assert_eq!(pal.foreground, Some(crate::color::Color::Rgb(0x1a, 0x1b, 0x1c)));
+    assert_eq!(pal.background, Some(crate::color::Color::Rgb(0x2a, 0x2b, 0x2c)));
+    assert_eq!(pal.indexed[0], Some(crate::color::Color::Rgb(0x0f, 0x0f, 0x0f)));
+    assert_eq!(pal.indexed[15], Some(crate::color::Color::Rgb(0x0f, 0x0f, 0x0f)));
+}
+
+// A helper local to these tests: first index of `needle` in `hay`.
+fn find_sub(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return None;
+    }
+    (0..=hay.len() - needle.len()).find(|&i| &hay[i..i + needle.len()] == needle)
 }
 
 #[test]
