@@ -39,7 +39,7 @@ pub(super) fn hex_decode(data: &[u8]) -> Option<Vec<u8>> {
         }
     };
     let mut out = Vec::with_capacity(data.len() / 2);
-    for pair in data.chunks_exact(2) {
+    for pair in data.as_chunks::<2>().0 {
         out.push((nib(pair[0])? << 4) | nib(pair[1])?);
     }
     Some(out)
