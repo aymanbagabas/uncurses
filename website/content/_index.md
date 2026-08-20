@@ -17,7 +17,7 @@ layout: hextra-home
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
   A direct, framework-free way to draw to the terminal and read input.&nbsp;<br class="hx:sm:block hx:hidden" />
-  You control every cell and own the event loop; uncurses keeps the bytes correct and minimal.
+  Program owns the session and input; Screen keeps frame bytes correct and minimal.
 {{< /hextra/hero-subtitle >}}
 </div>
 
@@ -27,15 +27,15 @@ layout: hextra-home
 
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card title="Layered, not a framework"
-    subtitle="Start with Screen, or grab TextBuffer, EventSource, and Terminal directly. Nothing is hidden." >}}
+    subtitle="Start with Program for interactive apps, or use Screen alone for output. Nothing is hidden." >}}
   {{< hextra/feature-card title="Cell-diffing renderer"
     subtitle="Screen diffs frames against the terminal and writes only the cells that changed." >}}
   {{< hextra/feature-card title="Typed events"
-    subtitle="Keys, mouse, paste, focus, resize, and query replies decoded from raw terminal input." >}}
+    subtitle="Program decodes keys, mouse, paste, focus, resize, and query replies from raw terminal input." >}}
   {{< hextra/feature-card title="Degrades gracefully"
     subtitle="Write true color once; uncurses maps it to 256-color, ANSI, or plain text when needed." >}}
   {{< hextra/feature-card title="Inline or fullscreen"
-    subtitle="Run in the normal buffer by default; switch to the alternate screen when you want it." >}}
+    subtitle="Program starts in the normal buffer by default; switch to the alternate screen when you want it." >}}
   {{< hextra/feature-card title="Async when you want it"
     subtitle="Enable the async feature for a runtime-agnostic futures Stream of events." >}}
 {{< /hextra/feature-grid >}}

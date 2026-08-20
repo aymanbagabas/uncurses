@@ -11,47 +11,45 @@ function, and an event loop.
 ## The shape of an app
 
 Almost every uncurses app follows the same four-beat structure: a type that owns
-the screen and app state, a setup step, a loop, and a teardown step.
+the program and app state, a setup step, a loop, and a teardown step.
 
 ```mermaid
 flowchart TB
-  begin["start: open the screen, init state"]
+  begin["start: open the program, init state"]
   begin --> eventloop["run: read event, update state, redraw"]
   eventloop --> eventloop
-  eventloop --> teardown["stop: finish the screen"]
+  eventloop --> teardown["stop: finish the program"]
 ```
 
-We will hang those four beats off a single `App` struct.
+We will hang those four beats off a single `App` struct. The snippets below are
+fragments from one complete file.
 
 ## Setting up
 
-`start` opens the screen, takes over the full terminal, and seeds the counter at
-zero.
+`start` opens the program, takes over the full terminal, and seeds the counter
+at zero.
 
 ```rust
+use uncurses::buffer::SurfaceMut;
 use uncurses::color::Color;
 use uncurses::event::Event;
-use uncurses::screen::Screen;
+use uncurses::program::Program;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::buffer::SurfaceMut;
 use uncurses::text::TextSurface;
 
 struct App {
-    screen: Screen<Stdin, Stdout>,
+    program: Program<Stdin, Stdout>,
     count: i64,
 }
 
 impl App {
     fn start() -> std::io::Result<Self> {
-        let mut screen = Screen::stdio()?;
-        screen.init()?;
-        screen.enter_alt_screen()?;
-        screen.hide_cursor()?;
-        Ok(Self {
-            screen,
-            count: 0,
-        })
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
+        Ok(Self { program, count: 0 })
     }
 }
 ```
@@ -62,27 +60,26 @@ Key matching accepts strings, so the loop can ask whether a key matches `"q"` or
 ## Drawing a frame
 
 `render` paints the whole frame from scratch every time: clear the grid, write
-the title, the value, and a hint line, then push it with one `render` call.
-Painting is cheap and the renderer only sends the cells that actually changed, so
-"redraw everything" is the right default.
+the title, the value, and a hint line, then push it with one `render` call on the
+program's `Screen`. Painting is cheap and the renderer only sends the cells that
+actually changed, so "redraw everything" is the right default.
 
 ```rust
 impl App {
     fn render(&mut self) -> std::io::Result<()> {
-        self.screen.clear();
+        let screen = self.program.screen_mut();
+        screen.clear();
 
         let title = Style::default().bold().fg(Color::BrightCyan);
-        self.screen.set_str((2, 1), "Counter", title);
+        screen.set_str((2, 1), "Counter", title);
 
         let value = Style::default().bold();
-        self.screen
-            .set_str((2, 3), &format!("count: {}", self.count), value);
+        screen.set_str((2, 3), &format!("count: {}", self.count), value);
 
         let hint = Style::default().fg(Color::BrightBlack);
-        self.screen
-            .set_str((2, 5), "up/down: change   r: reset   q: quit", hint);
+        screen.set_str((2, 5), "up/down: change   r: reset   q: quit", hint);
 
-        self.screen.render()
+        screen.render()
     }
 }
 ```
@@ -99,15 +96,14 @@ impl App {
         self.render()?;
 
         loop {
-            let ev = self.screen.read_event()?;
-            self.screen.observe_event(&ev)?;
+            let ev = self.program.read_event()?;
 
             match ev {
                 Event::KeyPress(ref k) if k.matches_any(["q", "ctrl+c"]) => break,
                 Event::KeyPress(ref k) if k.matches("up") => self.count += 1,
                 Event::KeyPress(ref k) if k.matches("down") => self.count -= 1,
                 Event::KeyPress(ref k) if k.matches("r") => self.count = 0,
-                Event::Resize(ws) => self.screen.resize((ws.col, ws.row)),
+                Event::Resize(ws) => self.program.screen_mut().resize((ws.col, ws.row)),
                 _ => continue,
             }
             self.render()?;
@@ -118,10 +114,10 @@ impl App {
 ```
 
 {{< callout type="info" >}}
-Raw `Screen` reads are pure. After `read_event`, `try_read_event`, or `poll_event`,
-feeding the event to [`screen.observe_event(&ev)?`](/api/uncurses/screen/struct.Screen.html#method.observe_event)
-is optional; it keeps capability detection, resize handling, and discovery
-defaults alive, and skipping it still reads fine.
+`Program` reads observe events automatically. `read_event` and `try_read_event`
+update capability state and cached window sizes before returning the event. If
+you bypass the program by reading from an `EventSource` or async stream directly,
+feed events back with `program.observe_event(&ev)?`.
 {{< /callout >}}
 
 The `continue` on the catch-all arm skips the redraw for events we ignore, so the
@@ -129,7 +125,7 @@ terminal only repaints when the frame would actually differ.
 
 ## Putting the terminal back
 
-`stop` consumes the app and finishes the screen, restoring the terminal exactly
+`stop` consumes the app and finishes the program, restoring the terminal exactly
 as it was. `main` wires the three lifecycle steps together and still runs `stop`
 when `run` returns an error, so an error mid-loop never leaves the terminal in an
 altered state.
@@ -137,7 +133,7 @@ altered state.
 ```rust
 impl App {
     fn stop(self) -> std::io::Result<()> {
-        self.screen.finish()
+        self.program.finish()
     }
 }
 
@@ -158,10 +154,8 @@ shell prompt comes back garbled.
 That is a complete, well-behaved terminal app in under a hundred lines. From
 here:
 
-- Add mouse support with `ScreenOptions::mouse`, then match on
-  `Event::MouseClick`.
-- Lay widgets out by reading `screen.width()` and `screen.height()` and doing the
-  arithmetic, the way the `counter` example centers a button.
+- Add mouse support with `ProgramOptions { mouse: Some(MouseTracking::empty()), ..Default::default() }`, then match on `Event::MouseClick`.
+- Lay widgets out by reading `program.screen().width()` and `program.screen().height()` and doing the arithmetic, the way the `counter` example centers a button.
 - Browse the [examples](https://github.com/aymanbagabas/uncurses/tree/main/examples/examples)
   for editors, file explorers, inline prompts, and more.
 - Dig into the [Concepts]({{< relref "../concepts/_index.md" >}}) to understand

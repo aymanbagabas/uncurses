@@ -50,8 +50,8 @@ fn collect_paste(ev: Event, paste: &mut Option<Vec<u8>>) -> Option<String> {
 }
 ```
 
-If your loop tracks terminal capabilities, call `screen.observe_event(&ev)?`
-after reading. Paste decoding does not depend on it.
+Program sync reads observe events automatically. Paste decoding does not depend
+on capability tracking.
 
 {{< callout type="warning" >}}
 Decode at the end, not per chunk: a multibyte character can be split across
@@ -103,10 +103,10 @@ file.
 ## Turning it on and off
 
 Bracketed paste is enabled by default. To start without it, pass
-`ScreenOptions { bracketed_paste: false, ..Default::default() }` to `init_with`.
-At runtime, toggle it with `screen.enable_bracketed_paste()` and
-`screen.disable_bracketed_paste()`. With it off, pasted text comes through as
-ordinary key events instead.
+`ProgramOptions { bracketed_paste: false, ..ProgramOptions::default() }` to
+`program.init_with`. At runtime, toggle it with
+`program.enable_bracketed_paste()` and `program.disable_bracketed_paste()`. With
+it off, pasted text comes through as ordinary key events instead.
 
 See the `paste` and `paste_to_file` examples for the in-memory and
 spill-to-disk versions.

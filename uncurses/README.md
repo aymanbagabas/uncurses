@@ -12,7 +12,7 @@ full screen, mix the two, or leave the console unmanaged and just shape your
 output. It includes a diffing renderer that redraws only what changed,
 Unicode-aware width, truecolor styling with automatic downsampling, hyperlinks,
 and typed keyboard, mouse, and paste input. Rather than a terminfo database, it
-detects capabilities through terminal queries and runs across Linux, macOS, and
+can ask the terminal what it supports and runs across Linux, macOS, and
 Windows.
 
 <p align="center">
@@ -21,8 +21,9 @@ Windows.
 
 ## Usage
 
-The whole lifecycle is three calls: `init()` claims the terminal, `render()`
-ships changed cells, `finish()` restores it.
+`Program` owns the session: raw mode, terminal modes, input, and teardown.
+`Screen` is the renderer it draws with: a cell grid that ships only the cells
+that changed. Reach for the screen through `screen_mut()`.
 
 ```rust,no_run
 use uncurses::event::Event;
@@ -34,8 +35,9 @@ fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
     program.init()?;
     program.enter_alt_screen()?; // take over the full screen
-    program.screen_mut().set_str((0, 0), "hello, uncurses", Style::new());
-    program.screen_mut().render()?;
+    let screen = program.screen_mut();
+    screen.set_str((0, 0), "hello, uncurses", Style::new());
+    screen.render()?;
     while !matches!(program.read_event()?, Event::KeyPress(_)) {} // wait for a key
     program.finish()
 }
@@ -43,8 +45,8 @@ fn main() -> std::io::Result<()> {
 
 `Program` owns the terminal and the input source; the `Screen` inside it owns
 the drawing. Add an event loop to react to input. A session starts inline
-(drawing in the normal buffer) with the cursor visible; the alternate screen
-and a hidden cursor are opt-in.
+(drawing in the normal buffer) with the cursor visible; the alternate screen, a
+hidden cursor, and capability queries are opt-in.
 
 ```rust,no_run
 use uncurses::buffer::Bounded;
@@ -55,11 +57,11 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    program.init()?; // raw mode, inline, cursor visible
-    let w = program.screen().width();
-    program.screen_mut().resize((w, 2)); // one text row plus a trailing blank line
+    program.init()?; // raw mode; inline, cursor visible
 
     let screen = program.screen_mut();
+    let w = screen.width();
+    screen.resize((w, 2)); // inline: one text row plus a trailing blank line
     screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
     screen.render()?;
 
@@ -75,9 +77,25 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`read_event` tracks capabilities as the event passes through, so a synchronous
-loop has nothing extra to call. Only the async `event_stream()` bypasses the
-program, and that is the one path that needs `observe_event`.
+`init()` sets up the session and sends no capability query, so discovery is
+yours to start: call `program.query_capabilities(&[])?` and keep reading events
+until the Primary DA reply arrives; ordinary `read_event` and `try_read_event`
+calls observe those replies automatically. `observe_event` is only needed when
+events come from outside the program, such as `event_stream()`.
+
+Only need output? A `Screen` stands alone over any `Write`, independent of any
+terminal session:
+
+```rust
+use uncurses::screen::Screen;
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
+
+let mut screen = Screen::new(Vec::new(), (20, 1));
+screen.set_str((0, 0), "hello, uncurses", Style::new());
+screen.render().unwrap();
+assert!(!screen.writer().is_empty());
+```
 
 That's the shape of it; the full API and guides live at
 [uncurses.org](https://uncurses.org).
@@ -96,8 +114,8 @@ the latest stable Rust (currently 1.88 or newer).
 
 Features: `unicode-rs` *(default)* for width and segmentation, `icu` for
 ICU4X-backed correctness, and `async` for runtime-agnostic `event_stream()`,
-an owned `futures_core::Stream` over the screen's own decoder with no executor
-dependency.
+an owned `futures_core::Stream` over the program's input decoder with no
+executor dependency.
 
 ## Credits
 
