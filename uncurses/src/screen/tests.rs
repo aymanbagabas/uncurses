@@ -2691,6 +2691,11 @@ fn inline_render_resets_pen_before_every_newline() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (10, 3));
+        // `for_test` derives capabilities and colour from `$TERM`, and BCE
+        // is exactly what decides whether the reset is needed. Pin both so
+        // the assertion means the same thing on every platform.
+        screen.set_optimizations(Optimizations::modern().with_bce(true));
+        screen.set_color_profile(crate::color::Profile::Ansi);
         let bg = Style::default().bg(Color::Blue);
         for y in 0..3u16 {
             screen.set_str((0, y), "abcdefghij", bg.clone());
@@ -2713,12 +2718,16 @@ fn inline_render_resets_pen_before_every_newline() {
 
 /// The reset is only worth its bytes when the pen carries a background:
 /// back-color erase paints nothing else, so an unstyled frame must not
-/// pay for it.
+/// pay for it. Pinned to the same capabilities as the test above, so
+/// this proves the background is what gates the reset — not a missing
+/// BCE flag.
 #[test]
 fn inline_render_without_background_emits_no_pen_resets() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (10, 3));
+        screen.set_optimizations(Optimizations::modern().with_bce(true));
+        screen.set_color_profile(crate::color::Profile::Ansi);
         for y in 0..3u16 {
             screen.set_str((0, y), "abcdefghij", Style::default());
         }
