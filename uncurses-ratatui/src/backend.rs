@@ -370,7 +370,7 @@ where
     ///
     /// Polling through the backend keeps capability detection and application
     /// input on the same event source.
-    pub fn poll_event(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
+    pub fn poll_event(&self, timeout: Option<Duration>) -> io::Result<bool> {
         self.program.poll_event(timeout)
     }
 

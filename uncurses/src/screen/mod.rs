@@ -553,8 +553,8 @@ impl<W: Write> Screen<W> {
     ///
     /// This is your switch to flip: uncurses does not second-guess it against
     /// detected capabilities. [`Program`](crate::program::Program) enables it
-    /// automatically when the terminal reports 2026 support during
-    /// [`init`](crate::program::Program::init), and you can override that here
+    /// automatically when the terminal reports 2026 support, which happens once
+    /// the caller has asked and read the reply, and you can override that here
     /// at any time.
     ///
     /// Enabling it also changes how the cursor is handled per frame. With sync

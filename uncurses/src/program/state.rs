@@ -132,13 +132,15 @@ impl Default for State {
     }
 }
 
-/// Terminal capabilities detected from the replies to the queries
-/// [`Program::init`](super::Program::init) fires. Every field answers a
-/// single question: does the terminal support this? The facade intercepts
-/// the reply events as they flow through
-/// [`read_event`](super::Program::read_event) / [`try_read_event`](super::Program::try_read_event),
-/// records support here, and applies the render-affecting ones — the app
-/// never sees the reply events. Read back with
+/// Terminal capabilities, as reported by the replies the terminal has sent.
+/// Every field answers a single question: does the terminal support this?
+/// Nothing is queried at startup, so the replies arrive because the caller
+/// asked, with [`query_capabilities`](super::Program::query_capabilities) or
+/// an individual `request_*` method. Reading with
+/// [`read_event`](super::Program::read_event) /
+/// [`try_read_event`](super::Program::try_read_event) records support here and
+/// applies the render-affecting ones on the way past; the event is still
+/// handed back to the application. Read back with
 /// [`Program::capabilities`](super::Program::capabilities).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
