@@ -177,3 +177,185 @@ mod utf8_boundaries {
         }
     }
 }
+
+/// A seeded fuzz over the text utilities' public `&str` API.
+///
+/// The tokenizer has its own byte-level fuzz in [`text`], but it stops at the
+/// token stream. What the callers build on top of it - the wrap's decision to
+/// skip a pass, the truncate's running width - is where an invariant can hold
+/// for every token and still be wrong for the string, and none of it was
+/// driven by anything but hand-written cases.
+///
+/// Deliberately a seeded xorshift in an ordinary `#[test]` rather than
+/// `cargo-fuzz`: it needs no nightly, no new dependency and no separate CI
+/// job, so it runs on every `cargo test` instead of whenever somebody
+/// remembers. The ceiling is that it explores a fixed alphabet from a fixed
+/// seed rather than mutating a corpus, so it cannot find a shape that is not
+/// built from these pieces. Reach for `cargo-fuzz` if that stops being enough.
+#[cfg(test)]
+mod fuzz {
+    use super::{
+        strip::strip,
+        text::{WidthMode, string_width},
+        truncate, wrap,
+    };
+
+    /// Text with no escape sequence in it, so a parser has no state to carry.
+    ///
+    /// Words longer than any limit used here are deliberate: they are the only
+    /// thing that makes the word wrap report a line over the limit, so without
+    /// one the hard-wrap path is never reached.
+    const PLAIN: &[&str] = &[
+        "a",
+        "bb",
+        "hello",
+        " ",
+        "  ",
+        "\t",
+        "\n",
+        "-",
+        ",",
+        ".",
+        ";",
+        ":",
+        "supercalifragilistic",
+        "\u{4e00}",
+        "\u{4e00}\u{4e01}\u{4e02}",
+        "\u{1f600}",
+        "\u{1f1fa}\u{1f1f8}",
+        "e\u{301}",
+        "a\u{200d}b",
+        "\u{2705}",
+        // C1 code points as characters. In UTF-8 the lead byte is `C2`, so
+        // these are text, not controls - the distinction the tokenizer exists
+        // to make.
+        "\u{9c}",
+        "\u{9d}",
+    ];
+
+    /// Sequences that terminate and sequences that do not, with payloads that
+    /// carry a C1 byte inside a character.
+    const SEQUENCES: &[&str] = &[
+        "\x07",
+        "\x1b[31m",
+        "\x1b[0m",
+        "\x1b[1;2;3m",
+        "\x1b]8;;https://example.com/\u{2705}\x1b\\",
+        "\x1b]0;title\x07",
+        "\x1bP1$r\u{2705}\x1b\\",
+        "\x1b_G\u{2705}\x1b\\",
+        // Unterminated: these carry parser state across a newline, which is
+        // the shape that makes a line-by-line measurement of the output lie.
+        "\x1b]0;unterminated",
+        "\x1b_",
+        "\x1b",
+    ];
+
+    fn next(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    fn build(state: &mut u64, alphabets: &[&[&str]]) -> String {
+        let n = (next(state) % 12) as usize + 1;
+        let mut s = String::new();
+        for _ in 0..n {
+            let a = alphabets[next(state) as usize % alphabets.len()];
+            s.push_str(a[next(state) as usize % a.len()]);
+        }
+        s
+    }
+
+    /// The pre-optimization wrap: word wrap, then hard wrap *every* line.
+    ///
+    /// Only a valid oracle on input with no escape sequence in it. It splits
+    /// the output on newlines and measures each line alone, which restarts the
+    /// ANSI parser; an unterminated control string spanning a newline then
+    /// reads as visible text on the lines after it, and this hard-wraps bytes
+    /// that are inside a sequence and have no width at all. `wrap_mode` no
+    /// longer asks the question that way - the word wrap already measured
+    /// every line it emitted, with the parser state it actually had, and
+    /// reports whether any went over. Without an escape there is no such
+    /// state to lose and the two must agree byte for byte.
+    fn unconditional_wrap(s: &str, limit: usize, mode: WidthMode, eaw_wide: bool) -> String {
+        if limit == 0 {
+            return s.to_string();
+        }
+        let wrapped = wrap::wordwrap_mode(s, limit, wrap::DEFAULT_BREAKPOINTS, mode, eaw_wide);
+        let mut out = String::with_capacity(wrapped.len());
+        for (i, line) in wrapped.split('\n').enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&wrap::hardwrap_mode(line, limit, false, mode, eaw_wide));
+        }
+        out
+    }
+
+    /// `wrap_mode` skips the whole hard-wrap pass when the word wrap reports
+    /// that no line went over the limit. If that report is ever wrong, `wrap`
+    /// returns lines wider than asked for: nothing panics, nothing is
+    /// ill-formed, and the layout is silently broken. That is the failure this
+    /// exists to catch.
+    #[test]
+    fn skipping_the_hard_wrap_matches_never_skipping_it() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..20_000 {
+            let s = build(&mut state, &[PLAIN]);
+            let limit = (next(&mut state) % 14) as usize;
+            for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+                for eaw_wide in [false, true] {
+                    assert_eq!(
+                        wrap::wrap_mode(&s, limit, wrap::DEFAULT_BREAKPOINTS, mode, eaw_wide),
+                        unconditional_wrap(&s, limit, mode, eaw_wide),
+                        "wrap skipped a hard wrap it needed\n input={s:?}\n limit={limit} mode={mode:?} eaw_wide={eaw_wide}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every text utility, over input that mixes sequences into the text.
+    ///
+    /// Under `debug_assertions` this also drives the assertions standing in
+    /// front of each `from_utf8_unchecked` these reach, so a scanner that
+    /// stops mid-character fails here rather than becoming undefined
+    /// behaviour in a release build.
+    #[test]
+    fn the_text_utilities_hold_on_input_containing_sequences() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..20_000 {
+            let s = build(&mut state, &[PLAIN, SEQUENCES]);
+            let limit = (next(&mut state) % 14) as usize;
+
+            for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+                for eaw_wide in [false, true] {
+                    // Measured over the whole string rather than line by line,
+                    // so this is the parser state the tokenizer actually had.
+                    let cut = truncate::truncate_mode(&s, limit, "", mode, eaw_wide);
+                    assert!(
+                        string_width(cut.as_bytes(), mode, eaw_wide) <= limit,
+                        "truncate exceeded its limit\n input={s:?} -> {cut:?}\n limit={limit} mode={mode:?} eaw_wide={eaw_wide}"
+                    );
+
+                    truncate::truncate_left_mode(&s, limit, "", mode, eaw_wide);
+                    truncate::cut_mode(&s, limit / 2, limit, mode, eaw_wide);
+                    wrap::hardwrap_mode(&s, limit, true, mode, eaw_wide);
+                    wrap::wrap_mode(&s, limit, wrap::DEFAULT_BREAKPOINTS, mode, eaw_wide);
+                    wrap::wordwrap_mode(&s, limit, wrap::DEFAULT_BREAKPOINTS, mode, eaw_wide);
+                }
+            }
+
+            // Stripping drops every sequence, so no introducer survives it.
+            let plain = strip(&s);
+            assert!(
+                !plain.contains('\x1b'),
+                "strip left an escape behind: {s:?} -> {plain:?}"
+            );
+        }
+    }
+}
