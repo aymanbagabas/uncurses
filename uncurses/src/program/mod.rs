@@ -277,6 +277,31 @@ where
     I: Input,
     O: Write,
 {
+    // --- The terminal ----------------------------------------------------
+
+    /// Borrow the [`Terminal`] this program drives.
+    ///
+    /// Shared on purpose: the program keeps ownership, so its record of the
+    /// modes and raw-mode state it emitted stays the authority for
+    /// [`finish`](Self::finish). Everything the program itself changes has a
+    /// method here. The borrow is not a seal, though. `Terminal::set_state`
+    /// takes `&self`, so a caller holding this can still change raw mode
+    /// behind the program's back, and the restore record will not know.
+    pub fn terminal(&self) -> &Terminal<I, O> {
+        &self.terminal
+    }
+
+    /// The environment snapshot the [`Terminal`] captured.
+    ///
+    /// This is where the answers the terminal never sends live: `TERM`,
+    /// `COLORTERM`, `TERM_PROGRAM`, and the rest. Shorthand for
+    /// [`terminal().env()`](crate::terminal::Terminal::env), and the
+    /// counterpart to [`capabilities`](Self::capabilities), which holds only
+    /// what the terminal answered.
+    pub fn env(&self) -> &crate::terminal::Env {
+        self.terminal.env()
+    }
+
     // --- The screen ------------------------------------------------------
 
     /// Borrow the [`Screen`] this program renders with.
