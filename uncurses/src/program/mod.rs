@@ -53,10 +53,11 @@
 //! choose whether to enable bracketed paste and mouse tracking at startup.
 //! Those take effect immediately at init.
 //!
-//! The two `prefer_*` fields are discovery-driven instead: they enable
-//! grapheme-cluster mode and in-band resize only once the terminal reports
-//! the mode as available. Since a program never probes on its own, that
-//! means calling [`query_capabilities`](Program::query_capabilities) and
+//! The three `prefer_*` fields are discovery-driven instead: they enable
+//! grapheme-cluster mode, in-band resize, and synchronized output only once
+//! the terminal reports the mode as available. Since a program never probes
+//! on its own, that means calling
+//! [`query_capabilities`](Program::query_capabilities) and
 //! reading the replies (see [`capabilities`](Program::capabilities)).
 //!
 //! [`Terminal`]: crate::terminal::Terminal
@@ -154,10 +155,11 @@ where
 
 /// Defaults applied by [`Program::init_with`].
 ///
-/// Most fields take effect at init unconditionally. The two `prefer_*` fields
-/// are the exception: they depend on capability detection, so they do nothing
-/// until the terminal reports the matching mode as available. A [`Program`]
-/// never probes on its own, so that report only arrives if you call
+/// Most fields take effect at init unconditionally. The three `prefer_*`
+/// fields are the exception: they depend on capability detection, so they do
+/// nothing until the terminal reports the matching mode as available. A
+/// [`Program`] never probes on its own, so that report only arrives if you
+/// call
 /// [`query_capabilities`](Program::query_capabilities) and read the replies.
 /// Without it these two fields stay dormant and the modes are never enabled.
 #[derive(Debug, Clone)]

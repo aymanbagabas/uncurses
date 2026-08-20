@@ -1,7 +1,10 @@
 //! Terminal/input mode state owned by the [`Program`] facade.
 //!
-//! Every field records a mode the facade has *emitted*, so it can tear the
+//! Most fields record a mode the facade has *emitted*, so it can tear the
 //! mode down on a shell handoff and re-apply it afterwards.
+//! [`chosen`](State::chosen) is the exception: it records which modes the app
+//! has decided for either way, so discovery can tell an explicit `disable_*`
+//! apart from silence.
 //!
 //! Three of them — [`alt_screen`](State::alt_screen),
 //! [`cursor_visible`](State::cursor_visible), and
