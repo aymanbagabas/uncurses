@@ -291,14 +291,14 @@ where
         &self.terminal
     }
 
-    /// The environment snapshot the [`Terminal`] captured.
+    /// The environment the [`Terminal`] reads variables from.
     ///
     /// This is where the answers the terminal never sends live: `TERM`,
     /// `COLORTERM`, `TERM_PROGRAM`, and the rest. Shorthand for
     /// [`terminal().env()`](crate::terminal::Terminal::env), and the
     /// counterpart to [`capabilities`](Self::capabilities), which holds only
     /// what the terminal answered.
-    pub fn env(&self) -> &crate::terminal::Env {
+    pub fn env(&self) -> &dyn crate::terminal::Env {
         self.terminal.env()
     }
 
@@ -861,7 +861,7 @@ where
 {
     /// Build the screen and event source over `terminal`, sizing the managed
     /// area to `size`. The color profile and renderer optimizations are
-    /// detected from the terminal's captured environment. The terminal is
+    /// detected from the terminal's environment. The terminal is
     /// left as-is.
     fn with_render(terminal: Terminal<I, O>, size: (u16, u16)) -> io::Result<Self> {
         let env = terminal.env();
