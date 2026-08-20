@@ -87,6 +87,12 @@ bitflags! {
         const IL_DL  = 1 <<  6;
         /// Terminal supports BCE (Background Color Erase): erase
         /// operations paint with the active background color.
+        ///
+        /// Also governs cursor motion. An inline downward move is
+        /// emitted as a literal `\n`, which scrolls the host when the
+        /// destination row does not exist yet; with BCE that scroll
+        /// paints the exposed row with the active background, so the
+        /// planner resets the pen first. See `PenPolicy`.
         const BCE    = 1 <<  7;
         /// Terminal supports CHA (Cursor Horizontal Absolute,
         /// `CSI Ps G`) for absolute column moves.

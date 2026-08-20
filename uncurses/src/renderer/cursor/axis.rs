@@ -138,6 +138,11 @@ impl Renderer {
             // destination row is visible. In fullscreen the screen
             // is sized to the surface up front, so LF only wins
             // when strictly cheaper than CUD / VPA.
+            //
+            // Because that scroll erases the newly exposed row with
+            // the active pen on a BCE terminal, the planner resets the
+            // pen before emitting these bytes — see
+            // `Renderer::lf_would_bleed_background`.
             let lf = cost::lf_cost(n);
             let lf_wins = !self.fullscreen || lf < best_cost;
             if lf_wins {

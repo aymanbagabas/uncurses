@@ -11,12 +11,34 @@ use crate::layout::Position;
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
 
+/// What a cursor move is allowed to do to the active pen.
+///
+/// An inline downward move is emitted as literal `\n`, which scrolls the
+/// host when the target row does not exist yet. Under back-color erase
+/// that scroll paints the freshly exposed row with the pen's background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PenPolicy {
+    /// Reset the pen before a `\n` that can scroll, so the exposed row
+    /// is erased with the terminal's default background — which is what
+    /// an untouched row in `cur_buf` claims. The default.
+    ResetBeforeScroll,
+    /// Leave the pen alone: the caller is about to erase or scroll with
+    /// it deliberately and records the resulting fill itself.
+    Keep,
+}
+
 impl Renderer {
     /// Move cursor to the given position. Runs all the pre-move
-    /// bookkeeping (width autowrap, pen reset, phantom-cell snap,
-    /// height clamp, no-op shortcut), then defers the actual emission
-    /// to [`Renderer::move_cursor`] so the destination row is available
+    /// bookkeeping (width autowrap, phantom-cell snap, height clamp,
+    /// no-op shortcut), then defers the actual emission to
+    /// [`Renderer::move_cursor`] so the destination row is available
     /// for overwrite consideration.
+    ///
+    /// May reset the pen: an inline downward move is emitted as a
+    /// literal `\n` that can scroll the host, and under back-color
+    /// erase the exposed row would otherwise keep the active
+    /// background. Callers that erase or scroll with the active pen
+    /// deliberately want [`Renderer::move_to_keeping_pen`].
     ///
     /// Most callers want this. Callers that have already done the
     /// bookkeeping and need to skip it can call
@@ -28,6 +50,37 @@ impl Renderer {
         buf: &RenderBuffer,
         y: u16,
         x: u16,
+    ) -> io::Result<()> {
+        self.move_to_with_pen(out, buf, y, x, PenPolicy::ResetBeforeScroll)
+    }
+
+    /// Like [`Renderer::move_to`], but leaves the pen alone.
+    ///
+    /// For callers that immediately follow the move with an erase or
+    /// scroll which is *meant* to fill with the active pen, and which
+    /// record that fill in `cur_buf` themselves — the scroll emitters in
+    /// [`crate::renderer::scroll`] and
+    /// [`Renderer::clear_to_bottom`]. Resetting the pen underneath them
+    /// would erase with the default background while the frame model
+    /// recorded the styled one, which is the very divergence
+    /// [`PenPolicy::ResetBeforeScroll`] exists to prevent.
+    pub(crate) fn move_to_keeping_pen(
+        &mut self,
+        out: &mut Vec<u8>,
+        buf: &RenderBuffer,
+        y: u16,
+        x: u16,
+    ) -> io::Result<()> {
+        self.move_to_with_pen(out, buf, y, x, PenPolicy::Keep)
+    }
+
+    fn move_to_with_pen(
+        &mut self,
+        out: &mut Vec<u8>,
+        buf: &RenderBuffer,
+        y: u16,
+        x: u16,
+        pen: PenPolicy,
     ) -> io::Result<()> {
         let mut y = y;
         let mut x = x;
@@ -70,7 +123,7 @@ impl Renderer {
             return Ok(());
         }
 
-        self.move_cursor(out, buf, y, x)
+        self.move_cursor_with_pen(out, buf, y, x, pen)
     }
 
     /// Emit a cursor move using the destination row's cells from
@@ -79,12 +132,28 @@ impl Renderer {
     /// then defers to the optimal-move planner. Use
     /// [`Renderer::move_to`] unless you already handled the
     /// pre-move bookkeeping yourself.
+    ///
+    /// Test-only convenience wrapper: production callers reach the
+    /// planner through [`Renderer::move_to`] so the pen policy is
+    /// always stated explicitly.
+    #[cfg(test)]
     pub(crate) fn move_cursor(
         &mut self,
         out: &mut Vec<u8>,
         buf: &RenderBuffer,
         y: u16,
         x: u16,
+    ) -> io::Result<()> {
+        self.move_cursor_with_pen(out, buf, y, x, PenPolicy::ResetBeforeScroll)
+    }
+
+    fn move_cursor_with_pen(
+        &mut self,
+        out: &mut Vec<u8>,
+        buf: &RenderBuffer,
+        y: u16,
+        x: u16,
+        pen: PenPolicy,
     ) -> io::Result<()> {
         // Inline mode + cursor fully unknown on both axes: snap to
         // column 0 with a bare `\r` so the relative move below has a
@@ -104,7 +173,7 @@ impl Renderer {
 
         let target = Position { x, y };
         let line = buf.line(y);
-        self.write_optimal_move(out, self.cur.pos(), target, line)?;
+        self.write_optimal_move_with_pen(out, self.cur.pos(), target, line, pen)?;
         self.cur.set_pos(target);
         Ok(())
     }
