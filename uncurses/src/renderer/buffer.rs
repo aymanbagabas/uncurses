@@ -182,9 +182,7 @@ impl RenderBuffer {
 
     /// Clear all touched flags without changing cell contents.
     pub fn clear_touched(&mut self) {
-        for t in &mut self.touched {
-            *t = None;
-        }
+        self.touched.fill(None);
     }
 
     /// Mark every row as touched across the full width.

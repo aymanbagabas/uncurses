@@ -220,9 +220,7 @@ impl TabStops {
 
     /// Remove all tab stops and rebuild neighbor caches.
     pub fn clear(&mut self) {
-        for w in &mut self.stops {
-            *w = 0;
-        }
+        self.stops.fill(0);
         self.rebuild_neighbor_tables();
     }
 
