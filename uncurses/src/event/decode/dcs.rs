@@ -80,18 +80,19 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     if intermediates == b"+" && final_byte == b'r' && (params_raw == b"1" || params_raw == b"0") {
         return Some(Event::Termcap {
             recognized: params_raw == b"1",
-            payload: decode_termcap_payload(data),
+            entries: decode_termcap_payload(data),
         });
     }
 
     // DECRQSS response: DCS 1$r ... ST (valid) or DCS 0$r ... ST (invalid).
-    // We expose these as a capability reply as well.
+    // Reported separately from XTGETTCAP: this payload is a settings string,
+    // not `cap=value` pairs.
     if (params_raw == b"1" || params_raw == b"0")
         && intermediates == b"$"
         && final_byte == b'r'
         && let Ok(s) = std::str::from_utf8(payload)
     {
-        return Some(Event::Termcap {
+        return Some(Event::SettingReport {
             recognized: params_raw == b"1",
             payload: s.to_string(),
         });

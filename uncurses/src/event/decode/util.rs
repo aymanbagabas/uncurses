@@ -46,12 +46,16 @@ pub(super) fn hex_decode(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Decode an XTGETTCAP payload: a `;`-separated list of `cap_hex=value_hex`
-/// pairs (value may be omitted). Pairs whose name fails to decode are
-/// skipped; pairs whose value fails to decode are also skipped. The result
-/// is a `;`-joined string of `cap[=value]` entries with raw bytes preserved
-/// via lossy UTF-8 conversion.
-pub(super) fn decode_termcap_payload(data: &[u8]) -> String {
-    let mut out = String::new();
+/// pairs (value may be omitted). Pairs whose name or value fails to decode
+/// are skipped. Raw bytes are preserved via lossy UTF-8 conversion.
+///
+/// The pairs are returned separately rather than rejoined into one string.
+/// Only the hex form is delimiter-safe: decoded values routinely contain `;`
+/// and `=` themselves (`kf13` is `\E[1;2P`), so rejoining them would be
+/// ambiguous and any later split would invent capabilities that were never
+/// reported.
+pub(super) fn decode_termcap_payload(data: &[u8]) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
     for entry in data.split(|&b| b == b';') {
         let mut parts = entry.splitn(2, |&b| b == b'=');
         let name_hex = parts.next().unwrap_or(&[]);
@@ -67,16 +71,7 @@ pub(super) fn decode_termcap_payload(data: &[u8]) -> String {
             },
             None => None,
         };
-        if !out.is_empty() {
-            out.push(';');
-        }
-        out.push_str(&name);
-        if let Some(v) = value
-            && !v.is_empty()
-        {
-            out.push('=');
-            out.push_str(&v);
-        }
+        out.push((name, value));
     }
     out
 }
