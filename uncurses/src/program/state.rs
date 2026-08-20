@@ -1,7 +1,10 @@
 //! Terminal/input mode state owned by the [`Program`] facade.
 //!
-//! Every field records a mode the facade has *emitted*, so it can tear the
+//! Most fields record a mode the facade has *emitted*, so it can tear the
 //! mode down on a shell handoff and re-apply it afterwards.
+//! [`chosen`](State::chosen) is the exception: it records which modes the app
+//! has decided for either way, so discovery can tell an explicit `disable_*`
+//! apart from silence.
 //!
 //! Three of them — [`alt_screen`](State::alt_screen),
 //! [`cursor_visible`](State::cursor_visible), and
@@ -16,12 +19,13 @@
 //!
 //! [`Program`]: super::Program
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
+use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
-use crate::event::ModifyOtherKeysMode;
+use crate::event::{ColorScheme, ModifyOtherKeysMode};
 
 use super::MouseTracking;
 use super::ProgressState;
@@ -104,6 +108,15 @@ pub(super) struct State {
     /// Whether grapheme-cluster mode is on (DEC 2027). Mirrors
     /// [`Screen::grapheme_clusters`](crate::screen::Screen::grapheme_clusters).
     pub grapheme_clusters: bool,
+    /// Modes the application has taken a position on, by calling the matching
+    /// `enable_*` / `disable_*` method or by having one adopted on its behalf.
+    ///
+    /// The mode fields above cannot carry this: `false` reads the same whether
+    /// the app turned the mode off or never mentioned it. Discovery adopts a
+    /// preferred mode only for a mode absent from this set, so an explicit
+    /// `disable_*` issued before the terminal ever reports is not quietly
+    /// undone by the report when it arrives.
+    pub chosen: BTreeSet<Mode>,
 }
 
 impl Default for State {
@@ -128,52 +141,214 @@ impl Default for State {
             alt_screen: false,
             cursor_visible: true,
             grapheme_clusters: false,
+            chosen: BTreeSet::new(),
         }
     }
 }
 
-/// Terminal capabilities, as reported by the replies the terminal has sent.
-/// Every field answers a single question: does the terminal support this?
-/// Nothing is queried at startup, so the replies arrive because the caller
-/// asked, with [`query_capabilities`](super::Program::query_capabilities) or
-/// an individual `request_*` method. Reading with
+/// What the terminal told us about itself.
+///
+/// This holds the replies themselves, not a summary of them: the
+/// [`ModeSetting`] reported for every mode that was asked about, the raw
+/// device-attribute lists, the reported colors, and so on. A reply that says
+/// "I do not recognize that" is recorded too, so `None` from an accessor
+/// generally means the terminal never answered, which is different from
+/// answering no. [`termcap`](Self::termcap) is the exception, folding both
+/// into `None`; use [`termcap_reports`](Self::termcap_reports) to separate
+/// them.
+///
+/// Everything here is what the terminal reported, never what the facade told
+/// it. The two are easy to confuse where both exist: a
+/// [`background_color`](Self::background_color) recorded here stays the
+/// terminal's own default even after
+/// [`set_background_color`](super::Program::set_background_color) overrides
+/// it.
+///
+/// Only replies land here, so questions the environment can also answer are
+/// deliberately absent. Direct-color support is the example: `COLORTERM` and
+/// `TERM` establish it as readily as an XTGETTCAP reply does, so the answer is
+/// [`Screen::color_profile`](crate::screen::Screen::color_profile), which
+/// folds in both, and what remains here is the reply itself via
+/// [`supports_termcap`](Self::supports_termcap).
+///
+/// The facade records these as reply events flow through
 /// [`read_event`](super::Program::read_event) /
-/// [`try_read_event`](super::Program::try_read_event) records support here and
-/// applies the few noted below as `Applied:` on the way past; the event is
-/// still handed back to the application. Read back with
+/// [`try_read_event`](super::Program::try_read_event), whichever way the
+/// question was put: see
+/// [`query_capabilities`](super::Program::query_capabilities), which asks for
+/// only some of this, and takes extra bytes so you can ask for the rest. An
+/// individual `request_*` method fills a single entry, and a few reports
+/// arrive unprompted once their mode is on, such as a color-scheme change
+/// under DEC mode 2031. Read it back with
 /// [`Program::capabilities`](super::Program::capabilities).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Capabilities {
-    /// Synchronized output (DEC private mode 2026). Applied: frames are
-    /// wrapped in begin/end-synchronized-update markers.
-    pub synchronized_output: bool,
-    /// Unicode core / grapheme-cluster mode (DEC private mode 2027).
-    /// Detected only: call
-    /// [`enable_grapheme_clusters`](super::Program::enable_grapheme_clusters)
-    /// to act on it.
-    pub grapheme_clusters: bool,
-    /// In-band resize notifications (DEC private mode 2048).
-    pub in_band_resize: bool,
-    /// Normal mouse button tracking (DEC private mode 1000).
-    pub mouse_normal: bool,
-    /// Button-event mouse tracking (DEC private mode 1002).
-    pub mouse_button: bool,
-    /// Any-event mouse tracking (DEC private mode 1003).
-    pub mouse_any: bool,
-    /// SGR mouse encoding (DEC private mode 1006).
-    pub mouse_sgr: bool,
-    /// SGR-pixel mouse encoding (DEC private mode 1016).
-    pub mouse_sgr_pixel: bool,
-    /// Sixel graphics (Primary DA attribute 4).
-    pub sixel: bool,
-    /// Clipboard access (Primary DA attribute 52).
-    pub clipboard: bool,
-    /// Kitty keyboard protocol (the terminal answered `CSI ? u`).
-    pub kitty_keyboard: bool,
-    /// xterm modifyOtherKeys (the terminal answered `CSI ? 4 m`).
-    pub modify_other_keys: bool,
-    /// Direct (24-bit) color, confirmed by an XTGETTCAP `RGB`/`Tc` reply.
-    /// Applied: the renderer's color profile is upgraded to
-    /// [`Profile::TrueColor`](crate::color::Profile::TrueColor).
-    pub true_color: bool,
+    pub(super) modes: BTreeMap<Mode, ModeSetting>,
+    pub(super) primary_device_attributes: Option<Vec<Option<u32>>>,
+    pub(super) secondary_device_attributes: Option<Vec<Option<u32>>>,
+    pub(super) tertiary_device_attributes: Option<String>,
+    pub(super) kitty_keyboard: Option<KittyKeyboardFlags>,
+    pub(super) modify_other_keys: Option<ModifyOtherKeysMode>,
+    pub(super) terminal_name: Option<String>,
+    pub(super) termcap: BTreeMap<String, Option<String>>,
+    pub(super) foreground_color: Option<Color>,
+    pub(super) background_color: Option<Color>,
+    pub(super) cursor_color: Option<Color>,
+    pub(super) palette: BTreeMap<u8, Color>,
+    pub(super) color_scheme: Option<ColorScheme>,
+    pub(super) kitty_graphics: bool,
+}
+
+impl Capabilities {
+    /// The [`ModeSetting`] the terminal reported for `mode`, or `None` if it
+    /// never reported on that mode.
+    ///
+    /// Use this when the distinction matters: [`ModeSetting::Set`] means the
+    /// mode is currently on, [`ModeSetting::PermanentlySet`] means it cannot
+    /// be turned off, and [`ModeSetting::NotRecognized`] is a definite "no"
+    /// rather than silence.
+    pub fn mode(&self, mode: Mode) -> Option<ModeSetting> {
+        self.modes.get(&mode).copied()
+    }
+
+    /// Whether the terminal reported `mode` as available, in any state.
+    ///
+    /// ```ignore
+    /// use uncurses::ansi::mode::Mode;
+    ///
+    /// if program.capabilities().supports(Mode::MOUSE_SGR_PIXEL) {
+    ///     // pixel-accurate mouse reporting is available
+    /// }
+    /// ```
+    pub fn supports(&self, mode: Mode) -> bool {
+        self.mode(mode).is_some_and(ModeSetting::is_available)
+    }
+
+    /// Every mode report recorded so far, keyed by mode.
+    pub fn modes(&self) -> &BTreeMap<Mode, ModeSetting> {
+        &self.modes
+    }
+
+    /// The raw Primary DA (`CSI c`) attribute list, or `None` if the terminal
+    /// never answered. Entries are `None` where the terminal sent an empty
+    /// parameter.
+    ///
+    /// The first parameter is the terminal's architectural service class, not
+    /// a capability: `6` identifies a VT102 and `64` a VT420. Capability
+    /// numbers live in the parameters after it, and only for a VT220-class
+    /// terminal or later (`62`, `63`, `64`, `65`); xterm puts it as "the
+    /// VT100-style response parameters do not mean anything by themselves".
+    /// So `CSI ? 4 ; 6 c` is a VT132 identifying itself, even though `4` is
+    /// also the capability number for Sixel graphics on a VT220-class reply.
+    /// Read the class first and interpret the rest against it, rather than
+    /// searching the list for a number.
+    ///
+    /// The capability numbers are assigned by DEC and extended by terminal
+    /// authors, so they are reported unparsed.
+    pub fn primary_device_attributes(&self) -> Option<&[Option<u32>]> {
+        self.primary_device_attributes.as_deref()
+    }
+
+    /// The raw Secondary DA (`CSI > c`) attribute list, or `None` if the
+    /// terminal never answered. Conventionally terminal type, firmware
+    /// version, and hardware option, but the meaning of each entry varies by
+    /// terminal, so it is reported unparsed.
+    pub fn secondary_device_attributes(&self) -> Option<&[Option<u32>]> {
+        self.secondary_device_attributes.as_deref()
+    }
+
+    /// The Tertiary DA (`CSI = c`) terminal unit ID, or `None` if the
+    /// terminal never answered.
+    pub fn tertiary_device_attributes(&self) -> Option<&str> {
+        self.tertiary_device_attributes.as_deref()
+    }
+
+    /// Whether the terminal has answered a Kitty graphics query, which is the
+    /// protocol's own support test: a terminal that does not implement it
+    /// stays silent.
+    pub fn kitty_graphics(&self) -> bool {
+        self.kitty_graphics
+    }
+
+    /// The Kitty keyboard enhancements the terminal reported, or `None` if it
+    /// never answered `CSI ? u`. An answer of
+    /// [`empty`](KittyKeyboardFlags::empty) means the protocol is supported
+    /// with no enhancements currently active.
+    pub fn kitty_keyboard(&self) -> Option<KittyKeyboardFlags> {
+        self.kitty_keyboard
+    }
+
+    /// The xterm modifyOtherKeys mode the terminal reported, or `None` if it
+    /// never answered `CSI ? 4 m`.
+    pub fn modify_other_keys(&self) -> Option<ModifyOtherKeysMode> {
+        self.modify_other_keys
+    }
+
+    /// The terminal's self-reported name from XTVERSION (for example
+    /// `"XTerm(380)"`), or `None` if it never answered.
+    pub fn terminal_name(&self) -> Option<&str> {
+        self.terminal_name.as_deref()
+    }
+
+    /// The value the terminal reported for the XTGETTCAP capability `name`,
+    /// or `None` if it reported the capability as unsupported or was never
+    /// asked. Boolean capabilities report an empty string, so use
+    /// [`supports_termcap`](Self::supports_termcap) to test for presence.
+    pub fn termcap(&self, name: &str) -> Option<&str> {
+        self.termcap.get(name)?.as_deref()
+    }
+
+    /// Whether the terminal reported the XTGETTCAP capability `name` as
+    /// supported. `false` both for a capability reported unsupported and for
+    /// one never asked about; tell them apart with
+    /// [`termcap_reports`](Self::termcap_reports).
+    pub fn supports_termcap(&self, name: &str) -> bool {
+        matches!(self.termcap.get(name), Some(Some(_)))
+    }
+
+    /// Every XTGETTCAP reply recorded so far, keyed by capability name. A
+    /// value of `None` is the terminal reporting that capability as
+    /// unsupported, which is different from the key being absent.
+    pub fn termcap_reports(&self) -> &BTreeMap<String, Option<String>> {
+        &self.termcap
+    }
+
+    /// The terminal's default foreground color (`OSC 10`), or `None` if it
+    /// never answered.
+    pub fn foreground_color(&self) -> Option<Color> {
+        self.foreground_color
+    }
+
+    /// The terminal's default background color (`OSC 11`), or `None` if it
+    /// never answered.
+    pub fn background_color(&self) -> Option<Color> {
+        self.background_color
+    }
+
+    /// The terminal's cursor color (`OSC 12`), or `None` if it never
+    /// answered.
+    pub fn cursor_color(&self) -> Option<Color> {
+        self.cursor_color
+    }
+
+    /// The color the terminal reported for palette entry `index`
+    /// (`OSC 4 ; index ; ?`), or `None` if it never answered for that entry.
+    pub fn palette_color(&self, index: u8) -> Option<Color> {
+        self.palette.get(&index).copied()
+    }
+
+    /// Every palette color reported so far, keyed by index.
+    pub fn palette(&self) -> &BTreeMap<u8, Color> {
+        &self.palette
+    }
+
+    /// Whether the terminal is in its dark or light scheme (DEC mode 2031),
+    /// or `None` if it never reported one. Updated as the scheme changes
+    /// while [`enable_color_scheme_updates`](super::Program::enable_color_scheme_updates)
+    /// is on. This is the terminal's own preference flag, which a terminal
+    /// can report independently of the colors it uses; when it is absent,
+    /// [`background_color`](Self::background_color) is the fallback.
+    pub fn color_scheme(&self) -> Option<ColorScheme> {
+        self.color_scheme
+    }
 }
