@@ -578,6 +578,52 @@ impl<W: Write> Screen<W> {
         self.sync_updates
     }
 
+    /// Enable or disable the renderer's scroll-detection pass.
+    ///
+    /// On by default, and best left on: when a run of rows has simply moved,
+    /// telling the terminal to move them costs a handful of bytes instead of
+    /// a repaint.
+    ///
+    /// **Turn it off only when both of these hold:** part of the screen does
+    /// not scroll with the rest — a sidebar, a file tree, a gutter, any fixed
+    /// column — *and* [synchronized output](Self::synchronized_output) is
+    /// off. With synchronized output on there is nothing to fix here; leave
+    /// detection on and keep the optimization.
+    ///
+    /// A fixed column is a problem because the scrolls uncurses emits are
+    /// always full width: rows move with `SU`, `IL`/`DL` or a bare line feed,
+    /// and the renderer does not set the left/right margins
+    /// ([DECLRMM](crate::ansi::mode::Mode::LEFT_RIGHT_MARGIN) and
+    /// [DECSLRM](crate::ansi::screen::write_set_left_right_margins)) that
+    /// would confine them to a column range on a terminal supporting those.
+    /// So a detected scroll moves that region too, and the renderer paints it
+    /// back within the same frame. The end state is correct either way —
+    /// which is why a test that compares the finished screen sees nothing
+    /// wrong — but what the user sees is that region jumping and being put
+    /// back, on every frame, for as long as they keep scrolling.
+    ///
+    /// The scroll and the repaint go into the same frame, and
+    /// [synchronized output](Self::set_synchronized_output) wraps the whole
+    /// frame in DEC 2026, so the terminal presents it in one step and the
+    /// intermediate state never reaches the display.
+    ///
+    /// Check [`synchronized_output`](Self::synchronized_output) rather than
+    /// assuming: it is off by default, and a
+    /// [`Program`](crate::program::Program) turns it on only once the
+    /// terminal has reported 2026 support, which takes an explicit
+    /// [`query_capabilities`](crate::program::Program::query_capabilities).
+    /// An application that never asks never gets that cover, whatever its
+    /// terminal supports.
+    ///
+    /// Detection is skipped outside [fullscreen](Self::set_fullscreen)
+    /// regardless of this setting.
+    ///
+    /// This only sets state; it takes effect on the next
+    /// [`render`](Self::render).
+    pub fn set_scroll_optimize(&mut self, enabled: bool) {
+        self.renderer.set_scroll_optimize(enabled);
+    }
+
     /// Set the color profile used when emitting styled cells.
     pub fn set_color_profile(&mut self, profile: crate::color::Profile) {
         self.renderer.set_color_profile(profile);
