@@ -1787,3 +1787,106 @@ fn inline_render_without_background_emits_no_pen_resets() {
         "an unstyled frame should need no pen reset: {out:?}"
     );
 }
+
+/// Render two frames of a two-pane layout and return the bytes the second
+/// one emits.
+///
+/// The layout is a static "file tree" in the left `SIDEBAR` columns of the
+/// top `TREE_ROWS` rows, with a scrolling content pane beside it. Frame two
+/// scrolls the pane by `SHIFT`; the tree is painted identically both times.
+///
+/// Two details make this reproduce the case `set_scroll_optimize` exists
+/// for, and both are load-bearing:
+///
+/// * the tree is shorter than the screen, so the rows below it match
+///   exactly after the shift and seed a hunk — `grow_hunks` cannot start
+///   from nothing, and a full-height tree detects no scroll at all;
+/// * the content differs a lot from row to row, the way real source or log
+///   lines do, so repainting a row in place costs far more cells than
+///   repainting the narrow tree after a scroll. With near-identical rows
+///   the cost analysis correctly declines to grow.
+fn two_pane_second_frame(scroll_optimize: bool) -> String {
+    const W: u16 = 40;
+    const H: u16 = 12;
+    const SIDEBAR: u16 = 10;
+    const TREE_ROWS: u16 = 4;
+    const SHIFT: usize = 3;
+
+    fn paint(screen: &mut Screen<Vec<u8>>, offset: usize) {
+        for y in 0..H {
+            if y < TREE_ROWS {
+                for (i, ch) in format!("tree-{y:02}").chars().enumerate() {
+                    screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+                }
+            }
+            let n = y as usize + offset;
+            let body: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+                .chars()
+                .cycle()
+                .skip(n * 7 % 36)
+                .take((W - SIDEBAR) as usize)
+                .collect();
+            for (i, ch) in body.chars().enumerate() {
+                screen.set_cell((SIDEBAR + i as u16, y), &Cell::narrow(ch.to_string()));
+            }
+        }
+    }
+
+    // Pin the scroll capabilities rather than inheriting them from the
+    // environment: which sequence implements the scroll is irrelevant here,
+    // but whether one is emitted at all is the whole assertion.
+    let opts = Optimizations::default()
+        .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL);
+    let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
+    screen.set_alt_screen(true);
+    screen.set_scroll_optimize(scroll_optimize);
+
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    paint(&mut screen, SHIFT);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    s(screen.writer())
+}
+
+#[test]
+fn scroll_detection_moves_a_fixed_column_and_paints_it_back() {
+    // Pins the behavior `set_scroll_optimize` exists to switch off, so that
+    // turning the knob off is visibly a change rather than a no-op.
+    //
+    // The scrolls the renderer emits are always full width, so the detected
+    // scroll moves the tree too and the renderer repaints it inside the same
+    // frame. The settled screen is correct either way, which is exactly why
+    // this needs a byte-level assertion: comparing the finished screen sees
+    // nothing.
+    let out = two_pane_second_frame(true);
+
+    assert!(
+        out.contains("\x1b[3S") || out.contains("\x1b[3M") || out.contains("\x1b[3L"),
+        "expected a detected 3-row scroll: {out:?}"
+    );
+    assert!(
+        out.contains("tree-"),
+        "the scroll moved the tree, so the frame must paint it back: {out:?}"
+    );
+}
+
+#[test]
+fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
+    // The same frame with detection off: no scroll goes out, so the tree
+    // never moves and never needs repainting. It is unchanged between the
+    // two frames, so its cells must not appear in the output at all.
+    let out = two_pane_second_frame(false);
+
+    assert!(
+        !out.contains("\x1b[3S") && !out.contains("\x1b[3M") && !out.contains("\x1b[3L"),
+        "scroll detection is off, so no scroll should be emitted: {out:?}"
+    );
+    assert!(
+        !out.contains("tree-"),
+        "an untouched fixed column must not be repainted: {out:?}"
+    );
+}
