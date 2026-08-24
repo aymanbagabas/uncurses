@@ -51,7 +51,35 @@ impl Renderer {
         y: u16,
         x: u16,
     ) -> io::Result<()> {
-        self.move_to_with_pen(out, buf, y, x, PenPolicy::ResetBeforeScroll)
+        self.move_to_with_pen(out, Some(buf), y, x, PenPolicy::ResetBeforeScroll)
+    }
+
+    /// Like [`Renderer::move_to`], but plans over no cell contents, and
+    /// measures the move against `size` rather than the last rendered frame.
+    ///
+    /// For a caller moving the cursor *between* frames rather than during a
+    /// diff. Two things separate that caller from the diff loop.
+    ///
+    /// The planner can pay for a short forward move by re-emitting the cells
+    /// it passes over, which is only sound when those cells are what the
+    /// terminal currently shows. Inside the diff loop they are: a move there
+    /// targets a column the transform has proven equal between the tracked
+    /// and the new line. Between frames nothing establishes that — the
+    /// desired grid can hold an edit that has not been rendered, or a whole
+    /// frame belonging to the other screen buffer — and the planner does not
+    /// record the cells it re-emits in the tracked buffer, so the divergence
+    /// it creates is never diffed away. Withholding the row makes that
+    /// unrepresentable rather than guarded, and costs nothing: a resting
+    /// cursor is essentially never reached by a forward move short enough for
+    /// the overwrite candidate to win.
+    ///
+    pub(crate) fn move_to_between_frames(
+        &mut self,
+        out: &mut Vec<u8>,
+        y: u16,
+        x: u16,
+    ) -> io::Result<()> {
+        self.move_to_with_pen(out, None, y, x, PenPolicy::ResetBeforeScroll)
     }
 
     /// Like [`Renderer::move_to`], but leaves the pen alone.
@@ -71,13 +99,13 @@ impl Renderer {
         y: u16,
         x: u16,
     ) -> io::Result<()> {
-        self.move_to_with_pen(out, buf, y, x, PenPolicy::Keep)
+        self.move_to_with_pen(out, Some(buf), y, x, PenPolicy::Keep)
     }
 
     fn move_to_with_pen(
         &mut self,
         out: &mut Vec<u8>,
-        buf: &RenderBuffer,
+        buf: Option<&RenderBuffer>,
         y: u16,
         x: u16,
         pen: PenPolicy,
@@ -144,13 +172,13 @@ impl Renderer {
         y: u16,
         x: u16,
     ) -> io::Result<()> {
-        self.move_cursor_with_pen(out, buf, y, x, PenPolicy::ResetBeforeScroll)
+        self.move_cursor_with_pen(out, Some(buf), y, x, PenPolicy::ResetBeforeScroll)
     }
 
     fn move_cursor_with_pen(
         &mut self,
         out: &mut Vec<u8>,
-        buf: &RenderBuffer,
+        buf: Option<&RenderBuffer>,
         y: u16,
         x: u16,
         pen: PenPolicy,
@@ -172,7 +200,7 @@ impl Renderer {
         }
 
         let target = Position { x, y };
-        let line = buf.line(y);
+        let line = buf.and_then(|buf| buf.line(y));
         self.write_optimal_move_with_pen(out, self.cur.pos(), target, line, pen)?;
         self.cur.set_pos(target);
         Ok(())
