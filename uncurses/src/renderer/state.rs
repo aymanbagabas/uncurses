@@ -376,8 +376,8 @@ impl Renderer {
     pub(crate) fn first_divergence(&self, front: &RenderBuffer) -> Option<Position> {
         use crate::buffer::Surface;
         let cur = self.cur_buf.as_ref()?;
-        for y in 0..front.height().min(cur.height()) {
-            for x in 0..front.width().min(cur.width()) {
+        for y in 0..front.height().max(cur.height()) {
+            for x in 0..front.width().max(cur.width()) {
                 let pos = Position { x, y };
                 if front.cell(pos) != cur.cell(pos) {
                     return Some(pos);
