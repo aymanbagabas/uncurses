@@ -63,6 +63,10 @@ impl<O: Write> Screen<O> {
         self.set_fullscreen(alt_screen);
     }
 
+    fn diverge(&self) -> Option<Position> {
+        self.renderer.first_divergence(&self.front_buf)
+    }
+
     fn cursor_position(&self) -> Position {
         self.tracked_cursor().unwrap_or_default()
     }
@@ -1889,4 +1893,218 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
         !out.contains("tree-"),
         "an untouched fixed column must not be repainted: {out:?}"
     );
+}
+
+/// An imperative cursor move happens between frames, where the desired grid
+/// is not what the terminal shows. The move planner may pay for a short
+/// forward hop by re-emitting the cells it passes over, so planning it over
+/// that grid paints cells the terminal does not have — and it never records
+/// them in the tracked buffer, so the next diff sees no work and the
+/// divergence is permanent.
+///
+/// Three ways the desired grid diverges, each reached by a forward hop short
+/// enough for the overwrite candidate to beat CUF.
+#[test]
+fn move_cursor_to_never_emits_cell_content() {
+    // (name, how the grid is made to diverge, where to move)
+    #[allow(clippy::type_complexity)]
+    let cases: [(&str, fn(&mut Screen<Vec<u8>>), (u16, u16)); 3] = [
+        // An edit staged since the last render is not on the terminal yet.
+        (
+            "edit staged but not rendered",
+            |s| {
+                s.set_str((0, 0), "XY", crate::style::Style::default());
+            },
+            (3, 0),
+        ),
+        // A column at or past the width wraps into a later row, so the row
+        // the planner lands on is not the one the caller named. A per-row
+        // guard in front of the planner would not see this one.
+        (
+            "column past the width wraps into a dirty row",
+            |s| {
+                s.set_str((0, 1), "XY", crate::style::Style::default());
+            },
+            (22, 0),
+        ),
+        // Entering the alternate screen blanks the terminal while the desired
+        // grid still holds the inline frame. The mode is emitted by Program,
+        // so the renderer never sees the terminal change.
+        (
+            "fullscreen switch pending",
+            |s| s.set_fullscreen(true),
+            (3, 0),
+        ),
+    ];
+
+    for (name, diverge, to) in cases {
+        let mut screen = Screen::for_test(Vec::new(), (20, 5));
+        screen.set_str((0, 0), "ab", crate::style::Style::default());
+        screen.set_str((0, 1), "cd", crate::style::Style::default());
+        screen.render().unwrap();
+        screen.move_cursor_to((1, 0)).unwrap();
+
+        diverge(&mut screen);
+        let n = screen.writer().len();
+        screen.move_cursor_to(to).unwrap();
+        let payload = printable_payload(&screen.writer()[n..]);
+        assert!(
+            payload.is_empty(),
+            "{name}: move emitted cell content: {payload:?} (raw {:?})",
+            String::from_utf8_lossy(&screen.writer()[n..])
+        );
+    }
+}
+
+/// Everything a byte run would put on screen, with escape sequences and the
+/// cursor-moving control characters removed. A cursor move is allowed to emit
+/// those; anything left over is cell content it had no business writing.
+///
+/// Checking for the content bytes directly does not work: `A`, `B`, `C` and
+/// `D` are CUU/CUD/CUF/CUB final bytes, and `b` and `d` are REP and VPA.
+fn printable_payload(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            0x1b => {
+                i += 1;
+                if i < bytes.len() && bytes[i] == b'[' {
+                    i += 1;
+                    // Parameter and intermediate bytes, then one final byte.
+                    while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                }
+                i += 1;
+            }
+            b'\r' | b'\n' | 0x08 | b'\t' => i += 1,
+            b => {
+                out.push(b as char);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Painting the rightmost column parks the terminal cursor there with its
+/// wrap pending, which the renderer tracks as the column one past the last. A
+/// move to that column is a request to wrap, so it has to reach the planner:
+/// the planner is what resyncs the pending wrap and normalizes the target
+/// back inside the surface. Answering it from the tracked position instead
+/// leaves the wrap pending and reports a column that does not exist.
+#[test]
+fn move_cursor_to_resyncs_a_pending_wrap() {
+    const W: u16 = 10;
+    const H: u16 = 5;
+    let mut screen = Screen::for_test(Vec::new(), (W, H));
+    screen.render().unwrap();
+    screen.set_str((0, H - 1), "0123456789", crate::style::Style::default());
+    screen.render().unwrap();
+
+    let pending = screen.tracked_cursor();
+    assert_eq!(
+        pending,
+        Some(Position { x: W, y: H - 1 }),
+        "expected the pending wrap one past the last column"
+    );
+
+    let n = screen.writer().len();
+    screen.move_cursor_to(pending.unwrap()).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&screen.writer()[n..]),
+        "\r",
+        "a move to the pending wrap must resync it"
+    );
+    assert_eq!(screen.tracked_cursor(), Some(Position { x: 0, y: H - 1 }));
+}
+
+/// A resize is not on the terminal until the next frame, so the renderer's
+/// own size is still the one it last rendered. An imperative move has to be
+/// measured against the caller's size instead: measuring against the stale
+/// one wraps a column that now fits and clamps to a row that no longer
+/// exists, landing somewhere the caller never named. Nothing repairs that —
+/// the move is immediate, so whatever the application writes next lands at
+/// the wrong physical position.
+#[test]
+fn move_cursor_to_measures_against_the_current_size() {
+    // (new size, target, where the cursor must end up)
+    for (size, to, want) in [
+        // A grown surface reaches the new corner instead of wrapping the
+        // column against the old, narrower width.
+        ((100u16, 30u16), (90u16, 29u16), (90u16, 29u16)),
+        // Shrinking still clamps, just to the size the caller now has.
+        ((40, 10), (20, 40), (20, 9)),
+    ] {
+        let mut screen = Screen::for_test(Vec::new(), (80, 24));
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
+        screen.render().unwrap();
+        screen.move_cursor_to((0, 0)).unwrap();
+        screen.resize(size);
+        screen.move_cursor_to(to).unwrap();
+        assert_eq!(
+            screen.tracked_cursor(),
+            Some(Position {
+                x: want.0,
+                y: want.1
+            }),
+            "resized to {size:?}, moved to {to:?}"
+        );
+    }
+}
+
+/// The end-of-frame cursor move is the one move that may still plan over the
+/// front buffer, because it runs after the cell diff has reconciled the
+/// terminal to it. That is a precondition, not a guarantee: if a frame ever
+/// stopped leaving the tracked contents equal to the front buffer, the move
+/// would start re-emitting cells the terminal does not show, exactly as an
+/// imperative move between frames would.
+#[test]
+fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
+    use crate::style::Style;
+    let st = Style::default();
+
+    // Fullscreen with every row full to the right margin, which reaches the
+    // bottom-right cell the renderer protects from scrolling.
+    let mut screen = Screen::for_test(Vec::new(), (10, 3));
+    screen.set_fullscreen(true);
+    for y in 0..3 {
+        screen.set_str((0, y), "0123456789", st.clone());
+    }
+    screen.set_cursor_position((0, 0));
+    screen.render().unwrap();
+    assert_eq!(
+        screen.diverge(),
+        None,
+        "fullscreen, rows full to the margin"
+    );
+
+    // Wide cells, whose continuation columns the diff has to keep in step.
+    let mut screen = Screen::for_test(Vec::new(), (12, 2));
+    screen.set_str((0, 0), "漢字テスト", st.clone());
+    screen.set_cursor_position((2, 0));
+    screen.render().unwrap();
+    assert_eq!(screen.diverge(), None, "wide cells");
+
+    // The scroll-optimize path, which rewrites tracked rows in place rather
+    // than emitting them cell by cell.
+    let mut screen = Screen::for_test(Vec::new(), (12, 6));
+    screen.set_fullscreen(true);
+    for y in 0..6 {
+        screen.set_str((0, y), &format!("line{y}"), st.clone());
+    }
+    screen.render().unwrap();
+    for y in 0..6 {
+        screen.set_str((0, y), &format!("line{}", y + 1), st.clone());
+    }
+    screen.set_cursor_position((3, 3));
+    screen.render().unwrap();
+    assert_eq!(screen.diverge(), None, "after a scroll");
+
+    // A resize, whose repaint rebuilds both buffers.
+    screen.resize((15, 4));
+    screen.set_str((0, 3), "grown", st.clone());
+    screen.render().unwrap();
+    assert_eq!(screen.diverge(), None, "after a resize");
 }

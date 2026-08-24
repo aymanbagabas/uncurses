@@ -367,6 +367,26 @@ impl Renderer {
         self.cur.known()
     }
 
+    /// First position where the tracked terminal contents disagree with
+    /// `front`, or `None` when they match (or nothing has been rendered).
+    ///
+    /// The end-of-frame cursor move plans over the caller's front buffer, so
+    /// it re-emits cells only when this invariant holds. Test-only.
+    #[cfg(test)]
+    pub(crate) fn first_divergence(&self, front: &RenderBuffer) -> Option<Position> {
+        use crate::buffer::Surface;
+        let cur = self.cur_buf.as_ref()?;
+        for y in 0..front.height().max(cur.height()) {
+            for x in 0..front.width().max(cur.width()) {
+                let pos = Position { x, y };
+                if front.cell(pos) != cur.cell(pos) {
+                    return Some(pos);
+                }
+            }
+        }
+        None
+    }
+
     /// Surface dimensions captured at the most recent render. Returns
     /// `(0, 0)` before the first render. Differs from the
     /// [`Screen`](crate::screen::Screen)'s live size when the terminal has
