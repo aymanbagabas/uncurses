@@ -715,7 +715,7 @@ impl<W: Write> Screen<W> {
             return;
         }
         self.renderer
-            .move_to(&mut self.out_buf, &self.front_buf, target.y, target.x)
+            .move_to_between_frames(&mut self.out_buf, target.y, target.x)
             .unwrap();
     }
 
@@ -731,7 +731,7 @@ impl<W: Write> Screen<W> {
         let (_, last_height) = self.renderer.last_size();
         if last_height > 0 {
             self.renderer
-                .move_to(&mut self.out_buf, &self.front_buf, last_height - 1, 0)?;
+                .move_to_between_frames(&mut self.out_buf, last_height - 1, 0)?;
         }
         Ok(())
     }
