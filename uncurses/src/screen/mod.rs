@@ -319,8 +319,14 @@ impl<W: Write> Screen<W> {
     // --- Cursor position ------------------------------------------------
 
     /// Immediately move the terminal cursor to a buffer-relative position and
-    /// flush. No-op when the renderer already reports the cursor there with
-    /// both axes known.
+    /// flush.
+    ///
+    /// The target is normalized against the managed area first: a column at or
+    /// past the width wraps into the following row, and the row is clamped to
+    /// the last row. The move is a no-op once the cursor already sits at that
+    /// normalized position, so asking for a column one past the last is a
+    /// request to wrap and is honored as one, even when the renderer is
+    /// already tracking the cursor there with its wrap pending.
     ///
     /// This is imperative: the move is emitted and flushed now, independent of
     /// [`render`](Self::render). It does **not** affect the declarative resting
@@ -711,9 +717,6 @@ impl<W: Write> Screen<W> {
     /// Stage a cursor move without flushing. See
     /// [`move_cursor_to`](Self::move_cursor_to).
     pub(crate) fn stage_move_cursor_to(&mut self, target: Position) {
-        if self.renderer.cursor_known() && self.renderer.cursor_position() == target {
-            return;
-        }
         self.renderer
             .move_to_between_frames(&mut self.out_buf, target.y, target.x)
             .unwrap();
