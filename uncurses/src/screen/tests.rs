@@ -1988,6 +1988,38 @@ fn printable_payload(bytes: &[u8]) -> String {
     out
 }
 
+/// Painting the rightmost column parks the terminal cursor there with its
+/// wrap pending, which the renderer tracks as the column one past the last. A
+/// move to that column is a request to wrap, so it has to reach the planner:
+/// the planner is what resyncs the pending wrap and normalizes the target
+/// back inside the surface. Answering it from the tracked position instead
+/// leaves the wrap pending and reports a column that does not exist.
+#[test]
+fn move_cursor_to_resyncs_a_pending_wrap() {
+    const W: u16 = 10;
+    const H: u16 = 5;
+    let mut screen = Screen::for_test(Vec::new(), (W, H));
+    screen.render().unwrap();
+    screen.set_str((0, H - 1), "0123456789", crate::style::Style::default());
+    screen.render().unwrap();
+
+    let pending = screen.tracked_cursor();
+    assert_eq!(
+        pending,
+        Some(Position { x: W, y: H - 1 }),
+        "expected the pending wrap one past the last column"
+    );
+
+    let n = screen.writer().len();
+    screen.move_cursor_to(pending.unwrap()).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&screen.writer()[n..]),
+        "\r",
+        "a move to the pending wrap must resync it"
+    );
+    assert_eq!(screen.tracked_cursor(), Some(Position { x: 0, y: H - 1 }));
+}
+
 /// The end-of-frame cursor move is the one move that may still plan over the
 /// front buffer, because it runs after the cell diff has reconciled the
 /// terminal to it. That is a precondition, not a guarantee: if a frame ever
