@@ -2020,6 +2020,40 @@ fn move_cursor_to_resyncs_a_pending_wrap() {
     assert_eq!(screen.tracked_cursor(), Some(Position { x: 0, y: H - 1 }));
 }
 
+/// A resize is not on the terminal until the next frame, so the renderer's
+/// own size is still the one it last rendered. An imperative move has to be
+/// measured against the caller's size instead: measuring against the stale
+/// one wraps a column that now fits and clamps to a row that no longer
+/// exists, landing somewhere the caller never named. Nothing repairs that —
+/// the move is immediate, so whatever the application writes next lands at
+/// the wrong physical position.
+#[test]
+fn move_cursor_to_measures_against_the_current_size() {
+    // (new size, target, where the cursor must end up)
+    for (size, to, want) in [
+        // A grown surface reaches the new corner instead of wrapping the
+        // column against the old, narrower width.
+        ((100u16, 30u16), (90u16, 29u16), (90u16, 29u16)),
+        // Shrinking still clamps, just to the size the caller now has.
+        ((40, 10), (20, 40), (20, 9)),
+    ] {
+        let mut screen = Screen::for_test(Vec::new(), (80, 24));
+        screen.set_str((0, 0), "hi", crate::style::Style::default());
+        screen.render().unwrap();
+        screen.move_cursor_to((0, 0)).unwrap();
+        screen.resize(size);
+        screen.move_cursor_to(to).unwrap();
+        assert_eq!(
+            screen.tracked_cursor(),
+            Some(Position {
+                x: want.0,
+                y: want.1
+            }),
+            "resized to {size:?}, moved to {to:?}"
+        );
+    }
+}
+
 /// The end-of-frame cursor move is the one move that may still plan over the
 /// front buffer, because it runs after the cell diff has reconciled the
 /// terminal to it. That is a precondition, not a guarantee: if a frame ever

@@ -344,8 +344,9 @@ impl<W: Write> Screen<W> {
     ///
     /// Convenience over [`move_cursor_to`](Self::move_cursor_to): the target
     /// is the tracked cursor offset by `(dx, dy)`, saturating at the buffer
-    /// origin. Like `move_cursor_to`, it does not clamp to the right or
-    /// bottom edge. An unknown tracked cursor is treated as the origin.
+    /// origin and then normalized the same way, so a column past the width
+    /// wraps into the following row and the row is clamped to the surface. An
+    /// unknown tracked cursor is treated as the origin.
     pub fn move_cursor_by(&mut self, dx: i16, dy: i16) -> io::Result<()> {
         let cur = self.tracked_cursor().unwrap_or(Position::ORIGIN);
         let x = cur.x.saturating_add_signed(dx);
@@ -717,8 +718,9 @@ impl<W: Write> Screen<W> {
     /// Stage a cursor move without flushing. See
     /// [`move_cursor_to`](Self::move_cursor_to).
     pub(crate) fn stage_move_cursor_to(&mut self, target: Position) {
+        let size = self.size();
         self.renderer
-            .move_to_between_frames(&mut self.out_buf, target.y, target.x)
+            .move_to_between_frames(&mut self.out_buf, size, target.y, target.x)
             .unwrap();
     }
 
@@ -731,10 +733,11 @@ impl<W: Write> Screen<W> {
     /// height, so a terminal that grew between the last render and the
     /// handoff does not push the cursor below where the user started.
     pub(crate) fn park_cursor(&mut self) -> io::Result<()> {
-        let (_, last_height) = self.renderer.last_size();
+        let (last_width, last_height) = self.renderer.last_size();
         if last_height > 0 {
+            let last = Size::new(last_width, last_height);
             self.renderer
-                .move_to_between_frames(&mut self.out_buf, last_height - 1, 0)?;
+                .move_to_between_frames(&mut self.out_buf, last, last_height - 1, 0)?;
         }
         Ok(())
     }
