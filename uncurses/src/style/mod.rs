@@ -180,7 +180,7 @@ pub enum UnderlineStyle {
 ///
 /// Cloning is cheap for hyperlinks: the [`Link`] is reference-counted so a
 /// long span of identically-linked cells keeps a single shared allocation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Style {
     /// Foreground/text color.
     ///
@@ -201,38 +201,6 @@ pub struct Style {
     pub underline: UnderlineStyle,
     /// Boolean SGR text attributes.
     pub attrs: AttrFlags,
-    /// Optional OSC 8 hyperlink target.
-    pub link: Option<Arc<Link>>,
-}
-
-impl PartialEq for Style {
-    fn eq(&self, other: &Self) -> bool {
-        self.fg == other.fg
-            && self.bg == other.bg
-            && self.underline_color == other.underline_color
-            && self.underline == other.underline
-            && self.attrs == other.attrs
-            && match (&self.link, &other.link) {
-                (None, None) => true,
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b) || **a == **b,
-                _ => false,
-            }
-    }
-}
-
-impl Eq for Style {}
-
-impl std::hash::Hash for Style {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.fg.hash(state);
-        self.bg.hash(state);
-        self.underline_color.hash(state);
-        self.underline.hash(state);
-        self.attrs.hash(state);
-        if let Some(l) = &self.link {
-            l.hash(state);
-        }
-    }
 }
 
 impl From<&Style> for Style {
@@ -279,7 +247,6 @@ impl Style {
         underline_color: None,
         underline: UnderlineStyle::None,
         attrs: AttrFlags::empty(),
-        link: None,
     };
 
     /// Return whether this style is entirely empty.
@@ -287,7 +254,7 @@ impl Style {
     /// Empty means no SGR-relevant fields and no OSC 8 hyperlink. This is
     /// equivalent to `*self == Style::EMPTY`.
     pub fn is_empty(&self) -> bool {
-        self.is_sgr_empty() && self.is_link_empty()
+        self.is_sgr_empty()
     }
 
     /// Return whether this style has no SGR-relevant settings.
@@ -302,15 +269,6 @@ impl Style {
             && self.underline == UnderlineStyle::None
             && self.attrs.is_empty()
     }
-
-    /// Return whether this style carries no hyperlink.
-    ///
-    /// Companion to [`Style::is_sgr_empty`]; together they decide whether the
-    /// style value has any terminal-visible state.
-    pub(crate) fn is_link_empty(&self) -> bool {
-        self.link.is_none()
-    }
-
     /// Inherit from `base`, returning `self` with its unset fields filled in.
     ///
     /// `self` takes precedence, like a child overriding inherited values: its
@@ -335,7 +293,6 @@ impl Style {
                 self.underline
             },
             attrs: self.attrs | base.attrs,
-            link: self.link.clone().or_else(|| base.link.clone()),
         }
     }
 
@@ -462,36 +419,12 @@ impl Style {
         self.attrs = attrs;
         self
     }
-
-    /// Attach or clear an OSC 8 hyperlink and return the updated style.
-    ///
-    /// A non-empty `url` stores a [`Link`] with the supplied `params`. An empty
-    /// `url` clears any existing link and ignores `params`. Parameters are the
-    /// raw OSC 8 parameter string, commonly empty or a terminal-supported value
-    /// such as `id=foo`.
-    pub fn link(mut self, url: impl Into<String>, params: impl Into<String>) -> Self {
-        let url = url.into();
-        if url.is_empty() {
-            self.link = None;
-        } else {
-            self.link = Some(Arc::new(Link {
-                url,
-                params: params.into(),
-            }));
-        }
-        self
-    }
-
     /// Write this style's opener bytes: the SGR sequence (`CSI … m`) followed
     /// by an OSC 8 hyperlink start when this style carries a [`link`](Self::link).
     ///
     /// Additive: an [empty](Self::is_empty) style writes nothing.
     fn write_opener<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        sgr::write_style(w, self)?;
-        if let Some(link) = &self.link {
-            crate::ansi::hyperlink::write_hyperlink(w, &link.url, &link.params)?;
-        }
-        Ok(())
+        sgr::write_style(w, self)
     }
 
     /// Write this style's closer bytes: the OSC 8 hyperlink terminator when this
@@ -503,9 +436,6 @@ impl Style {
     /// style was active before the opener. An [empty](Self::is_empty) style
     /// writes nothing.
     fn write_closer<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        if self.link.is_some() {
-            w.write_all(crate::ansi::hyperlink::HYPERLINK_RESET)?;
-        }
         if !self.is_sgr_empty() {
             w.write_all(sgr::RESET)?;
         }

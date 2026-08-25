@@ -64,9 +64,13 @@
 //! the one-`Cell`-per-column layout while still representing wide graphemes
 //! accurately.
 
+mod style;
+
+pub use style::Style;
+
 use compact_str::CompactString;
 
-use crate::style::Style;
+use crate::style::Style as Sgr;
 
 /// Structural role of a cell within a terminal grid.
 ///
