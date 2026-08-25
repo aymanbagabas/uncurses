@@ -11,7 +11,7 @@ use std::io::{self, Write};
 use crate::ansi::{cost, cursor};
 use crate::renderer::Renderer;
 use crate::renderer::caps::Optimizations;
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 
 /// Shape selected for the vertical leg.
 #[derive(Clone, Copy, Debug)]
@@ -208,7 +208,7 @@ impl Renderer {
         &self,
         fx: u16,
         tx: u16,
-        overwrite_line: Option<&[Ref]>,
+        overwrite_line: Option<&[Cell]>,
         use_tabs: bool,
         use_backspace: bool,
     ) -> HorizontalPlan {
@@ -343,7 +343,7 @@ impl Renderer {
         &self,
         out: &mut Vec<u8>,
         shape: HorizontalShape,
-        overwrite_line: Option<&[Ref]>,
+        overwrite_line: Option<&[Cell]>,
     ) -> io::Result<()> {
         match shape {
             HorizontalShape::None => Ok(()),
@@ -417,7 +417,7 @@ impl Renderer {
     /// `overwrite_line` is supplied and pen-compatible.
     fn forward_residual_cost(
         &self,
-        overwrite_line: Option<&[Ref]>,
+        overwrite_line: Option<&[Cell]>,
         fx: u16,
         tx: u16,
     ) -> (ForwardKind, usize) {
@@ -449,7 +449,7 @@ impl Renderer {
         &self,
         out: &mut Vec<u8>,
         kind: ForwardKind,
-        overwrite_line: Option<&[Ref]>,
+        overwrite_line: Option<&[Cell]>,
     ) -> io::Result<()> {
         match kind {
             ForwardKind::None => Ok(()),
@@ -554,11 +554,11 @@ mod tests {
     /// the cost helper); we don't assert byte equality for those.
     #[test]
     fn horizontal_cost_matches_emit_bytes_ascii_overwrite() {
-        use crate::renderer::packed::Ref;
+        use crate::cell::Cell;
         let r = renderer();
         // Cells match the active pen so overwrite is eligible.
-        let line: Vec<Ref> = (0..20)
-            .map(|i| Ref::narrow((b'a' + (i as u8 % 26)) as char).with_style(*r.cur.style()))
+        let line: Vec<Cell> = (0..20)
+            .map(|i| Cell::narrow((b'a' + (i as u8 % 26)) as char).with_style(*r.cur.style()))
             .collect();
         for fx in 0u16..20 {
             for tx in fx..20 {

@@ -3,7 +3,7 @@
 //! blank under the current pen, and whether bytes can be repeated
 //! via REP.
 
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 use crate::style::{AttrFlags, UnderlineStyle};
 
 /// Whether `cell` is safe to reproduce by emitting one of the EL/ED
@@ -19,12 +19,12 @@ use crate::style::{AttrFlags, UnderlineStyle};
 /// and only "invisible-on-blank" attributes (bold/faint/italic/blink).
 pub(super) fn can_clear_with(
     arena: &dyn crate::renderer::packed::arena::Arena,
-    cell: &Ref,
+    cell: &Cell,
     bce: bool,
 ) -> bool {
     // A space is its own grapheme id, so the content test needs no lookup.
     if cell.width() != 1
-        || cell.content_id() != b' ' as crate::renderer::packed::arena::GraphemeId
+        || cell.content != b' ' as crate::renderer::packed::arena::GraphemeId
         || cell.link != crate::renderer::packed::arena::EMPTY_LINK
     {
         return false;
@@ -48,7 +48,7 @@ pub(super) fn can_clear_with(
 /// match the cell ED would produce with the current pen. Continuation
 /// cells (the second half of a wide grapheme) are not blank — a wide
 /// cell straddling into the row means the row is non-blank.
-pub(super) fn cells_equal_blank(cell: &Ref, blank: &Ref) -> bool {
+pub(super) fn cells_equal_blank(cell: &Cell, blank: &Cell) -> bool {
     if cell.is_continuation() {
         return false;
     }
@@ -56,7 +56,7 @@ pub(super) fn cells_equal_blank(cell: &Ref, blank: &Ref) -> bool {
     // Empty content and a space render identically, which is why they are
     // allowed to differ.
     let same_content =
-        cell.content_id() == blank.content_id() || (cell.is_blank() && blank.is_blank());
+        cell.content == blank.content || (cell.is_blank() && blank.is_blank());
     cell.width() == blank.width() && same_content && cell.style == blank.style
 }
 

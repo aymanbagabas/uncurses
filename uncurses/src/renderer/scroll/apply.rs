@@ -465,7 +465,7 @@ mod tests {
         // the exposed row, and cur_buf must record the styled blank
         // so the subsequent diff sees the row as already-correct.
         use crate::color::Color;
-        use crate::renderer::packed::Ref;
+        use crate::cell::Cell;
         use crate::style::Style;
 
         let opts = Optimizations::default()
@@ -484,14 +484,14 @@ mod tests {
 
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
-        let expected = Ref::BLANK.with_style(bg_style);
+        let expected = Cell::default().with_style(bg_style);
         assert!(
             bottom_row.iter().all(|c| *c == expected),
             "cur_buf bottom row must be styled-blank, got: {bottom_row:?}",
         );
         assert_ne!(
             bottom_row[0],
-            Ref::BLANK,
+            Cell::default(),
             "must not record default-blank when clear_blank is styled",
         );
     }
@@ -524,7 +524,7 @@ mod tests {
         assert!(
             bottom_row
                 .iter()
-                .all(|c| char::from_u32(c.content_id()) == Some(' ') && c.style() == bg_only),
+                .all(|c| char::from_u32(c.content) == Some(' ') && c.style() == bg_only),
             "cur_buf bottom row must be bg-only, got: {bottom_row:?}",
         );
         assert!(
@@ -539,9 +539,9 @@ mod tests {
     fn scrolln_without_bce_freed_rows_are_default_blank() {
         // Without BCE the scroll byte paints freed cells with the
         // terminal's default bg, so cur_buf's fill must be the
-        // default Cell::BLANK regardless of the active pen.
+        // default Cell::default() regardless of the active pen.
         use crate::color::Color;
-        use crate::renderer::packed::Ref;
+        use crate::cell::Cell;
         use crate::style::Style;
 
         let opts = Optimizations::default()
@@ -559,7 +559,7 @@ mod tests {
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
         assert!(
-            bottom_row.iter().all(|c| *c == Ref::BLANK),
+            bottom_row.iter().all(|c| *c == Cell::default()),
             "without BCE, freed cells must be default-blank, got: {bottom_row:?}",
         );
     }

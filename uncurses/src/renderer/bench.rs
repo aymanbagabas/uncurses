@@ -38,7 +38,7 @@ extern crate test;
 use test::{Bencher, black_box};
 
 use crate::color::Color;
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 use crate::renderer::{RenderBuffer, Renderer};
 use crate::style::Style;
 
@@ -59,7 +59,7 @@ fn filled(w: u16, h: u16, offset: u8) -> RenderBuffer {
     let mut buf = RenderBuffer::new(w, h);
     for y in 0..h {
         for x in 0..w {
-            buf.set_ref((x, y), &Ref::narrow(glyph(x, y, offset)));
+            buf.set_ref((x, y), &Cell::narrow(glyph(x, y, offset)));
         }
     }
     buf
@@ -74,7 +74,7 @@ fn shifted_up_buffer() -> RenderBuffer {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             let source_y = (y + 1) % HEIGHT;
-            buf.set_ref((x, y), &Ref::narrow(glyph(x, source_y, 0)));
+            buf.set_ref((x, y), &Cell::narrow(glyph(x, source_y, 0)));
         }
     }
     buf
@@ -87,7 +87,7 @@ fn style_churn_buffer(offset: u8) -> RenderBuffer {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             let style = Style::default().fg(Color::Rgb(x as u8, y as u8, offset));
-            buf.set_ref((x, y), &Ref::narrow(glyph(x, y, offset)).with_style(style));
+            buf.set_ref((x, y), &Cell::narrow(glyph(x, y, offset)).with_style(style));
         }
     }
     buf
@@ -100,7 +100,7 @@ fn styled_runs_buffer(offset: u8) -> RenderBuffer {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             let style = Style::default().fg(Color::Indexed(((x / 8 + y) % 16) as u8));
-            buf.set_ref((x, y), &Ref::narrow(glyph(x, y, offset)).with_style(style));
+            buf.set_ref((x, y), &Cell::narrow(glyph(x, y, offset)).with_style(style));
         }
     }
     buf
@@ -115,7 +115,7 @@ fn cjk_buffer(offset: u8) -> RenderBuffer {
         while x + 1 < WIDTH {
             let ch = char::from_u32(0x4E00 + ((x as u32 + y as u32 + offset as u32) % 512))
                 .unwrap_or('中');
-            buf.set_ref((x, y), &Ref::wide(ch));
+            buf.set_ref((x, y), &Cell::wide(ch));
             x += 2;
         }
     }
@@ -208,8 +208,8 @@ fn single_cell_change(b: &mut Bencher) {
     let mut second = first.clone();
     first.clear_touched();
     second.clear_touched();
-    first.set_ref((WIDTH / 2, HEIGHT / 2), &Ref::narrow('0'));
-    second.set_ref((WIDTH / 2, HEIGHT / 2), &Ref::narrow('1'));
+    first.set_ref((WIDTH / 2, HEIGHT / 2), &Cell::narrow('0'));
+    second.set_ref((WIDTH / 2, HEIGHT / 2), &Cell::narrow('1'));
 
     bench_swap_render(b, Renderer::new(), first, second, |_| {});
 }
@@ -222,8 +222,8 @@ fn single_line_change(b: &mut Bencher) {
     first.clear_touched();
     second.clear_touched();
     for x in 0..WIDTH {
-        first.set_ref((x, HEIGHT / 2), &Ref::narrow(glyph(x, 0, 0)));
-        second.set_ref((x, HEIGHT / 2), &Ref::narrow(glyph(x, 0, 1)));
+        first.set_ref((x, HEIGHT / 2), &Cell::narrow(glyph(x, 0, 0)));
+        second.set_ref((x, HEIGHT / 2), &Cell::narrow(glyph(x, 0, 1)));
     }
 
     bench_swap_render(b, Renderer::new(), first, second, |_| {});
@@ -246,8 +246,8 @@ fn scattered_tenth_change(b: &mut Bencher) {
     for y in 0..HEIGHT {
         let mut x = y % 10;
         while x < WIDTH {
-            first.set_ref((x, y), &Ref::narrow('0'));
-            second.set_ref((x, y), &Ref::narrow('1'));
+            first.set_ref((x, y), &Cell::narrow('0'));
+            second.set_ref((x, y), &Cell::narrow('1'));
             x += 10;
         }
     }
@@ -265,8 +265,8 @@ fn contiguous_tenth_change(b: &mut Bencher) {
     second.clear_touched();
     for y in 0..HEIGHT {
         for x in 0..WIDTH / 10 {
-            first.set_ref((x, y), &Ref::narrow('0'));
-            second.set_ref((x, y), &Ref::narrow('1'));
+            first.set_ref((x, y), &Cell::narrow('0'));
+            second.set_ref((x, y), &Cell::narrow('1'));
         }
     }
 
@@ -284,8 +284,8 @@ fn wide_span_two_changes(b: &mut Bencher) {
     second.clear_touched();
     for y in 0..HEIGHT {
         for x in [0, WIDTH - 1] {
-            first.set_ref((x, y), &Ref::narrow('0'));
-            second.set_ref((x, y), &Ref::narrow('1'));
+            first.set_ref((x, y), &Cell::narrow('0'));
+            second.set_ref((x, y), &Cell::narrow('1'));
         }
     }
 
@@ -390,8 +390,8 @@ fn big_single_cell_change(b: &mut Bencher) {
     let mut second = first.clone();
     first.clear_touched();
     second.clear_touched();
-    first.set_ref((BIG_WIDTH / 2, BIG_HEIGHT / 2), &Ref::narrow('0'));
-    second.set_ref((BIG_WIDTH / 2, BIG_HEIGHT / 2), &Ref::narrow('1'));
+    first.set_ref((BIG_WIDTH / 2, BIG_HEIGHT / 2), &Cell::narrow('0'));
+    second.set_ref((BIG_WIDTH / 2, BIG_HEIGHT / 2), &Cell::narrow('1'));
 
     bench_swap_render(b, Renderer::new(), first, second, |_| {});
 }

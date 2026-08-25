@@ -7,7 +7,7 @@ use crate::layout::Position;
 use crate::renderer::buffer::RenderBuffer;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::color_cache::ColorCache;
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 use crate::renderer::packed::arena::Arena as _;
 use crate::renderer::{scroll, tabstops};
 use crate::style::Style;
@@ -62,14 +62,14 @@ pub(super) struct Cursor {
     /// [`Cursor::blank_dirty`] is set; callers that mutate
     /// `style` directly must call
     /// [`Cursor::mark_pen_changed`] to invalidate the cache.
-    blank: Ref,
+    blank: Cell,
     /// Set whenever the pen mutates; cleared on the next
     /// [`Cursor::current_blank`] call after a rebuild.
     blank_dirty: bool,
     /// Cached cell template matching what a back-color-erase actually
     /// paints into freed cells: a plain space carrying the active
     /// pen's bg when BCE is on, or a default blank otherwise.
-    bce_blank: Ref,
+    bce_blank: Cell,
     /// Cache key for [`Cursor::bce_blank`]: `(bce_flag, bg)`. `None`
     /// forces a rebuild on first access.
     bce_blank_key: Option<(bool, Option<Color>)>,
@@ -165,11 +165,11 @@ impl Cursor {
 
     /// Return the cached blank cell for the active pen, rebuilding it
     /// lazily on first access after a pen change.
-    pub(super) fn current_blank(&mut self) -> &Ref {
+    pub(super) fn current_blank(&mut self) -> &Cell {
         if self.blank_dirty {
-            self.blank = Ref {
+            self.blank = Cell {
                 style: self.style_id,
-                ..Ref::BLANK
+                ..Cell::default()
             };
             self.blank_dirty = false;
         }
@@ -180,7 +180,7 @@ impl Cursor {
     /// active pen's bg when `bce` is on, or a default blank otherwise.
     /// `bce` is supplied by the caller since it lives on Renderer
     /// state, not Cursor.
-    pub(super) fn bce_blank(&mut self, bce: bool) -> &Ref {
+    pub(super) fn bce_blank(&mut self, bce: bool) -> &Cell {
         let want_bg = if bce { self.style().bg } else { None };
         if self.bce_blank_key != Some((bce, want_bg)) {
             self.bce_blank = match want_bg {
@@ -191,12 +191,12 @@ impl Cursor {
                         bg: Some(bg),
                         ..Style::default()
                     };
-                    Ref {
+                    Cell {
                         style: crate::renderer::packed::arena::global_ref().intern_style(&s),
-                        ..Ref::BLANK
+                        ..Cell::default()
                     }
                 }
-                None => Ref::BLANK,
+                None => Cell::default(),
             };
             self.bce_blank_key = Some((bce, want_bg));
         }
@@ -215,9 +215,9 @@ impl Default for Cursor {
             x: None,
             y: None,
             at_phantom: false,
-            blank: Ref::BLANK,
+            blank: Cell::default(),
             blank_dirty: false,
-            bce_blank: Ref::BLANK,
+            bce_blank: Cell::default(),
             bce_blank_key: Some((false, None)),
         }
     }
