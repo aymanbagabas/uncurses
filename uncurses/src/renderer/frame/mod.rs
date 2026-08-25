@@ -72,14 +72,6 @@ impl Renderer {
         let width = new_buf.width();
         let height = new_buf.height();
 
-        // Cell ids belong to the arena that issued them, so adopt the one
-        // this buffer was built with before resolving anything. Buffers
-        // usually keep the same arena frame to frame, and the comparison is
-        // cheaper than the two atomics a blind clone would cost.
-        if !std::sync::Arc::ptr_eq(&self.arena, new_buf.arena()) {
-            self.arena = new_buf.arena().clone();
-        }
-
         let resized = self.prepare_frame(out, new_buf, width, height)?;
         self.diff_frame(out, new_buf, width, height)?;
         self.finalize_frame(out, new_buf, resized, height)?;

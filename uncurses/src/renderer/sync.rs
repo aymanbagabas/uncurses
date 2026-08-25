@@ -93,10 +93,10 @@ mod tests {
     use super::*;
     use crate::buffer::Surface;
     use crate::renderer::buffer::RenderBuffer;
-    use crate::renderer::packed::Ref;
+    use crate::cell::Cell;
 
-    fn cell(c: char) -> Ref {
-        Ref::narrow(c)
+    fn cell(c: char) -> Cell {
+        Cell::narrow(c)
     }
 
     fn fill_row(buf: &mut RenderBuffer, y: u16, content: &str) {
@@ -221,7 +221,7 @@ mod tests {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 1);
         // Wide CJK cell at col 0; col 1 is its continuation.
-        let wide = Ref::wide('漢');
+        let wide = Cell::wide('漢');
         front.set_ref((0, 0), &wide);
         front.set_ref((3, 0), &cell('a'));
         r.sync_front(&mut front);

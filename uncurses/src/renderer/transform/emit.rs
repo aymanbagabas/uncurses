@@ -7,7 +7,7 @@ use std::io;
 use super::predicates::{can_clear_with, is_rep_ascii};
 use crate::ansi;
 use crate::renderer::caps::Optimizations;
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 use crate::renderer::{RenderBuffer, Renderer};
 
 /// Longest glyph the emitter can print, in bytes: an interned cluster is
@@ -23,8 +23,8 @@ impl Renderer {
     /// scratch buffer without consulting the arena at all -- no lock, no
     /// table lookup, and no keeping the arena alive across the write.
     /// Only a multi-scalar cluster is resolved.
-    fn glyph_bytes<'s>(&self, cell: &Ref, scratch: &'s mut [u8; MAX_GLYPH_BYTES]) -> &'s [u8] {
-        let id = cell.content_id();
+    fn glyph_bytes<'s>(&self, cell: &Cell, scratch: &'s mut [u8; MAX_GLYPH_BYTES]) -> &'s [u8] {
+        let id = cell.content;
         if id == 0 {
             return &[];
         }
@@ -58,7 +58,7 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        line: &[Ref],
+        line: &[Cell],
         first: usize,
         last: usize,
     ) -> io::Result<bool> {
@@ -219,7 +219,7 @@ impl Renderer {
     pub(super) fn emit_cell(
         &mut self,
         out: &mut Vec<u8>,
-        cell: &Ref,
+        cell: &Cell,
         surface_width: u16,
         surface_height: u16,
     ) -> io::Result<()> {
@@ -257,8 +257,8 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        old_line: Option<&[Ref]>,
-        new_line: &[Ref],
+        old_line: Option<&[Cell]>,
+        new_line: &[Cell],
         y: u16,
         start: usize,
         end: usize,
@@ -350,7 +350,7 @@ impl Renderer {
     pub(super) fn insert_cells_op(
         &mut self,
         out: &mut Vec<u8>,
-        line: &[Ref],
+        line: &[Cell],
         count: usize,
     ) -> io::Result<()> {
         if count == 0 {

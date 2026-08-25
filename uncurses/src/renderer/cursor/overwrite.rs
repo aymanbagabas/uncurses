@@ -2,7 +2,7 @@
 //! is known, walking the cursor forward by re-emitting the row's own
 //! cell bytes can be shorter than CUF/HPA.
 
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 use crate::style::Style;
 
 /// Collect the UTF-8 bytes of cells in `line[from_x..to_x]` whose
@@ -15,7 +15,7 @@ use crate::style::Style;
 pub(in crate::renderer) fn collect_overwrite_bytes(
     arena: &dyn crate::renderer::packed::arena::Arena,
     out: &mut Vec<u8>,
-    line: &[Ref],
+    line: &[Cell],
     style: &Style,
     from_x: u16,
     to_x: u16,
@@ -37,7 +37,7 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            if &arena.style(cell.style) != style {
+            if &cell.style.style != style {
                 return false;
             }
             i += cell.width() as usize;
@@ -50,7 +50,7 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            out.extend_from_slice(arena.grapheme(cell.content_id()).as_bytes());
+            let _ = std::fmt::Write::write_fmt(out_str, format_args!("{cell}"));
             i += cell.width() as usize;
             continue;
         }
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, should_panic)]
     fn out_of_bounds_range_refuses_candidate() {
-        let line = vec![Ref::narrow('a'); 4];
+        let line = vec![Cell::narrow('a'); 4];
         let style = Style::default();
         let mut out = Vec::new();
         let accepted = collect_overwrite_bytes(
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn in_bounds_pen_match_writes_bytes() {
-        let line = vec![Ref::narrow('x'); 3];
+        let line = vec![Cell::narrow('x'); 3];
         let style = Style::default();
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(

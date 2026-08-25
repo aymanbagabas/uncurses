@@ -8,7 +8,7 @@ use crate::ansi::{self, cursor as ansi_cursor};
 use crate::buffer::{SurfaceMut, fill_line_into};
 use crate::layout::Position;
 use crate::renderer::caps::Optimizations;
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 use crate::renderer::{RenderBuffer, Renderer};
 
 impl Renderer {
@@ -54,7 +54,7 @@ impl Renderer {
         // disjoint from `self.cur_buf` reads below, so the loop runs
         // without cloning the cell.
         {
-            let blank: &Ref = self.cur.current_blank();
+            let blank: &Cell = self.cur.current_blank();
             for y in (0..height).rev() {
                 let new_all_blank = match new_buf.line(y) {
                     Some(l) => l.iter().all(|c| cells_equal_blank(c, blank)),
@@ -112,7 +112,7 @@ impl Renderer {
         // a redundant absolute CUP.
 
         let bce = self.opts.contains(Optimizations::BCE);
-        let blank: Ref = *self.cur.bce_blank(bce);
+        let blank: Cell = *self.cur.bce_blank(bce);
         if let Some(cb) = self.cur_buf.as_mut() {
             let blank = blank.resolve(&**cb.arena());
             cb.fill(&blank);
@@ -158,7 +158,7 @@ impl Renderer {
         // exactly in cur_buf so the next frame's diff is accurate AND
         // skips re-emit when the same blank persists.
         let bce = self.opts.contains(Optimizations::BCE);
-        let blank: Ref = *self.cur.bce_blank(bce);
+        let blank: Cell = *self.cur.bce_blank(bce);
         if let Some(cb) = self.cur_buf.as_mut() {
             // Cursor row: blank from col to end of line.
             if let Some(line) = cb.line_mut(row)
@@ -199,8 +199,8 @@ impl Renderer {
     pub(super) fn clear_to_end(
         &mut self,
         out: &mut Vec<u8>,
-        old_line: Option<&[Ref]>,
-        blank: &Ref,
+        old_line: Option<&[Cell]>,
+        blank: &Cell,
         width: usize,
         force: bool,
     ) -> io::Result<()> {

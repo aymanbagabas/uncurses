@@ -41,7 +41,7 @@ mod tests {
     use crate::color::Color;
     use crate::layout::Position;
     use crate::renderer::frame::emit::PenPolicy;
-    use crate::renderer::packed::Ref;
+    use crate::cell::Cell;
     use crate::style::Style;
 
     fn renderer() -> Renderer {
@@ -494,9 +494,9 @@ mod tests {
         let mut r = rel();
         let styled = Style::default().bg(Color::Blue);
         r.cur.set_style(styled);
-        let line: Vec<Ref> = "abcde"
+        let line: Vec<Cell> = "abcde"
             .chars()
-            .map(|c| Ref::narrow(c).with_style(styled))
+            .map(|c| Cell::narrow(c).with_style(styled))
             .collect();
 
         let mut buf = Vec::new();
@@ -527,9 +527,9 @@ mod tests {
         let mut r = rel();
         let styled = Style::default().bg(Color::Blue);
         r.cur.set_style(styled);
-        let line: Vec<Ref> = "abcde"
+        let line: Vec<Cell> = "abcde"
             .chars()
-            .map(|c| Ref::narrow(c).with_style(styled))
+            .map(|c| Cell::narrow(c).with_style(styled))
             .collect();
 
         let mut buf = Vec::new();

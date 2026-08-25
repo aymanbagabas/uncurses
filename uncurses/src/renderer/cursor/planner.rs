@@ -20,7 +20,7 @@ use crate::ansi::{cost, cursor};
 use crate::layout::Position;
 use crate::renderer::Renderer;
 use crate::renderer::caps::Optimizations;
-use crate::renderer::packed::Ref;
+use crate::cell::Cell;
 
 use super::axis::VerticalShape;
 use super::relative::RelativePlan;
@@ -97,7 +97,7 @@ impl Renderer {
         out: &mut Vec<u8>,
         from: Position,
         to: Position,
-        overwrite_line: Option<&[Ref]>,
+        overwrite_line: Option<&[Cell]>,
     ) -> io::Result<()> {
         self.write_optimal_move_with_pen(
             out,
@@ -114,7 +114,7 @@ impl Renderer {
         out: &mut Vec<u8>,
         from: Position,
         to: Position,
-        overwrite_line: Option<&[Ref]>,
+        overwrite_line: Option<&[Cell]>,
         pen: PenPolicy,
     ) -> io::Result<()> {
         if from.y == to.y && from.x == to.x && self.cur.known() {
@@ -205,7 +205,7 @@ impl Renderer {
     ///
     /// Pure: no bytes are materialised, so the caller can plan, change
     /// the pen, and plan again to keep the two in agreement.
-    fn plan_move(&self, from: Position, to: Position, overwrite_line: Option<&[Ref]>) -> Winner {
+    fn plan_move(&self, from: Position, to: Position, overwrite_line: Option<&[Cell]>) -> Winner {
         // Seed the candidate list with CUP in absolute mode so it
         // wins ties against any relative shape.
         let mut best: Option<Winner> = None;
