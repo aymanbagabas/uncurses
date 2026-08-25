@@ -11,6 +11,87 @@ use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 
 impl Renderer {
+    /// How many cells starting at `x` can be written as one batch.
+    ///
+    /// A batch needs every cell to be a printable one-column cell in the
+    /// same style, because the pen is set once and the cursor advances
+    /// once. Anything that makes a single write special is excluded: wide
+    /// cells own a continuation, the last column parks the cursor in the
+    /// right-margin phantom, and the bottom-right corner has its own
+    /// auto-wrap dance.
+    fn styled_run_len(
+        &self,
+        line: &[Cell],
+        x: usize,
+        last: usize,
+        surface_width: u16,
+        surface_height: u16,
+    ) -> usize {
+        // Bail before doing any setup when there is no run to find. Text
+        // where every cell carries a different style never batches, and the
+        // scan would otherwise be pure overhead on every cell.
+        if x >= last || line[x].style != line[x + 1].style {
+            return 1;
+        }
+
+        // A run that would reach the right margin has to go through the
+        // per-cell path so the phantom-column bookkeeping still happens.
+        let room = (surface_width as usize).saturating_sub(self.cur.pos().x as usize + 1);
+        let limit = last.min(x + room.saturating_sub(1));
+        if self.fullscreen && self.cur.pos().y + 1 == surface_height {
+            // The bottom row ends in the corner case; leave it alone.
+            return 1;
+        }
+
+        let style = &line[x].style;
+        let mut n = 0;
+        while x + n <= limit {
+            let cell = &line[x + n];
+            if cell.width() != 1 || cell.is_continuation() || cell.content().is_empty() {
+                break;
+            }
+            if &cell.style != style {
+                break;
+            }
+            // Stop before an equal-run: ECH and REP encode those far more
+            // cheaply than literal bytes, and batching would swallow them.
+            if x + n < limit && line[x + n] == line[x + n + 1] {
+                n += 1;
+                break;
+            }
+            n += 1;
+        }
+        n
+    }
+
+    /// Write a run of same-styled one-column cells in one go.
+    fn put_styled_run(
+        &mut self,
+        out: &mut Vec<u8>,
+        run: &[Cell],
+        surface_width: u16,
+        surface_height: u16,
+    ) -> io::Result<()> {
+        self.update_pen(out, Some(&run[0]))?;
+        // Resolve the phantom column once for the whole run rather than
+        // once per cell.
+        if self.cur.at_phantom {
+            let next_y = self.cur.pos().y.saturating_add(1);
+            if next_y < surface_height {
+                let target = crate::layout::Position { y: next_y, x: 0 };
+                self.write_optimal_move(out, self.cur.pos(), target, None)?;
+                self.cur.set_pos(target);
+            }
+            self.cur.at_phantom = false;
+        }
+        for cell in run {
+            out.extend_from_slice(cell.content().as_bytes());
+        }
+        let advanced = self.cur.pos().x.saturating_add(run.len() as u16);
+        self.cur.x = Some(advanced.min(surface_width));
+        Ok(())
+    }
+
     /// Emit a range of cells from a line, handling style transitions.
     ///
     /// Returns `true` when the emission left the cursor partway through
@@ -74,8 +155,18 @@ impl Renderer {
                 return Ok(false);
             }
 
-            // Singleton: the cell differs from its successor.
+            // Singleton: the cell differs from its successor. Ordinary
+            // text is almost all singletons, so before falling back to one
+            // emission per cell, look for a run that merely shares a style.
+            // Those can be written as one byte append and one cursor
+            // advance instead of paying the per-cell bookkeeping.
             if line[x] != line[next_idx] {
+                let run = self.styled_run_len(line, x, last, surface_width, surface_height);
+                if run > 1 {
+                    self.put_styled_run(out, &line[x..x + run], surface_width, surface_height)?;
+                    x += run;
+                    continue;
+                }
                 self.emit_cell(out, &line[x], surface_width, surface_height)?;
                 x = next_idx;
                 continue;
