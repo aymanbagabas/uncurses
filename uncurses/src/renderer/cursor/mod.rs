@@ -38,10 +38,10 @@ mod tests {
     use super::super::Renderer;
     use super::super::caps::Optimizations;
     use super::super::tabstops::TabStops;
-    use crate::cell::Cell;
     use crate::color::Color;
     use crate::layout::Position;
     use crate::renderer::frame::emit::PenPolicy;
+    use crate::renderer::packed::Ref;
     use crate::style::Style;
 
     fn renderer() -> Renderer {
@@ -493,10 +493,10 @@ mod tests {
     fn reset_before_lf_disqualifies_styled_overwrite_cells() {
         let mut r = rel();
         let styled = Style::default().bg(Color::Blue);
-        r.cur.set_style(styled.clone());
-        let line: Vec<Cell> = "abcde"
+        r.cur.set_style(styled);
+        let line: Vec<Ref> = "abcde"
             .chars()
-            .map(|c| Cell::narrow(c.to_string()).style(styled.clone()))
+            .map(|c| Ref::narrow(c).with_style(styled))
             .collect();
 
         let mut buf = Vec::new();
@@ -526,10 +526,10 @@ mod tests {
     fn styled_overwrite_survives_when_no_reset_is_needed() {
         let mut r = rel();
         let styled = Style::default().bg(Color::Blue);
-        r.cur.set_style(styled.clone());
-        let line: Vec<Cell> = "abcde"
+        r.cur.set_style(styled);
+        let line: Vec<Ref> = "abcde"
             .chars()
-            .map(|c| Cell::narrow(c.to_string()).style(styled.clone()))
+            .map(|c| Ref::narrow(c).with_style(styled))
             .collect();
 
         let mut buf = Vec::new();

@@ -21,7 +21,7 @@ use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
 use uncurses::text::TextSurface;
 
-const GLYPH: &str = "\u{2580}";
+const GLYPH: char = '\u{2580}';
 
 struct Fps {
     frames: u32,
@@ -248,7 +248,6 @@ fn draw(
     }
 
     let shift = frame_count as usize;
-    let glyph_cell = Cell::narrow(GLYPH);
 
     for y in body_top..height {
         let py = (y - body_top) as usize * 2;
@@ -256,8 +255,7 @@ fn draw(
             let sx = ((x as usize) + shift) % width as usize;
             let fg = field.at(sx as u16, py as u16);
             let bg = field.at(sx as u16, (py + 1) as u16);
-            let cell = glyph_cell.clone().style(Style::default().fg(fg).bg(bg));
-            screen.set_cell((x, y), &cell);
+            screen.set_cell((x, y), &Cell::new(GLYPH, Style::default().fg(fg).bg(bg)));
         }
     }
 

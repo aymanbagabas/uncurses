@@ -18,6 +18,7 @@
 use std::io;
 
 use uncurses::buffer::SurfaceMut;
+use uncurses::cell::Style as CellStyle;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key};
 use uncurses::program::{MouseTracking, Program, ProgramOptions};
@@ -131,7 +132,11 @@ fn render(screen: &mut Screen<Stdout>, links: &[Link]) {
 
     let link_style = Style::default().fg(Color::BrightBlue).underline();
     for l in links {
-        screen.set_str((l.x, l.y), l.label, link_style.clone().link(l.url, ""));
+        screen.set_str(
+            (l.x, l.y),
+            l.label,
+            CellStyle::from(link_style).link(l.url, ""),
+        );
     }
 
     let _ = screen.render();

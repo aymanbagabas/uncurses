@@ -43,7 +43,7 @@ impl<T: Bounded + ?Sized> Bounded for View<'_, T> {
 }
 
 impl<T: Surface + ?Sized> Surface for View<'_, T> {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<Cell> {
         if self.bounds.contains(pos) {
             self.inner.cell(pos)
         } else {
@@ -56,14 +56,6 @@ impl<T: SurfaceMut + ?Sized> SurfaceMut for View<'_, T> {
     fn set_cell(&mut self, pos: Position, cell: &Cell) {
         if self.bounds.contains(pos) {
             self.inner.set_cell(pos, cell);
-        }
-    }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        if self.bounds.contains(pos) {
-            self.inner.cell_mut(pos)
-        } else {
-            None
         }
     }
 }
@@ -79,11 +71,14 @@ mod tests {
         let mut buf = Buffer::new(10, 5);
         {
             let mut v = View::new(&mut buf, Rect::new(2, 1, 3, 2));
-            v.set_cell(Position::new(2, 1), &Cell::narrow("A")); // inside
-            v.set_cell(Position::new(0, 0), &Cell::narrow("B")); // outside view
-            v.set_cell(Position::new(5, 1), &Cell::narrow("C")); // right of view
+            v.set_cell(Position::new(2, 1), &Cell::from('A')); // inside
+            v.set_cell(Position::new(0, 0), &Cell::from('B')); // outside view
+            v.set_cell(Position::new(5, 1), &Cell::from('C')); // right of view
         }
-        assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "A");
+        assert_eq!(
+            buf.cell(Position::new(2, 1)).unwrap().content.char(),
+            Some('A')
+        );
         assert!(buf.cell(Position::new(0, 0)).unwrap().is_blank());
         assert!(buf.cell(Position::new(5, 1)).unwrap().is_blank());
     }
@@ -91,11 +86,14 @@ mod tests {
     #[test]
     fn view_clips_reads_outside_bounds() {
         let mut buf = Buffer::new(10, 5);
-        buf.set_cell(Position::new(2, 1), &Cell::narrow("A"));
-        buf.set_cell(Position::new(0, 0), &Cell::narrow("B"));
+        buf.set_cell(Position::new(2, 1), &Cell::from('A'));
+        buf.set_cell(Position::new(0, 0), &Cell::from('B'));
         let mut buf2 = buf.clone();
         let v = View::new(&mut buf2, Rect::new(2, 1, 3, 2));
-        assert_eq!(v.cell(Position::new(2, 1)).unwrap().content(), "A");
+        assert_eq!(
+            v.cell(Position::new(2, 1)).unwrap().content.char(),
+            Some('A')
+        );
         assert!(v.cell(Position::new(0, 0)).is_none());
     }
 

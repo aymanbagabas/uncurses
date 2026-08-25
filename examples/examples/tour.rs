@@ -13,7 +13,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use uncurses::buffer::{Bounded, SurfaceMut};
-use uncurses::cell::Cell;
+use uncurses::cell::{Cell, Style as CellStyle};
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Position;
@@ -92,7 +92,7 @@ fn draw_box(screen: &mut Screen<Stdout>, a: Anchor, style: &Style) {
 }
 
 fn fill_inside(screen: &mut Screen<Stdout>, a: Anchor, style: &Style) {
-    let cell = Cell::narrow(" ").style(style);
+    let cell = Cell::new(" ", style);
     for y in a.y + 1..a.y + BOX_H - 1 {
         for x in a.x + 1..a.x + BOX_W - 1 {
             screen.set_cell(Position::new(x, y), &cell);
@@ -105,7 +105,7 @@ fn write(screen: &mut Screen<Stdout>, x: u16, y: u16, s: &str, style: &Style) {
 }
 
 fn write_link(screen: &mut Screen<Stdout>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
-    screen.set_str((x, y), s, style.clone().link(url, ""));
+    screen.set_str((x, y), s, CellStyle::from(style).link(url, ""));
 }
 
 fn footer(program: &mut Program<Stdin, Stdout>, a: Anchor, hint: &str) {
@@ -205,7 +205,7 @@ fn scene_sprinkles(program: &mut Program<Stdin, Stdout>) -> std::io::Result<bool
             Color::BrightYellow
         };
         let style = Style::default().fg(fg);
-        let cell = Cell::narrow(glyph).style(style);
+        let cell = Cell::new(glyph, style);
         for _ in 0..40 {
             let dx = rng.range(inner_w) as u16;
             let dy = rng.range(inner_h) as u16;
@@ -290,7 +290,7 @@ fn scene_panels(program: &mut Program<Stdin, Stdout>) -> std::io::Result<bool> {
                 let x = a.x + dx;
                 let y = a.y + dy;
                 let style = Style::default().bg(bg).fg(fg);
-                let cell = Cell::narrow(" ").style(&style);
+                let cell = Cell::new(" ", style);
                 for yy in y..y + h {
                     for xx in x..x + w {
                         program.screen_mut().set_cell(Position::new(xx, yy), &cell);
@@ -707,7 +707,7 @@ fn scene_balls(program: &mut Program<Stdin, Stdout>) -> std::io::Result<bool> {
                 "scene 6 / 6 — bouncing balls — any key to continue, Q to quit",
             );
         }
-        let blank = Cell::narrow(" ").style(Style::default());
+        let blank = Cell::new(" ", Style::default());
         for y in a.y + 1..a.y + BOX_H - 1 {
             for x in a.x + 1..a.x + BOX_W - 1 {
                 program.screen_mut().set_cell(Position::new(x, y), &blank);
@@ -737,7 +737,7 @@ fn scene_balls(program: &mut Program<Stdin, Stdout>) -> std::io::Result<bool> {
             let cx = a.x + 1 + ball.x as u16;
             let cy = a.y + 1 + ball.y as u16;
             let style = Style::default().fg(ball.color).bold();
-            let cell = Cell::narrow(ball.glyph).style(style);
+            let cell = Cell::new(ball.glyph, style);
             program.screen_mut().set_cell(Position::new(cx, cy), &cell);
         }
         Ok(())

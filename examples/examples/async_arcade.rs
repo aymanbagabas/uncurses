@@ -32,7 +32,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio_stream::StreamExt;
 
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Surface, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode};
@@ -738,14 +738,14 @@ impl World {
 fn put(screen: &mut Screen<Stdout>, x: u16, y: u16, glyph: &str, style: Style) {
     let pos = Position { x, y };
     let style = if style.bg.is_none() {
-        match screen.cell_mut(pos).and_then(|c| c.style.bg) {
+        match screen.cell(pos).and_then(|c| c.style.style.bg) {
             Some(bg) => style.bg(bg),
             None => style,
         }
     } else {
         style
     };
-    screen.set_cell(pos, &Cell::narrow(glyph).style(style));
+    screen.set_cell(pos, &Cell::new(glyph, style));
 }
 
 /// A rainbow color wheel over a u8 so hue animations are one add away.

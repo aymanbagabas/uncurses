@@ -464,15 +464,15 @@ mod tests {
         // scroll byte must be emitted with that pen so BCE pre-fills
         // the exposed row, and cur_buf must record the styled blank
         // so the subsequent diff sees the row as already-correct.
-        use crate::cell::Cell;
         use crate::color::Color;
+        use crate::renderer::packed::Ref;
         use crate::style::Style;
 
         let opts = Optimizations::default()
             .difference(Optimizations::CSR | Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
         let bg_style = Style::default().bg(Color::Blue);
-        renderer.cur.set_style(bg_style.clone());
+        renderer.cur.set_style(bg_style);
         renderer.cur.set_pos(Position { y: 3, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 4);
         new_buf.clear_touched();
@@ -484,14 +484,14 @@ mod tests {
 
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
-        let expected = Cell::BLANK.style(bg_style);
+        let expected = Ref::BLANK.with_style(bg_style);
         assert!(
             bottom_row.iter().all(|c| *c == expected),
             "cur_buf bottom row must be styled-blank, got: {bottom_row:?}",
         );
         assert_ne!(
             bottom_row[0],
-            Cell::BLANK,
+            Ref::BLANK,
             "must not record default-blank when clear_blank is styled",
         );
     }
@@ -502,7 +502,6 @@ mod tests {
         // fg, underline, etc. are dropped. cur_buf's fill must match
         // that or the next-frame diff will think those rows already
         // carry attrs the screen never received.
-        use crate::cell::Cell;
         use crate::color::Color;
         use crate::style::Style;
 
@@ -522,15 +521,16 @@ mod tests {
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
         let bg_only = Style::default().bg(Color::Red);
-        let expected = Cell::BLANK.style(bg_only);
         assert!(
-            bottom_row.iter().all(|c| *c == expected),
+            bottom_row
+                .iter()
+                .all(|c| char::from_u32(c.content_id()) == Some(' ') && c.style() == bg_only),
             "cur_buf bottom row must be bg-only, got: {bottom_row:?}",
         );
         assert!(
-            bottom_row.iter().all(|c| c.style.fg.is_none()
-                && c.style.attrs.is_empty()
-                && c.style.underline_color.is_none()),
+            bottom_row.iter().all(|c| c.style().fg.is_none()
+                && c.style().attrs.is_empty()
+                && c.style().underline_color.is_none()),
             "freed cells must drop fg / attrs / underline_color"
         );
     }
@@ -540,8 +540,8 @@ mod tests {
         // Without BCE the scroll byte paints freed cells with the
         // terminal's default bg, so cur_buf's fill must be the
         // default Cell::BLANK regardless of the active pen.
-        use crate::cell::Cell;
         use crate::color::Color;
+        use crate::renderer::packed::Ref;
         use crate::style::Style;
 
         let opts = Optimizations::default()
@@ -559,7 +559,7 @@ mod tests {
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
         assert!(
-            bottom_row.iter().all(|c| *c == Cell::BLANK),
+            bottom_row.iter().all(|c| *c == Ref::BLANK),
             "without BCE, freed cells must be default-blank, got: {bottom_row:?}",
         );
     }

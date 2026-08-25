@@ -48,7 +48,7 @@
 //!          └─ none / CR / HOME (when eligible)
 //! ```
 //!
-//! ## Pen and SGR state
+//! ## CellStyle and SGR state
 //!
 //! The renderer tracks the active style ("pen") alongside cursor
 //! position. Before emitting a cell it writes only the style difference
@@ -96,6 +96,8 @@ mod render_tests;
 #[cfg(test)]
 #[path = "tests/optimizations_golden.rs"]
 mod optimizations_golden;
+
+pub(crate) mod packed;
 
 pub use buffer::RenderBuffer;
 pub use caps::Optimizations;

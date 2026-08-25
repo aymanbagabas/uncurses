@@ -813,6 +813,7 @@ where
         if w == 0 || h == 0 {
             return Ok(());
         }
+        let blank = CzCell::default();
         let region = match clear_type {
             ClearType::All => Some(uncurses::layout::Rect::new(0, 0, w, h)),
             ClearType::AfterCursor if matches!(self.viewport, Viewport::Inline(_)) => {
@@ -835,7 +836,7 @@ where
                     let tail_x = cursor.x.min(w);
                     self.program.screen_mut().fill_rect(
                         uncurses::layout::Rect::new(tail_x, cursor.y, w - tail_x, 1),
-                        &CzCell::BLANK,
+                        &blank,
                     );
                 }
                 (cursor.y + 1 < h)
@@ -843,10 +844,9 @@ where
             }
             ClearType::BeforeCursor => {
                 if cursor.y > 0 {
-                    self.program.screen_mut().fill_rect(
-                        uncurses::layout::Rect::new(0, 0, w, cursor.y),
-                        &CzCell::BLANK,
-                    );
+                    self.program
+                        .screen_mut()
+                        .fill_rect(uncurses::layout::Rect::new(0, 0, w, cursor.y), &blank);
                 }
                 (cursor.y < h).then(|| {
                     let head_w = (cursor.x.min(w).saturating_add(1)).min(w);
@@ -860,7 +860,7 @@ where
                 .then(|| uncurses::layout::Rect::new(cursor.x, cursor.y, w - cursor.x, 1)),
         };
         if let Some(region) = region {
-            self.program.screen_mut().fill_rect(region, &CzCell::BLANK);
+            self.program.screen_mut().fill_rect(region, &blank);
         }
         self.program.screen_mut().invalidate_tracked_cursor();
         // Push the staged blanks to the wire so the clear takes effect

@@ -123,7 +123,7 @@ impl Bounded for TextBuffer {
 }
 
 impl Surface for TextBuffer {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<Cell> {
         self.buffer.cell(pos)
     }
 }
@@ -131,10 +131,6 @@ impl Surface for TextBuffer {
 impl SurfaceMut for TextBuffer {
     fn set_cell(&mut self, pos: Position, cell: &Cell) {
         self.buffer.set_cell(pos, cell);
-    }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.buffer.cell_mut(pos)
     }
 }
 
@@ -177,6 +173,9 @@ mod tests {
         let mut tb = TextBuffer::new(3, 1);
         tb.set_str((0, 0), "ab", Style::new());
         let buf = tb.into_buffer();
-        assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "a");
+        assert_eq!(
+            buf.cell(Position::new(0, 0)).unwrap().content.char(),
+            Some('a')
+        );
     }
 }

@@ -53,7 +53,8 @@ use crate::ansi::hyperlink::parse_hyperlink;
 use crate::ansi::params::Params;
 use crate::ansi::text::{Token, string_width, tokenize};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
-use crate::cell::Cell;
+use crate::cell::Style as CellStyle;
+use crate::cell::{Cell, Content, Kind};
 use crate::layout::{Position, Rect};
 use crate::style::{Style, read_style};
 
@@ -110,8 +111,8 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         clip: Rect,
         s: &str,
         tail_text: &str,
-        tail_style: Style,
-        style: Style,
+        tail_style: CellStyle,
+        style: CellStyle,
     ) -> Position {
         if clip.is_empty() {
             return start;
@@ -150,7 +151,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         clip: Rect,
         s: &str,
         wrap: WrapMode,
-        style: Style,
+        style: CellStyle,
     ) -> Position {
         self.paint_inner(start, clip, s, wrap, None, style)
     }
@@ -162,7 +163,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         s: &str,
         wrap: WrapMode,
         tail: Option<Tail<'_>>,
-        base: Style,
+        base: CellStyle,
     ) -> Position {
         if clip.is_empty() {
             return start;
@@ -180,6 +181,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         // joins it instead of starting a new cell, so the cell is held until
         // the next non-zero-width token finalizes it.
         let mut pen = Style::default();
+        // OSC 8 state is tracked separately from SGR: hyperlinks live on the
+        // cell, not on `Style`. The pen's link opens the span, and inline
+        // OSC 8 in the text can retarget or close it.
+        let mut pen_link = base.link.clone();
         let mut pending: Option<(u16, u16, String, u8)> = None;
         // Truncation is per row: once a row overflows, clusters are dropped
         // until `\n` or `\r` puts the cursor back inside the clip. Escapes
@@ -194,13 +199,17 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 && let Some((px, py, content, w)) = pending.take()
                 && clip.contains(Position::new(px, py))
             {
-                let cell = if w == 2 {
-                    Cell::wide(&content)
-                } else {
-                    Cell::narrow(&content)
+                // The tokenizer measured this cluster, so its footprint is
+                // authoritative rather than `Cell::new`'s own measurement.
+                let cell = Cell {
+                    content: Content::from(content.as_str()),
+                    style: CellStyle {
+                        style: pen.inherit(base.style),
+                        link: pen_link.clone(),
+                    },
+                    kind: if w == 2 { Kind::Wide } else { Kind::Narrow },
                 };
-                self.target
-                    .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+                self.target.set_cell(Position::new(px, py), &cell);
             }
 
             match tok {
@@ -255,7 +264,12 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     } else if let Some(body) = osc_body(seq)
                         && let Some((params, url)) = parse_hyperlink(body)
                     {
-                        pen = pen.link(url, params);
+                        pen_link = (!url.is_empty()).then(|| {
+                            std::sync::Arc::new(crate::style::Link {
+                                url: url.to_owned(),
+                                params: params.to_owned(),
+                            })
+                        });
                     }
                 }
                 Token::Control(0x0A) => {
@@ -278,13 +292,15 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         if let Some((px, py, content, w)) = pending.take()
             && clip.contains(Position::new(px, py))
         {
-            let cell = if w == 2 {
-                Cell::wide(&content)
-            } else {
-                Cell::narrow(&content)
+            let cell = Cell {
+                content: Content::from(content.as_str()),
+                style: CellStyle {
+                    style: pen.inherit(base.style),
+                    link: pen_link.clone(),
+                },
+                kind: if w == 2 { Kind::Wide } else { Kind::Narrow },
             };
-            self.target
-                .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+            self.target.set_cell(Position::new(px, py), &cell);
         }
         Position::new(x, y)
     }
@@ -297,7 +313,7 @@ impl<'s, S: TextSurface + ?Sized> Bounded for Painter<'s, S> {
 }
 
 impl<'s, S: TextSurface + ?Sized> Surface for Painter<'s, S> {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<Cell> {
         self.target.cell(pos)
     }
 }
@@ -305,10 +321,6 @@ impl<'s, S: TextSurface + ?Sized> Surface for Painter<'s, S> {
 impl<'s, S: TextSurface + ?Sized> SurfaceMut for Painter<'s, S> {
     fn set_cell(&mut self, pos: Position, cell: &Cell) {
         self.target.set_cell(pos, cell);
-    }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.target.cell_mut(pos)
     }
 
     fn insert_lines(&mut self, y: u16, count: u16, bounds_bottom: u16, fill: &Cell) {
@@ -373,7 +385,12 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
+    fn set_str(
+        &mut self,
+        pos: impl Into<Position>,
+        s: &str,
+        style: impl Into<CellStyle>,
+    ) -> Position {
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, WrapMode::default(), style.into())
     }
@@ -405,7 +422,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         pos: impl Into<Position>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<CellStyle>,
     ) -> Position {
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, wrap, style.into())
@@ -435,7 +452,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
-        style: impl Into<Style>,
+        style: impl Into<CellStyle>,
     ) -> Position {
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
@@ -468,7 +485,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<CellStyle>,
     ) -> Position {
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
@@ -510,7 +527,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         pos: impl Into<Position>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<CellStyle>,
     ) -> Position {
         let clip = self.target.bounds();
         self.paint_truncate(
@@ -519,7 +536,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
             s,
             tail,
             tail_style.into(),
-            Style::default(),
+            CellStyle::default(),
         )
     }
 
@@ -550,7 +567,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         rect: impl Into<Rect>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<CellStyle>,
     ) -> Position {
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
@@ -560,7 +577,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
             s,
             tail,
             tail_style.into(),
-            Style::default(),
+            CellStyle::default(),
         )
     }
 }
@@ -571,7 +588,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
 #[derive(Clone, Copy)]
 struct Tail<'a> {
     text: &'a str,
-    style: &'a Style,
+    style: &'a CellStyle,
     width: u16,
 }
 
@@ -636,12 +653,13 @@ mod tests {
     }
 
     fn cell_at(b: &TextBuffer, x: u16, y: u16) -> Cell {
-        b.cell(Position::new(x, y)).cloned().unwrap()
+        b.cell(Position::new(x, y)).unwrap()
     }
 
-    fn link_of(s: &crate::style::Style) -> Option<(&str, &str)> {
-        s.link
-            .as_deref()
+    fn link_of(c: &Cell) -> Option<(&str, &str)> {
+        c.style
+            .link
+            .as_ref()
             .map(|l| (l.url.as_str(), l.params.as_str()))
     }
 
@@ -651,8 +669,8 @@ mod tests {
         let end =
             Painter::new(&mut b).set_str_wrap((0, 0), "abc", WrapMode::Truncate, Style::default());
         assert_eq!(end, Position::new(3, 0));
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
     }
 
     #[test]
@@ -669,9 +687,9 @@ mod tests {
         let c0 = cell_at(&b, 0, 0);
         let c1 = cell_at(&b, 1, 0);
         let c2 = cell_at(&b, 2, 0);
-        assert!(!c0.style.attrs.contains(AttrFlags::BOLD));
-        assert!(c1.style.attrs.contains(AttrFlags::BOLD));
-        assert!(!c2.style.attrs.contains(AttrFlags::BOLD));
+        assert!(!c0.style.style.attrs.contains(AttrFlags::BOLD));
+        assert!(c1.style.style.attrs.contains(AttrFlags::BOLD));
+        assert!(!c2.style.style.attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
@@ -683,7 +701,7 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 0, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 0, 0).style.style.fg, Some(Color::Red));
     }
 
     /// The painter's `from_utf8_unchecked` on a text token, driven by the
@@ -715,8 +733,8 @@ mod tests {
                 Position::new(2, 0),
                 "{input:?} painted the wrong width"
             );
-            assert_eq!(cell_at(&b, 0, 0).content(), "a", "{input:?}");
-            assert_eq!(cell_at(&b, 1, 0).content(), "b", "{input:?}");
+            assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'), "{input:?}");
+            assert_eq!(cell_at(&b, 1, 0).content.char(), Some('b'), "{input:?}");
         }
     }
 
@@ -732,12 +750,38 @@ mod tests {
             Style::default(),
         );
         assert_eq!(
-            link_of(&cell_at(&b, 0, 0).style),
+            link_of(&cell_at(&b, 0, 0)),
             Some(("https://x/\u{2705}", ""))
         );
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
         assert!(cell_at(&b, 1, 0).style.link.is_none());
-        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+        assert_eq!(cell_at(&b, 1, 0).content.char(), Some('b'));
+    }
+
+    #[test]
+    fn pen_link_applies_to_every_painted_cell() {
+        let mut b = buf(10, 1);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "hi",
+            WrapMode::Truncate,
+            CellStyle::new().link("https://x", "id=7"),
+        );
+        assert_eq!(link_of(&cell_at(&b, 0, 0)), Some(("https://x", "id=7")));
+        assert_eq!(link_of(&cell_at(&b, 1, 0)), Some(("https://x", "id=7")));
+    }
+
+    #[test]
+    fn inline_osc8_overrides_the_pen_link() {
+        let mut b = buf(10, 1);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "a\x1b]8;;\x1b\\b",
+            WrapMode::Truncate,
+            CellStyle::new().link("https://x", ""),
+        );
+        assert_eq!(link_of(&cell_at(&b, 0, 0)), Some(("https://x", "")));
+        assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
     #[test]
@@ -749,7 +793,7 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
+        assert_eq!(link_of(&cell_at(&b, 0, 0)), Some(("https://x", "")));
         assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
@@ -765,8 +809,8 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
-        assert_eq!(link_of(&cell_at(&b, 1, 0).style), Some(("https://x", "")));
+        assert_eq!(link_of(&cell_at(&b, 0, 0)), Some(("https://x", "")));
+        assert_eq!(link_of(&cell_at(&b, 1, 0)), Some(("https://x", "")));
     }
 
     #[test]
@@ -778,10 +822,10 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 1, 0).content(), "b");
-        assert_eq!(cell_at(&b, 0, 1).content(), "c");
-        assert_eq!(cell_at(&b, 1, 1).content(), "d");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 1, 0).content.char(), Some('b'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 1, 1).content.char(), Some('d'));
         assert_eq!(end, Position::new(2, 1));
     }
 
@@ -790,9 +834,9 @@ mod tests {
         let mut b = buf(5, 1);
         Painter::new(&mut b).set_str_wrap((0, 0), "abc\rXY", WrapMode::Truncate, Style::default());
         // 'X' overwrites 'a', 'Y' overwrites 'b', 'c' remains.
-        assert_eq!(cell_at(&b, 0, 0).content(), "X");
-        assert_eq!(cell_at(&b, 1, 0).content(), "Y");
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('X'));
+        assert_eq!(cell_at(&b, 1, 0).content.char(), Some('Y'));
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
     }
 
     #[test]
@@ -805,8 +849,8 @@ mod tests {
             Style::default(),
         );
         assert_eq!(end, Position::new(0, 2));
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 0, 1).content(), "b");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('b'));
         // Row 2 is out of bounds; "c" never lands.
     }
 
@@ -820,8 +864,8 @@ mod tests {
             Style::default(),
         );
         assert_eq!(end, Position::new(3, 0));
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
     }
 
     #[test]
@@ -833,9 +877,9 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
-        assert_eq!(cell_at(&b, 0, 1).content(), "x");
-        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('x'));
+        assert_eq!(cell_at(&b, 1, 1).content.char(), Some('y'));
         assert_eq!(end, Position::new(2, 1));
     }
 
@@ -843,18 +887,18 @@ mod tests {
     fn truncate_tail_stamped_per_row() {
         let mut b = buf(4, 2);
         Painter::new(&mut b).set_str_truncate((0, 0), "abcdef\nghijkl", "…", Style::default());
-        assert_eq!(cell_at(&b, 3, 0).content(), "…");
-        assert_eq!(cell_at(&b, 0, 1).content(), "g");
-        assert_eq!(cell_at(&b, 3, 1).content(), "…");
+        assert_eq!(cell_at(&b, 3, 0).content.char(), Some('…'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('g'));
+        assert_eq!(cell_at(&b, 3, 1).content.char(), Some('…'));
     }
 
     #[test]
     fn literal_truncate_resumes_on_next_row() {
         let mut b = buf(3, 2);
         b.set_str((0, 0), "abcdef\nxy", Style::default());
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
-        assert_eq!(cell_at(&b, 0, 1).content(), "x");
-        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('x'));
+        assert_eq!(cell_at(&b, 1, 1).content.char(), Some('y'));
     }
 
     #[test]
@@ -866,9 +910,9 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 0, 0).content(), "X");
-        assert_eq!(cell_at(&b, 1, 0).content(), "Y");
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('X'));
+        assert_eq!(cell_at(&b, 1, 0).content.char(), Some('Y'));
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
     }
 
     #[test]
@@ -880,11 +924,11 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 1, 0).content.char(), Some('b'));
         // "中" needs two columns and only one is left; "c" must not slot into
         // the gap ahead of it.
-        assert_eq!(cell_at(&b, 2, 0).content(), " ");
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some(' '));
         assert_eq!(end, Position::new(2, 0));
     }
 
@@ -894,9 +938,9 @@ mod tests {
         // cluster, so it has to be matched explicitly to break the line.
         let mut b = buf(3, 2);
         b.set_str((0, 0), "abcdef\r\nxy", Style::default());
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
-        assert_eq!(cell_at(&b, 0, 1).content(), "x");
-        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('x'));
+        assert_eq!(cell_at(&b, 1, 1).content.char(), Some('y'));
     }
 
     #[test]
@@ -908,9 +952,9 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
-        assert_eq!(cell_at(&b, 0, 1).content(), "x");
-        assert_eq!(cell_at(&b, 1, 1).content(), "y");
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('x'));
+        assert_eq!(cell_at(&b, 1, 1).content.char(), Some('y'));
     }
 
     #[test]
@@ -924,11 +968,17 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            !cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
         let z = cell_at(&b, 0, 1);
-        assert_eq!(z.content(), "z");
-        assert!(z.style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(link_of(&z.style), Some(("https://x", "")));
+        assert_eq!(z.content.char(), Some('z'));
+        assert!(z.style.style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(link_of(&z), Some(("https://x", "")));
     }
 
     #[test]
@@ -943,7 +993,7 @@ mod tests {
         assert_eq!(end, Position::new(0, 5));
         for y in 0..2 {
             for x in 0..3 {
-                assert_eq!(cell_at(&b, x, y).content(), " ");
+                assert_eq!(cell_at(&b, x, y).content.char(), Some(' '));
             }
         }
     }
@@ -953,8 +1003,8 @@ mod tests {
         let mut b = buf(3, 2);
         let end = b.set_str((0, 5), "abcdef\nghi", Style::default());
         assert_eq!(end, Position::new(0, 5));
-        assert_eq!(cell_at(&b, 0, 0).content(), " ");
-        assert_eq!(cell_at(&b, 0, 1).content(), " ");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some(' '));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some(' '));
     }
 
     #[test]
@@ -963,20 +1013,20 @@ mod tests {
         // break the line there too, not read as zero-width filler.
         let mut b = buf(4, 3);
         Painter::new(&mut b).set_str_wrap((0, 0), "ab\r\ncd", WrapMode::Wrap, Style::default());
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 1, 0).content(), "b");
-        assert_eq!(cell_at(&b, 0, 1).content(), "c");
-        assert_eq!(cell_at(&b, 1, 1).content(), "d");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 1, 0).content.char(), Some('b'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 1, 1).content.char(), Some('d'));
     }
 
     #[test]
     fn literal_wrap_breaks_on_crlf() {
         let mut b = buf(4, 3);
         b.set_str_wrap((0, 0), "ab\r\ncd", WrapMode::Wrap, Style::default());
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 1, 0).content(), "b");
-        assert_eq!(cell_at(&b, 0, 1).content(), "c");
-        assert_eq!(cell_at(&b, 1, 1).content(), "d");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 1, 0).content.char(), Some('b'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 1, 1).content.char(), Some('d'));
     }
 
     #[test]
@@ -985,10 +1035,10 @@ mod tests {
         let end =
             Painter::new(&mut b).set_str_wrap((0, 0), "abcdef", WrapMode::Wrap, Style::default());
         assert_eq!(end, Position::new(3, 1));
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
-        assert_eq!(cell_at(&b, 0, 1).content(), "d");
-        assert_eq!(cell_at(&b, 2, 1).content(), "f");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 2, 0).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 0, 1).content.char(), Some('d'));
+        assert_eq!(cell_at(&b, 2, 1).content.char(), Some('f'));
     }
 
     #[test]
@@ -1001,13 +1051,13 @@ mod tests {
             Style::default(),
         );
         assert_eq!(end, Position::new(5, 2));
-        assert_eq!(cell_at(&b, 2, 1).content(), "a");
-        assert_eq!(cell_at(&b, 4, 1).content(), "c");
-        assert_eq!(cell_at(&b, 2, 2).content(), "d");
-        assert_eq!(cell_at(&b, 4, 2).content(), "f");
+        assert_eq!(cell_at(&b, 2, 1).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 4, 1).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 2, 2).content.char(), Some('d'));
+        assert_eq!(cell_at(&b, 4, 2).content.char(), Some('f'));
         // Outside the rect must remain blank.
-        assert_eq!(cell_at(&b, 0, 0).content(), " ");
-        assert_eq!(cell_at(&b, 5, 1).content(), " ");
+        assert_eq!(cell_at(&b, 0, 0).content.char(), Some(' '));
+        assert_eq!(cell_at(&b, 5, 1).content.char(), Some(' '));
     }
 
     #[test]
@@ -1019,29 +1069,41 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 2, 1).content(), "a");
-        assert_eq!(cell_at(&b, 3, 1).content(), "b");
+        assert_eq!(cell_at(&b, 2, 1).content.char(), Some('a'));
+        assert_eq!(cell_at(&b, 3, 1).content.char(), Some('b'));
         // Newline returns x to rect.left() = 2, not to 0.
-        assert_eq!(cell_at(&b, 2, 2).content(), "c");
-        assert_eq!(cell_at(&b, 3, 2).content(), "d");
-        assert_eq!(cell_at(&b, 0, 2).content(), " ");
+        assert_eq!(cell_at(&b, 2, 2).content.char(), Some('c'));
+        assert_eq!(cell_at(&b, 3, 2).content.char(), Some('d'));
+        assert_eq!(cell_at(&b, 0, 2).content.char(), Some(' '));
     }
 
     #[test]
     fn with_resets_style_and_link() {
         let mut b = buf(10, 1);
-        // First call: paint with bold + a link.
+        // First call: paint with bold plus a link carried by the pen.
         Painter::new(&mut b).set_str_wrap(
             (0, 0),
             "a",
             WrapMode::Truncate,
-            Style::default().bold().link("https://x", ""),
+            CellStyle::from(Style::default().bold()).link("https://x", ""),
         );
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
-        // Second call with `_with` and an empty style must reset.
+        assert!(
+            cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        assert_eq!(link_of(&cell_at(&b, 0, 0)), Some(("https://x", "")));
+        // A second call starts from a clean pen: no bold, no open link.
         Painter::new(&mut b).set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            !cell_at(&b, 1, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
         assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
@@ -1053,8 +1115,20 @@ mod tests {
         p.set_str_wrap((0, 0), "\x1b[1ma", WrapMode::Truncate, Style::default());
         // The next call starts fresh from its base: no bold carries over.
         p.set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        assert!(
+            !cell_at(&b, 1, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
@@ -1066,12 +1140,30 @@ mod tests {
         // rather than to a fully default style.
         Painter::new(&mut b).set_str_wrap((0, 0), "a\x1b[1mb\x1b[0mc", WrapMode::Truncate, base);
         let red = Some(Color::Red);
-        assert_eq!(cell_at(&b, 0, 0).style.fg, red);
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 1, 0).style.fg, red);
-        assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 2, 0).style.fg, red);
-        assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 0, 0).style.style.fg, red);
+        assert!(
+            !cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        assert_eq!(cell_at(&b, 1, 0).style.style.fg, red);
+        assert!(
+            cell_at(&b, 1, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        assert_eq!(cell_at(&b, 2, 0).style.style.fg, red);
+        assert!(
+            !cell_at(&b, 2, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
@@ -1087,12 +1179,12 @@ mod tests {
             Style::default(),
         );
         assert_eq!(e1, e2);
-        assert_eq!(cell_at(&a, 2, 0).content(), cell_at(&b, 2, 0).content());
+        assert_eq!(cell_at(&a, 2, 0).to_string(), cell_at(&b, 2, 0).to_string());
     }
 
     fn row(b: &TextBuffer, y: u16) -> String {
         (0..b.width())
-            .map(|x| cell_at(b, x, y).content().to_string())
+            .map(|x| cell_at(b, x, y).to_string())
             .collect()
     }
 
@@ -1132,7 +1224,7 @@ mod tests {
             Style::default().fg(Color::Red),
         );
         // The tail cell gets the supplied base style.
-        assert_eq!(cell_at(&b, 4, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 4, 0).style.style.fg, Some(Color::Red));
     }
 
     #[test]
@@ -1140,7 +1232,13 @@ mod tests {
         let mut b = buf(5, 1);
         Painter::new(&mut b).set_str_truncate((0, 0), "abcdefgh", "\x1b[1m…", Style::default());
         // The tail's inline SGR bolds it even though the base style is empty.
-        assert!(cell_at(&b, 4, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 4, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
@@ -1163,7 +1261,7 @@ mod tests {
         // "ab" + wide "中" fills columns 0..4; the tail overwrites column 4,
         // which is the continuation of "中", so the wide primary at 3 must be
         // blanked rather than left dangling.
-        assert_eq!(cell_at(&b, 4, 0).content(), "…");
+        assert_eq!(cell_at(&b, 4, 0).content.char(), Some('…'));
         assert!(!cell_at(&b, 3, 0).is_wide());
     }
 }

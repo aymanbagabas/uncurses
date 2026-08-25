@@ -254,8 +254,9 @@ pub const fn tab_cost(n: u16) -> usize {
 /// emitted length, so an overwrite candidate may be picked here that
 /// a strict byte minimisation would have rejected. Accepting this
 /// approximation keeps the predictor allocation-free.
-pub fn overwrite_cost(
-    line: &[crate::cell::Cell],
+pub(crate) fn overwrite_cost(
+    arena: &dyn crate::renderer::packed::arena::Arena,
+    line: &[crate::renderer::packed::Ref],
     style: &crate::style::Style,
     from: u16,
     to: u16,
@@ -270,7 +271,7 @@ pub fn overwrite_cost(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            if &cell.style != style {
+            if &arena.style(cell.style) != style {
                 return None;
             }
             cost += cell.width() as usize;

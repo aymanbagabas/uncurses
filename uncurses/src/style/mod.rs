@@ -1,34 +1,36 @@
-//! Text style values and terminal SGR/OSC 8 rendering.
+//! Text style values and terminal SGR rendering.
 //!
 //! ## Style as a value
 //!
-//! [`Style`] is an owned description of how text should look: optional
+//! [`Style`] is a description of how text should look: optional
 //! foreground/background colors, optional underline color, an
-//! [`UnderlineStyle`], an [`AttrFlags`] bitset, and an optional OSC 8
-//! [`Link`]. Builder methods take and return `Self`, so styles can be composed
-//! fluently and then cloned into cells or spans.
+//! [`UnderlineStyle`], and an [`AttrFlags`] bitset. It is a small `Copy`
+//! value, so styles can be composed fluently with the builder methods and
+//! then stored on cells or spans. Everything a `Style` describes maps to
+//! SGR.
+//!
+//! Hyperlinks live beside SGR rather than inside it, because OSC 8 is a
+//! terminal state machine independent of SGR: one link span commonly covers
+//! cells with differing styles, and a style change inside a span leaves the
+//! link open. A cell carries both through
+//! [`cell::Style`](crate::cell::Style).
 //!
 //! ## Open/close versus wrapped rendering
 //!
-//! The [`std::fmt::Display`] implementation for [`Style`] emits the opener: the
-//! SGR sequence (`CSI … m`), followed by the OSC 8 hyperlink start when the
-//! style carries a link. The opener does not reset the terminal or close the
-//! link afterward; following output remains in that style until another style
-//! or reset is written.
+//! The [`std::fmt::Display`] implementation for [`Style`] emits the opener,
+//! the SGR sequence (`CSI … m`). The opener leaves the terminal in that
+//! style; following output stays styled until another style or a reset is
+//! written.
 //!
-//! The alternate form (`{style:#}`) emits the matching closer: the OSC 8
-//! hyperlink terminator (when the style carries a link) followed by the SGR
-//! reset (`CSI m`). Used together, `{style}` and `{style:#}` wrap a complete
-//! span with a single style value. The SGR reset clears to defaults rather than
+//! The alternate form (`{style:#}`) emits the matching closer, the SGR reset
+//! (`CSI m`). Used together, `{style}` and `{style:#}` wrap a complete span
+//! with a single style value. The reset clears to defaults rather than
 //! restoring a previously active style, so wrap each span independently:
 //!
 //! ```text
-//! without link: ┌─────────┐ ┌──────┐ ┌───────┐
-//!               │ CSI … m │▶│ text │▶│ CSI m │
-//!               └─────────┘ └──────┘ └───────┘
-//! with link:    ┌─────────┐ ┌───────┐ ┌──────┐ ┌───────────┐ ┌───────┐
-//!               │ CSI … m │▶│ OSC 8 │▶│ text │▶│ OSC 8 end │▶│ CSI m │
-//!               └─────────┘ └───────┘ └──────┘ └───────────┘ └───────┘
+//! ┌─────────┐ ┌──────┐ ┌───────┐
+//! │ CSI … m │▶│ text │▶│ CSI m │
+//! └─────────┘ └──────┘ └───────┘
 //! ```
 //!
 //! ## Attributes and underline
@@ -54,6 +56,7 @@
 //! ```
 //!
 //! ```rust
+//! use uncurses::cell::{Cell, Style as CellStyle};
 //! use uncurses::color::Color;
 //! use uncurses::style::Style;
 //!
@@ -61,10 +64,14 @@
 //! let heading = Style::default().bold().fg(Color::Green);
 //! println!("{heading}Hello{heading:#}");
 //!
-//! let link = Style::default()
-//!     .underline()
+//! // A hyperlink rides along with the style a cell is painted in.
+//! let linked = CellStyle::from(Style::default().underline())
 //!     .link("https://example.com", "");
-//! println!("{link}docs{link:#}");
+//! let docs = Cell::new('d', linked);
+//! assert_eq!(
+//!     docs.style.link.as_ref().map(|l| l.url.as_str()),
+//!     Some("https://example.com"),
+//! );
 //! ```
 
 pub(crate) mod diff;
@@ -76,33 +83,78 @@ pub(crate) use parse::read_style;
 pub(crate) use sgr::RESET;
 
 use std::borrow::Borrow;
+
 use std::io::{self, Write};
-use std::sync::Arc;
 
 use bitflags::bitflags;
 
 use crate::color::Color;
 
-/// OSC 8 hyperlink target carried by a [`Style`].
+/// An OSC 8 hyperlink target.
 ///
-/// A link is used when styled text should also open a terminal hyperlink.
-/// [`Style::link`] stores non-empty URLs behind an [`Arc`] so many cells in
-/// the same hyperlink span can share one allocation. The URL and parameter
-/// string are emitted verbatim as `OSC 8 ; params ; url ST`; callers are
-/// responsible for passing values that are appropriate for the target
-/// terminal.
+/// A hyperlink is tracked separately from [`Style`]:
+/// OSC 8 is a separate terminal state machine from SGR, and a single link
+/// span commonly covers cells with differing styles. Links are interned, so
+/// a run of cells pointing at one URL stores one copy of it.
+///
+/// The URL and parameter string are emitted verbatim as
+/// `OSC 8 ; params ; url ST`; callers are responsible for passing values
+/// appropriate for the target terminal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Link {
     /// Target URI written into the OSC 8 sequence.
-    ///
-    /// Empty URLs are not stored by [`Style::link`]; passing an empty URL to
-    /// that builder clears the current link instead.
     pub url: String,
     /// OSC 8 parameter string written between the two semicolons.
     ///
     /// Use an empty string for no parameters, or terminal-supported
     /// `key=value` pairs such as `id=section`.
     pub params: String,
+}
+
+impl Link {
+    /// Return whether this link targets nothing.
+    ///
+    /// An empty URL is how OSC 8 closes a hyperlink, so an empty link is the
+    /// value a cell carries when it is not part of a link span.
+    ///
+    /// # Returns
+    ///
+    /// `true` when the URL is empty.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    pub fn is_empty(&self) -> bool {
+        self.url.is_empty()
+    }
+}
+
+impl std::fmt::Display for Link {
+    /// Write the OSC 8 opener, or the terminator in the alternate form
+    /// (`{link:#}`), mirroring how [`Style`] renders its opener and closer.
+    ///
+    /// Wrapping text between the two forms makes it clickable in terminals
+    /// that support hyperlinks:
+    ///
+    /// ```rust
+    /// use uncurses::style::Link;
+    ///
+    /// let docs = Link { url: "https://example.com".into(), params: String::new() };
+    /// let span = format!("{docs}uncurses{docs:#}");
+    /// assert!(span.starts_with("\x1b]8;;https://example.com"));
+    /// assert!(span.ends_with("\x1b]8;;\x1b\\"));
+    /// ```
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // OSC 8 framing is pure ASCII, so the bytes are valid UTF-8.
+        let mut buf = Vec::new();
+        if f.alternate() {
+            buf.extend_from_slice(crate::ansi::hyperlink::HYPERLINK_RESET);
+        } else {
+            crate::ansi::hyperlink::write_hyperlink(&mut buf, &self.url, &self.params)
+                .map_err(|_| std::fmt::Error)?;
+        }
+        f.write_str(std::str::from_utf8(&buf).map_err(|_| std::fmt::Error)?)
+    }
 }
 
 bitflags! {
@@ -180,7 +232,7 @@ pub enum UnderlineStyle {
 ///
 /// Cloning is cheap for hyperlinks: the [`Link`] is reference-counted so a
 /// long span of identically-linked cells keeps a single shared allocation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Style {
     /// Foreground/text color.
     ///
@@ -201,38 +253,6 @@ pub struct Style {
     pub underline: UnderlineStyle,
     /// Boolean SGR text attributes.
     pub attrs: AttrFlags,
-    /// Optional OSC 8 hyperlink target.
-    pub link: Option<Arc<Link>>,
-}
-
-impl PartialEq for Style {
-    fn eq(&self, other: &Self) -> bool {
-        self.fg == other.fg
-            && self.bg == other.bg
-            && self.underline_color == other.underline_color
-            && self.underline == other.underline
-            && self.attrs == other.attrs
-            && match (&self.link, &other.link) {
-                (None, None) => true,
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b) || **a == **b,
-                _ => false,
-            }
-    }
-}
-
-impl Eq for Style {}
-
-impl std::hash::Hash for Style {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.fg.hash(state);
-        self.bg.hash(state);
-        self.underline_color.hash(state);
-        self.underline.hash(state);
-        self.attrs.hash(state);
-        if let Some(l) = &self.link {
-            l.hash(state);
-        }
-    }
 }
 
 impl From<&Style> for Style {
@@ -242,7 +262,7 @@ impl From<&Style> for Style {
     /// the caller writing `.clone()`. Owned styles convert for free via the
     /// blanket `From<Style> for Style`.
     fn from(style: &Style) -> Self {
-        style.clone()
+        *style
     }
 }
 
@@ -279,7 +299,6 @@ impl Style {
         underline_color: None,
         underline: UnderlineStyle::None,
         attrs: AttrFlags::empty(),
-        link: None,
     };
 
     /// Return whether this style is entirely empty.
@@ -287,7 +306,7 @@ impl Style {
     /// Empty means no SGR-relevant fields and no OSC 8 hyperlink. This is
     /// equivalent to `*self == Style::EMPTY`.
     pub fn is_empty(&self) -> bool {
-        self.is_sgr_empty() && self.is_link_empty()
+        self.is_sgr_empty()
     }
 
     /// Return whether this style has no SGR-relevant settings.
@@ -301,14 +320,6 @@ impl Style {
             && self.underline_color.is_none()
             && self.underline == UnderlineStyle::None
             && self.attrs.is_empty()
-    }
-
-    /// Return whether this style carries no hyperlink.
-    ///
-    /// Companion to [`Style::is_sgr_empty`]; together they decide whether the
-    /// style value has any terminal-visible state.
-    pub(crate) fn is_link_empty(&self) -> bool {
-        self.link.is_none()
     }
 
     /// Inherit from `base`, returning `self` with its unset fields filled in.
@@ -335,7 +346,6 @@ impl Style {
                 self.underline
             },
             attrs: self.attrs | base.attrs,
-            link: self.link.clone().or_else(|| base.link.clone()),
         }
     }
 
@@ -463,49 +473,22 @@ impl Style {
         self
     }
 
-    /// Attach or clear an OSC 8 hyperlink and return the updated style.
-    ///
-    /// A non-empty `url` stores a [`Link`] with the supplied `params`. An empty
-    /// `url` clears any existing link and ignores `params`. Parameters are the
-    /// raw OSC 8 parameter string, commonly empty or a terminal-supported value
-    /// such as `id=foo`.
-    pub fn link(mut self, url: impl Into<String>, params: impl Into<String>) -> Self {
-        let url = url.into();
-        if url.is_empty() {
-            self.link = None;
-        } else {
-            self.link = Some(Arc::new(Link {
-                url,
-                params: params.into(),
-            }));
-        }
-        self
-    }
-
     /// Write this style's opener bytes: the SGR sequence (`CSI … m`) followed
     /// by an OSC 8 hyperlink start when this style carries a [`link`](Self::link).
     ///
     /// Additive: an [empty](Self::is_empty) style writes nothing.
     fn write_opener<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        sgr::write_style(w, self)?;
-        if let Some(link) = &self.link {
-            crate::ansi::hyperlink::write_hyperlink(w, &link.url, &link.params)?;
-        }
-        Ok(())
+        sgr::write_style(w, self)
     }
 
-    /// Write this style's closer bytes: the OSC 8 hyperlink terminator when this
-    /// style carries a [`link`](Self::link), followed by the SGR reset (`CSI m`)
-    /// when it carries any SGR state.
+    /// Write this style's closer bytes: the SGR reset (`CSI m`) when it
+    /// carries any SGR state.
     ///
     /// The SGR reset clears all attributes to their defaults, so the closer
     /// returns the terminal to a clean state rather than restoring whatever
     /// style was active before the opener. An [empty](Self::is_empty) style
     /// writes nothing.
     fn write_closer<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        if self.link.is_some() {
-            w.write_all(crate::ansi::hyperlink::HYPERLINK_RESET)?;
-        }
         if !self.is_sgr_empty() {
             w.write_all(sgr::RESET)?;
         }
@@ -516,15 +499,11 @@ impl Style {
 /// Render this style as ANSI escape sequences.
 ///
 /// The default form (`{style}`) renders the **opener**: the SGR sequence
-/// (`CSI … m`) followed by an OSC 8 hyperlink start when this style carries a
-/// [`link`](Style::link). The opener is additive, so an empty style renders
-/// nothing.
+/// (`CSI … m`). It is additive, so an empty style renders nothing.
 ///
-/// The alternate form (`{style:#}`) renders the **closer**: the OSC 8
-/// hyperlink terminator (when the style carries a link) followed by the SGR
-/// reset (`CSI m`, when it carries SGR state). The SGR reset clears all
-/// attributes to their defaults rather than restoring a previously active
-/// style.
+/// The alternate form (`{style:#}`) renders the **closer**: the SGR reset
+/// (`CSI m`), which clears all attributes to their defaults rather than
+/// restoring a previously active style.
 ///
 /// Use the two together to wrap a span with a single style value:
 ///
@@ -571,21 +550,6 @@ mod tests {
     }
 
     #[test]
-    fn link_empty_url_clears() {
-        let s = Style::EMPTY.link("https://x", "id=42");
-        let l = s.link.as_deref().unwrap();
-        assert_eq!((l.url.as_str(), l.params.as_str()), ("https://x", "id=42"));
-
-        // Empty url clears, regardless of params.
-        let s = s.link("", "id=ignored");
-        assert!(s.link.is_none());
-        assert!(s.is_empty());
-
-        let s = Style::EMPTY.link("", "");
-        assert!(s.link.is_none());
-    }
-
-    #[test]
     fn display_emits_sgr_opener_without_reset() {
         let s = Style::EMPTY.bold().fg(Color::Red);
         assert_eq!(format!("{s}"), "\x1b[1;31m");
@@ -605,17 +569,9 @@ mod tests {
 
     #[test]
     fn alternate_display_closes_only_what_is_set() {
-        // SGR-only style closes with the SGR reset alone.
+        // An SGR style closes with the SGR reset.
         let s = Style::EMPTY.bold();
         assert_eq!(format!("{s:#}"), "\x1b[m");
-
-        // A link adds the OSC 8 terminator before the SGR reset.
-        let s = Style::EMPTY.bold().link("https://x", "");
-        assert_eq!(format!("{s:#}"), "\x1b]8;;\x1b\\\x1b[m");
-
-        // A link-only style emits just the OSC 8 terminator, no SGR reset.
-        let s = Style::EMPTY.link("https://x", "");
-        assert_eq!(format!("{s:#}"), "\x1b]8;;\x1b\\");
 
         // An empty style resets nothing.
         assert_eq!(format!("{:#}", Style::EMPTY), "");
@@ -643,7 +599,7 @@ mod tests {
     fn inherit_empty_self_returns_base() {
         let base = Style::EMPTY.bold().fg(Color::Red);
         // An empty child inherits everything from the base.
-        assert_eq!(Style::EMPTY.inherit(&base), base);
+        assert_eq!(Style::EMPTY.inherit(base), base);
     }
 
     #[test]
@@ -651,22 +607,5 @@ mod tests {
         let style = Style::EMPTY.bold().fg(Color::Red);
         let merged = style.inherit(Style::EMPTY);
         assert_eq!(merged, style);
-    }
-
-    #[test]
-    fn span_wraps_link_in_osc8() {
-        let s = Style::EMPTY.underline().link("https://example.com", "");
-        // SGR opener, hyperlink start, text, hyperlink end, SGR reset.
-        assert_eq!(
-            format!("{s}docs{s:#}"),
-            "\x1b[4m\x1b]8;;https://example.com\x1b\\docs\x1b]8;;\x1b\\\x1b[m"
-        );
-    }
-
-    #[test]
-    fn opener_includes_hyperlink_after_sgr() {
-        let s = Style::EMPTY.underline().link("https://example.com", "");
-        // The opener is the SGR sequence followed by the OSC 8 hyperlink start.
-        assert_eq!(format!("{s}"), "\x1b[4m\x1b]8;;https://example.com\x1b\\");
     }
 }

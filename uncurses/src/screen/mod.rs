@@ -204,12 +204,7 @@ impl<W: Write> Screen<W> {
 
     /// Write `cell` at `pos` in the desired frame.
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
-        self.front_buf.set_cell(pos.into(), cell);
-    }
-
-    /// Borrow the cell at `pos` mutably, marking its columns touched.
-    pub fn cell_mut(&mut self, pos: impl Into<Position>) -> Option<&mut Cell> {
-        self.front_buf.cell_mut(pos.into())
+        SurfaceMut::set_cell(self, pos.into(), cell);
     }
 
     /// The managed area size in cells.
@@ -793,34 +788,30 @@ impl<W: Write> Bounded for Screen<W> {
 }
 
 impl<W: Write> Surface for Screen<W> {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<Cell> {
         self.front_buf.cell(pos)
     }
 }
 
 impl<W: Write> SurfaceMut for Screen<W> {
     fn set_cell(&mut self, pos: Position, cell: &Cell) {
-        self.front_buf.set_cell(pos, cell);
-    }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.front_buf.cell_mut(pos)
+        SurfaceMut::set_cell(&mut self.front_buf, pos, cell);
     }
 
     fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        self.front_buf.insert_lines(y, n, bounds_bottom, fill);
+        SurfaceMut::insert_lines(&mut self.front_buf, y, n, bounds_bottom, fill);
     }
 
     fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        self.front_buf.delete_lines(y, n, bounds_bottom, fill);
+        SurfaceMut::delete_lines(&mut self.front_buf, y, n, bounds_bottom, fill);
     }
 
     fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        self.front_buf.insert_cells(pos, n, bounds_right, fill);
+        SurfaceMut::insert_cells(&mut self.front_buf, pos, n, bounds_right, fill);
     }
 
     fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        self.front_buf.delete_cells(pos, n, bounds_right, fill);
+        SurfaceMut::delete_cells(&mut self.front_buf, pos, n, bounds_right, fill);
     }
 }
 

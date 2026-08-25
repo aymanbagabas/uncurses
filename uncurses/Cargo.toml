@@ -31,7 +31,6 @@ icu = ["dep:icu_segmenter", "dep:icu_properties"]
 
 [dependencies]
 bitflags.workspace = true
-compact_str.workspace = true
 rustc-hash.workspace = true
 futures-core = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }

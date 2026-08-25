@@ -141,11 +141,11 @@ fn draw_card(screen: &mut Screen<Stdout>, x: u16, y: u16, label: &str, border: S
         .chain(std::iter::repeat_n('─', w as usize - 2))
         .chain(std::iter::once('╯'))
         .collect();
-    screen.set_str((x, y), &top, border.clone());
-    screen.set_str((x, y + h - 1), &bot, border.clone());
+    screen.set_str((x, y), &top, border);
+    screen.set_str((x, y + h - 1), &bot, border);
     for row in 1..h - 1 {
-        screen.set_str((x, y + row), "│", border.clone());
-        screen.set_str((x + w - 1, y + row), "│", border.clone());
+        screen.set_str((x, y + row), "│", border);
+        screen.set_str((x + w - 1, y + row), "│", border);
     }
 
     // Centered label.

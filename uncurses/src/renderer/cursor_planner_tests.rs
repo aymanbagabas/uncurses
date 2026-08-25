@@ -1,7 +1,7 @@
 use super::tabstops::TabStops;
 use super::*;
-use crate::cell::Cell;
 use crate::layout::Position;
+use crate::renderer::packed::Ref;
 use crate::style::Style;
 
 fn movement_opts() -> Optimizations {
@@ -38,7 +38,7 @@ fn relative_move(
     r: &mut Renderer,
     from: Position,
     to: Position,
-    line: Option<&[Cell]>,
+    line: Option<&[Ref]>,
     use_tabs: bool,
     use_backspace: bool,
 ) -> Vec<u8> {
@@ -201,10 +201,10 @@ fn backspace_beats_cub_for_short_leftward() {
 fn styled_overwrite_beats_cuf() {
     let mut r = setup_renderer(80, 24, movement_opts());
     let style = Style::default().bold();
-    r.cur.set_style(style.clone());
-    let mut line = vec![Cell::BLANK; 80];
-    line[0] = Cell::narrow("A").style(style.clone());
-    line[1] = Cell::narrow("B").style(style);
+    r.cur.set_style(style);
+    let mut line = vec![Ref::BLANK; 80];
+    line[0] = Ref::narrow('A').with_style(style);
+    line[1] = Ref::narrow('B').with_style(style);
 
     let actual = relative_move(
         &mut r,
