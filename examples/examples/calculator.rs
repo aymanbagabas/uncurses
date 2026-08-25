@@ -374,7 +374,7 @@ fn render(
 fn paint_display(screen: &mut Screen<Stdout>, text: &str, dx: u16) {
     let style = Style::default().fg(Color::BrightWhite).bg(Color::Black);
     let rect = Rect::new(dx, 0, BOARD_W, DISPLAY_H);
-    screen.fill_rect(rect, &Cell::narrow(" ").style(style.clone()));
+    screen.fill_rect(rect, &Cell::narrow(" ").style(style));
     // Right-align the number, one cell of padding from the edge.
     let width = BOARD_W as usize;
     let shown: String = text
@@ -401,7 +401,7 @@ fn paint_button(screen: &mut Screen<Stdout>, btn: &Button, label: &str, dx: u16,
     };
     let style = Style::default().fg(fg).bg(bg);
     let r = btn.rect(dx);
-    screen.fill_rect(r, &Cell::narrow(" ").style(style.clone()));
+    screen.fill_rect(r, &Cell::narrow(" ").style(style));
     // Center the label.
     let label_w = label.chars().count() as u16;
     let lx = r.x + (r.width.saturating_sub(label_w)) / 2;

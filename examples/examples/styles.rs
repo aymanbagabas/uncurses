@@ -12,6 +12,7 @@
 
 use std::io::{self, Write};
 
+use uncurses::cell::Style as CellStyle;
 use uncurses::color::Color;
 use uncurses::style::{Style, UnderlineStyle};
 
@@ -67,7 +68,10 @@ fn main() -> io::Result<()> {
     // its terminator, so the same opener/closer pattern that styles text also
     // makes it clickable.
     let url = "https://github.com/aymanbagabas/uncurses";
-    let link = Style::new().underline().fg(Color::BrightBlue).link(url, "");
+    let link = CellStyle::new()
+        .underline()
+        .fg(Color::BrightBlue)
+        .link(url, "");
     writeln!(
         out,
         "  {link}uncurses on GitHub{link:#} (Ctrl/Cmd-click in a supporting terminal)",

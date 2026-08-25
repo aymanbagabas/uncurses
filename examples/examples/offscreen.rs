@@ -67,7 +67,7 @@ fn draw_card(buf: &mut TextBuffer) {
 
     // Rounded border.
     let border = Style::default().fg(Color::BrightBlack);
-    let edge = |s: &str| Cell::narrow(s).style(border.clone());
+    let edge = |s: &str| Cell::narrow(s).style(border);
     buf.fill_rect(Rect::new(1, 0, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(1, h - 1, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(0, 1, 1, h - 2), &edge("│"));

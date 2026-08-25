@@ -134,7 +134,7 @@ fn paint_content(screen: &mut Screen<Stdout>) {
     for (i, label) in ["item 1", "item 2", "item 3", "item 4"].iter().enumerate() {
         let y = 3 + i as u16;
         screen.set_str((0, y), "•", Style::default().fg(Color::Yellow));
-        screen.set_str((2, y), label, bullet_color.clone());
+        screen.set_str((2, y), label, bullet_color);
     }
 }
 
@@ -166,23 +166,23 @@ fn paint_modal(screen: &mut Screen<Stdout>, rect: Rect) {
     let body = Style::default().fg(Color::BrightWhite).bg(Color::Blue);
     let hint = Style::default().fg(Color::BrightYellow).bg(Color::Blue);
 
-    screen.fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
+    screen.fill_rect(rect, &Cell::narrow(" ").style(body));
 
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;
     for x in (rect.x + 1)..right {
-        screen.set_str((x, rect.y), "─", frame.clone());
-        screen.set_str((x, bottom), "─", frame.clone());
+        screen.set_str((x, rect.y), "─", frame);
+        screen.set_str((x, bottom), "─", frame);
     }
     for y in (rect.y + 1)..bottom {
-        screen.set_str((rect.x, y), "│", frame.clone());
-        screen.set_str((right, y), "│", frame.clone());
+        screen.set_str((rect.x, y), "│", frame);
+        screen.set_str((right, y), "│", frame);
     }
     // Rounded corners.
-    screen.set_str((rect.x, rect.y), "╭", frame.clone());
-    screen.set_str((right, rect.y), "╮", frame.clone());
-    screen.set_str((rect.x, bottom), "╰", frame.clone());
-    screen.set_str((right, bottom), "╯", frame.clone());
+    screen.set_str((rect.x, rect.y), "╭", frame);
+    screen.set_str((right, rect.y), "╮", frame);
+    screen.set_str((rect.x, bottom), "╰", frame);
+    screen.set_str((right, bottom), "╯", frame);
 
     let inner = Rect::new(
         rect.x + 2,

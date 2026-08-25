@@ -381,3 +381,75 @@ mod tests {
         assert!(s.link.is_none());
     }
 }
+
+/// Write the escape sequences that move a terminal from `from` to `to`.
+///
+/// SGR and OSC 8 are separate state machines, so this emits the SGR delta
+/// first and then the hyperlink delta, and either half can be empty. Use it
+/// when both are known at once; the renderer tracks them apart so it can
+/// short-circuit each independently.
+///
+/// # Returns
+///
+/// Whether any bytes were written.
+///
+/// # Errors
+///
+/// Propagates errors from `w`.
+pub fn write_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<bool> {
+    let wrote_sgr = crate::style::diff::write_style_diff(w, &from.style, &to.style)?;
+
+    let same_link = match (&from.link, &to.link) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+        _ => false,
+    };
+    if same_link {
+        return Ok(wrote_sgr);
+    }
+    match &to.link {
+        Some(l) => crate::ansi::hyperlink::write_hyperlink(w, &l.url, &l.params)?,
+        None => w.write_all(crate::ansi::hyperlink::HYPERLINK_RESET)?,
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+
+    #[test]
+    fn sgr_opens_before_the_hyperlink() {
+        let mut buf = Vec::new();
+        let to = Style::new().bold().link("https://example.com", "");
+        assert!(write_diff(&mut buf, &Style::new(), &to).unwrap());
+        assert_eq!(buf, b"\x1b[1m\x1b]8;;https://example.com\x1b\\");
+    }
+
+    #[test]
+    fn a_link_change_alone_still_emits() {
+        // Same SGR state, only the link differs. An SGR-only diff would
+        // write nothing here.
+        let mut buf = Vec::new();
+        let from = Style::new().bold();
+        let to = Style::new().bold().link("https://example.com", "");
+        assert!(write_diff(&mut buf, &from, &to).unwrap());
+        assert_eq!(buf, b"\x1b]8;;https://example.com\x1b\\");
+    }
+
+    #[test]
+    fn dropping_a_link_emits_the_terminator() {
+        let mut buf = Vec::new();
+        let from = Style::new().link("https://example.com", "");
+        assert!(write_diff(&mut buf, &from, &Style::new()).unwrap());
+        assert_eq!(buf, b"\x1b]8;;\x1b\\");
+    }
+
+    #[test]
+    fn identical_styles_write_nothing() {
+        let mut buf = Vec::new();
+        let s = Style::new().bold().link("https://example.com", "");
+        assert!(!write_diff(&mut buf, &s, &s).unwrap());
+        assert!(buf.is_empty());
+    }
+}

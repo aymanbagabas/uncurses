@@ -61,9 +61,11 @@
 //! let heading = Style::default().bold().fg(Color::Green);
 //! println!("{heading}Hello{heading:#}");
 //!
-//! let link = Style::default()
-//!     .underline()
-//!     .link("https://example.com", "");
+//! // A hyperlink is a separate terminal state machine, so it lives beside
+//! // the SGR state on [`cell::Style`](crate::cell::Style) rather than in
+//! // this type.
+//! use uncurses::cell::Style as CellStyle;
+//! let link = CellStyle::new().underline().link("https://example.com", "");
 //! println!("{link}docs{link:#}");
 //! ```
 
@@ -77,7 +79,6 @@ pub(crate) use sgr::RESET;
 
 use std::borrow::Borrow;
 use std::io::{self, Write};
-use std::sync::Arc;
 
 use bitflags::bitflags;
 
@@ -210,7 +211,7 @@ impl From<&Style> for Style {
     /// the caller writing `.clone()`. Owned styles convert for free via the
     /// blanket `From<Style> for Style`.
     fn from(style: &Style) -> Self {
-        style.clone()
+        *style
     }
 }
 
@@ -500,21 +501,8 @@ mod tests {
         assert!(!s.is_empty());
     }
 
-    #[test]
-    fn link_empty_url_clears() {
-        let s = Style::EMPTY.link("https://x", "id=42");
-        let l = s.link.as_deref().unwrap();
-        assert_eq!((l.url.as_str(), l.params.as_str()), ("https://x", "id=42"));
-
-        // Empty url clears, regardless of params.
-        let s = s.link("", "id=ignored");
-        assert!(s.link.is_none());
-        assert!(s.is_empty());
-
-        let s = Style::EMPTY.link("", "");
-        assert!(s.link.is_none());
-    }
-
+    // Link builders and OSC 8 rendering live on `cell::Style` now; see
+    // its tests for the opener, the closer, and empty-url clearing.
     #[test]
     fn display_emits_sgr_opener_without_reset() {
         let s = Style::EMPTY.bold().fg(Color::Red);
@@ -538,14 +526,6 @@ mod tests {
         // SGR-only style closes with the SGR reset alone.
         let s = Style::EMPTY.bold();
         assert_eq!(format!("{s:#}"), "\x1b[m");
-
-        // A link adds the OSC 8 terminator before the SGR reset.
-        let s = Style::EMPTY.bold().link("https://x", "");
-        assert_eq!(format!("{s:#}"), "\x1b]8;;\x1b\\\x1b[m");
-
-        // A link-only style emits just the OSC 8 terminator, no SGR reset.
-        let s = Style::EMPTY.link("https://x", "");
-        assert_eq!(format!("{s:#}"), "\x1b]8;;\x1b\\");
 
         // An empty style resets nothing.
         assert_eq!(format!("{:#}", Style::EMPTY), "");
@@ -573,7 +553,7 @@ mod tests {
     fn inherit_empty_self_returns_base() {
         let base = Style::EMPTY.bold().fg(Color::Red);
         // An empty child inherits everything from the base.
-        assert_eq!(Style::EMPTY.inherit(&base), base);
+        assert_eq!(Style::EMPTY.inherit(base), base);
     }
 
     #[test]
@@ -581,22 +561,5 @@ mod tests {
         let style = Style::EMPTY.bold().fg(Color::Red);
         let merged = style.inherit(Style::EMPTY);
         assert_eq!(merged, style);
-    }
-
-    #[test]
-    fn span_wraps_link_in_osc8() {
-        let s = Style::EMPTY.underline().link("https://example.com", "");
-        // SGR opener, hyperlink start, text, hyperlink end, SGR reset.
-        assert_eq!(
-            format!("{s}docs{s:#}"),
-            "\x1b[4m\x1b]8;;https://example.com\x1b\\docs\x1b]8;;\x1b\\\x1b[m"
-        );
-    }
-
-    #[test]
-    fn opener_includes_hyperlink_after_sgr() {
-        let s = Style::EMPTY.underline().link("https://example.com", "");
-        // The opener is the SGR sequence followed by the OSC 8 hyperlink start.
-        assert_eq!(format!("{s}"), "\x1b[4m\x1b]8;;https://example.com\x1b\\");
     }
 }

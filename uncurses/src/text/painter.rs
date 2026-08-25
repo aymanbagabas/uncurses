@@ -55,7 +55,7 @@ use crate::ansi::text::{Token, string_width, tokenize};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::layout::{Position, Rect};
-use crate::style::{Style, read_style};
+use crate::style::read_style;
 
 use super::{TextSurface, WidthMode, WrapMode};
 
@@ -110,8 +110,8 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         clip: Rect,
         s: &str,
         tail_text: &str,
-        tail_style: Style,
-        style: Style,
+        tail_style: crate::cell::Style,
+        style: crate::cell::Style,
     ) -> Position {
         if clip.is_empty() {
             return start;
@@ -150,7 +150,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         clip: Rect,
         s: &str,
         wrap: WrapMode,
-        style: Style,
+        style: crate::cell::Style,
     ) -> Position {
         self.paint_inner(start, clip, s, wrap, None, style)
     }
@@ -162,7 +162,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         s: &str,
         wrap: WrapMode,
         tail: Option<Tail<'_>>,
-        base: Style,
+        base: crate::cell::Style,
     ) -> Position {
         if clip.is_empty() {
             return start;
@@ -179,7 +179,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         // text, and width. A trailing zero-width grapheme (a combining mark)
         // joins it instead of starting a new cell, so the cell is held until
         // the next non-zero-width token finalizes it.
-        let mut pen = Style::default();
+        let mut pen = crate::cell::Style::default();
         let mut pending: Option<(u16, u16, String, u8)> = None;
         // Truncation is per row: once a row overflows, clusters are dropped
         // until `\n` or `\r` puts the cursor back inside the clip. Escapes
@@ -251,11 +251,11 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     if seq.last() == Some(&b'm')
                         && let Some(body) = csi_body(seq)
                     {
-                        read_style(Params::from_raw(body), &mut pen);
+                        read_style(Params::from_raw(body), &mut pen.style);
                     } else if let Some(body) = osc_body(seq)
                         && let Some((params, url)) = parse_hyperlink(body)
                     {
-                        pen = pen.link(url, params);
+                        pen = std::mem::take(&mut pen).link(url, params);
                     }
                 }
                 Token::Control(0x0A) => {
@@ -373,7 +373,12 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     /// # Errors and panics
     ///
     /// This method does not return errors and does not intentionally panic.
-    fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
+    fn set_str(
+        &mut self,
+        pos: impl Into<Position>,
+        s: &str,
+        style: impl Into<crate::cell::Style>,
+    ) -> Position {
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, WrapMode::default(), style.into())
     }
@@ -405,7 +410,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         pos: impl Into<Position>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<crate::cell::Style>,
     ) -> Position {
         let clip = self.target.bounds();
         self.paint(pos.into(), clip, s, wrap, style.into())
@@ -435,7 +440,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
-        style: impl Into<Style>,
+        style: impl Into<crate::cell::Style>,
     ) -> Position {
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
@@ -468,7 +473,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<crate::cell::Style>,
     ) -> Position {
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
@@ -510,7 +515,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         pos: impl Into<Position>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<crate::cell::Style>,
     ) -> Position {
         let clip = self.target.bounds();
         self.paint_truncate(
@@ -519,7 +524,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
             s,
             tail,
             tail_style.into(),
-            Style::default(),
+            crate::cell::Style::default(),
         )
     }
 
@@ -550,7 +555,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         rect: impl Into<Rect>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<crate::cell::Style>,
     ) -> Position {
         let rect = rect.into();
         let clip = rect.intersection(self.target.bounds());
@@ -560,7 +565,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
             s,
             tail,
             tail_style.into(),
-            Style::default(),
+            crate::cell::Style::default(),
         )
     }
 }
@@ -571,7 +576,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
 #[derive(Clone, Copy)]
 struct Tail<'a> {
     text: &'a str,
-    style: &'a Style,
+    style: &'a crate::cell::Style,
     width: u16,
 }
 
@@ -630,6 +635,7 @@ mod tests {
     use crate::buffer::{Surface, TextBuffer};
     use crate::color::Color;
     use crate::style::AttrFlags;
+    use crate::style::Style;
 
     fn buf(width: u16, height: u16) -> TextBuffer {
         TextBuffer::new(width, height)
@@ -639,7 +645,7 @@ mod tests {
         b.cell(Position::new(x, y)).cloned().unwrap()
     }
 
-    fn link_of(s: &crate::style::Style) -> Option<(&str, &str)> {
+    fn link_of(s: &crate::cell::Style) -> Option<(&str, &str)> {
         s.link
             .as_deref()
             .map(|l| (l.url.as_str(), l.params.as_str()))
@@ -669,9 +675,9 @@ mod tests {
         let c0 = cell_at(&b, 0, 0);
         let c1 = cell_at(&b, 1, 0);
         let c2 = cell_at(&b, 2, 0);
-        assert!(!c0.style.attrs.contains(AttrFlags::BOLD));
-        assert!(c1.style.attrs.contains(AttrFlags::BOLD));
-        assert!(!c2.style.attrs.contains(AttrFlags::BOLD));
+        assert!(!c0.style.style.attrs.contains(AttrFlags::BOLD));
+        assert!(c1.style.style.attrs.contains(AttrFlags::BOLD));
+        assert!(!c2.style.style.attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
@@ -683,7 +689,7 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 0, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 0, 0).style.style.fg, Some(Color::Red));
     }
 
     /// The painter's `from_utf8_unchecked` on a text token, driven by the
@@ -924,10 +930,16 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            !cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
         let z = cell_at(&b, 0, 1);
         assert_eq!(z.content(), "z");
-        assert!(z.style.attrs.contains(AttrFlags::BOLD));
+        assert!(z.style.style.attrs.contains(AttrFlags::BOLD));
         assert_eq!(link_of(&z.style), Some(("https://x", "")));
     }
 
@@ -1035,13 +1047,25 @@ mod tests {
             (0, 0),
             "a",
             WrapMode::Truncate,
-            Style::default().bold().link("https://x", ""),
+            crate::cell::Style::new().bold().link("https://x", ""),
         );
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
         assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
         // Second call with `_with` and an empty style must reset.
         Painter::new(&mut b).set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            !cell_at(&b, 1, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
         assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
@@ -1053,8 +1077,20 @@ mod tests {
         p.set_str_wrap((0, 0), "\x1b[1ma", WrapMode::Truncate, Style::default());
         // The next call starts fresh from its base: no bold carries over.
         p.set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        assert!(
+            !cell_at(&b, 1, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
@@ -1066,12 +1102,30 @@ mod tests {
         // rather than to a fully default style.
         Painter::new(&mut b).set_str_wrap((0, 0), "a\x1b[1mb\x1b[0mc", WrapMode::Truncate, base);
         let red = Some(Color::Red);
-        assert_eq!(cell_at(&b, 0, 0).style.fg, red);
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 1, 0).style.fg, red);
-        assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 2, 0).style.fg, red);
-        assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 0, 0).style.style.fg, red);
+        assert!(
+            !cell_at(&b, 0, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        assert_eq!(cell_at(&b, 1, 0).style.style.fg, red);
+        assert!(
+            cell_at(&b, 1, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        assert_eq!(cell_at(&b, 2, 0).style.style.fg, red);
+        assert!(
+            !cell_at(&b, 2, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
@@ -1132,7 +1186,7 @@ mod tests {
             Style::default().fg(Color::Red),
         );
         // The tail cell gets the supplied base style.
-        assert_eq!(cell_at(&b, 4, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 4, 0).style.style.fg, Some(Color::Red));
     }
 
     #[test]
@@ -1140,7 +1194,13 @@ mod tests {
         let mut b = buf(5, 1);
         Painter::new(&mut b).set_str_truncate((0, 0), "abcdefgh", "\x1b[1m…", Style::default());
         // The tail's inline SGR bolds it even though the base style is empty.
-        assert!(cell_at(&b, 4, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 4, 0)
+                .style
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]

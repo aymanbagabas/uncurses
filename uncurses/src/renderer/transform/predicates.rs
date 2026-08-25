@@ -18,7 +18,7 @@ use crate::style::{AttrFlags, UnderlineStyle};
 /// The cell must always be a plain space, with no link, no underline,
 /// and only "invisible-on-blank" attributes (bold/faint/italic/blink).
 pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
-    if cell.width() != 1 || cell.content() != " " || !cell.style.is_link_empty() {
+    if cell.width() != 1 || cell.content() != " " || cell.style.link.is_some() {
         return false;
     }
     let allowed_attrs = AttrFlags::BOLD
@@ -26,15 +26,15 @@ pub(super) fn can_clear_with(cell: &Cell, bce: bool) -> bool {
         | AttrFlags::ITALIC
         | AttrFlags::SLOW_BLINK
         | AttrFlags::RAPID_BLINK;
-    if cell.style.underline != UnderlineStyle::None
-        || !(cell.style.attrs - allowed_attrs).is_empty()
+    if cell.style.style.underline != UnderlineStyle::None
+        || !(cell.style.style.attrs - allowed_attrs).is_empty()
     {
         return false;
     }
     // Without BCE, the cleared region is painted with the terminal's
     // default background — so any non-default bg in the blank would be
     // lost. Underline color rides on the same erase path, gate it too.
-    bce || (cell.style.bg.is_none() && cell.style.underline_color.is_none())
+    bce || (cell.style.style.bg.is_none() && cell.style.style.underline_color.is_none())
 }
 
 /// Equality used by `clear_bottom` to decide whether a row's cells

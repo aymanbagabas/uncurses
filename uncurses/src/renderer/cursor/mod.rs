@@ -493,10 +493,10 @@ mod tests {
     fn reset_before_lf_disqualifies_styled_overwrite_cells() {
         let mut r = rel();
         let styled = Style::default().bg(Color::Blue);
-        r.cur.set_style(styled.clone());
+        r.cur.set_style(styled);
         let line: Vec<Cell> = "abcde"
             .chars()
-            .map(|c| Cell::narrow(c.to_string()).style(styled.clone()))
+            .map(|c| Cell::narrow(c.to_string()).style(styled))
             .collect();
 
         let mut buf = Vec::new();
@@ -526,10 +526,10 @@ mod tests {
     fn styled_overwrite_survives_when_no_reset_is_needed() {
         let mut r = rel();
         let styled = Style::default().bg(Color::Blue);
-        r.cur.set_style(styled.clone());
+        r.cur.set_style(styled);
         let line: Vec<Cell> = "abcde"
             .chars()
-            .map(|c| Cell::narrow(c.to_string()).style(styled.clone()))
+            .map(|c| Cell::narrow(c.to_string()).style(styled))
             .collect();
 
         let mut buf = Vec::new();

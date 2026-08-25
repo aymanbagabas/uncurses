@@ -201,13 +201,13 @@ pub(crate) fn convert_style(style: &Style, profile: crate::color::Profile) -> St
             fg: None,
             bg: None,
             underline_color: None,
-            ..style.clone()
+            ..*style
         },
         _ => Style {
             fg: style.fg.and_then(|c| profile.convert(c)),
             bg: style.bg.and_then(|c| profile.convert(c)),
             underline_color: style.underline_color.and_then(|c| profile.convert(c)),
-            ..style.clone()
+            ..*style
         },
     }
 }
@@ -369,49 +369,8 @@ mod tests {
         assert_eq!(buf, b"\x1b[34;48;5;7m");
     }
 
-    #[test]
-    fn test_diff_adds_hyperlink_after_sgr() {
-        let mut buf = Vec::new();
-        let from = Style::default();
-        let to = Style::default().bold().link("https://example.com", "");
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        // SGR opener first, then OSC 8 hyperlink start.
-        assert_eq!(buf, b"\x1b[1m\x1b]8;;https://example.com\x1b\\");
-    }
-
-    #[test]
-    fn test_diff_link_change_without_sgr_change() {
-        // Same SGR state, only the link differs: the old SGR-only diff would
-        // have emitted nothing. The combined diff must still toggle OSC 8.
-        let mut buf = Vec::new();
-        let from = Style::default().bold();
-        let to = Style::default().bold().link("https://example.com", "");
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        assert_eq!(buf, b"\x1b]8;;https://example.com\x1b\\");
-    }
-
-    #[test]
-    fn test_diff_removes_hyperlink() {
-        let mut buf = Vec::new();
-        let from = Style::default().link("https://example.com", "");
-        let to = Style::default();
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        // No SGR change, only the OSC 8 terminator.
-        assert_eq!(buf, b"\x1b]8;;\x1b\\");
-    }
-
-    #[test]
-    fn test_diff_identical_link_writes_nothing() {
-        let mut buf = Vec::new();
-        let s = Style::default().bold().link("https://example.com", "");
-        let wrote = write_style_diff(&mut buf, &s, &s).unwrap();
-        assert!(!wrote);
-        assert!(buf.is_empty());
-    }
-
+    // Hyperlink transitions moved to the pen when OSC 8 was separated from
+    // SGR: `write_style_diff` now emits SGR only. See `renderer::pen`.
     #[test]
     fn test_convert_style_notty() {
         let s = Style::default().bold().fg(Color::Red);
