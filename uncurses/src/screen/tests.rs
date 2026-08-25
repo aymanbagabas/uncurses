@@ -1034,7 +1034,7 @@ fn hyperlinks_emit_osc8_with_url() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (10, 1));
-        let style = Style::default().link("https://example.com", "");
+        let style = crate::cell::Style::new().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
@@ -1058,7 +1058,7 @@ fn hyperlinks_suppressed_under_disabled_profile() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (10, 1)).with_color_profile(Profile::Disabled);
-        let style = Style::default().link("https://example.com", "");
+        let style = crate::cell::Style::new().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
@@ -1189,7 +1189,7 @@ fn text_attribute_variants_emit_matching_sgr_params() {
             Style::default().bold(),
         ];
         for (i, st) in styles.iter().enumerate() {
-            screen.set_cell((i as u16, 0u16), &Cell::narrow("A").style(st.clone()));
+            screen.set_cell((i as u16, 0u16), &Cell::narrow("A").style(*st));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1749,7 +1749,7 @@ fn inline_render_resets_pen_before_every_newline() {
         screen.set_color_profile(crate::color::Profile::Ansi);
         let bg = Style::default().bg(Color::Blue);
         for y in 0..3u16 {
-            screen.set_str((0, y), "abcdefghij", bg.clone());
+            screen.set_str((0, y), "abcdefghij", bg);
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -2070,7 +2070,7 @@ fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
     let mut screen = Screen::for_test(Vec::new(), (10, 3));
     screen.set_fullscreen(true);
     for y in 0..3 {
-        screen.set_str((0, y), "0123456789", st.clone());
+        screen.set_str((0, y), "0123456789", st);
     }
     screen.set_cursor_position((0, 0));
     screen.render().unwrap();
@@ -2082,7 +2082,7 @@ fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
 
     // Wide cells, whose continuation columns the diff has to keep in step.
     let mut screen = Screen::for_test(Vec::new(), (12, 2));
-    screen.set_str((0, 0), "漢字テスト", st.clone());
+    screen.set_str((0, 0), "漢字テスト", st);
     screen.set_cursor_position((2, 0));
     screen.render().unwrap();
     assert_eq!(screen.diverge(), None, "wide cells");
@@ -2092,11 +2092,11 @@ fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
     let mut screen = Screen::for_test(Vec::new(), (12, 6));
     screen.set_fullscreen(true);
     for y in 0..6 {
-        screen.set_str((0, y), &format!("line{y}"), st.clone());
+        screen.set_str((0, y), &format!("line{y}"), st);
     }
     screen.render().unwrap();
     for y in 0..6 {
-        screen.set_str((0, y), &format!("line{}", y + 1), st.clone());
+        screen.set_str((0, y), &format!("line{}", y + 1), st);
     }
     screen.set_cursor_position((3, 3));
     screen.render().unwrap();
@@ -2104,7 +2104,7 @@ fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
 
     // A resize, whose repaint rebuilds both buffers.
     screen.resize((15, 4));
-    screen.set_str((0, 3), "grown", st.clone());
+    screen.set_str((0, 3), "grown", st);
     screen.render().unwrap();
     assert_eq!(screen.diverge(), None, "after a resize");
 }

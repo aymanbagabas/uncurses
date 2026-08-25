@@ -472,7 +472,7 @@ mod tests {
             .difference(Optimizations::CSR | Optimizations::IL_DL | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 4, opts);
         let bg_style = Style::default().bg(Color::Blue);
-        renderer.cur.set_style(bg_style.clone());
+        renderer.cur.set_style(bg_style);
         renderer.cur.set_pos(Position { y: 3, x: 0 });
         let mut new_buf = RenderBuffer::new(10, 4);
         new_buf.clear_touched();
@@ -528,9 +528,9 @@ mod tests {
             "cur_buf bottom row must be bg-only, got: {bottom_row:?}",
         );
         assert!(
-            bottom_row.iter().all(|c| c.style.fg.is_none()
-                && c.style.attrs.is_empty()
-                && c.style.underline_color.is_none()),
+            bottom_row.iter().all(|c| c.style.style.fg.is_none()
+                && c.style.style.attrs.is_empty()
+                && c.style.style.underline_color.is_none()),
             "freed cells must drop fg / attrs / underline_color"
         );
     }

@@ -127,7 +127,7 @@ fn paint_background(screen: &mut Screen<Stdout>) {
     let body_rows = h.saturating_sub(1);
     for y in 0..body_rows {
         let line = BACKGROUND[(y as usize) % BACKGROUND.len()];
-        screen.set_str((0, y), line, body.clone());
+        screen.set_str((0, y), line, body);
     }
 }
 
@@ -140,7 +140,7 @@ fn paint_status(screen: &mut Screen<Stdout>, modal_open: bool) {
     let status = Style::default().fg(Color::Black).bg(Color::BrightWhite);
     screen.fill_rect(
         Rect::new(0, y, screen.width(), 1),
-        &Cell::narrow(" ").style(status.clone()),
+        &Cell::narrow(" ").style(status),
     );
     let label = if modal_open {
         " modal: open    space/m: toggle    q: quit "
@@ -175,44 +175,30 @@ fn paint_modal(program: &mut Program<Stdin, Stdout>, rect: Rect) {
     // Solid fill so background text never bleeds through the modal.
     program
         .screen_mut()
-        .fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
+        .fill_rect(rect, &Cell::narrow(" ").style(body));
 
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;
     // Borders.
     for x in (rect.x + 1)..right {
-        program
-            .screen_mut()
-            .set_str((x, rect.y), "─", frame.clone());
-        program
-            .screen_mut()
-            .set_str((x, bottom), "─", frame.clone());
+        program.screen_mut().set_str((x, rect.y), "─", frame);
+        program.screen_mut().set_str((x, bottom), "─", frame);
     }
     for y in (rect.y + 1)..bottom {
-        program
-            .screen_mut()
-            .set_str((rect.x, y), "│", frame.clone());
-        program.screen_mut().set_str((right, y), "│", frame.clone());
+        program.screen_mut().set_str((rect.x, y), "│", frame);
+        program.screen_mut().set_str((right, y), "│", frame);
     }
-    program
-        .screen_mut()
-        .set_str((rect.x, rect.y), "┌", frame.clone());
-    program
-        .screen_mut()
-        .set_str((right, rect.y), "┐", frame.clone());
-    program
-        .screen_mut()
-        .set_str((rect.x, bottom), "└", frame.clone());
-    program
-        .screen_mut()
-        .set_str((right, bottom), "┘", frame.clone());
+    program.screen_mut().set_str((rect.x, rect.y), "┌", frame);
+    program.screen_mut().set_str((right, rect.y), "┐", frame);
+    program.screen_mut().set_str((rect.x, bottom), "└", frame);
+    program.screen_mut().set_str((right, bottom), "┘", frame);
 
     // Title bar.
     let title = " Modal ";
     let title_x = rect.x + (rect.width - title.chars().count() as u16) / 2;
     program
         .screen_mut()
-        .set_str((title_x, rect.y), title, frame.clone());
+        .set_str((title_x, rect.y), title, frame);
 
     // Body wraps inside the modal's inner area.
     let inner = Rect::new(
@@ -226,7 +212,7 @@ fn paint_modal(program: &mut Program<Stdin, Stdout>, rect: Rect) {
                      modal is dismissed.";
     program
         .screen_mut()
-        .set_str_rect_wrap(inner, body_text, WrapMode::Wrap, body.clone());
+        .set_str_rect_wrap(inner, body_text, WrapMode::Wrap, body);
 
     // Footer hint inside the modal.
     let footer = "press space / m to close";

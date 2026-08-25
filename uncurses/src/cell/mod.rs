@@ -66,11 +66,9 @@
 
 mod style;
 
-pub use style::Style;
+pub use style::{Style, write_diff};
 
 use compact_str::CompactString;
-
-use crate::style::Style as Sgr;
 
 /// Structural role of a cell within a terminal grid.
 ///
@@ -447,6 +445,6 @@ mod tests {
     #[test]
     fn test_cell_with_style() {
         let c = Cell::narrow("x").style(Style::default().bold());
-        assert!(c.style.attrs.contains(crate::style::AttrFlags::BOLD));
+        assert!(c.style.style.attrs.contains(crate::style::AttrFlags::BOLD));
     }
 }

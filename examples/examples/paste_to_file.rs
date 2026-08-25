@@ -138,7 +138,7 @@ fn render(screen: &mut Screen<Stdout>, last: Option<&Outcome>) {
     screen.clear();
     let dim = Style::default().fg(Color::BrightBlack);
     let hint = format!("Paste text. Pastes over {THRESHOLD} bytes spill to a file. q quits.");
-    screen.set_str((0, 0), &hint, dim.clone());
+    screen.set_str((0, 0), &hint, dim);
 
     let height = screen.height();
     match last {
@@ -154,7 +154,7 @@ fn render(screen: &mut Screen<Stdout>, last: Option<&Outcome>) {
                 if row >= height {
                     break;
                 }
-                screen.set_str((0, row), line, body.clone());
+                screen.set_str((0, row), line, body);
             }
         }
         Some(Outcome::File { path, bytes }) => {

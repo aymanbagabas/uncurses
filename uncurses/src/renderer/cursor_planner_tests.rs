@@ -201,9 +201,9 @@ fn backspace_beats_cub_for_short_leftward() {
 fn styled_overwrite_beats_cuf() {
     let mut r = setup_renderer(80, 24, movement_opts());
     let style = Style::default().bold();
-    r.cur.set_style(style.clone());
+    r.cur.set_style(style);
     let mut line = vec![Cell::BLANK; 80];
-    line[0] = Cell::narrow("A").style(style.clone());
+    line[0] = Cell::narrow("A").style(style);
     line[1] = Cell::narrow("B").style(style);
 
     let actual = relative_move(

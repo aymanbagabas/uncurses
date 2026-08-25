@@ -23,6 +23,8 @@ pub(super) struct Cursor {
     /// state by [`Renderer::update_pen`]. Mutate via
     /// [`Cursor::set_style`] so the pen-cache invariant holds.
     style: Style,
+    /// The OSC 8 link currently open on the terminal, if any.
+    link: Option<std::sync::Arc<crate::style::Link>>,
     /// Tracked cursor column, or `None` when the column is unknown.
     ///
     /// `None` means the value is untrustworthy and the position must be
@@ -103,6 +105,14 @@ impl Cursor {
 
     /// Adopt `style` as the active pen style, invalidating any cached
     /// pen-derived blanks so they are rebuilt on next access.
+    pub(super) fn link(&self) -> &Option<std::sync::Arc<crate::style::Link>> {
+        &self.link
+    }
+
+    pub(super) fn set_link(&mut self, link: Option<std::sync::Arc<crate::style::Link>>) {
+        self.link = link;
+    }
+
     pub(super) fn set_style(&mut self, style: Style) {
         self.style = style;
         self.mark_pen_changed();
@@ -122,7 +132,7 @@ impl Cursor {
     /// lazily on first access after a pen change.
     pub(super) fn current_blank(&mut self) -> &Cell {
         if self.blank_dirty {
-            self.blank = Cell::BLANK.style(self.style.clone());
+            self.blank = Cell::BLANK.style(self.style);
             self.blank_dirty = false;
         }
         &self.blank
@@ -155,6 +165,7 @@ impl Default for Cursor {
     fn default() -> Self {
         Self {
             style: Style::default(),
+            link: None,
             // Until proven otherwise the cursor is wherever the previous
             // program left it; both axes are untrusted (unknown).
             x: None,

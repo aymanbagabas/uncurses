@@ -270,7 +270,7 @@ pub fn overwrite_cost(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            if &cell.style != style {
+            if &cell.style.style != style {
                 return None;
             }
             cost += cell.width() as usize;

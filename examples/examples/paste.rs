@@ -65,7 +65,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
 fn render(screen: &mut Screen<Stdout>, last: Option<&str>) {
     screen.clear();
     let dim = Style::default().fg(Color::BrightBlack);
-    screen.set_str((0, 0), "Paste some text. q quits.", dim.clone());
+    screen.set_str((0, 0), "Paste some text. q quits.", dim);
 
     match last {
         None => {
@@ -84,7 +84,7 @@ fn render(screen: &mut Screen<Stdout>, last: Option<&str>) {
                 if row >= height {
                     break;
                 }
-                screen.set_str((0, row), line, body.clone());
+                screen.set_str((0, row), line, body);
             }
         }
     }

@@ -738,7 +738,7 @@ impl World {
 fn put(screen: &mut Screen<Stdout>, x: u16, y: u16, glyph: &str, style: Style) {
     let pos = Position { x, y };
     let style = if style.bg.is_none() {
-        match screen.cell_mut(pos).and_then(|c| c.style.bg) {
+        match screen.cell_mut(pos).and_then(|c| c.style.style.bg) {
             Some(bg) => style.bg(bg),
             None => style,
         }

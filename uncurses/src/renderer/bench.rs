@@ -37,8 +37,8 @@ extern crate test;
 
 use test::{Bencher, black_box};
 
-use crate::color::Color;
 use crate::cell::Cell;
+use crate::color::Color;
 use crate::renderer::{RenderBuffer, Renderer};
 use crate::style::Style;
 
@@ -87,7 +87,10 @@ fn style_churn_buffer(offset: u8) -> RenderBuffer {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             let style = Style::default().fg(Color::Rgb(x as u8, y as u8, offset));
-            buf.set_cell((x, y), &Cell::narrow(glyph(x, y, offset).to_string()).style(style));
+            buf.set_cell(
+                (x, y),
+                &Cell::narrow(glyph(x, y, offset).to_string()).style(style),
+            );
         }
     }
     buf
@@ -100,7 +103,10 @@ fn styled_runs_buffer(offset: u8) -> RenderBuffer {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             let style = Style::default().fg(Color::Indexed(((x / 8 + y) % 16) as u8));
-            buf.set_cell((x, y), &Cell::narrow(glyph(x, y, offset).to_string()).style(style));
+            buf.set_cell(
+                (x, y),
+                &Cell::narrow(glyph(x, y, offset).to_string()).style(style),
+            );
         }
     }
     buf

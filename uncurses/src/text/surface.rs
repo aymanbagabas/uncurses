@@ -26,7 +26,6 @@
 use crate::buffer::SurfaceMut;
 use crate::cell::Cell;
 use crate::layout::{Position, Rect};
-use crate::style::Style;
 
 use super::{WidthMode, WrapMode, grapheme_cells};
 
@@ -92,7 +91,12 @@ pub trait TextSurface: SurfaceMut {
     ///
     /// Use [`set_str_wrap`](Self::set_str_wrap) when text should continue on
     /// following rows instead of truncating at the right edge.
-    fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
+    fn set_str(
+        &mut self,
+        pos: impl Into<Position>,
+        s: &str,
+        style: impl Into<crate::cell::Style>,
+    ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let clip = self.bounds();
         paint_literal(
@@ -135,7 +139,7 @@ pub trait TextSurface: SurfaceMut {
         pos: impl Into<Position>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<crate::cell::Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let clip = self.bounds();
@@ -168,7 +172,7 @@ pub trait TextSurface: SurfaceMut {
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
-        style: impl Into<Style>,
+        style: impl Into<crate::cell::Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let rect = rect.into();
@@ -211,7 +215,7 @@ pub trait TextSurface: SurfaceMut {
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<crate::cell::Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let rect = rect.into();
@@ -260,7 +264,7 @@ pub trait TextSurface: SurfaceMut {
         pos: impl Into<Position>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<crate::cell::Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let clip = self.bounds();
@@ -302,7 +306,7 @@ pub trait TextSurface: SurfaceMut {
         rect: impl Into<Rect>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<crate::cell::Style>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let rect = rect.into();
@@ -386,7 +390,7 @@ pub trait TextSurface: SurfaceMut {
 /// measured cell width.
 struct LiteralTail<'a> {
     text: &'a str,
-    style: &'a Style,
+    style: &'a crate::cell::Style,
     width: u16,
 }
 
@@ -403,7 +407,7 @@ fn paint_literal<S: SurfaceMut + ?Sized>(
     wrap: WrapMode,
     mode: WidthMode,
     eaw_wide: bool,
-    style: &Style,
+    style: &crate::cell::Style,
 ) -> Position {
     paint_literal_inner(target, start, clip, s, wrap, mode, eaw_wide, style, None)
 }
@@ -420,7 +424,7 @@ fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
     clip: Rect,
     s: &str,
     tail_text: &str,
-    tail_style: &Style,
+    tail_style: &crate::cell::Style,
     mode: WidthMode,
     eaw_wide: bool,
 ) -> Position {
@@ -446,7 +450,7 @@ fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
         WrapMode::Truncate,
         mode,
         eaw_wide,
-        &Style::default(),
+        &crate::cell::Style::default(),
         tail,
     )
 }
@@ -460,7 +464,7 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
     wrap: WrapMode,
     mode: WidthMode,
     eaw_wide: bool,
-    style: &Style,
+    style: &crate::cell::Style,
     tail: Option<LiteralTail<'_>>,
 ) -> Position {
     if clip.is_empty() {

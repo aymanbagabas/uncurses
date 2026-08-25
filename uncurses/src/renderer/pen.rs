@@ -5,38 +5,57 @@ use std::io;
 
 use crate::cell::Cell;
 use crate::renderer::Renderer;
-use crate::style::Style;
 use crate::style::diff::write_style_diff;
 
 impl Renderer {
     /// Update the pen with minimal escape sequences. `None` resets to
     /// the default style (emits SGR reset and/or hyperlink terminator
     /// only when the current pen actually has something set).
+    /// Bring the terminal's pen in line with `cell`.
+    ///
+    /// SGR and OSC 8 are separate state machines on the wire: a run can
+    /// change style without breaking an open link, and a link can open or
+    /// close without disturbing the style. They transition independently.
     pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
-        let target_style = match cell {
-            Some(c) => &c.style,
-            None => &Style::default(),
-        };
+        self.update_sgr(out, cell)?;
+        self.update_link(out, cell)
+    }
 
-        // Raw-equality fast path: most cells in a styled run share the
-        // exact same style (including any open link) as the last cell
-        // that updated the pen, so a single PartialEq check (no clones,
-        // no color-profile conversion) short-circuits the whole
-        // function.
-        if target_style == self.cur.style() {
+    fn update_sgr(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
+        let target = cell.map(|c| c.style.style).unwrap_or_default();
+        // Most cells in a run share the previous cell's style, and `Style`
+        // is a small `Copy` value, so this is a register comparison.
+        if target == *self.cur.style() {
             return Ok(());
         }
-
-        let to = self.color_profile.convert_style(target_style);
+        let to = self.color_profile.convert_style(&target);
         let from = self.color_profile.convert_style(self.cur.style());
-
-        // `write_style_diff` emits both the SGR delta and the OSC 8 hyperlink
-        // delta. Both sides come from `convert_style`, which drops the link
-        // entirely under `Profile::Disabled`, so OSC 8 is auto-suppressed
-        // there with no special-case code here.
         write_style_diff(out, &from, &to)?;
+        self.cur.set_style(target);
+        Ok(())
+    }
 
-        self.cur.set_style(target_style.clone());
+    fn update_link(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
+        // A disabled profile drops hyperlinks the same way it drops colour.
+        let target = match cell {
+            Some(c) if self.color_profile.profile() != crate::color::Profile::Disabled => {
+                c.style.link.clone()
+            }
+            _ => None,
+        };
+        let same = match (&target, self.cur.link()) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b) || a == b,
+            _ => false,
+        };
+        if same {
+            return Ok(());
+        }
+        match &target {
+            Some(l) => crate::ansi::hyperlink::write_hyperlink(out, &l.url, &l.params)?,
+            None => out.extend_from_slice(crate::ansi::hyperlink::HYPERLINK_RESET),
+        }
+        self.cur.set_link(target);
         Ok(())
     }
 

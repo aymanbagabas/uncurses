@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::cell::Cell;
+use uncurses::cell::Style as CellStyle;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::layout::Position;
@@ -105,7 +106,7 @@ fn write(screen: &mut Screen<Stdout>, x: u16, y: u16, s: &str, style: &Style) {
 }
 
 fn write_link(screen: &mut Screen<Stdout>, x: u16, y: u16, s: &str, style: &Style, url: &str) {
-    screen.set_str((x, y), s, style.clone().link(url, ""));
+    screen.set_str((x, y), s, CellStyle::from(*style).link(url, ""));
 }
 
 fn footer(program: &mut Program<Stdin, Stdout>, a: Anchor, hint: &str) {
@@ -290,7 +291,7 @@ fn scene_panels(program: &mut Program<Stdin, Stdout>) -> std::io::Result<bool> {
                 let x = a.x + dx;
                 let y = a.y + dy;
                 let style = Style::default().bg(bg).fg(fg);
-                let cell = Cell::narrow(" ").style(&style);
+                let cell = Cell::narrow(" ").style(style);
                 for yy in y..y + h {
                     for xx in x..x + w {
                         program.screen_mut().set_cell(Position::new(xx, yy), &cell);
