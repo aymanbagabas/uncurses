@@ -69,7 +69,7 @@ impl Bounded for Window {
 }
 
 impl Surface for Window {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<Cell> {
         self.buffer.cell(pos)
     }
 }
@@ -77,10 +77,6 @@ impl Surface for Window {
 impl SurfaceMut for Window {
     fn set_cell(&mut self, pos: Position, cell: &Cell) {
         self.buffer.set_cell(pos, cell);
-    }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.buffer.cell_mut(pos)
     }
 }
 
@@ -93,14 +89,20 @@ mod tests {
     fn write_then_present_offsets_by_position() {
         let mut src = Window::new(3, 2);
         src.set_position((5, 1));
-        src.set_cell(Position::new(0, 0), &Cell::narrow("A"));
-        src.set_cell(Position::new(2, 1), &Cell::narrow("B"));
+        src.set_cell(Position::new(0, 0), &Cell::from('A'));
+        src.set_cell(Position::new(2, 1), &Cell::from('B'));
 
         let mut dst = Buffer::new(10, 4);
         src.present(&mut dst);
 
-        assert_eq!(dst.cell(Position::new(5, 1)).unwrap().content(), "A");
-        assert_eq!(dst.cell(Position::new(7, 2)).unwrap().content(), "B");
+        assert_eq!(
+            dst.cell(Position::new(5, 1)).unwrap().content.char(),
+            Some('A')
+        );
+        assert_eq!(
+            dst.cell(Position::new(7, 2)).unwrap().content.char(),
+            Some('B')
+        );
         // Outside the window's footprint stays blank.
         assert!(dst.cell(Position::new(0, 0)).unwrap().is_blank());
     }
@@ -109,12 +111,18 @@ mod tests {
     fn present_clips_to_target_bounds() {
         let mut src = Window::new(4, 4);
         src.set_position((8, 2));
-        src.fill(&Cell::narrow("X"));
+        src.fill(&Cell::from('X'));
         // Target is 10x3 — only the top-left 2x1 of src lands.
         let mut dst = Buffer::new(10, 3);
         src.present(&mut dst);
-        assert_eq!(dst.cell(Position::new(8, 2)).unwrap().content(), "X");
-        assert_eq!(dst.cell(Position::new(9, 2)).unwrap().content(), "X");
+        assert_eq!(
+            dst.cell(Position::new(8, 2)).unwrap().content.char(),
+            Some('X')
+        );
+        assert_eq!(
+            dst.cell(Position::new(9, 2)).unwrap().content.char(),
+            Some('X')
+        );
         // Below target bottom — never written.
         assert!(dst.cell(Position::new(8, 0)).unwrap().is_blank());
     }

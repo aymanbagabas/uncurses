@@ -87,13 +87,13 @@ impl ColorCache {
                 fg: None,
                 bg: None,
                 underline_color: None,
-                ..style.clone()
+                ..*style
             }),
             Profile::Ansi | Profile::Ansi256 => Cow::Owned(Style {
                 fg: style.fg.and_then(|c| self.convert(c)),
                 bg: style.bg.and_then(|c| self.convert(c)),
                 underline_color: style.underline_color.and_then(|c| self.convert(c)),
-                ..style.clone()
+                ..*style
             }),
         }
     }

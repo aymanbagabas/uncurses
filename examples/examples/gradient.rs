@@ -162,7 +162,7 @@ fn draw_gradient(screen: &mut Screen<Stdout>, w: u16, h: u16) {
         for x in 0..w {
             let left = color_at(x * 2, y, w, h);
             let right = color_at(x * 2 + 1, y, w, h);
-            let cell = Cell::narrow("▌").style(Style::default().fg(left).bg(right));
+            let cell = Cell::new("▌", Style::default().fg(left).bg(right));
             screen.set_cell((x, y), &cell);
         }
     }
@@ -237,27 +237,23 @@ fn draw_info_box(screen: &mut Screen<Stdout>, bx: u16, by: u16, color: Color) {
     let dim = Style::default().fg(Color::BrightBlack).bg(bg);
 
     let span = usize::from(BOX_W - 2);
-    screen.set_str((bx, by), &format!("╭{}╮", "─".repeat(span)), border.clone());
+    screen.set_str((bx, by), &format!("╭{}╮", "─".repeat(span)), border);
     screen.set_str(
         (bx, by + BOX_H - 1),
         &format!("╰{}╯", "─".repeat(span)),
-        border.clone(),
+        border,
     );
     for row in 1..BOX_H - 1 {
-        screen.set_str((bx, by + row), "│", border.clone());
-        screen.set_str((bx + 1, by + row), &" ".repeat(span), panel.clone());
-        screen.set_str((bx + BOX_W - 1, by + row), "│", border.clone());
+        screen.set_str((bx, by + row), "│", border);
+        screen.set_str((bx + 1, by + row), &" ".repeat(span), panel);
+        screen.set_str((bx + BOX_W - 1, by + row), "│", border);
     }
 
     let cx = bx + 2;
     // Solid color swatch from the background color.
     screen.set_str((cx, by + 1), "    ", Style::default().bg(color));
-    screen.set_str((cx + 5, by + 1), &color.to_hex(), panel.clone());
-    screen.set_str(
-        (cx, by + 2),
-        &format!("rgb {r:>3} {g:>3} {b:>3}"),
-        dim.clone(),
-    );
+    screen.set_str((cx + 5, by + 1), &color.to_hex(), panel);
+    screen.set_str((cx, by + 2), &format!("rgb {r:>3} {g:>3} {b:>3}"), dim);
     screen.set_str(
         (cx, by + 3),
         &format!(

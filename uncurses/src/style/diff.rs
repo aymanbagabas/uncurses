@@ -1,10 +1,11 @@
 //! Style diffing for compact visual transitions.
 //!
 //! A diff compares two [`Style`] values and emits only what changed to move
-//! the terminal from `from` to `to`. [`write_style_diff`] emits both deltas:
-//! the SGR delta (a single `CSI … m` sequence) followed by the OSC 8 hyperlink
-//! delta. SGR and OSC 8 are independent terminal state machines, so each is
-//! written only when its own state changed.
+//! the terminal from `from` to `to`, as a single `CSI … m` sequence.
+//!
+//! SGR and OSC 8 are independent terminal state machines and hyperlinks are
+//! a property of the cell, so the OSC 8 delta is emitted by the renderer's
+//! pen rather than here.
 //!
 //! [`write_sgr_diff`] is the SGR-only core: it compares just the SGR-relevant
 //! fields and ignores hyperlinks. It uses targeted reset parameters when
@@ -26,21 +27,11 @@ use super::{AttrFlags, Style, UnderlineStyle};
 /// independent terminal state machines; this writes whichever of them changed.
 ///
 /// Returns `Ok(true)` if any bytes were written and `Ok(false)` if `from` and
-/// `to` are visually identical (same SGR state and same link).
+/// `to` have identical SGR state.
 ///
 /// The function returns I/O errors from `w` and does not panic.
 pub(crate) fn write_style_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<bool> {
-    let wrote_sgr = write_sgr_diff(w, from, to)?;
-
-    let wrote_link = from.link != to.link;
-    if wrote_link {
-        match to.link.as_deref() {
-            Some(link) => crate::ansi::hyperlink::write_hyperlink(w, &link.url, &link.params)?,
-            None => w.write_all(crate::ansi::hyperlink::HYPERLINK_RESET)?,
-        }
-    }
-
-    Ok(wrote_sgr || wrote_link)
+    write_sgr_diff(w, from, to)
 }
 
 /// Write a compact SGR sequence that transitions from `from` to `to`.
@@ -208,13 +199,13 @@ pub(crate) fn convert_style(style: &Style, profile: crate::color::Profile) -> St
             fg: None,
             bg: None,
             underline_color: None,
-            ..style.clone()
+            ..*style
         },
         _ => Style {
             fg: style.fg.and_then(|c| profile.convert(c)),
             bg: style.bg.and_then(|c| profile.convert(c)),
             underline_color: style.underline_color.and_then(|c| profile.convert(c)),
-            ..style.clone()
+            ..*style
         },
     }
 }
@@ -374,49 +365,6 @@ mod tests {
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[34;48;5;7m");
-    }
-
-    #[test]
-    fn test_diff_adds_hyperlink_after_sgr() {
-        let mut buf = Vec::new();
-        let from = Style::default();
-        let to = Style::default().bold().link("https://example.com", "");
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        // SGR opener first, then OSC 8 hyperlink start.
-        assert_eq!(buf, b"\x1b[1m\x1b]8;;https://example.com\x1b\\");
-    }
-
-    #[test]
-    fn test_diff_link_change_without_sgr_change() {
-        // Same SGR state, only the link differs: the old SGR-only diff would
-        // have emitted nothing. The combined diff must still toggle OSC 8.
-        let mut buf = Vec::new();
-        let from = Style::default().bold();
-        let to = Style::default().bold().link("https://example.com", "");
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        assert_eq!(buf, b"\x1b]8;;https://example.com\x1b\\");
-    }
-
-    #[test]
-    fn test_diff_removes_hyperlink() {
-        let mut buf = Vec::new();
-        let from = Style::default().link("https://example.com", "");
-        let to = Style::default();
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        // No SGR change, only the OSC 8 terminator.
-        assert_eq!(buf, b"\x1b]8;;\x1b\\");
-    }
-
-    #[test]
-    fn test_diff_identical_link_writes_nothing() {
-        let mut buf = Vec::new();
-        let s = Style::default().bold().link("https://example.com", "");
-        let wrote = write_style_diff(&mut buf, &s, &s).unwrap();
-        assert!(!wrote);
-        assert!(buf.is_empty());
     }
 
     #[test]

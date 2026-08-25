@@ -9,9 +9,9 @@
 use std::io::{self, Write};
 
 use crate::ansi::{cost, cursor};
-use crate::cell::Cell;
 use crate::renderer::Renderer;
 use crate::renderer::caps::Optimizations;
+use crate::renderer::packed::Ref;
 
 /// Shape selected for the vertical leg.
 #[derive(Clone, Copy, Debug)]
@@ -208,7 +208,7 @@ impl Renderer {
         &self,
         fx: u16,
         tx: u16,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<&[Ref]>,
         use_tabs: bool,
         use_backspace: bool,
     ) -> HorizontalPlan {
@@ -343,7 +343,7 @@ impl Renderer {
         &self,
         out: &mut Vec<u8>,
         shape: HorizontalShape,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<&[Ref]>,
     ) -> io::Result<()> {
         match shape {
             HorizontalShape::None => Ok(()),
@@ -417,7 +417,7 @@ impl Renderer {
     /// `overwrite_line` is supplied and pen-compatible.
     fn forward_residual_cost(
         &self,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<&[Ref]>,
         fx: u16,
         tx: u16,
     ) -> (ForwardKind, usize) {
@@ -435,7 +435,8 @@ impl Renderer {
         // iteration-free on long forward moves.
         if (n as usize) < cuf
             && let Some(line) = overwrite_line
-            && let Some(ow) = cost::overwrite_cost(line, self.cur.style(), fx, tx)
+            && let Some(ow) =
+                cost::overwrite_cost(self.arena.as_ref(), line, self.cur.style(), fx, tx)
             && ow < best_cost
         {
             best_kind = ForwardKind::Overwrite { fx, tx };
@@ -448,7 +449,7 @@ impl Renderer {
         &self,
         out: &mut Vec<u8>,
         kind: ForwardKind,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<&[Ref]>,
     ) -> io::Result<()> {
         match kind {
             ForwardKind::None => Ok(()),
@@ -458,6 +459,7 @@ impl Renderer {
                     .expect("overwrite chosen without overwrite_line — planner contract bug");
                 let mut tmp = Vec::with_capacity((tx - fx) as usize);
                 let ok = super::overwrite::collect_overwrite_bytes(
+                    self.arena.as_ref(),
                     &mut tmp,
                     line,
                     self.cur.style(),
@@ -552,14 +554,11 @@ mod tests {
     /// the cost helper); we don't assert byte equality for those.
     #[test]
     fn horizontal_cost_matches_emit_bytes_ascii_overwrite() {
-        use crate::cell::Cell;
+        use crate::renderer::packed::Ref;
         let r = renderer();
         // Cells match the active pen so overwrite is eligible.
-        let line: Vec<Cell> = (0..20)
-            .map(|i| {
-                Cell::narrow(((b'a' + (i as u8 % 26)) as char).to_string())
-                    .style(r.cur.style().clone())
-            })
+        let line: Vec<Ref> = (0..20)
+            .map(|i| Ref::narrow((b'a' + (i as u8 % 26)) as char).with_style(*r.cur.style()))
             .collect();
         for fx in 0u16..20 {
             for tx in fx..20 {

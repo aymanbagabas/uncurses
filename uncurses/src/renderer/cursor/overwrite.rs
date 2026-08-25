@@ -2,7 +2,7 @@
 //! is known, walking the cursor forward by re-emitting the row's own
 //! cell bytes can be shorter than CUF/HPA.
 
-use crate::cell::Cell;
+use crate::renderer::packed::Ref;
 use crate::style::Style;
 
 /// Collect the UTF-8 bytes of cells in `line[from_x..to_x]` whose
@@ -13,8 +13,9 @@ use crate::style::Style;
 /// extends past the row. Continuation cells (`width == 0`) are
 /// silently skipped.
 pub(in crate::renderer) fn collect_overwrite_bytes(
+    arena: &dyn crate::renderer::packed::arena::Arena,
     out: &mut Vec<u8>,
-    line: &[Cell],
+    line: &[Ref],
     style: &Style,
     from_x: u16,
     to_x: u16,
@@ -36,7 +37,7 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            if &cell.style != style {
+            if &arena.style(cell.style) != style {
                 return false;
             }
             i += cell.width() as usize;
@@ -49,7 +50,7 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            out.extend_from_slice(cell.content().as_bytes());
+            out.extend_from_slice(arena.grapheme(cell.content_id()).as_bytes());
             i += cell.width() as usize;
             continue;
         }
@@ -69,20 +70,34 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, should_panic)]
     fn out_of_bounds_range_refuses_candidate() {
-        let line = vec![Cell::narrow("a"); 4];
+        let line = vec![Ref::narrow('a'); 4];
         let style = Style::default();
         let mut out = Vec::new();
-        let accepted = collect_overwrite_bytes(&mut out, &line, &style, 0, 8);
+        let accepted = collect_overwrite_bytes(
+            crate::renderer::packed::arena::global_ref(),
+            &mut out,
+            &line,
+            &style,
+            0,
+            8,
+        );
         assert!(!accepted, "OOB range must return false in release");
         assert!(out.is_empty());
     }
 
     #[test]
     fn in_bounds_pen_match_writes_bytes() {
-        let line = vec![Cell::narrow("x"); 3];
+        let line = vec![Ref::narrow('x'); 3];
         let style = Style::default();
         let mut out = Vec::new();
-        assert!(collect_overwrite_bytes(&mut out, &line, &style, 0, 3));
+        assert!(collect_overwrite_bytes(
+            crate::renderer::packed::arena::global_ref(),
+            &mut out,
+            &line,
+            &style,
+            0,
+            3
+        ));
         assert_eq!(out, b"xxx");
     }
 }

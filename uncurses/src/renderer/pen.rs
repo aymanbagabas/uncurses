@@ -1,10 +1,11 @@
-//! Pen state transitions: SGR and OSC 8 deltas for the renderer's
+//! CellStyle state transitions: SGR and OSC 8 deltas for the renderer's
 //! tracked cell style.
 
+use crate::renderer::packed::arena::Arena as _;
 use std::io;
 
-use crate::cell::Cell;
 use crate::renderer::Renderer;
+use crate::renderer::packed::Ref;
 use crate::style::Style;
 use crate::style::diff::write_style_diff;
 
@@ -12,31 +13,57 @@ impl Renderer {
     /// Update the pen with minimal escape sequences. `None` resets to
     /// the default style (emits SGR reset and/or hyperlink terminator
     /// only when the current pen actually has something set).
-    pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
-        let target_style = match cell {
-            Some(c) => &c.style,
-            None => &Style::default(),
+    pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Ref>) -> io::Result<()> {
+        // SGR and OSC 8 are independent terminal state machines, so the
+        // style and the hyperlink are transitioned separately: a run can
+        // change style without breaking an open link, and vice versa.
+        let target_id = match cell {
+            Some(c) => c.style,
+            None => crate::renderer::packed::arena::EMPTY_STYLE,
         };
 
-        // Raw-equality fast path: most cells in a styled run share the
-        // exact same style (including any open link) as the last cell
-        // that updated the pen, so a single PartialEq check (no clones,
-        // no color-profile conversion) short-circuits the whole
-        // function.
-        if target_style == self.cur.style() {
-            return Ok(());
+        // Id fast path: styles are interned, so equal ids mean equal
+        // styles. Most cells in a run share the previous cell's style, so
+        // this short-circuits on one integer compare rather than a
+        // field-by-field `Style` comparison.
+        if target_id != self.cur.style_id() {
+            let target_style = match cell {
+                Some(c) => self.arena.style(c.style),
+                None => Style::default(),
+            };
+
+            let to = self.color_profile.convert_style(&target_style);
+            let from = self.color_profile.convert_style(self.cur.style());
+            write_style_diff(out, &from, &to)?;
+            self.cur.set_style_with_id(target_style, target_id);
         }
 
-        let to = self.color_profile.convert_style(target_style);
-        let from = self.color_profile.convert_style(self.cur.style());
+        self.update_link(out, cell)?;
+        Ok(())
+    }
 
-        // `write_style_diff` emits both the SGR delta and the OSC 8 hyperlink
-        // delta. Both sides come from `convert_style`, which drops the link
-        // entirely under `Profile::Disabled`, so OSC 8 is auto-suppressed
-        // there with no special-case code here.
-        write_style_diff(out, &from, &to)?;
-
-        self.cur.set_style(target_style.clone());
+    /// Emit the OSC 8 delta for `cell`, closing any open hyperlink when the
+    /// target cell has none.
+    ///
+    /// Hyperlinks are suppressed entirely when the color profile disables
+    /// styling, matching the SGR path.
+    fn update_link(&mut self, out: &mut Vec<u8>, cell: Option<&Ref>) -> io::Result<()> {
+        let target = match cell {
+            Some(c) if self.color_profile.profile() != crate::color::Profile::Disabled => c.link,
+            _ => crate::renderer::packed::arena::EMPTY_LINK,
+        };
+        if target == self.cur.link_id() {
+            return Ok(());
+        }
+        // An empty URL is the OSC 8 close, so the terminator covers both
+        // "no link" and an explicitly cleared one.
+        let link = crate::renderer::packed::arena::GLOBAL.link(target);
+        if link.is_empty() {
+            out.extend_from_slice(crate::ansi::hyperlink::HYPERLINK_RESET);
+        } else {
+            crate::ansi::hyperlink::write_hyperlink(out, &link.url, &link.params)?;
+        }
+        self.cur.set_link_id(target);
         Ok(())
     }
 
@@ -46,5 +73,87 @@ impl Renderer {
     /// neither leaks a half-open hyperlink to the terminal.
     pub(crate) fn reset_pen(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
         self.update_pen(out, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::renderer::Renderer;
+    use crate::renderer::packed::Ref;
+
+    const URL: &str = "https://example.com";
+    const OPEN: &[u8] = b"\x1b]8;;https://example.com\x1b\\";
+    const CLOSE: &[u8] = b"\x1b]8;;\x1b\\";
+
+    #[test]
+    fn opens_and_closes_a_hyperlink() {
+        let mut r = Renderer::new();
+        let mut out = Vec::new();
+        r.update_pen(&mut out, Some(&Ref::narrow('a').with_link(URL, "")))
+            .unwrap();
+        assert_eq!(out, OPEN);
+
+        out.clear();
+        r.update_pen(&mut out, Some(&Ref::narrow('b'))).unwrap();
+        assert_eq!(out, CLOSE);
+    }
+
+    #[test]
+    fn a_link_survives_an_sgr_change() {
+        // OSC 8 and SGR are independent state machines: restyling a cell
+        // inside a link span must not close the link.
+        let mut r = Renderer::new();
+        let mut out = Vec::new();
+        r.update_pen(&mut out, Some(&Ref::narrow('a').with_link(URL, "")))
+            .unwrap();
+
+        out.clear();
+        let bold = Ref::narrow('b')
+            .with_style(crate::style::Style::default().bold())
+            .with_link(URL, "");
+        r.update_pen(&mut out, Some(&bold)).unwrap();
+        assert_eq!(out, b"\x1b[1m");
+    }
+
+    #[test]
+    fn an_sgr_run_survives_a_link_change() {
+        let mut r = Renderer::new();
+        let mut out = Vec::new();
+        let bold = crate::style::Style::default().bold();
+        r.update_pen(&mut out, Some(&Ref::narrow('a').with_style(bold)))
+            .unwrap();
+
+        // Same style, link added: only OSC 8 should move.
+        out.clear();
+        r.update_pen(
+            &mut out,
+            Some(&Ref::narrow('b').with_style(bold).with_link(URL, "")),
+        )
+        .unwrap();
+        assert_eq!(out, OPEN);
+    }
+
+    #[test]
+    fn an_unchanged_link_writes_nothing() {
+        let mut r = Renderer::new();
+        let mut out = Vec::new();
+        let cell = Ref::narrow('a').with_link(URL, "");
+        r.update_pen(&mut out, Some(&cell)).unwrap();
+
+        out.clear();
+        r.update_pen(&mut out, Some(&cell)).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn reset_pen_closes_an_open_link() {
+        let mut r = Renderer::new();
+        let mut out = Vec::new();
+        r.update_pen(&mut out, Some(&Ref::narrow('a').with_link(URL, "")))
+            .unwrap();
+
+        out.clear();
+        r.reset_pen(&mut out).unwrap();
+        assert_eq!(out, CLOSE);
     }
 }

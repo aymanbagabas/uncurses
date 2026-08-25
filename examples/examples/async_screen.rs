@@ -122,7 +122,7 @@ fn draw(screen: &mut Screen<Stdout>, ball: &Ball, frames: u64, last_key: &str) {
     screen.set_str(
         (0, 0),
         &format!("async Screen + EventStream • frame {frames} • last key: {last_key}"),
-        hud.clone(),
+        hud,
     );
     screen.set_str((0, h.saturating_sub(1)), "q / Esc / Ctrl-C: quit", hud);
 

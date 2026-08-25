@@ -1,11 +1,13 @@
 use super::*;
+use crate::cell::{Cell, Style as CellStyle};
 use crate::renderer::RenderBuffer;
 use crate::style::Style;
 use crate::text::{Painter, TextSurface, WidthMode, WrapMode};
 
-fn link_of(s: &Style) -> Option<(&str, &str)> {
-    s.link
-        .as_deref()
+fn link_of(c: &Cell) -> Option<(&str, &str)> {
+    c.style
+        .link
+        .as_ref()
         .map(|l| (l.url.as_str(), l.params.as_str()))
 }
 
@@ -15,23 +17,29 @@ fn test_new_buffer() {
     assert_eq!(buf.width(), 80);
     assert_eq!(buf.height(), 24);
     assert_eq!(buf.height(), 24);
-    assert_eq!(buf.line(0).map(|l| l.len()), Some(80));
+    assert_eq!(buf.bounds().width, 80);
 }
 
 #[test]
 fn test_set_get() {
     let mut buf = Buffer::new(10, 5);
-    let cell = Cell::narrow("X");
-    buf.set((3, 2), &cell.clone());
-    assert_eq!(buf.cell(Position::new(3, 2)).unwrap().content(), "X");
+    let cell = Cell::from('X');
+    buf.set_cell(Position::from((3, 2)), &cell.clone());
+    assert_eq!(
+        buf.cell(Position::new(3, 2)).unwrap().content.char(),
+        Some('X')
+    );
 }
 
 #[test]
 fn test_wide_char_set() {
     let mut buf = Buffer::new(10, 1);
-    let cell = Cell::wide("中");
-    buf.set((3, 0), &cell);
-    assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "中");
+    let cell = Cell::from('中');
+    buf.set_cell(Position::from((3, 0)), &cell);
+    assert_eq!(
+        buf.cell(Position::new(3, 0)).unwrap().content.char(),
+        Some('中')
+    );
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().width(), 2);
     assert!(buf.cell(Position::new(4, 0)).unwrap().is_continuation());
 }
@@ -39,12 +47,15 @@ fn test_wide_char_set() {
 #[test]
 fn test_overwrite_wide_char() {
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::wide("中"));
+    buf.set_cell(Position::from((3, 0)), &Cell::from('中'));
     // Overwrite continuation cell
-    buf.set((4, 0), &Cell::narrow("A"));
+    buf.set_cell(Position::from((4, 0)), &Cell::from('A'));
     // Primary cell should be blanked
     assert!(buf.cell(Position::new(3, 0)).unwrap().is_blank());
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "A");
+    assert_eq!(
+        buf.cell(Position::new(4, 0)).unwrap().content.char(),
+        Some('A')
+    );
 }
 
 #[test]
@@ -55,29 +66,29 @@ fn test_broken_wide_cell_keeps_bg() {
     // Overwriting a wide cell's continuation blanks the primary; the blank
     // must keep the wide cell's background instead of resetting to default.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::wide("中").style(styled.clone()));
-    buf.set((4, 0), &Cell::narrow("A"));
+    buf.set_cell(Position::from((3, 0)), &Cell::new('中', styled));
+    buf.set_cell(Position::from((4, 0)), &Cell::from('A'));
     let primary = buf.cell(Position::new(3, 0)).unwrap();
     assert!(primary.is_blank());
-    assert_eq!(primary.style.bg, Some(Color::Red));
+    assert_eq!(primary.style.style.bg, Some(Color::Red));
 
     // Overwriting the primary blanks the trailing continuation; that blank
     // keeps the wide cell's background too.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::wide("中").style(styled.clone()));
-    buf.set((3, 0), &Cell::narrow("A"));
+    buf.set_cell(Position::from((3, 0)), &Cell::new('中', styled));
+    buf.set_cell(Position::from((3, 0)), &Cell::from('A'));
     assert_eq!(
-        buf.cell(Position::new(4, 0)).unwrap().style.bg,
+        buf.cell(Position::new(4, 0)).unwrap().style.style.bg,
         Some(Color::Red)
     );
 
     // A wide cell that doesn't fit at the right edge is stored as a blank
     // that still carries its background.
     let mut buf = Buffer::new(4, 1);
-    buf.set((3, 0), &Cell::wide("中").style(styled.clone()));
+    buf.set_cell(Position::from((3, 0)), &Cell::new('中', styled));
     let edge = buf.cell(Position::new(3, 0)).unwrap();
     assert!(edge.is_blank());
-    assert_eq!(edge.style.bg, Some(Color::Red));
+    assert_eq!(edge.style.style.bg, Some(Color::Red));
 }
 
 #[test]
@@ -88,11 +99,14 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
     // continuation produced by the previous set(). That second write must
     // not blank the wide primary we just placed.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::wide("中"));
+    buf.set_cell(Position::from((3, 0)), &Cell::from('中'));
     // Now write a continuation into col 4 (where one already lives).
     let cont = Cell::continuation();
-    buf.set((4, 0), &cont);
-    assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "中");
+    buf.set_cell(Position::from((4, 0)), &cont);
+    assert_eq!(
+        buf.cell(Position::new(3, 0)).unwrap().content.char(),
+        Some('中')
+    );
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().width(), 2);
     assert!(buf.cell(Position::new(4, 0)).unwrap().is_continuation());
 }
@@ -100,24 +114,30 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
 #[test]
 fn test_resize() {
     let mut buf = Buffer::new(10, 5);
-    buf.set((0, 0), &Cell::narrow("X"));
+    buf.set_cell(Position::from((0, 0)), &Cell::from('X'));
     buf.resize(20, 10);
     assert_eq!(buf.width(), 20);
     assert_eq!(buf.height(), 10);
-    assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "X");
+    assert_eq!(
+        buf.cell(Position::new(0, 0)).unwrap().content.char(),
+        Some('X')
+    );
 }
 
 fn fill_with_marker(buf: &mut Buffer) {
     for y in 0..buf.height() {
         for x in 0..buf.width() {
-            buf.set((x, y), &Cell::narrow(format!("{x},{y}")));
+            buf.set_cell(
+                (x, y).into(),
+                &Cell::new(format!("{x},{y}"), Style::default()),
+            );
         }
     }
 }
 
 fn assert_marker(buf: &Buffer, x: u16, y: u16) {
     assert_eq!(
-        buf.cell(Position::new(x, y)).unwrap().content(),
+        buf.cell(Position::new(x, y)).unwrap().to_string(),
         format!("{x},{y}"),
         "cell ({x},{y}) lost its marker"
     );
@@ -220,8 +240,14 @@ fn test_write_string() {
     let p =
         Painter::new(&mut buf).set_str_wrap((0, 0), "Hello", WrapMode::Truncate, Style::default());
     assert_eq!(p, Position::new(5, 0));
-    assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "H");
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
+    assert_eq!(
+        buf.cell(Position::new(0, 0)).unwrap().content.char(),
+        Some('H')
+    );
+    assert_eq!(
+        buf.cell(Position::new(4, 0)).unwrap().content.char(),
+        Some('o')
+    );
 }
 
 #[test]
@@ -229,10 +255,16 @@ fn test_view() {
     let mut buf = RenderBuffer::new(20, 10);
     {
         let mut v = View::new(&mut buf, (5, 2, 10, 5));
-        v.set_cell(Position::new(5, 2), &Cell::narrow("W"));
-        assert_eq!(v.cell(Position::new(5, 2)).unwrap().content(), "W");
+        v.set_cell(Position::new(5, 2), &Cell::from('W'));
+        assert_eq!(
+            v.cell(Position::new(5, 2)).unwrap().content.char(),
+            Some('W')
+        );
     }
-    assert_eq!(buf.cell(Position::new(5, 2)).unwrap().content(), "W");
+    assert_eq!(
+        buf.cell(Position::new(5, 2)).unwrap().content.char(),
+        Some('W')
+    );
 }
 
 #[test]
@@ -249,10 +281,13 @@ fn write_string_wc_mode_attaches_combining_marks_to_base() {
     );
     assert_eq!(p, Position::new(2, 0));
     assert_eq!(
-        buf.cell(Position::new(0, 0)).unwrap().content(),
+        buf.cell(Position::new(0, 0)).unwrap().to_string(),
         "e\u{0301}"
     );
-    assert_eq!(buf.cell(Position::new(1, 0)).unwrap().content(), "f");
+    assert_eq!(
+        buf.cell(Position::new(1, 0)).unwrap().content.char(),
+        Some('f')
+    );
 }
 
 #[test]
@@ -267,7 +302,10 @@ fn write_string_wc_mode_skips_leading_combining_mark() {
         Style::default(),
     );
     assert_eq!(p, Position::new(4, 0));
-    assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "a");
+    assert_eq!(
+        buf.cell(Position::new(3, 0)).unwrap().content.char(),
+        Some('a')
+    );
 }
 
 #[test]
@@ -280,7 +318,10 @@ fn write_string_truncates_at_right_edge() {
         Style::default(),
     );
     assert_eq!(p, Position::new(5, 0));
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
+    assert_eq!(
+        buf.cell(Position::new(4, 0)).unwrap().content.char(),
+        Some('o')
+    );
 }
 
 #[test]
@@ -289,9 +330,18 @@ fn write_string_wraps_to_next_row() {
     let p =
         Painter::new(&mut buf).set_str_wrap((0, 0), "abcdefghij", WrapMode::Wrap, Style::default());
     assert_eq!(p, Position::new(5, 1));
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "e");
-    assert_eq!(buf.cell(Position::new(0, 1)).unwrap().content(), "f");
-    assert_eq!(buf.cell(Position::new(4, 1)).unwrap().content(), "j");
+    assert_eq!(
+        buf.cell(Position::new(4, 0)).unwrap().content.char(),
+        Some('e')
+    );
+    assert_eq!(
+        buf.cell(Position::new(0, 1)).unwrap().content.char(),
+        Some('f')
+    );
+    assert_eq!(
+        buf.cell(Position::new(4, 1)).unwrap().content.char(),
+        Some('j')
+    );
 }
 
 #[test]
@@ -301,7 +351,10 @@ fn write_string_wrap_stops_at_bottom() {
         Painter::new(&mut buf).set_str_wrap((0, 0), "abcdefghi", WrapMode::Wrap, Style::default());
     // Two full rows consumed, then we run out.
     assert_eq!(p, Position::new(0, 2));
-    assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "f");
+    assert_eq!(
+        buf.cell(Position::new(2, 1)).unwrap().content.char(),
+        Some('f')
+    );
 }
 
 #[test]
@@ -316,10 +369,22 @@ fn write_string_wrap_inside_view() {
         Style::default(),
     );
     assert_eq!(p, Position::new(14, 2));
-    assert_eq!(tb.cell(Position::new(10, 1)).unwrap().content(), "a");
-    assert_eq!(tb.cell(Position::new(13, 1)).unwrap().content(), "d");
-    assert_eq!(tb.cell(Position::new(10, 2)).unwrap().content(), "e");
-    assert_eq!(tb.cell(Position::new(13, 2)).unwrap().content(), "h");
+    assert_eq!(
+        tb.cell(Position::new(10, 1)).unwrap().content.char(),
+        Some('a')
+    );
+    assert_eq!(
+        tb.cell(Position::new(13, 1)).unwrap().content.char(),
+        Some('d')
+    );
+    assert_eq!(
+        tb.cell(Position::new(10, 2)).unwrap().content.char(),
+        Some('e')
+    );
+    assert_eq!(
+        tb.cell(Position::new(13, 2)).unwrap().content.char(),
+        Some('h')
+    );
 }
 
 #[test]
@@ -329,14 +394,14 @@ fn write_string_with_link() {
         (0, 0),
         "hi",
         WrapMode::Truncate,
-        Style::default().link("https://example.com", ""),
+        CellStyle::new().link("https://example.com", ""),
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(0, 0)).unwrap().style),
+        link_of(&buf.cell(Position::new(0, 0)).unwrap()),
         Some(("https://example.com", ""))
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(1, 0)).unwrap().style),
+        link_of(&buf.cell(Position::new(1, 0)).unwrap()),
         Some(("https://example.com", ""))
     );
 }

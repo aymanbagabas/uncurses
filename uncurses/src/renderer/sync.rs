@@ -14,7 +14,7 @@
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
 
-use crate::buffer::Surface;
+use crate::layout::Position;
 
 impl Renderer {
     /// Sync a caller-facing buffer into the renderer staging buffer.
@@ -57,8 +57,8 @@ impl Renderer {
             };
             let mut x = span.first;
             while x <= span.last {
-                let pos = (x, y).into();
-                let Some(new_cell) = front.cell(pos) else {
+                let pos = Position::from((x, y));
+                let Some(new_cell) = front.cell_ref(pos) else {
                     x += 1;
                     continue;
                 };
@@ -75,7 +75,7 @@ impl Renderer {
                 // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
-                self.back_buf.set_cell(pos, new_cell);
+                self.back_buf.set_ref(pos, &new_cell);
                 // Step over any continuation columns owned by the cell
                 // we just wrote so we don't try to re-copy them.
                 let step = (new_cell.width() as u16).max(1);
@@ -91,16 +91,17 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::Cell;
+    use crate::buffer::Surface;
     use crate::renderer::buffer::RenderBuffer;
+    use crate::renderer::packed::Ref;
 
-    fn cell(c: &str) -> Cell {
-        Cell::narrow(c)
+    fn cell(c: char) -> Ref {
+        Ref::narrow(c)
     }
 
     fn fill_row(buf: &mut RenderBuffer, y: u16, content: &str) {
         for (x, ch) in content.chars().enumerate() {
-            buf.set_cell((x as u16, y), &cell(&ch.to_string()));
+            buf.set_ref((x as u16, y), &cell(ch));
         }
     }
 
@@ -131,7 +132,10 @@ mod tests {
         assert!(need);
         assert!(r.back_buf.touched(1).is_some());
         assert!(r.back_buf.touched(0).is_none());
-        assert_eq!(r.back_buf.cell((0, 1).into()).unwrap().content(), "W");
+        assert_eq!(
+            r.back_buf.cell((0, 1).into()).unwrap().content.char(),
+            Some('W')
+        );
     }
 
     #[test]
@@ -188,12 +192,12 @@ mod tests {
 
         // Now write one cell on row 0; row 2 of front is blank-but-
         // untouched, so sync must not visit row 2.
-        front.set_cell((3, 0), &cell("X"));
+        front.set_ref((3, 0), &cell('X'));
         r.sync_front(&mut front);
         assert!(r.back_buf.touched(0).is_some());
         assert!(r.back_buf.touched(2).is_none());
         assert_eq!(
-            r.back_buf.cell((0, 2).into()).unwrap().content(),
+            r.back_buf.cell((0, 2).into()).unwrap().to_string(),
             "p",
             "row 2 in back_buf must keep its pre-existing content"
         );
@@ -217,17 +221,23 @@ mod tests {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 1);
         // Wide CJK cell at col 0; col 1 is its continuation.
-        let wide = Cell::wide("漢");
-        front.set_cell((0, 0), &wide);
-        front.set_cell((3, 0), &cell("a"));
+        let wide = Ref::wide('漢');
+        front.set_ref((0, 0), &wide);
+        front.set_ref((3, 0), &cell('a'));
         r.sync_front(&mut front);
 
-        assert_eq!(r.back_buf.cell((0, 0).into()).unwrap().content(), "漢");
+        assert_eq!(
+            r.back_buf.cell((0, 0).into()).unwrap().content.char(),
+            Some('漢')
+        );
         assert_eq!(r.back_buf.cell((0, 0).into()).unwrap().width(), 2);
         assert!(
             r.back_buf.cell((1, 0).into()).unwrap().is_continuation(),
             "col 1 must remain the wide cell's continuation, not be blanked"
         );
-        assert_eq!(r.back_buf.cell((3, 0).into()).unwrap().content(), "a");
+        assert_eq!(
+            r.back_buf.cell((3, 0).into()).unwrap().content.char(),
+            Some('a')
+        );
     }
 }

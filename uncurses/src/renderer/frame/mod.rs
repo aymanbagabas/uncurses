@@ -58,11 +58,26 @@ impl Renderer {
     /// No output is produced when neither the buffer has touched rows nor
     /// a force-clear is pending.
     pub fn render(&mut self, out: &mut Vec<u8>, new_buf: &mut RenderBuffer) -> io::Result<()> {
+        // An idle frame pays only this check, so keep it in a function
+        // small enough to stay cheap to enter.
+        if !self.force_clear && !new_buf.has_changes() {
+            return Ok(());
+        }
+        self.render_changed(out, new_buf)
+    }
+
+    /// The frame pipeline proper, once there is known to be work.
+    #[inline(never)]
+    fn render_changed(&mut self, out: &mut Vec<u8>, new_buf: &mut RenderBuffer) -> io::Result<()> {
         let width = new_buf.width();
         let height = new_buf.height();
 
-        if !self.force_clear && !new_buf.has_changes() {
-            return Ok(());
+        // Cell ids belong to the arena that issued them, so adopt the one
+        // this buffer was built with before resolving anything. Buffers
+        // usually keep the same arena frame to frame, and the comparison is
+        // cheaper than the two atomics a blind clone would cost.
+        if !std::sync::Arc::ptr_eq(&self.arena, new_buf.arena()) {
+            self.arena = new_buf.arena().clone();
         }
 
         let resized = self.prepare_frame(out, new_buf, width, height)?;

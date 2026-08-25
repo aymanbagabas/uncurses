@@ -5,8 +5,8 @@ use std::io::{self, Write};
 
 use super::predicates::can_clear_with;
 use crate::ansi;
-use crate::cell::Cell;
 use crate::renderer::caps::Optimizations;
+use crate::renderer::packed::Ref;
 use crate::renderer::{RenderBuffer, Renderer};
 
 impl Renderer {
@@ -76,7 +76,7 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        mut cur_line: Option<&mut [Cell]>,
+        mut cur_line: Option<&mut [Ref]>,
         y: u16,
         _first_x: u16,
         _last_x: u16,
@@ -96,7 +96,7 @@ impl Renderer {
         // reproduce by erasing (default-style blanks), we may be able
         // to use EL-1 to wipe a leading run. Otherwise just scan
         // linearly for the first differing cell.
-        let leading_blank: &Cell = &new_line[0];
+        let leading_blank: &Ref = &new_line[0];
         let mut first_cell;
         // `copy_from` is the leftmost column where the post-emission
         // screen matches `new_line`. The wrapper uses it to copy
@@ -105,7 +105,11 @@ impl Renderer {
         // left of first_cell, so copy_from stays at the pre-erase
         // first_cell in that case.
         let copy_from;
-        if can_clear_with(leading_blank, self.opts.contains(Optimizations::BCE)) {
+        if can_clear_with(
+            self.arena.as_ref(),
+            leading_blank,
+            self.opts.contains(Optimizations::BCE),
+        ) {
             let mut o_first = 0usize;
             if let Some(cur) = cur_line.as_deref() {
                 while o_first < cur.len() && &cur[o_first] == leading_blank {
@@ -164,7 +168,7 @@ impl Renderer {
                     // disjoint from `cur_line` (already split off
                     // above), so the bce_blank ref lives directly.
                     let bce = self.opts.contains(Optimizations::BCE);
-                    let bce_fill: &Cell = self.cur.bce_blank(bce);
+                    let bce_fill: &Ref = self.cur.bce_blank(bce);
                     if let Some(cur) = cur_line.as_deref_mut() {
                         let end = n_first.min(cur.len());
                         if first_cell < end {
@@ -207,7 +211,11 @@ impl Renderer {
         // that case just walk backward to find the last differing
         // column and overwrite the changed range.
         let trailing = &new_line[width - 1];
-        if !can_clear_with(trailing, self.opts.contains(Optimizations::BCE)) {
+        if !can_clear_with(
+            self.arena.as_ref(),
+            trailing,
+            self.opts.contains(Optimizations::BCE),
+        ) {
             let mut n_last = width - 1;
             while n_last > first_cell {
                 let new_c = &new_line[n_last];
@@ -226,7 +234,7 @@ impl Renderer {
         }
 
         // === Step 3: locate last non-blank cells on each side ===
-        let blank: &Cell = trailing;
+        let blank: &Ref = trailing;
         let mut o_last = width.saturating_sub(1);
         while o_last > first_cell
             && cur_slice
@@ -277,17 +285,17 @@ impl Renderer {
             let o_last_nonblank = o_last;
             let mut n_lc = n_last as isize;
             let mut o_lc = o_last as isize;
-            fn cell_at_isize(line: &[Cell], i: isize) -> Option<&Cell> {
+            fn cell_at_isize(line: &[Ref], i: isize) -> Option<&Ref> {
                 if i < 0 { None } else { line.get(i as usize) }
             }
             let cur_at_isize =
-                |i: isize| -> Option<&Cell> { cur_slice.and_then(|c| cell_at_isize(c, i)) };
+                |i: isize| -> Option<&Ref> { cur_slice.and_then(|c| cell_at_isize(c, i)) };
             // Treat out-of-bounds slots as unequal so the walk-back
             // stops at the line boundary rather than stepping past it.
             // Returning false when either side is absent makes the loop
             // break at At(-1) instead of decrementing both indices to
             // -1.
-            fn cells_eq(a: Option<&Cell>, b: Option<&Cell>) -> bool {
+            fn cells_eq(a: Option<&Ref>, b: Option<&Ref>) -> bool {
                 matches!((a, b), (Some(x), Some(y)) if x == y)
             }
             while cells_eq(cell_at_isize(new_line, n_lc), cur_at_isize(o_lc)) {

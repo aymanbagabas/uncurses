@@ -2,12 +2,13 @@
 //! and the constructor / [`Default`] impl. Behavior methods live in the
 //! sibling submodules.
 
-use crate::cell::Cell;
 use crate::color::{Color, Profile};
 use crate::layout::Position;
 use crate::renderer::buffer::RenderBuffer;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::color_cache::ColorCache;
+use crate::renderer::packed::Ref;
+use crate::renderer::packed::arena::Arena as _;
 use crate::renderer::{scroll, tabstops};
 use crate::style::Style;
 
@@ -23,6 +24,13 @@ pub(super) struct Cursor {
     /// state by [`Renderer::update_pen`]. Mutate via
     /// [`Cursor::set_style`] so the pen-cache invariant holds.
     style: Style,
+    /// Interned id of `style`. Comparing ids replaces a full `Style`
+    /// equality check on the per-cell pen fast path.
+    style_id: crate::renderer::packed::arena::StyleId,
+    /// Interned id of the hyperlink the terminal currently has open, or
+    /// `EMPTY_LINK`. OSC 8 is a separate state machine from SGR, so this is
+    /// tracked independently of `style`.
+    link_id: crate::renderer::packed::arena::LinkId,
     /// Tracked cursor column, or `None` when the column is unknown.
     ///
     /// `None` means the value is untrustworthy and the position must be
@@ -54,14 +62,14 @@ pub(super) struct Cursor {
     /// [`Cursor::blank_dirty`] is set; callers that mutate
     /// `style` directly must call
     /// [`Cursor::mark_pen_changed`] to invalidate the cache.
-    blank: Cell,
+    blank: Ref,
     /// Set whenever the pen mutates; cleared on the next
     /// [`Cursor::current_blank`] call after a rebuild.
     blank_dirty: bool,
     /// Cached cell template matching what a back-color-erase actually
     /// paints into freed cells: a plain space carrying the active
     /// pen's bg when BCE is on, or a default blank otherwise.
-    bce_blank: Cell,
+    bce_blank: Ref,
     /// Cache key for [`Cursor::bce_blank`]: `(bce_flag, bg)`. `None`
     /// forces a rebuild on first access.
     bce_blank_key: Option<(bool, Option<Color>)>,
@@ -103,9 +111,46 @@ impl Cursor {
 
     /// Adopt `style` as the active pen style, invalidating any cached
     /// pen-derived blanks so they are rebuilt on next access.
+    /// Test-only: the renderer itself always has the interned id in hand
+    /// and goes through [`Cursor::set_style_with_id`].
+    #[cfg(test)]
     pub(super) fn set_style(&mut self, style: Style) {
+        let id = crate::renderer::packed::arena::GLOBAL.intern_style(&style);
+        self.set_style_with_id(style, id);
+    }
+
+    /// Adopt `style` when its interned id is already known, skipping the
+    /// table probe. The caller must pass the id `style` interns to.
+    pub(super) fn set_style_with_id(
+        &mut self,
+        style: Style,
+        id: crate::renderer::packed::arena::StyleId,
+    ) {
+        debug_assert_eq!(
+            id,
+            crate::renderer::packed::arena::GLOBAL.intern_style(&style)
+        );
+        self.style_id = id;
         self.style = style;
         self.mark_pen_changed();
+    }
+
+    /// Interned id of the active pen style.
+    #[inline]
+    pub(super) fn style_id(&self) -> crate::renderer::packed::arena::StyleId {
+        self.style_id
+    }
+
+    /// Interned id of the hyperlink currently open on the terminal.
+    #[inline]
+    pub(super) fn link_id(&self) -> crate::renderer::packed::arena::LinkId {
+        self.link_id
+    }
+
+    /// Record the hyperlink the terminal now has open.
+    #[inline]
+    pub(super) fn set_link_id(&mut self, id: crate::renderer::packed::arena::LinkId) {
+        self.link_id = id;
     }
 
     /// Invalidate the cached pen-derived blanks so the next
@@ -120,9 +165,12 @@ impl Cursor {
 
     /// Return the cached blank cell for the active pen, rebuilding it
     /// lazily on first access after a pen change.
-    pub(super) fn current_blank(&mut self) -> &Cell {
+    pub(super) fn current_blank(&mut self) -> &Ref {
         if self.blank_dirty {
-            self.blank = Cell::BLANK.style(self.style.clone());
+            self.blank = Ref {
+                style: self.style_id,
+                ..Ref::BLANK
+            };
             self.blank_dirty = false;
         }
         &self.blank
@@ -132,18 +180,23 @@ impl Cursor {
     /// active pen's bg when `bce` is on, or a default blank otherwise.
     /// `bce` is supplied by the caller since it lives on Renderer
     /// state, not Cursor.
-    pub(super) fn bce_blank(&mut self, bce: bool) -> &Cell {
-        let want_bg = if bce { self.style.bg } else { None };
+    pub(super) fn bce_blank(&mut self, bce: bool) -> &Ref {
+        let want_bg = if bce { self.style().bg } else { None };
         if self.bce_blank_key != Some((bce, want_bg)) {
             self.bce_blank = match want_bg {
                 Some(bg) => {
+                    // Only the background survives into the fill: erase
+                    // reproduces a bg, not bold or underline.
                     let s = Style {
                         bg: Some(bg),
                         ..Style::default()
                     };
-                    Cell::BLANK.style(s)
+                    Ref {
+                        style: crate::renderer::packed::arena::global_ref().intern_style(&s),
+                        ..Ref::BLANK
+                    }
                 }
-                None => Cell::BLANK,
+                None => Ref::BLANK,
             };
             self.bce_blank_key = Some((bce, want_bg));
         }
@@ -155,14 +208,16 @@ impl Default for Cursor {
     fn default() -> Self {
         Self {
             style: Style::default(),
+            style_id: crate::renderer::packed::arena::EMPTY_STYLE,
+            link_id: crate::renderer::packed::arena::EMPTY_LINK,
             // Until proven otherwise the cursor is wherever the previous
             // program left it; both axes are untrusted (unknown).
             x: None,
             y: None,
             at_phantom: false,
-            blank: Cell::BLANK,
+            blank: Ref::BLANK,
             blank_dirty: false,
-            bce_blank: Cell::BLANK,
+            bce_blank: Ref::BLANK,
             bce_blank_key: Some((false, None)),
         }
     }
@@ -213,6 +268,10 @@ pub struct Renderer {
     /// private cache so the per-frame palette lookups for Ansi /
     /// Ansi256 are memoized.
     pub(super) color_profile: ColorCache,
+    /// Arena backing the ids of the cells being rendered. Refreshed from the
+    /// buffer at the start of each frame, since cell ids are only meaningful
+    /// to the arena that issued them.
+    pub(super) arena: std::sync::Arc<dyn crate::renderer::packed::arena::Arena>,
     /// Whether we're in fullscreen mode (alt screen).
     pub(super) fullscreen: bool,
     /// Whether to use relative cursor positioning.
@@ -259,6 +318,7 @@ impl Renderer {
             saved: Cursor::default(),
             opts: Optimizations::default(),
             color_profile: ColorCache::new(Profile::TrueColor),
+            arena: crate::renderer::packed::arena::global(),
             fullscreen: false,
             relative_cursor: true,
             scroll_optimize: true,

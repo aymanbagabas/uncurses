@@ -1,6 +1,6 @@
 use super::{Optimizations, RenderBuffer, Renderer};
-use crate::cell::Cell;
 use crate::color::Color;
+use crate::renderer::packed::Ref;
 use crate::style::Style;
 
 fn opts_with(mut f: impl FnMut(&mut Optimizations)) -> Optimizations {
@@ -23,7 +23,7 @@ fn renderer(width: u16, height: u16, opts: Optimizations) -> Renderer {
 fn buffer_with_text(width: u16, height: u16, y: u16, text: &str) -> RenderBuffer {
     let mut buf = RenderBuffer::new(width, height);
     for (x, ch) in text.chars().enumerate() {
-        buf.set_cell((x as u16, y), &Cell::narrow(ch.to_string()));
+        buf.set_ref((x as u16, y), &Ref::narrow(ch));
     }
     buf.clear_touched();
     buf
@@ -31,7 +31,7 @@ fn buffer_with_text(width: u16, height: u16, y: u16, text: &str) -> RenderBuffer
 
 fn set_text(buf: &mut RenderBuffer, y: u16, text: &str) {
     for (x, ch) in text.chars().enumerate() {
-        buf.set_cell((x as u16, y), &Cell::narrow(ch.to_string()));
+        buf.set_ref((x as u16, y), &Ref::narrow(ch));
     }
 }
 
@@ -119,7 +119,7 @@ fn emit_range_rep_skipped_for_non_ascii() {
 
     let mut new_buf = RenderBuffer::new(width, 1);
     for x in 0..8u16 {
-        new_buf.set_cell((x, 0), &Cell::narrow("é"));
+        new_buf.set_ref((x, 0), &Ref::narrow('é'));
     }
 
     let out = transform_output(&mut renderer, &new_buf);
@@ -184,11 +184,11 @@ fn transform_el_0_partial_clear_from_column() {
     let mut cur = RenderBuffer::new(width, 1);
     let mut new_buf = RenderBuffer::new(width, 1);
     for x in 0..30u16 {
-        cur.set_cell((x, 0), &Cell::narrow("A"));
-        new_buf.set_cell((x, 0), &Cell::narrow("A"));
+        cur.set_ref((x, 0), &Ref::narrow('A'));
+        new_buf.set_ref((x, 0), &Ref::narrow('A'));
     }
     for x in 30..width {
-        cur.set_cell((x, 0), &Cell::narrow("X"));
+        cur.set_ref((x, 0), &Ref::narrow('X'));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
@@ -234,7 +234,7 @@ fn transform_pen_change_emits_sgr() {
 
     let mut new_buf = RenderBuffer::new(width, 1);
     let red = Style::default().fg(Color::Red);
-    new_buf.set_cell((0, 0), &Cell::narrow("R").style(red));
+    new_buf.set_ref((0, 0), &Ref::narrow('R').with_style(red));
 
     let out = transform_output(&mut renderer, &new_buf);
     assert_eq!(out, b"\x1b[31mR");
@@ -246,9 +246,11 @@ fn transform_osc8_link_open_and_close() {
     let mut renderer = renderer(width, 1, Optimizations::none());
     renderer.cur_buf = Some(RenderBuffer::new(width, 1));
 
-    let linked_style = Style::default().link("https://example.test", "");
     let mut linked_buf = RenderBuffer::new(width, 1);
-    linked_buf.set_cell((0, 0), &Cell::narrow("L").style(linked_style));
+    linked_buf.set_ref(
+        (0, 0),
+        &Ref::narrow('L').with_link("https://example.test", ""),
+    );
     let open = transform_output(&mut renderer, &linked_buf);
     assert!(
         open.windows(b"\x1b]8;;https://example.test\x1b\\L".len())
@@ -257,7 +259,7 @@ fn transform_osc8_link_open_and_close() {
     );
 
     let mut plain_buf = RenderBuffer::new(width, 1);
-    plain_buf.set_cell((0, 0), &Cell::narrow("P"));
+    plain_buf.set_ref((0, 0), &Ref::narrow('P'));
     let close = transform_output(&mut renderer, &plain_buf);
     assert!(
         close
@@ -270,9 +272,13 @@ fn transform_osc8_link_open_and_close() {
 #[test]
 fn reset_pen_closes_osc8_and_emits_sgr_reset() {
     let mut renderer = renderer(10, 1, Optimizations::none());
+    let mut prime = Vec::new();
     renderer
-        .cur
-        .set_style(Style::default().link("https://example.test", ""));
+        .update_pen(
+            &mut prime,
+            Some(&Ref::narrow('L').with_link("https://example.test", "")),
+        )
+        .unwrap();
 
     let mut out = Vec::new();
     renderer.reset_pen(&mut out).unwrap();
@@ -282,8 +288,9 @@ fn reset_pen_closes_osc8_and_emits_sgr_reset() {
         "expected OSC 8 close, got {:?}",
         std::str::from_utf8(&out)
     );
-    assert!(
-        renderer.cur.style().link.is_none(),
+    assert_eq!(
+        renderer.cur.link_id(),
+        crate::renderer::packed::arena::EMPTY_LINK,
         "link tracking should be cleared after reset_pen"
     );
 }
@@ -295,13 +302,13 @@ fn clear_bottom_uses_ed_when_bce() {
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
     let mut cur = RenderBuffer::new(width, height);
     for y in 1..height {
-        cur.set_cell((0, y), &Cell::narrow("X"));
+        cur.set_ref((0, y), &Ref::narrow('X'));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
 
     let mut new_buf = RenderBuffer::new(width, height);
-    new_buf.set_cell((0, 0), &Cell::narrow("A"));
+    new_buf.set_ref((0, 0), &Ref::narrow('A'));
     let mut out = Vec::new();
     let top = renderer.clear_bottom(&mut out, &new_buf).unwrap();
 
@@ -316,13 +323,13 @@ fn clear_bottom_without_bce_still_uses_ed_for_default_blank() {
     let mut renderer = renderer(width, height, Optimizations::none());
     let mut cur = RenderBuffer::new(width, height);
     for y in 1..height {
-        cur.set_cell((0, y), &Cell::narrow("X"));
+        cur.set_ref((0, y), &Ref::narrow('X'));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
 
     let mut new_buf = RenderBuffer::new(width, height);
-    new_buf.set_cell((0, 0), &Cell::narrow("A"));
+    new_buf.set_ref((0, 0), &Ref::narrow('A'));
     let mut out = Vec::new();
     let top = renderer.clear_bottom(&mut out, &new_buf).unwrap();
 
@@ -335,13 +342,13 @@ fn clear_bottom_with_styled_blank() {
     let width = 8;
     let height = 4;
     let bg = Style::default().bg(Color::Blue);
-    let blank = Cell::BLANK.style(bg);
+    let blank = Ref::BLANK.with_style(bg);
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
-    renderer.cur.set_style(blank.style.clone());
+    renderer.cur.set_style(blank.style());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
-        cur.set_cell((0, y), &Cell::narrow("X"));
+        cur.set_ref((0, y), &Ref::narrow('X'));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
@@ -350,7 +357,7 @@ fn clear_bottom_with_styled_blank() {
     set_text(&mut new_buf, 0, "top");
     for y in 1..height {
         for x in 0..width {
-            new_buf.set_cell((x, y), &blank.clone());
+            new_buf.set_ref((x, y), &blank.clone());
         }
     }
 
@@ -369,13 +376,13 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
     let width = 8;
     let height = 4;
     let bg = Style::default().bg(Color::Blue);
-    let blank = Cell::BLANK.style(bg);
+    let blank = Ref::BLANK.with_style(bg);
     let mut renderer = renderer(width, height, Optimizations::none());
-    renderer.cur.set_style(blank.style.clone());
+    renderer.cur.set_style(blank.style());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
-        cur.set_cell((0, y), &Cell::narrow("X"));
+        cur.set_ref((0, y), &Ref::narrow('X'));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
@@ -384,7 +391,7 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
     set_text(&mut new_buf, 0, "top");
     for y in 1..height {
         for x in 0..width {
-            new_buf.set_cell((x, y), &blank.clone());
+            new_buf.set_ref((x, y), &blank.clone());
         }
     }
 

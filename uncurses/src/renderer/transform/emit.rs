@@ -6,11 +6,39 @@ use std::io;
 
 use super::predicates::{can_clear_with, is_rep_ascii};
 use crate::ansi;
-use crate::cell::Cell;
 use crate::renderer::caps::Optimizations;
+use crate::renderer::packed::Ref;
 use crate::renderer::{RenderBuffer, Renderer};
 
+/// Longest glyph the emitter can print, in bytes: an interned cluster is
+/// capped at [`MAX_GRAPHEME_CODEPOINTS`] scalars, each at most four bytes.
+pub(super) const MAX_GLYPH_BYTES: usize =
+    crate::renderer::packed::arena::MAX_GRAPHEME_CODEPOINTS * 4;
+
 impl Renderer {
+    /// Copy the bytes `cell` prints into `scratch` and return the filled
+    /// slice. An empty slice means the cell has no glyph of its own.
+    ///
+    /// A scalar is its own grapheme id, so it encodes straight into the
+    /// scratch buffer without consulting the arena at all -- no lock, no
+    /// table lookup, and no keeping the arena alive across the write.
+    /// Only a multi-scalar cluster is resolved.
+    fn glyph_bytes<'s>(&self, cell: &Ref, scratch: &'s mut [u8; MAX_GLYPH_BYTES]) -> &'s [u8] {
+        let id = cell.content_id();
+        if id == 0 {
+            return &[];
+        }
+        if let Some(c) = char::from_u32(id) {
+            return c.encode_utf8(scratch).as_bytes();
+        }
+        // Interned: copy out so the arena borrow ends before the caller
+        // needs `&mut self` to write.
+        let text = self.arena.grapheme(id).as_bytes();
+        let n = text.len().min(scratch.len());
+        scratch[..n].copy_from_slice(&text[..n]);
+        &scratch[..n]
+    }
+
     /// Emit a range of cells from a line, handling style transitions.
     ///
     /// Returns `true` when the emission left the cursor partway through
@@ -30,7 +58,7 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        line: &[Cell],
+        line: &[Ref],
         first: usize,
         last: usize,
     ) -> io::Result<bool> {
@@ -97,7 +125,11 @@ impl Renderer {
 
             if has_ech
                 && (count as usize) > ech_b + cup_b
-                && can_clear_with(cell0, self.opts.contains(Optimizations::BCE))
+                && can_clear_with(
+                    self.arena.as_ref(),
+                    cell0,
+                    self.opts.contains(Optimizations::BCE),
+                )
             {
                 self.update_pen(out, Some(cell0))?;
                 ansi::screen::write_ech(out, count)?;
@@ -113,7 +145,7 @@ impl Renderer {
                 x = j;
             } else if has_rep
                 && (count as usize) > rep_b
-                && is_rep_ascii(cell0.content().as_bytes())
+                && is_rep_ascii(self.glyph_bytes(cell0, &mut [0u8; MAX_GLYPH_BYTES]))
             {
                 // Right-margin wrap: when the run would cross the
                 // right edge, REP would lose the wrapped cell to the
@@ -126,13 +158,9 @@ impl Renderer {
                 }
 
                 self.update_pen(out, Some(cell0))?;
-                self.put_glyph_bytes(
-                    out,
-                    cell0.content().as_bytes(),
-                    1,
-                    surface_width,
-                    surface_height,
-                )?;
+                let mut scratch = [0u8; MAX_GLYPH_BYTES];
+                let n = self.glyph_bytes(cell0, &mut scratch).len();
+                self.put_glyph_bytes(out, &scratch[..n], 1, surface_width, surface_height)?;
                 rep_count -= 1;
 
                 if rep_count > 0 {
@@ -150,13 +178,8 @@ impl Renderer {
                 }
 
                 if wrap_possible {
-                    self.put_glyph_bytes(
-                        out,
-                        cell0.content().as_bytes(),
-                        1,
-                        surface_width,
-                        surface_height,
-                    )?;
+                    let n = self.glyph_bytes(cell0, &mut scratch).len();
+                    self.put_glyph_bytes(out, &scratch[..n], 1, surface_width, surface_height)?;
                 }
                 x = j;
             } else {
@@ -166,13 +189,24 @@ impl Renderer {
                 // continuation cells, so cell0 is always a printable
                 // primary cell here.
                 self.update_pen(out, Some(cell0))?;
-                let (bytes, glyph_width) = if cell0.content().is_empty() {
-                    (b" ".as_slice(), 1u16)
-                } else {
-                    (cell0.content().as_bytes(), cell0.width() as u16)
-                };
+                let mut scratch = [0u8; MAX_GLYPH_BYTES];
+                let mut n = self.glyph_bytes(cell0, &mut scratch).len();
+                let mut glyph_width = cell0.width() as u16;
+                if n == 0 {
+                    // No glyph of its own, but the cell still owns its
+                    // column, so print a space to advance the cursor.
+                    scratch[0] = b' ';
+                    n = 1;
+                    glyph_width = 1;
+                }
                 for _ in 0..count {
-                    self.put_glyph_bytes(out, bytes, glyph_width, surface_width, surface_height)?;
+                    self.put_glyph_bytes(
+                        out,
+                        &scratch[..n],
+                        glyph_width,
+                        surface_width,
+                        surface_height,
+                    )?;
                 }
                 x = j;
             }
@@ -185,7 +219,7 @@ impl Renderer {
     pub(super) fn emit_cell(
         &mut self,
         out: &mut Vec<u8>,
-        cell: &Cell,
+        cell: &Ref,
         surface_width: u16,
         surface_height: u16,
     ) -> io::Result<()> {
@@ -193,12 +227,14 @@ impl Renderer {
             return Ok(());
         }
         self.update_pen(out, Some(cell))?;
-        if cell.content().is_empty() {
+        let mut scratch = [0u8; MAX_GLYPH_BYTES];
+        let n = self.glyph_bytes(cell, &mut scratch).len();
+        if n == 0 {
             self.put_glyph_bytes(out, b" ", 1, surface_width, surface_height)
         } else {
             self.put_glyph_bytes(
                 out,
-                cell.content().as_bytes(),
+                &scratch[..n],
                 cell.width() as u16,
                 surface_width,
                 surface_height,
@@ -221,8 +257,8 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        old_line: Option<&[Cell]>,
-        new_line: &[Cell],
+        old_line: Option<&[Ref]>,
+        new_line: &[Ref],
         y: u16,
         start: usize,
         end: usize,
@@ -314,7 +350,7 @@ impl Renderer {
     pub(super) fn insert_cells_op(
         &mut self,
         out: &mut Vec<u8>,
-        line: &[Cell],
+        line: &[Ref],
         count: usize,
     ) -> io::Result<()> {
         if count == 0 {
@@ -333,9 +369,11 @@ impl Renderer {
                 Some(cell) if cell.is_continuation() => continue,
                 Some(cell) => {
                     self.update_pen(out, Some(cell))?;
+                    let mut scratch = [0u8; MAX_GLYPH_BYTES];
+                    let n = self.glyph_bytes(cell, &mut scratch).len();
                     self.put_glyph_bytes(
                         out,
-                        cell.content().as_bytes(),
+                        &scratch[..n],
                         cell.width() as u16,
                         surface_width,
                         surface_height,

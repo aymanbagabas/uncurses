@@ -11,8 +11,8 @@
 //! | trait          | adds                            | required methods                         |
 //! |----------------|---------------------------------|------------------------------------------|
 //! | [`Bounded`]    | rectangular extent              | [`bounds`](Bounded::bounds)              |
-//! | [`Surface`]    | read-only cell access           | [`cell`](Surface::cell)                  |
-//! | [`SurfaceMut`] | writes and terminal operations  | [`set_cell`](SurfaceMut::set_cell), [`cell_mut`](SurfaceMut::cell_mut) |
+//! | [`Surface`]    | read-only cell access           | [`arena`](Surface::arena), `cell_ref`    |
+//! | [`SurfaceMut`] | writes and terminal operations  | `set_ref`                                |
 //!
 //! [`Surface`] extends [`Bounded`], and [`SurfaceMut`] extends
 //! [`Surface`]. Default methods supply common behavior such as
@@ -20,6 +20,21 @@
 //! [`SurfaceMut::insert_lines`], and [`SurfaceMut::delete_cells`].
 //! Implementations may override defaults for storage-specific fast paths
 //! as long as they preserve the same visible semantics.
+//!
+//! ## Two cell types
+//!
+//! A surface stores [`Ref`](crate::renderer::packed::Ref): three interned ids, eight
+//! bytes, meaningful only against the surface's own
+//! [`Arena`](crate::renderer::packed::arena::Arena). The renderer diffs frames by
+//! comparing those ids.
+//!
+//! [`Cell`] is what the public methods take and return. It owns its content
+//! and style, so it carries no id provenance and is safe to hold, build, and
+//! compare anywhere. [`Surface::cell`] resolves and
+//! [`SurfaceMut::set_cell`] interns, both at the surface boundary.
+//!
+//! The required methods work in `Ref` and are therefore implementable only
+//! inside this crate, which is what keeps ids from escaping.
 //!
 //! ## Coordinates and bounds
 //!
@@ -157,19 +172,22 @@ pub trait Surface: Bounded {
     ///
     /// # Returns
     ///
-    /// `Some(&Cell)` when `pos` is readable, or `None` when it is outside
+    /// `Some(Cell)` when `pos` is readable, or `None` when it is outside
     /// [`Bounded::bounds`] or otherwise unavailable.
     ///
     /// # Panics
     ///
-    /// Implementations should not panic for out-of-bounds positions.
+    /// Never panics.
     ///
     /// # Usage notes
     ///
     /// A returned cell may be a wide primary or a continuation placeholder.
     /// Callers that walk rows should advance by `cell.width().max(1)` for
     /// primary cells and handle continuations explicitly.
-    fn cell(&self, pos: Position) -> Option<&Cell>;
+    ///
+    /// A surface that stores cells in a packed form resolves them here, so
+    /// this is a read API rather than a scanning one.
+    fn cell(&self, pos: Position) -> Option<Cell>;
 
     /// Copy `self`'s cells into `target`, mapping the top-left of
     /// `self.bounds()` to `at` in target coordinates.
@@ -230,7 +248,7 @@ pub trait Surface: Bounded {
                 // Substitute a blank to avoid writing an orphan
                 // continuation into target.
                 if cell.is_continuation() {
-                    target.set_cell(dst, &Cell::BLANK);
+                    target.set_cell(dst, &Cell::default());
                     dx += 1;
                     continue;
                 }
@@ -243,12 +261,12 @@ pub trait Surface: Bounded {
                 let fits_in_src = dx + w <= b.width;
                 let fits_in_dst = dst.x.saturating_add(w) <= t_right;
                 if w > 1 && (!fits_in_src || !fits_in_dst) {
-                    target.set_cell(dst, &Cell::BLANK);
+                    target.set_cell(dst, &Cell::default());
                     dx += 1;
                     continue;
                 }
 
-                target.set_cell(dst, cell);
+                target.set_cell(dst, &cell);
                 dx += w;
             }
         }
@@ -268,57 +286,23 @@ pub trait Surface: Bounded {
 /// without their primary, and clipped wide writes should leave blanks
 /// rather than half a grapheme.
 pub trait SurfaceMut: Surface {
-    /// Place `cell` at `pos`. Implementations are responsible for
-    /// wide-cell semantics (continuation markers, blanking covered
-    /// cells) and any dirty tracking they care to do. Taking `&Cell`
-    /// lets implementations skip the clone when the destination
-    /// already matches.
+    /// Place `cell` at `pos`.
     ///
     /// # Parameters
     ///
     /// - `pos`: destination coordinate in this surface's coordinate space.
     /// - `cell`: cell to write.
     ///
-    /// # Returns
-    ///
-    /// Nothing.
-    ///
     /// # Panics
     ///
-    /// Implementations should not panic for out-of-bounds positions.
+    /// Never panics. Out-of-bounds writes are ignored.
     ///
     /// # Usage notes
     ///
-    /// Out-of-bounds writes should be ignored. Use this method instead of
-    /// [`Self::cell_mut`] whenever changing content could affect display
-    /// width or neighboring continuation slots.
+    /// Implementations are responsible for wide-cell semantics
+    /// (continuation markers, blanking covered cells) and any dirty tracking
+    /// they care to do. Out-of-bounds writes are ignored.
     fn set_cell(&mut self, pos: Position, cell: &Cell);
-
-    /// Mutable handle to the cell at `pos`. Returns `None` for
-    /// out-of-bounds positions.
-    ///
-    /// # Parameters
-    ///
-    /// - `pos`: coordinate in this surface's coordinate space.
-    ///
-    /// # Returns
-    ///
-    /// `Some(&mut Cell)` for an in-bounds cell, or `None` when `pos` is not
-    /// writable.
-    ///
-    /// # Panics
-    ///
-    /// Implementations should not panic for out-of-bounds positions.
-    ///
-    /// # Usage notes
-    ///
-    /// Implementations that track dirty state must mark the cell as
-    /// touched eagerly — the caller may mutate any field through this
-    /// handle and the surface has no way to observe a write. Callers
-    /// must not change the cell's display width through this handle; use
-    /// [`Self::set_cell`] for wide-cell writes that need
-    /// continuation-column accounting.
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell>;
 
     /// Fill the entire surface bounds with `cell`.
     ///
@@ -379,13 +363,13 @@ pub trait SurfaceMut: Surface {
                 x += step;
             }
             while x < clipped.right() {
-                self.set_cell(Position::new(x, y), &Cell::BLANK);
+                self.set_cell(Position::new(x, y), &Cell::default());
                 x += 1;
             }
         }
     }
 
-    /// Clear the entire surface bounds to [`Cell::BLANK`].
+    /// Clear the entire surface bounds to [`Cell::default`].
     ///
     /// # Returns
     ///
@@ -399,10 +383,10 @@ pub trait SurfaceMut: Surface {
     ///
     /// This is equivalent to `self.fill(&Cell::BLANK)`.
     fn clear(&mut self) {
-        self.fill(&Cell::BLANK);
+        self.fill(&Cell::default());
     }
 
-    /// Clear a rectangle to [`Cell::BLANK`].
+    /// Clear a rectangle to [`Cell::default`].
     ///
     /// # Parameters
     ///
@@ -421,7 +405,7 @@ pub trait SurfaceMut: Surface {
     ///
     /// Only the intersection of `rect` and [`Bounded::bounds`] is modified.
     fn clear_rect(&mut self, rect: Rect) {
-        self.fill_rect(rect, &Cell::BLANK);
+        self.fill_rect(rect, &Cell::default());
     }
 
     /// Insert `n` blank rows at `y`, pushing existing rows down within
@@ -651,7 +635,7 @@ fn collect_primaries<S: SurfaceMut + ?Sized>(
             && !cell.is_continuation()
         {
             let cw = (cell.width() as u16).max(1);
-            out.push((x, cell.clone()));
+            out.push((x, cell));
             x = x.saturating_add(cw);
             continue;
         }
@@ -662,7 +646,7 @@ fn collect_primaries<S: SurfaceMut + ?Sized>(
 
 fn blank_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16) {
     for x in left..right {
-        s.set_cell(Position::new(x, y), &Cell::BLANK);
+        s.set_cell(Position::new(x, y), &Cell::default());
     }
 }
 
@@ -677,7 +661,7 @@ fn fill_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16, f
         col += fill_w;
     }
     while col < right {
-        s.set_cell(Position::new(col, y), &Cell::BLANK);
+        s.set_cell(Position::new(col, y), &Cell::default());
         col += 1;
     }
 }
@@ -687,18 +671,18 @@ fn copy_row<S: SurfaceMut + ?Sized>(s: &mut S, src_y: u16, dst_y: u16, width: u1
     while x < width {
         let src = Position::new(x, src_y);
         let dst = Position::new(x, dst_y);
-        let Some(cell) = s.cell(src).cloned() else {
+        let Some(cell) = s.cell(src) else {
             x += 1;
             continue;
         };
         if cell.is_continuation() {
-            s.set_cell(dst, &Cell::BLANK);
+            s.set_cell(dst, &Cell::default());
             x += 1;
             continue;
         }
         let cw = (cell.width() as u16).max(1);
         if cw > 1 && x + cw > width {
-            s.set_cell(dst, &Cell::BLANK);
+            s.set_cell(dst, &Cell::default());
             x += 1;
         } else {
             s.set_cell(dst, &cell);
@@ -725,7 +709,7 @@ mod tests {
     use crate::buffer::Buffer;
 
     fn wide(s: &str) -> Cell {
-        Cell::wide(s)
+        Cell::from(s)
     }
 
     fn cont() -> Cell {
@@ -735,25 +719,34 @@ mod tests {
     #[test]
     fn draw_copies_normal_cells() {
         let mut src = Buffer::new(2, 1);
-        src.set((0, 0), &Cell::narrow("A"));
-        src.set((1, 0), &Cell::narrow("B"));
+        src.set_cell(Position::new(0, 0), &Cell::from('A'));
+        src.set_cell(Position::new(1, 0), &Cell::from('B'));
         let mut dst = Buffer::new(4, 1);
         src.draw(&mut dst, Position::new(1, 0));
-        assert_eq!(dst.cell(Position::new(0, 0)).unwrap().content(), " ");
-        assert_eq!(dst.cell(Position::new(1, 0)).unwrap().content(), "A");
-        assert_eq!(dst.cell(Position::new(2, 0)).unwrap().content(), "B");
+        assert_eq!(
+            dst.cell(Position::new(0, 0)).unwrap().content.char(),
+            Some(' ')
+        );
+        assert_eq!(
+            dst.cell(Position::new(1, 0)).unwrap().content.char(),
+            Some('A')
+        );
+        assert_eq!(
+            dst.cell(Position::new(2, 0)).unwrap().content.char(),
+            Some('B')
+        );
     }
 
     #[test]
     fn draw_preserves_wide_pair() {
         let mut src = Buffer::new(2, 1);
-        src.set((0, 0), &wide("世"));
+        src.set_cell(Position::new(0, 0), &wide("世"));
         // Buffer::set already wrote the continuation at (1,0).
         let mut dst = Buffer::new(2, 1);
         src.draw(&mut dst, Position::new(0, 0));
         let primary = dst.cell(Position::new(0, 0)).unwrap();
         let cont_cell = dst.cell(Position::new(1, 0)).unwrap();
-        assert_eq!(primary.content(), "世");
+        assert_eq!(primary.content.char(), Some('世'));
         assert_eq!(primary.width(), 2);
         assert!(cont_cell.is_continuation());
     }
@@ -764,22 +757,28 @@ mod tests {
         // continuation half of a wide cell that lives outside the
         // slice. The default must not propagate the orphan.
         let mut src = Buffer::new(2, 1);
-        src.set((0, 0), &cont());
-        src.set((1, 0), &Cell::narrow("X"));
+        src.set_cell(Position::new(0, 0), &cont());
+        src.set_cell(Position::new(1, 0), &Cell::from('X'));
 
         let mut dst = Buffer::new(2, 1);
         // Pre-seed target with an unrelated wide cell to make sure
         // we'd notice a corruption.
-        dst.set((0, 0), &Cell::narrow("Y"));
-        dst.set((1, 0), &Cell::narrow("Z"));
+        dst.set_cell(Position::new(0, 0), &Cell::from('Y'));
+        dst.set_cell(Position::new(1, 0), &Cell::from('Z'));
 
         src.draw(&mut dst, Position::new(0, 0));
 
         // The orphan continuation became a blank — no spurious
         // continuation marker carried over.
         assert!(!dst.cell(Position::new(0, 0)).unwrap().is_continuation());
-        assert_eq!(dst.cell(Position::new(0, 0)).unwrap().content(), " ");
-        assert_eq!(dst.cell(Position::new(1, 0)).unwrap().content(), "X");
+        assert_eq!(
+            dst.cell(Position::new(0, 0)).unwrap().content.char(),
+            Some(' ')
+        );
+        assert_eq!(
+            dst.cell(Position::new(1, 0)).unwrap().content.char(),
+            Some('X')
+        );
     }
 
     #[test]
@@ -788,13 +787,13 @@ mod tests {
         // continuation would fall outside target bounds. Substitute
         // a blank rather than emitting a half-drawn grapheme.
         let mut src = Buffer::new(2, 1);
-        src.set((0, 0), &wide("世"));
+        src.set_cell(Position::new(0, 0), &wide("世"));
 
         let mut dst = Buffer::new(2, 1);
         src.draw(&mut dst, Position::new(1, 0));
 
         let landed = dst.cell(Position::new(1, 0)).unwrap();
-        assert_eq!(landed.content(), " ");
+        assert_eq!(landed.content.char(), Some(' '));
         assert_eq!(landed.width(), 1);
     }
 
@@ -809,10 +808,7 @@ mod tests {
         let mut win = Window::new(w, h);
         for (y, row) in content.iter().enumerate() {
             for (x, ch) in row.chars().enumerate() {
-                win.set_cell(
-                    Position::new(x as u16, y as u16),
-                    &Cell::narrow(ch.to_string()),
-                );
+                win.set_cell(Position::new(x as u16, y as u16), &Cell::from(ch));
             }
         }
         win
@@ -822,7 +818,7 @@ mod tests {
         (0..win.bounds().width)
             .map(|x| {
                 win.cell(Position::new(x, y))
-                    .map(|c| c.content().to_string())
+                    .map(|c| c.to_string().to_string())
                     .unwrap_or_default()
             })
             .collect()
@@ -831,7 +827,7 @@ mod tests {
     #[test]
     fn default_insert_lines_shifts_down_and_blanks_top() {
         let mut win = window_with(&["AAA", "BBB", "CCC", "DDD"]);
-        SurfaceMut::insert_lines(&mut win, 1, 1, 4, &Cell::BLANK);
+        SurfaceMut::insert_lines(&mut win, 1, 1, 4, &Cell::default());
         assert_eq!(row_content(&win, 0), "AAA");
         assert_eq!(row_content(&win, 1), "   ");
         assert_eq!(row_content(&win, 2), "BBB");
@@ -841,7 +837,7 @@ mod tests {
     #[test]
     fn default_delete_lines_pulls_up_and_blanks_bottom() {
         let mut win = window_with(&["AAA", "BBB", "CCC", "DDD"]);
-        SurfaceMut::delete_lines(&mut win, 1, 1, 4, &Cell::BLANK);
+        SurfaceMut::delete_lines(&mut win, 1, 1, 4, &Cell::default());
         assert_eq!(row_content(&win, 0), "AAA");
         assert_eq!(row_content(&win, 1), "CCC");
         assert_eq!(row_content(&win, 2), "DDD");
@@ -851,14 +847,14 @@ mod tests {
     #[test]
     fn default_insert_cells_shifts_right_and_blanks_left() {
         let mut win = window_with(&["ABCDE"]);
-        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 2, 5, &Cell::BLANK);
+        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 2, 5, &Cell::default());
         assert_eq!(row_content(&win, 0), "A  BC");
     }
 
     #[test]
     fn default_delete_cells_pulls_left_and_blanks_right() {
         let mut win = window_with(&["ABCDE"]);
-        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 5, &Cell::BLANK);
+        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 5, &Cell::default());
         assert_eq!(row_content(&win, 0), "ADE  ");
     }
 
@@ -868,14 +864,23 @@ mod tests {
         // 世's new primary would be at col 2, continuation at col 3.
         // That still fits (col 3 < right=4). So 世 is preserved.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::narrow("A"));
+        win.set_cell(Position::new(0, 0), &Cell::from('A'));
         win.set_cell(Position::new(1, 0), &wide("世"));
-        win.set_cell(Position::new(3, 0), &Cell::narrow("B"));
-        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
+        win.set_cell(Position::new(3, 0), &Cell::from('B'));
+        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::default());
 
-        assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
-        assert_eq!(win.cell(Position::new(1, 0)).unwrap().content(), " ");
-        assert_eq!(win.cell(Position::new(2, 0)).unwrap().content(), "世");
+        assert_eq!(
+            win.cell(Position::new(0, 0)).unwrap().content.char(),
+            Some('A')
+        );
+        assert_eq!(
+            win.cell(Position::new(1, 0)).unwrap().content.char(),
+            Some(' ')
+        );
+        assert_eq!(
+            win.cell(Position::new(2, 0)).unwrap().content.char(),
+            Some('世')
+        );
         assert!(win.cell(Position::new(3, 0)).unwrap().is_continuation());
     }
 
@@ -885,15 +890,27 @@ mod tests {
         // 世 would move from col 2 to col 3, continuation to col 4 (out).
         // So 世 must be dropped, leaving a blank at col 3.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::narrow("A"));
-        win.set_cell(Position::new(1, 0), &Cell::narrow("B"));
+        win.set_cell(Position::new(0, 0), &Cell::from('A'));
+        win.set_cell(Position::new(1, 0), &Cell::from('B'));
         win.set_cell(Position::new(2, 0), &wide("世"));
-        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
+        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::default());
 
-        assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
-        assert_eq!(win.cell(Position::new(1, 0)).unwrap().content(), " ");
-        assert_eq!(win.cell(Position::new(2, 0)).unwrap().content(), "B");
-        assert_eq!(win.cell(Position::new(3, 0)).unwrap().content(), " ");
+        assert_eq!(
+            win.cell(Position::new(0, 0)).unwrap().content.char(),
+            Some('A')
+        );
+        assert_eq!(
+            win.cell(Position::new(1, 0)).unwrap().content.char(),
+            Some(' ')
+        );
+        assert_eq!(
+            win.cell(Position::new(2, 0)).unwrap().content.char(),
+            Some('B')
+        );
+        assert_eq!(
+            win.cell(Position::new(3, 0)).unwrap().content.char(),
+            Some(' ')
+        );
     }
 
     #[test]
@@ -901,14 +918,26 @@ mod tests {
         // Row: A 世(prim) 世(cont) B, delete 2 at col 1 with right=4.
         // 世's primary falls inside [1, 3) → dropped entirely.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::narrow("A"));
+        win.set_cell(Position::new(0, 0), &Cell::from('A'));
         win.set_cell(Position::new(1, 0), &wide("世"));
-        win.set_cell(Position::new(3, 0), &Cell::narrow("B"));
-        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 4, &Cell::BLANK);
+        win.set_cell(Position::new(3, 0), &Cell::from('B'));
+        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 4, &Cell::default());
 
-        assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
-        assert_eq!(win.cell(Position::new(1, 0)).unwrap().content(), "B");
-        assert_eq!(win.cell(Position::new(2, 0)).unwrap().content(), " ");
-        assert_eq!(win.cell(Position::new(3, 0)).unwrap().content(), " ");
+        assert_eq!(
+            win.cell(Position::new(0, 0)).unwrap().content.char(),
+            Some('A')
+        );
+        assert_eq!(
+            win.cell(Position::new(1, 0)).unwrap().content.char(),
+            Some('B')
+        );
+        assert_eq!(
+            win.cell(Position::new(2, 0)).unwrap().content.char(),
+            Some(' ')
+        );
+        assert_eq!(
+            win.cell(Position::new(3, 0)).unwrap().content.char(),
+            Some(' ')
+        );
     }
 }

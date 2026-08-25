@@ -13,6 +13,7 @@
 use std::io::{self, Write};
 
 use uncurses::color::Color;
+use uncurses::style::Link;
 use uncurses::style::{Style, UnderlineStyle};
 
 fn main() -> io::Result<()> {
@@ -63,14 +64,16 @@ fn main() -> io::Result<()> {
     )?;
 
     section(&mut out, "Hyperlink (OSC 8)")?;
-    // A `link(...)` makes the opener emit the OSC 8 start and the closer emit
-    // its terminator, so the same opener/closer pattern that styles text also
-    // makes it clickable.
-    let url = "https://github.com/aymanbagabas/uncurses";
-    let link = Style::new().underline().fg(Color::BrightBlue).link(url, "");
+    // OSC 8 is its own escape, independent of SGR, so a clickable span wraps
+    // the styled text in a `Link`'s opener and closer.
+    let link = Link {
+        url: "https://github.com/aymanbagabas/uncurses".into(),
+        params: String::new(),
+    };
+    let style = Style::new().underline().fg(Color::BrightBlue);
     writeln!(
         out,
-        "  {link}uncurses on GitHub{link:#} (Ctrl/Cmd-click in a supporting terminal)",
+        "  {link}{style}uncurses on GitHub{style:#}{link:#} (Ctrl/Cmd-click in a supporting terminal)",
     )?;
 
     out.flush()

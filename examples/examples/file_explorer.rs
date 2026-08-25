@@ -283,7 +283,7 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdout>) {
     let dim = Style::default().faint();
     let dir_style = Style::default().fg(Color::BrightBlue).bold();
     let selected = Style::default().bg(Color::Blue).fg(Color::BrightWhite);
-    let selected_dir = selected.clone().bold();
+    let selected_dir = selected.bold();
 
     // Header bar across full width.
     {
@@ -294,7 +294,7 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdout>) {
         );
         let pad = clip_to(&pad, w);
         {
-            screen.set_str((0, 0), &pad, header.clone());
+            screen.set_str((0, 0), &pad, header);
         };
     }
 
@@ -330,7 +330,7 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdout>) {
     // Vertical divider.
     for row in 0..body_h {
         {
-            screen.set_str((list_w, row + 1), "│", dim.clone());
+            screen.set_str((list_w, row + 1), "│", dim);
         };
     }
 
@@ -341,7 +341,7 @@ fn draw(app: &ExplorerState, screen: &mut Screen<Stdout>) {
         if let Some(line) = app.preview_lines.get(idx) {
             let s = slice_cols(line, app.preview_hscroll, preview_w);
             {
-                screen.set_str((preview_x, row as u16 + 1), &s, normal.clone());
+                screen.set_str((preview_x, row as u16 + 1), &s, normal);
             };
         }
     }

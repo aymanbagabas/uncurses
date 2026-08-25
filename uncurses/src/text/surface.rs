@@ -24,9 +24,9 @@
 //! ```
 
 use crate::buffer::SurfaceMut;
-use crate::cell::Cell;
+use crate::cell::Style as CellStyle;
+use crate::cell::{Cell, Content, Kind};
 use crate::layout::{Position, Rect};
-use crate::style::Style;
 
 use super::{WidthMode, WrapMode, grapheme_cells};
 
@@ -92,7 +92,12 @@ pub trait TextSurface: SurfaceMut {
     ///
     /// Use [`set_str_wrap`](Self::set_str_wrap) when text should continue on
     /// following rows instead of truncating at the right edge.
-    fn set_str(&mut self, pos: impl Into<Position>, s: &str, style: impl Into<Style>) -> Position {
+    fn set_str(
+        &mut self,
+        pos: impl Into<Position>,
+        s: &str,
+        style: impl Into<CellStyle>,
+    ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let clip = self.bounds();
         paint_literal(
@@ -135,7 +140,7 @@ pub trait TextSurface: SurfaceMut {
         pos: impl Into<Position>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<CellStyle>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let clip = self.bounds();
@@ -168,7 +173,7 @@ pub trait TextSurface: SurfaceMut {
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
-        style: impl Into<Style>,
+        style: impl Into<CellStyle>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let rect = rect.into();
@@ -211,7 +216,7 @@ pub trait TextSurface: SurfaceMut {
         rect: impl Into<Rect>,
         s: &str,
         wrap: WrapMode,
-        style: impl Into<Style>,
+        style: impl Into<CellStyle>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let rect = rect.into();
@@ -260,7 +265,7 @@ pub trait TextSurface: SurfaceMut {
         pos: impl Into<Position>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<CellStyle>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let clip = self.bounds();
@@ -302,7 +307,7 @@ pub trait TextSurface: SurfaceMut {
         rect: impl Into<Rect>,
         s: &str,
         tail: &str,
-        tail_style: impl Into<Style>,
+        tail_style: impl Into<CellStyle>,
     ) -> Position {
         let (mode, eaw) = (self.width_mode(), self.eaw_wide());
         let rect = rect.into();
@@ -386,7 +391,7 @@ pub trait TextSurface: SurfaceMut {
 /// measured cell width.
 struct LiteralTail<'a> {
     text: &'a str,
-    style: &'a Style,
+    style: &'a CellStyle,
     width: u16,
 }
 
@@ -403,7 +408,7 @@ fn paint_literal<S: SurfaceMut + ?Sized>(
     wrap: WrapMode,
     mode: WidthMode,
     eaw_wide: bool,
-    style: &Style,
+    style: &CellStyle,
 ) -> Position {
     paint_literal_inner(target, start, clip, s, wrap, mode, eaw_wide, style, None)
 }
@@ -420,7 +425,7 @@ fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
     clip: Rect,
     s: &str,
     tail_text: &str,
-    tail_style: &Style,
+    tail_style: &CellStyle,
     mode: WidthMode,
     eaw_wide: bool,
 ) -> Position {
@@ -446,7 +451,7 @@ fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
         WrapMode::Truncate,
         mode,
         eaw_wide,
-        &Style::default(),
+        &CellStyle::default(),
         tail,
     )
 }
@@ -460,7 +465,7 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
     wrap: WrapMode,
     mode: WidthMode,
     eaw_wide: bool,
-    style: &Style,
+    style: &CellStyle,
     tail: Option<LiteralTail<'_>>,
 ) -> Position {
     if clip.is_empty() {
@@ -521,12 +526,15 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
             }
         }
         if clip.contains(Position::new(x, y)) {
-            let cell = if w == 2 {
-                Cell::wide(cluster)
-            } else {
-                Cell::narrow(cluster)
+            // The surface already measured this cluster, so build the cell
+            // directly: `Cell::new` would measure it a second time only for
+            // the result to be overwritten here.
+            let cell = Cell {
+                content: Content::from(cluster),
+                style: style.clone(),
+                kind: if w == 2 { Kind::Wide } else { Kind::Narrow },
             };
-            target.set_cell(Position::new(x, y), &cell.style(style.clone()));
+            target.set_cell(Position::new(x, y), &cell);
         }
         x += w;
     }

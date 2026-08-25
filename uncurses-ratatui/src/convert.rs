@@ -23,7 +23,7 @@
 //! ```
 
 use ratatui::style::{Color as RtColor, Modifier, Style as RtStyle};
-use uncurses::cell::Cell as CzCell;
+use uncurses::cell::{Cell as CzCell, Kind};
 use uncurses::color::Color as CzColor;
 use uncurses::style::{AttrFlags, Style as CzStyle, UnderlineStyle};
 
@@ -196,12 +196,16 @@ pub(crate) fn cell_from_ratatui(rc: &ratatui::buffer::Cell) -> CzCell {
         add_modifier: rc.modifier,
         sub_modifier: Modifier::empty(),
     };
-    let style = to_uncurses_style(style);
+    // A symbol can be a whole grapheme cluster, not just a lone codepoint.
+    // The footprint is measured the way the widget library measures it, so a
+    // widget's layout and the cell it lands in agree.
     let symbol = rc.symbol();
-    let cell = if str_cell_width(symbol) >= 2 {
-        CzCell::wide(symbol)
-    } else {
-        CzCell::narrow(symbol)
-    };
-    cell.style(style)
+    CzCell {
+        kind: if str_cell_width(symbol) >= 2 {
+            Kind::Wide
+        } else {
+            Kind::Narrow
+        },
+        ..CzCell::new(symbol, to_uncurses_style(style))
+    }
 }
