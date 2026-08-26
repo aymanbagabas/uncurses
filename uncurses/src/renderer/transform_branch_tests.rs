@@ -222,8 +222,12 @@ fn transform_step4c_walkback() {
     let mut new_buf = RenderBuffer::new(width, 1);
     set_text(&mut new_buf, 0, "Abcdef");
 
+    // Only the first cell differs and the cursor already rests on it, so the
+    // repaint is the one character. This used to walk back over the second
+    // cell as well: a zero-distance move was priced at three bytes, so
+    // overwriting one extra cell looked cheaper than a move that was free.
     let out = transform_output(&mut renderer, &new_buf);
-    assert_eq!(out, b"Ab");
+    assert_eq!(out, b"A");
 }
 
 #[test]
