@@ -577,6 +577,9 @@ impl<W: Write> Screen<W> {
     /// This only sets state; the markers are emitted on the next `render`.
     pub fn set_synchronized_output(&mut self, enabled: bool) {
         self.sync_updates = enabled;
+        // Scroll detection needs this: without a synchronized frame a
+        // post-scroll correction repaint is visible as flicker.
+        self.renderer.set_sync_output(enabled);
     }
 
     /// Whether [synchronized output](Self::set_synchronized_output) frame
@@ -609,18 +612,18 @@ impl<W: Write> Screen<W> {
     /// wrong — but what the user sees is that region jumping and being put
     /// back, on every frame, for as long as they keep scrolling.
     ///
-    /// The scroll and the repaint go into the same frame, and
-    /// [synchronized output](Self::set_synchronized_output) wraps the whole
-    /// frame in DEC 2026, so the terminal presents it in one step and the
-    /// intermediate state never reaches the display.
+    /// That only happens when the frame is presented atomically. With
+    /// [synchronized output](Self::set_synchronized_output) the whole frame
+    /// is wrapped in DEC 2026, the terminal presents it in one step, and
+    /// the intermediate state never reaches the display -- so the renderer
+    /// takes the cheaper plan.
     ///
-    /// Check [`synchronized_output`](Self::synchronized_output) rather than
-    /// assuming: it is off by default, and a
-    /// [`Program`](crate::program::Program) turns it on only once the
-    /// terminal has reported 2026 support, which takes an explicit
-    /// [`query_capabilities`](crate::program::Program::query_capabilities).
-    /// An application that never asks never gets that cover, whatever its
-    /// terminal supports.
+    /// Without it the renderer scrolls a row only when the scroll lands
+    /// exactly the cells the frame wants there, leaving nothing to repaint
+    /// afterwards. A fixed column is left alone instead of being moved and
+    /// put back, at the cost of emitting more bytes. Turning this setting
+    /// off is therefore no longer the remedy for that flicker; it now only
+    /// gives up scrolling altogether.
     ///
     /// Detection is skipped outside [fullscreen](Self::set_fullscreen)
     /// regardless of this setting.

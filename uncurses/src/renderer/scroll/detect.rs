@@ -4,7 +4,24 @@
 //! old and new buffers. Finds unique 1:1 matches and grows them into
 //! contiguous hunks. When the renderer has a previous-frame buffer,
 //! growth past hash mismatches is allowed whenever the per-cell cost
-//! of scrolling-then-patching beats redrawing in place.
+//! of scrolling-then-patching beats redrawing in place -- but only
+//! under synchronized output.
+//!
+//! A terminal scroll is always full width, so growing a hunk through a
+//! row the scroll gets wrong means emitting the scroll and then
+//! repainting the cells it moved but shouldn't have. Inside a
+//! synchronized frame that correction is invisible and the byte saving
+//! is free. Outside one it is on screen for a moment: a fixed sidebar
+//! beside a scrolling pane visibly slides and snaps back.
+//!
+//! So without synchronized output a row joins a hunk only when the
+//! scroll delivers it exactly, which [`Renderer::delivers_exactly`]
+//! decides by comparing live cells. Row hashes cannot answer that: they
+//! cover content alone, so a cell differing only in style hashes equal,
+//! and [`prepare`](crate::renderer::frame) leaves a row's hash stale
+//! when the new frame does not touch it. The hash still runs first as a
+//! cheap filter -- equal cells always hash equal, so it never rejects a
+//! row the cell comparison would have accepted.
 
 use crate::cell::Cell;
 use crate::renderer::Renderer;
@@ -103,8 +120,15 @@ impl Renderer {
             // walks in grow_hunks.
             if entry.old_count == 1 && entry.new_count == 1 && entry.old_idx != entry.new_idx {
                 let new_idx = entry.new_idx as usize;
-                if new_idx < height {
-                    self.oldnum[new_idx] = entry.old_idx;
+                let old_idx = entry.old_idx;
+                // A seed is trusted on its hash alone under synchronized
+                // output. Without it, confirm against live cells: the hash
+                // is content-only and can be stale.
+                if new_idx < height
+                    && (self.sync_output
+                        || self.delivers_exactly(new_buf, old_idx as usize, new_idx))
+                {
+                    self.oldnum[new_idx] = old_idx;
                 }
             }
         }
@@ -178,8 +202,12 @@ impl Renderer {
                     break;
                 }
                 let hash_match = self.new_hashes[j as usize] == self.old_hashes[target as usize];
-                let ok = hash_match
-                    || self.cost_effective(new_buf, target as usize, j as usize, shift < 0);
+                let ok = if self.sync_output {
+                    hash_match
+                        || self.cost_effective(new_buf, target as usize, j as usize, shift < 0)
+                } else {
+                    hash_match && self.delivers_exactly(new_buf, target as usize, j as usize)
+                };
                 if !ok {
                     break;
                 }
@@ -202,8 +230,12 @@ impl Renderer {
                     break;
                 }
                 let hash_match = self.new_hashes[j as usize] == self.old_hashes[target as usize];
-                let ok = hash_match
-                    || self.cost_effective(new_buf, target as usize, j as usize, shift > 0);
+                let ok = if self.sync_output {
+                    hash_match
+                        || self.cost_effective(new_buf, target as usize, j as usize, shift > 0)
+                } else {
+                    hash_match && self.delivers_exactly(new_buf, target as usize, j as usize)
+                };
                 if !ok {
                     break;
                 }
@@ -226,6 +258,27 @@ impl Renderer {
     /// indicates the destination of the move will leave a blank row
     /// that BCE can fill, changing the accounting on the source side.
     ///
+    /// Whether scrolling the row now at `from` to position `to` lands
+    /// exactly the cells this frame wants there, leaving nothing to
+    /// correct afterwards.
+    ///
+    /// This is the condition for moving a row with no visible artifact:
+    /// the scroll puts the right cells in place on the first try, so no
+    /// repaint follows it and there is no intermediate state to see.
+    ///
+    /// Compares live [`Cell`]s rather than row hashes, which answer a
+    /// weaker question -- they cover content alone, and go stale for rows
+    /// the new frame does not touch. Stops at the first mismatch.
+    fn delivers_exactly(&self, new_buf: &RenderBuffer, from: usize, to: usize) -> bool {
+        let Some(old) = self.cur_buf.as_ref() else {
+            return false;
+        };
+        match (old.line(from as u16), new_buf.line(to as u16)) {
+            (Some(a), Some(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x == y),
+            _ => false,
+        }
+    }
+
     /// Returns `false` whenever the renderer has no previous frame
     /// to compare against (the cost analysis needs both buffers).
     fn cost_effective(
@@ -363,8 +416,13 @@ mod tests {
     use super::*;
     use crate::renderer::Renderer;
 
+    /// A renderer carrying synthetic hashes and no `cur_buf`, for testing
+    /// the mapping algorithm itself. Runs as if synchronized, because the
+    /// unsynchronized path decides from live cells and there are none to
+    /// compare here.
     fn renderer_with_hashes(old: Vec<u64>, new: Vec<u64>, height: u16) -> (Renderer, RenderBuffer) {
         let mut r = Renderer::new();
+        r.sync_output = true;
         r.old_hashes = old;
         r.new_hashes = new;
         let buf = RenderBuffer::new(1, height);
@@ -471,7 +529,8 @@ mod tests {
         // differs from old[1]. With cell-aware growth the hunk
         // should still extend to cover row 0 because the per-cell
         // cost of scrolling and patching one cell beats a full
-        // redraw.
+        // redraw -- but only under synchronized output, which hides the
+        // patch.
         let width: u16 = 20;
         let height: u16 = 5;
         let mut old_buf = RenderBuffer::new(width, height);
@@ -504,13 +563,118 @@ mod tests {
         }
 
         let mut r = Renderer::new();
-        r.cur_buf = Some(old_buf);
-        r.old_hashes = old_hashes;
-        r.new_hashes = new_hashes;
+        r.cur_buf = Some(old_buf.clone());
+        r.old_hashes = old_hashes.clone();
+        r.new_hashes = new_hashes.clone();
+        r.sync_output = true;
         r.update_hashmap(&new_buf, height as usize);
         assert_eq!(
             r.oldnum[0], 1,
             "cell-aware grow should have linked new[0] to old[1]"
+        );
+
+        // Without synchronized output the same frame must not link row 0:
+        // the scroll would deliver the wrong cell there and the correction
+        // repaint would be visible.
+        let mut r = Renderer::new();
+        r.cur_buf = Some(old_buf);
+        r.old_hashes = old_hashes;
+        r.new_hashes = new_hashes;
+        r.sync_output = false;
+        r.update_hashmap(&new_buf, height as usize);
+        assert_eq!(
+            r.oldnum[0], NO_MAP,
+            "without sync output, growth must stop at the mismatched row"
+        );
+    }
+
+    /// Build a pair of buffers where `new` is `old` shifted by one row,
+    /// optionally with a one-cell edit on `edit_row` so its hash misses.
+    fn shifted_pair(height: u16, edit_row: Option<u16>) -> (RenderBuffer, RenderBuffer) {
+        let width: u16 = 20;
+        let mut old_buf = RenderBuffer::new(width, height);
+        let mut new_buf = RenderBuffer::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let a = char::from_u32('a' as u32 + y as u32).unwrap();
+                old_buf.set_cell((x, y), &Cell::narrow(a.to_string()));
+                let src = if y == height - 1 {
+                    'z'
+                } else {
+                    char::from_u32('a' as u32 + y as u32 + 1).unwrap()
+                };
+                new_buf.set_cell((x, y), &Cell::narrow(src.to_string()));
+            }
+        }
+        if let Some(r) = edit_row {
+            new_buf.set_cell((0, r), &Cell::narrow("Z"));
+        }
+        (old_buf, new_buf)
+    }
+
+    fn run_hashmap(old_buf: RenderBuffer, new_buf: &RenderBuffer, sync: bool) -> Vec<i32> {
+        let height = new_buf.height();
+        let mut old_hashes = vec![0u64; height as usize];
+        let mut new_hashes = vec![0u64; height as usize];
+        for y in 0..height as usize {
+            old_hashes[y] = simple_hash(old_buf.line(y as u16).unwrap());
+            new_hashes[y] = simple_hash(new_buf.line(y as u16).unwrap());
+        }
+        let mut r = Renderer::new();
+        r.cur_buf = Some(old_buf);
+        r.old_hashes = old_hashes;
+        r.new_hashes = new_hashes;
+        r.sync_output = sync;
+        r.update_hashmap(new_buf, height as usize);
+        r.oldnum.clone()
+    }
+
+    #[test]
+    fn hash_matched_rows_still_grow_without_sync_output() {
+        // The guard must not disable growth. Rows 1..3 all hold the same
+        // text, so their hash is not unique and the seeding pass skips
+        // them -- only growth can map them. Seeds alone would leave a
+        // 2-row hunk, which `invalidate_bad_hunks` then drops, so if
+        // growth stops here no scroll survives at all.
+        let width: u16 = 8;
+        let rows = ["A", "B", "B", "B", "C", "D"];
+        let mut old_buf = RenderBuffer::new(width, 6);
+        let mut new_buf = RenderBuffer::new(width, 6);
+        for y in 0..6u16 {
+            for x in 0..width {
+                old_buf.set_cell((x, y), &Cell::narrow(rows[y as usize]));
+                // `new` is `old` shifted up one row.
+                let src = if y == 5 { "E" } else { rows[y as usize + 1] };
+                new_buf.set_cell((x, y), &Cell::narrow(src));
+            }
+        }
+        let guarded = run_hashmap(old_buf, &new_buf, false);
+        for y in 0..5 {
+            assert_eq!(
+                guarded[y],
+                (y + 1) as i32,
+                "row {y} is reachable only by growth and must still map \
+                 unsynchronized: {guarded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn forward_growth_is_guarded_too() {
+        // Growth runs backward from the seed and forward from it. The
+        // backward direction is covered by the cost-effective test; this
+        // pins the forward one, where the mismatched row sits *below* the
+        // seed.
+        let (old_buf, new_buf) = shifted_pair(8, Some(5));
+        let synced = run_hashmap(old_buf.clone(), &new_buf, true);
+        assert_eq!(
+            synced[5], 6,
+            "synchronized, forward growth crosses the edited row: {synced:?}"
+        );
+        let guarded = run_hashmap(old_buf, &new_buf, false);
+        assert_eq!(
+            guarded[5], NO_MAP,
+            "unsynchronized, forward growth must stop at it: {guarded:?}"
         );
     }
 

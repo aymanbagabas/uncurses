@@ -1809,7 +1809,7 @@ fn inline_render_without_background_emits_no_pen_resets() {
 ///   lines do, so repainting a row in place costs far more cells than
 ///   repainting the narrow tree after a scroll. With near-identical rows
 ///   the cost analysis correctly declines to grow.
-fn two_pane_second_frame(scroll_optimize: bool) -> String {
+fn two_pane_second_frame(scroll_optimize: bool, sync_output: bool) -> String {
     const W: u16 = 40;
     const H: u16 = 12;
     const SIDEBAR: u16 = 10;
@@ -1819,7 +1819,11 @@ fn two_pane_second_frame(scroll_optimize: bool) -> String {
     fn paint(screen: &mut Screen<Vec<u8>>, offset: usize) {
         for y in 0..H {
             if y < TREE_ROWS {
-                for (i, ch) in format!("tree-{y:02}").chars().enumerate() {
+                // Non-ASCII label so any repaint of this column shows up in
+                // `is_ascii()`. A substring search misses a partial
+                // correction, which re-emits only the differing cells.
+                let label = format!("tree-{}", ['á', 'é', 'í', 'ó'][y as usize % 4]);
+                for (i, ch) in label.chars().enumerate() {
                     screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
                 }
             }
@@ -1844,6 +1848,7 @@ fn two_pane_second_frame(scroll_optimize: bool) -> String {
     let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
     screen.set_alt_screen(true);
     screen.set_scroll_optimize(scroll_optimize);
+    screen.set_synchronized_output(sync_output);
 
     paint(&mut screen, 0);
     screen.render().unwrap();
@@ -1858,22 +1863,22 @@ fn two_pane_second_frame(scroll_optimize: bool) -> String {
 
 #[test]
 fn scroll_detection_moves_a_fixed_column_and_paints_it_back() {
-    // Pins the behavior `set_scroll_optimize` exists to switch off, so that
-    // turning the knob off is visibly a change rather than a no-op.
+    // Under synchronized output the renderer takes the cheaper route: the
+    // scrolls it emits are always full width, so the detected scroll moves
+    // the tree too and the frame repaints it. The correction is inside the
+    // synchronized frame, so nothing is on screen mid-way.
     //
-    // The scrolls the renderer emits are always full width, so the detected
-    // scroll moves the tree too and the renderer repaints it inside the same
-    // frame. The settled screen is correct either way, which is exactly why
-    // this needs a byte-level assertion: comparing the finished screen sees
+    // The settled screen is correct either way, which is exactly why this
+    // needs a byte-level assertion: comparing the finished screen sees
     // nothing.
-    let out = two_pane_second_frame(true);
+    let out = two_pane_second_frame(true, true);
 
     assert!(
         out.contains("\x1b[3S") || out.contains("\x1b[3M") || out.contains("\x1b[3L"),
         "expected a detected 3-row scroll: {out:?}"
     );
     assert!(
-        out.contains("tree-"),
+        !out.is_ascii(),
         "the scroll moved the tree, so the frame must paint it back: {out:?}"
     );
 }
@@ -1883,15 +1888,115 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
     // The same frame with detection off: no scroll goes out, so the tree
     // never moves and never needs repainting. It is unchanged between the
     // two frames, so its cells must not appear in the output at all.
-    let out = two_pane_second_frame(false);
+    let out = two_pane_second_frame(false, true);
 
     assert!(
         !out.contains("\x1b[3S") && !out.contains("\x1b[3M") && !out.contains("\x1b[3L"),
         "scroll detection is off, so no scroll should be emitted: {out:?}"
     );
     assert!(
-        !out.contains("tree-"),
+        out.is_ascii(),
         "an untouched fixed column must not be repainted: {out:?}"
+    );
+}
+
+#[test]
+fn scroll_detection_leaves_a_fixed_column_alone_without_sync_output() {
+    // Same frame, no synchronized output. A full-width scroll would move the
+    // tree and need repainting to put it back, and that correction would be
+    // on screen for a moment: the sidebar visibly slides and snaps back.
+    //
+    // So hunks may only grow through rows the scroll delivers exactly, and
+    // the tree rows are not among them. The tree must not be touched.
+    let out = two_pane_second_frame(true, false);
+
+    assert!(
+        out.is_ascii(),
+        "an untouched fixed column must not be repainted: {out:?}"
+    );
+    // Without this the test is also satisfied by emitting no scroll at all,
+    // so it would pass even if the guard disabled the optimization outright.
+    assert!(
+        out.contains("\x1b[3S") || out.contains("\x1b[3M") || out.contains("\x1b[3L"),
+        "hash-matched rows must still scroll without sync output: {out:?}"
+    );
+}
+
+/// A scrollbar thumb beside a scrolling pane: column 0 is a space on every
+/// row, and the thumb is a background colour parked at a fixed row. Every
+/// row's *content* is identical, so row hashes cannot tell the thumb apart
+/// -- only full cell equality can.
+///
+/// Returns the bytes of the second frame.
+fn thumb_second_frame(sync_output: bool) -> String {
+    const W: u16 = 40;
+    const H: u16 = 12;
+    const THUMB_ROW: u16 = 2;
+    const SHIFT: usize = 3;
+
+    fn paint(screen: &mut Screen<Vec<u8>>, offset: usize) {
+        for y in 0..H {
+            let track = if y == THUMB_ROW {
+                Cell::narrow(" ").style(Style::default().bg(Color::Red))
+            } else {
+                Cell::narrow(" ")
+            };
+            screen.set_cell((0, y), &track);
+            let n = y as usize + offset;
+            let body: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+                .chars()
+                .cycle()
+                .skip(n * 7 % 36)
+                .take((W - 1) as usize)
+                .collect();
+            for (i, ch) in body.chars().enumerate() {
+                screen.set_cell((1 + i as u16, y), &Cell::narrow(ch.to_string()));
+            }
+        }
+    }
+
+    let opts = Optimizations::default()
+        .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL);
+    let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
+    screen.set_alt_screen(true);
+    screen.set_scroll_optimize(true);
+    screen.set_synchronized_output(sync_output);
+
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    paint(&mut screen, SHIFT);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    s(screen.writer())
+}
+
+#[test]
+fn scroll_detection_leaves_a_styled_thumb_alone_without_sync_output() {
+    // The row hash covers content only, so the thumb row hashes exactly
+    // like every other track row. Only comparing live cells catches it.
+    // If it is scrolled, the frame has to repaint the thumb, and that
+    // repaint is visible.
+    let out = thumb_second_frame(false);
+
+    assert!(
+        !out.contains("\x1b[41m") && !out.contains("48;2;") && !out.contains("\x1b[48;5;"),
+        "an unmoved thumb must not be repainted: {out:?}"
+    );
+}
+
+#[test]
+fn styled_thumb_scrolls_and_is_repainted_under_sync_output() {
+    // The same frame with an atomic presentation: the cheaper plan is
+    // taken, the thumb moves with the scroll, and the repaint that puts
+    // it back is hidden.
+    let out = thumb_second_frame(true);
+
+    assert!(
+        out.contains("\x1b[3S") || out.contains("\x1b[3M") || out.contains("\x1b[3L"),
+        "expected a detected scroll: {out:?}"
     );
 }
 

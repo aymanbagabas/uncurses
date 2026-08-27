@@ -219,6 +219,14 @@ pub struct Renderer {
     pub(super) relative_cursor: bool,
     /// Whether scroll optimization is enabled.
     pub(super) scroll_optimize: bool,
+    /// Whether the frame is wrapped in synchronized-output brackets.
+    ///
+    /// When it is, a repaint that corrects cells a scroll moved is
+    /// invisible, so scroll hunks may grow through rows the scroll gets
+    /// wrong. When it is not, that correction is on screen for a moment
+    /// and reads as flicker, so growth is restricted to rows the scroll
+    /// delivers exactly.
+    pub(super) sync_output: bool,
     /// Force clear on next render.
     pub(super) force_clear: bool,
     /// Width at last render (for resize detection).
@@ -262,6 +270,7 @@ impl Renderer {
             fullscreen: false,
             relative_cursor: true,
             scroll_optimize: true,
+            sync_output: false,
             force_clear: false,
             last_width: 0,
             last_height: 0,
@@ -345,6 +354,12 @@ impl Renderer {
     /// if line hashes indicate a scroll could be cheaper.
     pub(crate) fn set_scroll_optimize(&mut self, enabled: bool) {
         self.scroll_optimize = enabled;
+    }
+
+    /// Tell the renderer whether frames are wrapped in synchronized-output
+    /// brackets. See [`Renderer::sync_output`].
+    pub(crate) fn set_sync_output(&mut self, enabled: bool) {
+        self.sync_output = enabled;
     }
 
     /// Current cursor position as last tracked by the renderer.
