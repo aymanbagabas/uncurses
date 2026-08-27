@@ -571,3 +571,52 @@ fn preset_vt100_sparse_glyphs() {
         b"\r\x1b[8CA\x1b[7CB\x1b[7CC\x1b[7CD\r",
     );
 }
+
+// --- styled-run batching ----------------------------------------------------
+//
+// `emit_range` writes a run of *different* glyphs that share a style as one
+// byte append. These pin the three boundaries that keep it honest.
+
+#[test]
+fn styled_run_of_distinct_glyphs_emits_literal_bytes() {
+    let opts = Optimizations::none();
+    let mut r = renderer_with(opts);
+    let mut buf = RenderBuffer::new(20, 1);
+    set_text(&mut buf, 0, "abcde");
+    let actual = render_to_vec(&mut r, &mut buf);
+    assert_golden(actual, b"\rabcde\r");
+}
+
+#[test]
+fn styled_run_stops_before_a_repeat_so_rep_keeps_its_cells() {
+    let opts = Optimizations::none().union(Optimizations::REP);
+    let mut r = renderer_with(opts);
+    let mut buf = RenderBuffer::new(20, 1);
+    set_text(&mut buf, 0, "abcde");
+    for x in 5..15u16 {
+        buf.set_cell((x, 0), &Cell::narrow("Z"));
+    }
+    let actual = render_to_vec(&mut r, &mut buf);
+    // The batch ends before the equal-run, so REP still starts at the
+    // first Z. Batching must not cost a byte: this is exactly what the
+    // unbatched path emits.
+    assert_golden(actual, b"\rabcdeZ\x1b[9b\r");
+}
+
+#[test]
+fn styled_run_stops_at_a_style_change() {
+    let opts = Optimizations::none();
+    let mut r = renderer_with(opts);
+    let mut buf = RenderBuffer::new(20, 1);
+    set_text(&mut buf, 0, "ab");
+    let red = Style::default().fg(Color::Red);
+    for (i, ch) in "cd".chars().enumerate() {
+        buf.set_cell(
+            (2 + i as u16, 0),
+            &Cell::narrow(ch.to_string()).style(red.clone()),
+        );
+    }
+    let actual = render_to_vec(&mut r, &mut buf);
+    // SGR must land between `ab` and `cd`, not before the whole row.
+    assert_golden(actual, b"\rab\x1b[31mcd\r\x1b[m");
+}
