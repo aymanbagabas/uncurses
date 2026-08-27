@@ -64,7 +64,7 @@
 //! the one-`Cell`-per-column layout while still representing wide graphemes
 //! accurately.
 
-use compact_str::CompactString;
+use std::sync::Arc;
 
 use crate::style::Style;
 
@@ -100,11 +100,68 @@ pub enum Kind {
 /// [`Cell::BLANK`] for an empty styled-as-default space. Continuations are
 /// normally produced by the surface write path rather than by application
 /// code.
+/// A cell's grapheme cluster.
+///
+/// Almost every cell holds a single Unicode scalar, which is at most four
+/// UTF-8 bytes, so those live inline with no allocation. Multi-scalar
+/// clusters (combining marks, ZWJ emoji) share one allocation across every
+/// cell that repeats them.
+///
+/// Storing UTF-8 rather than a `char` keeps [`Cell::content`] a plain
+/// `&str` borrow and keeps emission a copy instead of an encode.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Content {
+    Inline { buf: [u8; 4], len: u8 },
+    Cluster(Arc<str>),
+}
+
+impl Content {
+    const EMPTY: Content = Content::Inline {
+        buf: [0; 4],
+        len: 0,
+    };
+    const SPACE: Content = Content::Inline {
+        buf: [b' ', 0, 0, 0],
+        len: 1,
+    };
+
+    fn new(s: &str) -> Self {
+        let b = s.as_bytes();
+        if b.len() <= 4 {
+            let mut buf = [0u8; 4];
+            buf[..b.len()].copy_from_slice(b);
+            Content::Inline {
+                buf,
+                len: b.len() as u8,
+            }
+        } else {
+            Content::Cluster(Arc::from(s))
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            // `new` only ever copies bytes out of a `&str`, so this is
+            // always valid UTF-8.
+            Content::Inline { buf, len } => {
+                std::str::from_utf8(&buf[..*len as usize]).unwrap_or("")
+            }
+            Content::Cluster(s) => s,
+        }
+    }
+}
+
+impl Default for Content {
+    fn default() -> Self {
+        Content::EMPTY
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Cell {
     /// The grapheme cluster content. Empty string for a wide-cell
     /// continuation placeholder.
-    content: CompactString,
+    content: Content,
     /// Visual style: colors, attributes, underline, and any attached
     /// hyperlink. The link inside `style` is reference-counted so a
     /// run of identically-linked cells shares a single allocation
@@ -149,7 +206,7 @@ impl Cell {
     /// Clearing and newly allocated buffers use `BLANK`. Clone it when an
     /// owned value is required.
     pub const BLANK: Cell = Cell {
-        content: CompactString::const_new(" "),
+        content: Content::SPACE,
         style: Style::EMPTY,
         kind: Kind::Narrow,
     };
@@ -174,9 +231,9 @@ impl Cell {
     /// This constructor does not validate display width. Call it only for
     /// content that should occupy one terminal column; use [`Cell::wide`] for
     /// two-column graphemes.
-    pub fn narrow(content: impl Into<CompactString>) -> Self {
+    pub fn narrow(content: impl AsRef<str>) -> Self {
         Cell {
-            content: content.into(),
+            content: Content::new(content.as_ref()),
             style: Style::default(),
             kind: Kind::Narrow,
         }
@@ -203,9 +260,9 @@ impl Cell {
     /// placeholder automatically. If there is no room for that placeholder
     /// at the row's right edge, [`Buffer::set`](crate::buffer::Buffer::set)
     /// stores a blank instead of half a wide grapheme.
-    pub fn wide(content: impl Into<CompactString>) -> Self {
+    pub fn wide(content: impl AsRef<str>) -> Self {
         Cell {
-            content: content.into(),
+            content: Content::new(content.as_ref()),
             style: Style::default(),
             kind: Kind::Wide,
         }
@@ -232,7 +289,7 @@ impl Cell {
     /// continuation remain adjacent.
     pub fn continuation() -> Self {
         Cell {
-            content: CompactString::default(),
+            content: Content::EMPTY,
             style: Style::default(),
             kind: Kind::Continuation,
         }
@@ -328,7 +385,8 @@ impl Cell {
     /// Style is not considered. A styled space still counts as blank because
     /// this method answers whether the cell has independent textual content.
     pub fn is_blank(&self) -> bool {
-        self.content.is_empty() || self.content == " " || self.is_continuation()
+        let s = self.content.as_str();
+        s.is_empty() || s == " " || self.is_continuation()
     }
 
     /// Return the cell's grapheme-cluster content.

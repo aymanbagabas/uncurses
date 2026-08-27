@@ -134,3 +134,47 @@ fn force_clear_frame(b: &mut Bencher) {
         |renderer| renderer.request_clear(),
     );
 }
+
+/// Mirrors the `space_unlimited` example: a full-screen starfield drawn with
+/// one glyph where every cell carries its own RGB foreground and background,
+/// taken from a jittered depth gradient.
+///
+/// This is the adversarial case for same-style run batching. No two adjacent
+/// cells share a style, so the run scan can never find a run and its bail-out
+/// check is pure overhead on every cell.
+fn starfield_buffer(shift: usize) -> RenderBuffer {
+    use crate::color::Color;
+    use crate::style::Style;
+
+    let mut buf = RenderBuffer::new(WIDTH, HEIGHT);
+    let ph = (HEIGHT as usize) * 2;
+    // Deterministic stand-in for the example's `depth * depth + jitter`.
+    let shade = |x: usize, y: usize| -> u8 {
+        let depth = (ph - y) as f32 / ph as f32;
+        let jitter = ((x * 7 + y * 31) % 26) as f32 / 255.0;
+        ((depth * depth + jitter).clamp(0.0, 1.0) * 255.0) as u8
+    };
+    for y in 0..HEIGHT {
+        let py = y as usize * 2;
+        for x in 0..WIDTH {
+            let sx = (x as usize + shift) % WIDTH as usize;
+            let f = shade(sx, py);
+            let g = shade(sx, py + 1);
+            let cell = Cell::narrow("\u{2580}")
+                .style(Style::default().fg(Color::Rgb(f, f, f)).bg(Color::Rgb(g, g, g)));
+            buf.set_cell((x, y), &cell);
+        }
+    }
+    buf
+}
+
+#[bench]
+fn full_frame_starfield(b: &mut Bencher) {
+    bench_swap_render(
+        b,
+        Renderer::new(),
+        starfield_buffer(0),
+        starfield_buffer(1),
+        |_| {},
+    );
+}
