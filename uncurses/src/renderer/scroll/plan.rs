@@ -30,6 +30,14 @@ pub(super) fn scrolln(
         return Ok(());
     }
 
+    // `scroll_idl` simulates a scroll with DL+IL and no scrolling region,
+    // so every row below `bot` moves up and back within the frame. It
+    // lands correct and emits no corrective bytes, which means no
+    // row-level check can see it -- but unsynchronized the bounce is on
+    // screen. Refuse it there unless the region reaches the last row, in
+    // which case nothing sits below it to bounce.
+    let idl_ok = renderer.sync_output || bot == max_y;
+
     let mut v;
     if n > 0 {
         let amt = n as u16;
@@ -41,7 +49,7 @@ pub(super) fn scrolln(
             ansi::screen::write_reset_scroll_region(out)?;
             renderer.invalidate_cursor();
         }
-        if !v && renderer.opts.contains(Optimizations::IL_DL) {
+        if !v && idl_ok && renderer.opts.contains(Optimizations::IL_DL) {
             v = scroll_idl(out, renderer, new_buf, amt, top, bot + 1 - amt as usize)?;
         }
     } else {
@@ -54,7 +62,7 @@ pub(super) fn scrolln(
             ansi::screen::write_reset_scroll_region(out)?;
             renderer.invalidate_cursor();
         }
-        if !v && renderer.opts.contains(Optimizations::IL_DL) {
+        if !v && idl_ok && renderer.opts.contains(Optimizations::IL_DL) {
             v = scroll_idl(out, renderer, new_buf, amt, bot + 1 - amt as usize, top)?;
         }
     }

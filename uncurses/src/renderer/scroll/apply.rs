@@ -173,6 +173,9 @@ mod tests {
             .union(Optimizations::IL_DL)
             .difference(Optimizations::CSR | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 8, opts);
+        // DL+IL in a partial region bounces the rows below it, so it is
+        // only offered when the frame is presented atomically.
+        renderer.sync_output = true;
         let mut new_buf = RenderBuffer::new(10, 8);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -191,11 +194,59 @@ mod tests {
     }
 
     #[test]
+    fn scrolln_partial_region_refuses_il_dl_without_sync_output() {
+        // The DL+IL pair lands correct but bounces every row below the
+        // region up and back inside the frame, emitting no corrective
+        // bytes. Unsynchronized that bounce is visible, so the scroll is
+        // declined and the rows fall through to a direct redraw.
+        let opts = Optimizations::default()
+            .union(Optimizations::IL_DL)
+            .difference(Optimizations::CSR | Optimizations::SU_SD);
+        let mut renderer = make_renderer(10, 8, opts);
+        renderer.sync_output = false;
+        let mut new_buf = RenderBuffer::new(10, 8);
+        new_buf.clear_touched();
+        let mut out = Vec::new();
+
+        // region rows 2..=5 with max_y 7: rows 6 and 7 would bounce.
+        scrolln(&mut out, &mut renderer, &mut new_buf, 2, 2, 5, 7).unwrap();
+
+        let s = String::from_utf8(out).expect("ascii");
+        assert!(
+            !s.contains("\x1b[2M") && !s.contains("\x1b[2L"),
+            "no scroll should be emitted without sync output: {s:?}"
+        );
+    }
+
+    #[test]
+    fn scrolln_region_to_last_row_still_uses_il_dl_without_sync_output() {
+        // Nothing sits below the last row, so the pair has nothing to
+        // bounce and stays available unsynchronized.
+        let opts = Optimizations::default()
+            .union(Optimizations::IL_DL)
+            .difference(Optimizations::CSR | Optimizations::SU_SD);
+        let mut renderer = make_renderer(10, 8, opts);
+        renderer.sync_output = false;
+        let mut new_buf = RenderBuffer::new(10, 8);
+        new_buf.clear_touched();
+        let mut out = Vec::new();
+
+        scrolln(&mut out, &mut renderer, &mut new_buf, 2, 2, 7, 7).unwrap();
+
+        let s = String::from_utf8(out).expect("ascii");
+        assert!(
+            s.contains("\x1b[2M") || s.contains("\x1b[2L"),
+            "a region reaching the last row may still scroll: {s:?}"
+        );
+    }
+
+    #[test]
     fn scrolln_down_il_dl_pairs_dl_and_il_in_partial_region() {
         let opts = Optimizations::default()
             .union(Optimizations::IL_DL)
             .difference(Optimizations::CSR | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 8, opts);
+        renderer.sync_output = true;
         let mut new_buf = RenderBuffer::new(10, 8);
         new_buf.clear_touched();
         let mut out = Vec::new();
@@ -269,6 +320,8 @@ mod tests {
             .union(Optimizations::IL_DL)
             .difference(Optimizations::CSR | Optimizations::SU_SD);
         let mut renderer = make_renderer(10, 8, opts);
+        // Partial-region DL+IL is only offered on an atomic frame.
+        renderer.sync_output = true;
         renderer
             .cur
             .set_style(crate::style::Style::default().bg(crate::color::Color::Red));
