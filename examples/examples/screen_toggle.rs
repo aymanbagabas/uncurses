@@ -84,7 +84,7 @@ impl App {
                 }
                 Event::Resize(ws) => {
                     if self.alt {
-                        self.program.screen_mut().resize((ws.col, ws.row));
+                        self.program.autoresize()?;
                     } else {
                         self.program.screen_mut().resize((ws.col, INLINE_ROWS));
                     }

@@ -82,8 +82,8 @@ impl App {
                     self.modal_open = !self.modal_open;
                     dirty = true;
                 }
-                Event::Resize(ws) => {
-                    self.program.screen_mut().resize((ws.col, ws.row));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                     dirty = true;
                 }
                 _ => {}

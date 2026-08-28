@@ -133,7 +133,9 @@ impl App {
             })) => {
                 self.typed.pop();
             }
-            AppEvent::Term(Event::Resize(ws)) => program.screen_mut().resize((ws.col, ws.row)),
+            AppEvent::Term(Event::Resize(_)) => {
+                let _ = program.autoresize();
+            }
             AppEvent::Term(_) => {}
             AppEvent::Tick(s) => self.seconds = s,
             AppEvent::Job(p) => self.progress = p,

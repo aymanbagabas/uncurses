@@ -159,7 +159,7 @@ async fn render_loop(
                     Event::KeyPress(ref k) if world.quit_key(k) => break,
                     Event::KeyPress(key) => world.on_key(&key),
                     Event::Resize(ws) => {
-                        program.screen_mut().resize((ws.col, ws.row));
+                        program.autoresize()?;
                         world.resize(ws.col, ws.row);
                     }
                     _ => {}

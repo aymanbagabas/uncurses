@@ -231,6 +231,32 @@ fn write_string_widths_follow_current_mode() {
 }
 
 #[test]
+fn a_burst_of_same_size_resizes_repaints_each_time() {
+    // Pins the cost of the explicit path. A drag emits a report per pixel
+    // while the cell grid changes only at cell boundaries, so most reports
+    // carry an unchanged size. Forwarding each one to `resize` repaints
+    // each one -- which is why the documented handler calls `autoresize`,
+    // and why an application that forwards event-carried dimensions should
+    // compare against `Screen::size()` first.
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_str((0, 0), "hello", crate::style::Style::default());
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
+    let mut sizes = Vec::new();
+    for _ in 0..5 {
+        screen.resize((80, 24));
+        screen.render().unwrap();
+        sizes.push(screen.writer().len());
+        screen.writer_mut().clear();
+    }
+    assert!(
+        sizes.iter().all(|&n| n > 0),
+        "each explicit resize re-establishes the area: {sizes:?}"
+    );
+}
+
+#[test]
 fn resize_repaints_even_at_the_same_size() {
     // An explicit resize means the caller wants the managed area
     // re-established. A resize report can follow a font or window change

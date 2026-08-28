@@ -100,7 +100,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
         match event {
             Event::KeyPress(ref k) if quit.contains(k) => break,
             Event::MouseMove(m) | Event::MouseClick(m) => pointer = Some((m.x, m.y)),
-            Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
+            Event::Resize(_) => program.autoresize()?,
             _ => continue,
         }
 

@@ -68,7 +68,7 @@ impl App {
                             ..
                         }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(()),
                         Event::Resize(ws) => {
-                            self.program.screen_mut().resize((ws.col, ws.row));
+                            self.program.autoresize()?;
                             let h = self.program.screen().height();
                             push(&mut self.log, format!("Resize {}x{}", ws.col, ws.row), h);
                         }
