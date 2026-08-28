@@ -1953,13 +1953,19 @@ fn plain_scroll_frame(sync_output: bool, shift: i32) -> String {
     s(screen.writer())
 }
 
-/// Whether `out` contains any physical scroll, at any magnitude.
+/// Whether `out` contains a physical scroll emitted as an escape sequence.
 ///
 /// Matching a fixed shift (`\x1b[3S`) would read every other magnitude as
 /// "no scroll", so a regression at a different shift would pass silently.
-/// Scans for a CSI whose final byte is one of `S`/`T`/`M`/`L`, and for the
-/// single-row forms, which carry no CSI at all: `ESC M` and a bare line
-/// feed used as a scroll.
+/// Scans for `ESC M` and for a CSI whose final byte is one of `S`/`T`/`M`/`L`,
+/// with or without a count: the writers omit the parameter at one row, so
+/// requiring a digit would miss every single-row scroll.
+///
+/// One form is invisible here. A full-region scroll of exactly one row is
+/// emitted as a bare line feed, which is byte-identical to the cursor
+/// optimizer stepping down a row, so no scan can tell them apart. Give a
+/// test either a magnitude above one or a region shorter than the view when
+/// it needs this helper to see the scroll.
 fn scrolled(out: &str) -> bool {
     if out.contains("\x1bM") {
         return true;
@@ -1973,13 +1979,27 @@ fn scrolled(out: &str) -> bool {
         while j < b.len() && (b[j].is_ascii_digit() || b[j] == b';') {
             j += 1;
         }
-        // A parameterless CSI is some other sequence; a scroll always
-        // carries a count here.
-        if j > i + 2 && j < b.len() && matches!(b[j], b'S' | b'T' | b'M' | b'L') {
+        if j < b.len() && matches!(b[j], b'S' | b'T' | b'M' | b'L') {
             return true;
         }
     }
     false
+}
+
+#[test]
+fn scrolled_sees_scrolls_with_and_without_a_count() {
+    // The writers omit the parameter at one row, so the helper has to match
+    // both spellings or every single-row scroll reads as "no scroll".
+    assert!(scrolled("\x1b[3S"), "counted scroll up");
+    assert!(scrolled("\x1b[S"), "scroll up, count omitted");
+    assert!(scrolled("\x1b[T"), "scroll down, count omitted");
+    assert!(scrolled("\x1b[M"), "delete line, count omitted");
+    assert!(scrolled("\x1b[L"), "insert line, count omitted");
+    assert!(scrolled("\x1bM"), "reverse index");
+    assert!(!scrolled("\x1b[2J\x1b[H"), "clear and home are not scrolls");
+    assert!(!scrolled("\x1b[5;1Hhello"), "positioning is not a scroll");
+    // Documented blind spot: indistinguishable from a cursor step down.
+    assert!(!scrolled("hello\n"), "a bare line feed is not matched");
 }
 
 #[test]

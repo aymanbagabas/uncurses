@@ -219,7 +219,9 @@ pub struct Renderer {
     pub(super) relative_cursor: bool,
     /// Whether scroll optimization is enabled.
     pub(super) scroll_optimize: bool,
-    /// Whether frames are wrapped in synchronized-output brackets.
+    /// Whether the caller presents each frame atomically, wrapping it in
+    /// synchronized-output brackets. [`Screen`](crate::screen::Screen) emits
+    /// those markers and sets this to match; the renderer only reads it.
     ///
     /// A physical scroll is always full width, so any scroll the renderer
     /// emits may move cells that should have stayed put and then repaint
