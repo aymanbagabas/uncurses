@@ -158,9 +158,12 @@ async fn render_loop(
                 match ev {
                     Event::KeyPress(ref k) if world.quit_key(k) => break,
                     Event::KeyPress(key) => world.on_key(&key),
-                    Event::Resize(ws) => {
-                        program.screen_mut().resize((ws.col, ws.row));
-                        world.resize(ws.col, ws.row);
+                    Event::Resize(_) => {
+                        program.autoresize()?;
+                        // Follow the managed area rather than the report, so
+                        // the world always matches what actually gets drawn.
+                        let size = program.screen().size();
+                        world.resize(size.width, size.height);
                     }
                     _ => {}
                 }

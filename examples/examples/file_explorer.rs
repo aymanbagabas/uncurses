@@ -572,8 +572,8 @@ impl App {
                     _ => dirty = false,
                 },
 
-                Event::Resize(ws) => {
-                    self.program.screen_mut().resize((ws.col, ws.row));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                 }
 
                 _ => dirty = false,

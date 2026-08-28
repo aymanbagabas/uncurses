@@ -62,8 +62,8 @@ impl App {
                     self.flip = !self.flip;
                     dirty = true;
                 }
-                Event::Resize(ws) => {
-                    self.program.screen_mut().resize((ws.col, VIEW_H));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                     dirty = true;
                 }
                 _ => {}

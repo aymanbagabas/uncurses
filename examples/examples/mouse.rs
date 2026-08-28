@@ -62,7 +62,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
                     _ => {}
                 }
             }
-            Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
+            Event::Resize(_) => program.autoresize()?,
             _ => continue,
         }
         render(program.screen_mut(), &state);

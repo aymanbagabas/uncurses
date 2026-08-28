@@ -624,7 +624,6 @@ where
             self.program.screen_mut().invalidate();
         }
         if (w, h) != (size.width, size.height) {
-            self.program.screen_mut().invalidate();
             self.program.screen_mut().resize((w, h));
         }
         for (x, y, rc) in content {

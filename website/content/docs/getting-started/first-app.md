@@ -103,7 +103,7 @@ impl App {
                 Event::KeyPress(ref k) if k.matches("up") => self.count += 1,
                 Event::KeyPress(ref k) if k.matches("down") => self.count -= 1,
                 Event::KeyPress(ref k) if k.matches("r") => self.count = 0,
-                Event::Resize(ws) => self.program.screen_mut().resize((ws.col, ws.row)),
+                Event::Resize(_) => self.program.autoresize()?,
                 _ => continue,
             }
             self.render()?;

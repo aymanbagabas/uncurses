@@ -57,7 +57,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
             let ev = program.read_event()?;
             match ev {
                 Event::KeyPress(_) => break,
-                Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
+                Event::Resize(_) => program.autoresize()?,
                 _ => {}
             }
         }

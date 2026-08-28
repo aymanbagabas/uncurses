@@ -231,27 +231,60 @@ fn write_string_widths_follow_current_mode() {
 }
 
 #[test]
-fn resize_to_the_same_size_does_not_repaint() {
+fn a_burst_of_same_size_resizes_repaints_each_time() {
+    // Pins the cost of the explicit path. A drag emits a report per pixel
+    // while the cell grid changes only at cell boundaries, so most reports
+    // carry an unchanged size. Forwarding each one to `resize` repaints
+    // each one -- which is why the documented handler calls `autoresize`,
+    // and why an application that forwards event-carried dimensions should
+    // compare against `Screen::size()` first.
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
     screen.set_str((0, 0), "hello", crate::style::Style::default());
     screen.render().unwrap();
+    screen.writer_mut().clear();
 
-    let after_first = screen.writer().len();
+    let mut rounds = Vec::new();
+    for _ in 0..5 {
+        screen.resize((80, 24));
+        screen.render().unwrap();
+        rounds.push(String::from_utf8_lossy(screen.writer()).into_owned());
+        screen.writer_mut().clear();
+    }
+    assert!(
+        rounds.iter().all(|out| out.contains("hello")),
+        "each explicit resize re-establishes the area: {rounds:?}"
+    );
+}
+
+#[test]
+fn resize_repaints_even_at_the_same_size() {
+    // An explicit resize means the caller wants the managed area
+    // re-established. A resize report can follow a font or window change
+    // that keeps the cell grid while moving where those cells land, and the
+    // tracked contents are then wrong in a way no diff can detect.
+    //
+    // The same-size skip belongs to `Program::autoresize`, which runs on
+    // every report including the ones that change nothing.
+    let mut screen = Screen::for_test(Vec::new(), (80, 24));
+    screen.set_str((0, 0), "hello", crate::style::Style::default());
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
     screen.resize((80, 24));
     screen.render().unwrap();
-    assert_eq!(
-        screen.writer().len(),
-        after_first,
-        "same size repainted: {:?}",
-        String::from_utf8_lossy(&screen.writer()[after_first..])
+    let same = String::from_utf8_lossy(screen.writer()).into_owned();
+    assert!(
+        same.contains("hello"),
+        "an explicit resize must redraw the tracked contents even at the same size: {same:?}"
     );
 
-    // A real change still repaints.
+    screen.writer_mut().clear();
     screen.resize((80, 25));
     screen.render().unwrap();
+    let changed = String::from_utf8_lossy(screen.writer()).into_owned();
     assert!(
-        screen.writer().len() > after_first,
-        "a changed size must repaint"
+        changed.contains("hello"),
+        "a changed size must redraw the tracked contents: {changed:?}"
     );
 }
 

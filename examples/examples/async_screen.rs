@@ -96,7 +96,7 @@ async fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
                 match ev {
                     Event::KeyPress(ref key) if quit_keys.contains(key) => break,
                     Event::KeyPress(ref key) => last_key = key.to_string(),
-                    Event::Resize(ws) => program.screen_mut().resize((ws.col, ws.row)),
+                    Event::Resize(_) => program.autoresize()?,
                     _ => {}
                 }
             }

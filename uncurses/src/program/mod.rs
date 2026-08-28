@@ -1067,6 +1067,13 @@ where
     /// operating system already knows. On platforms whose size query carries
     /// no pixel dimensions (the Windows console), refresh those with
     /// [`request_window_pixel_size`](Self::request_window_pixel_size).
+    ///
+    /// When the managed area already fits the queried size, this returns
+    /// without resizing and without repainting, so it is safe to call on every
+    /// resize report. Terminals send a report per pixel of a window drag while
+    /// the cell grid only changes at cell boundaries, so most reports ask for a
+    /// size the area already has. To re-establish the area whatever the size,
+    /// call [`Screen::resize`](crate::screen::Screen::resize) instead.
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than
@@ -1078,6 +1085,15 @@ where
             true => ws.row,
             false => self.screen.size().height,
         };
+        // Terminals report resizes for changes that leave the cell grid alone
+        // (a font change that keeps rows and columns, a window move on some
+        // terminals). This runs on every one of them, and `Screen::resize`
+        // repaints unconditionally, so skip the ones that change nothing
+        // rather than flickering on each. A caller that wants the repaint
+        // anyway calls `Screen::resize` directly.
+        if self.screen.size() == crate::layout::Size::new(ws.col, height) {
+            return Ok(());
+        }
         self.screen.resize((ws.col, height));
         Ok(())
     }
@@ -1206,6 +1222,13 @@ where
     /// operating system already knows. On platforms whose size query carries
     /// no pixel dimensions (the Windows console), refresh those with
     /// [`request_window_pixel_size`](Self::request_window_pixel_size).
+    ///
+    /// When the managed area already fits the queried size, this returns
+    /// without resizing and without repainting, so it is safe to call on every
+    /// resize report. Terminals send a report per pixel of a window drag while
+    /// the cell grid only changes at cell boundaries, so most reports ask for a
+    /// size the area already has. To re-establish the area whatever the size,
+    /// call [`Screen::resize`](crate::screen::Screen::resize) instead.
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than
@@ -1217,6 +1240,15 @@ where
             true => ws.row,
             false => self.screen.size().height,
         };
+        // Terminals report resizes for changes that leave the cell grid alone
+        // (a font change that keeps rows and columns, a window move on some
+        // terminals). This runs on every one of them, and `Screen::resize`
+        // repaints unconditionally, so skip the ones that change nothing
+        // rather than flickering on each. A caller that wants the repaint
+        // anyway calls `Screen::resize` directly.
+        if self.screen.size() == crate::layout::Size::new(ws.col, height) {
+            return Ok(());
+        }
         self.screen.resize((ws.col, height));
         Ok(())
     }

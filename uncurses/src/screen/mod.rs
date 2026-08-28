@@ -241,18 +241,17 @@ impl<W: Write> Screen<W> {
     /// size; inline, the terminal width and the application surface height.
     ///
     /// Resizing discards the tracked terminal contents, so the next
-    /// [`render`](Self::render) is a full repaint. Passing the current size is
-    /// a no-op for that reason: [`Program::autoresize`](crate::program::Program::autoresize)
-    /// runs on every resize report, and terminals send those for changes that
-    /// leave the cell grid alone (a font size change that keeps rows and
-    /// columns, a window move on some terminals), so repainting on them would
-    /// be flicker with nothing behind it. Use [`invalidate`](Self::invalidate)
-    /// to force a repaint on purpose.
+    /// [`render`](Self::render) is a full repaint. That holds even when the
+    /// size is unchanged: a resize report can follow a font or window change
+    /// that keeps the cell grid but moves where those cells land, and the
+    /// tracked contents are then wrong in a way no diff can see. An explicit
+    /// resize says the caller wants the area re-established, so it is.
+    ///
+    /// [`Program::autoresize`](crate::program::Program::autoresize) runs on
+    /// every resize report, including ones that change nothing, so it skips
+    /// the call when the size already matches rather than repainting on each.
     pub fn resize(&mut self, size: impl Into<Size>) {
         let size = size.into();
-        if self.width == size.width && self.height == size.height {
-            return;
-        }
         self.width = size.width;
         self.height = size.height;
         self.front_buf.resize(size.width, size.height);

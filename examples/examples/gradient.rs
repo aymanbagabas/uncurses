@@ -92,8 +92,8 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
                 state.pointer = Some(m);
                 state.show_box = true;
             }
-            Event::Resize(ws) => {
-                program.screen_mut().resize((ws.col, ws.row));
+            Event::Resize(_) => {
+                program.autoresize()?;
                 // The cell↔pixel ratio changed; refresh the pixel size so the
                 // converter stays accurate.
                 program.request_window_pixel_size()?;

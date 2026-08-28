@@ -82,12 +82,10 @@ impl App {
                     }
                     self.render()?;
                 }
-                Event::Resize(ws) => {
-                    if self.alt {
-                        self.program.screen_mut().resize((ws.col, ws.row));
-                    } else {
-                        self.program.screen_mut().resize((ws.col, INLINE_ROWS));
-                    }
+                Event::Resize(_) => {
+                    // Fullscreen follows the whole terminal; inline follows its
+                    // width and keeps the INLINE_ROWS height either way.
+                    self.program.autoresize()?;
                     self.render()?;
                 }
                 _ => {}

@@ -136,8 +136,8 @@ impl App {
                         modifiers,
                         ..
                     }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-                    Event::Resize(ws) => {
-                        self.program.screen_mut().resize((ws.col, ws.row));
+                    Event::Resize(_) => {
+                        self.program.autoresize()?;
                         self.w = self.program.screen().width();
                         self.h = self.program.screen().height();
                         self.patterns = build_patterns(self.w, self.h, &mut self.rng);

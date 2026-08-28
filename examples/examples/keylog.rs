@@ -172,8 +172,8 @@ impl App {
                     self.render()?;
                     continue;
                 }
-                Event::Resize(ws) => {
-                    self.program.screen_mut().resize((ws.col, 2));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                 }
                 _ => {}
             }

@@ -161,8 +161,8 @@ fn run_scene(
                         ..
                     }) if modifiers.contains(KeyModifiers::CTRL) => return Ok(false),
                     Event::KeyPress(_) => return Ok(true),
-                    Event::Resize(ws) => {
-                        program.screen_mut().resize((ws.col, ws.row));
+                    Event::Resize(_) => {
+                        program.autoresize()?;
                     }
                     _ => {}
                 }

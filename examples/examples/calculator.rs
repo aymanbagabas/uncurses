@@ -306,7 +306,12 @@ fn main() -> std::io::Result<()> {
 /// keypad.
 fn fit(screen: &mut Screen<Stdout>, cols: u16, rows: u16) {
     let h = BOARD_H.min(rows.max(1));
-    screen.resize((cols.max(1), h));
+    let size = (cols.max(1), h);
+    // Resizing re-establishes the surface, so only do it when the clamped
+    // size actually moved. Every caller routes through here.
+    if screen.size() != size.into() {
+        screen.resize(size);
+    }
 }
 
 /// The left margin that centers the keypad in the surface.
