@@ -575,12 +575,13 @@ impl<W: Write> Screen<W> {
     /// which reads as flicker.
     ///
     /// This only sets state; the markers are emitted on the next `render`.
-    /// Enabling this also turns on scroll detection, which is gated on it:
-    /// see [`set_scroll_optimize`](Self::set_scroll_optimize). A terminal
-    /// that advertises DEC 2026 but does not honour it therefore gets both
-    /// the markers and the scroll plans that rely on them, and a scroll's
-    /// corrective repaint may be visible. Disable scroll optimization on
-    /// such a terminal.
+    /// Scroll detection is gated on this, so enabling it is what lets
+    /// [`set_scroll_optimize`](Self::set_scroll_optimize) take effect; that
+    /// setting still has to be on, and the screen still has to be
+    /// [fullscreen](Self::set_fullscreen). A terminal that advertises DEC
+    /// 2026 but does not honour it therefore gets both the markers and the
+    /// scroll plans that rely on them, and a scroll's corrective repaint may
+    /// be visible. Disable scroll optimization on such a terminal.
     ///
     pub fn set_synchronized_output(&mut self, enabled: bool) {
         self.sync_updates = enabled;
