@@ -142,11 +142,24 @@ fn autoresize_at_the_same_size_does_not_repaint() {
         let mut buf = [0u8; 8192];
         loop {
             let n = unsafe { libc::read(master.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
-                return String::from_utf8_lossy(&out).into_owned();
+            if n > 0 {
+                out.extend_from_slice(&buf[..n as usize]);
+                continue;
             }
-            out.extend_from_slice(&buf[..n as usize]);
+            if n == 0 {
+                break;
+            }
+            // Only "nothing buffered right now" ends the drain. A signal means
+            // retry, and anything else is a real failure worth reporting
+            // rather than reading as an empty frame.
+            let err = std::io::Error::last_os_error();
+            match err.kind() {
+                std::io::ErrorKind::WouldBlock => break,
+                std::io::ErrorKind::Interrupted => continue,
+                _ => panic!("read from the pty master: {err}"),
+            }
         }
+        String::from_utf8_lossy(&out).into_owned()
     };
     let set_size = |rows: u16, cols: u16| {
         let ws = libc::winsize {
