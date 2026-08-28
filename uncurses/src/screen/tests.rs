@@ -231,7 +231,14 @@ fn write_string_widths_follow_current_mode() {
 }
 
 #[test]
-fn resize_to_the_same_size_does_not_repaint() {
+fn resize_repaints_even_at_the_same_size() {
+    // An explicit resize means the caller wants the managed area
+    // re-established. A resize report can follow a font or window change
+    // that keeps the cell grid while moving where those cells land, and the
+    // tracked contents are then wrong in a way no diff can detect.
+    //
+    // The same-size skip belongs to `Program::autoresize`, which runs on
+    // every report including the ones that change nothing.
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
     screen.set_str((0, 0), "hello", crate::style::Style::default());
     screen.render().unwrap();
@@ -239,18 +246,16 @@ fn resize_to_the_same_size_does_not_repaint() {
     let after_first = screen.writer().len();
     screen.resize((80, 24));
     screen.render().unwrap();
-    assert_eq!(
-        screen.writer().len(),
-        after_first,
-        "same size repainted: {:?}",
-        String::from_utf8_lossy(&screen.writer()[after_first..])
+    assert!(
+        screen.writer().len() > after_first,
+        "an explicit resize must repaint even at the same size"
     );
 
-    // A real change still repaints.
+    let after_same = screen.writer().len();
     screen.resize((80, 25));
     screen.render().unwrap();
     assert!(
-        screen.writer().len() > after_first,
+        screen.writer().len() > after_same,
         "a changed size must repaint"
     );
 }

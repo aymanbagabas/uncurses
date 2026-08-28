@@ -1078,6 +1078,15 @@ where
             true => ws.row,
             false => self.screen.size().height,
         };
+        // Terminals report resizes for changes that leave the cell grid alone
+        // (a font change that keeps rows and columns, a window move on some
+        // terminals). This runs on every one of them, and `Screen::resize`
+        // repaints unconditionally, so skip the ones that change nothing
+        // rather than flickering on each. A caller that wants the repaint
+        // anyway calls `Screen::resize` directly.
+        if self.screen.size() == crate::layout::Size::new(ws.col, height) {
+            return Ok(());
+        }
         self.screen.resize((ws.col, height));
         Ok(())
     }
@@ -1217,6 +1226,15 @@ where
             true => ws.row,
             false => self.screen.size().height,
         };
+        // Terminals report resizes for changes that leave the cell grid alone
+        // (a font change that keeps rows and columns, a window move on some
+        // terminals). This runs on every one of them, and `Screen::resize`
+        // repaints unconditionally, so skip the ones that change nothing
+        // rather than flickering on each. A caller that wants the repaint
+        // anyway calls `Screen::resize` directly.
+        if self.screen.size() == crate::layout::Size::new(ws.col, height) {
+            return Ok(());
+        }
         self.screen.resize((ws.col, height));
         Ok(())
     }
