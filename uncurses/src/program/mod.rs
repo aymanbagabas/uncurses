@@ -1067,6 +1067,13 @@ where
     /// operating system already knows. On platforms whose size query carries
     /// no pixel dimensions (the Windows console), refresh those with
     /// [`request_window_pixel_size`](Self::request_window_pixel_size).
+    ///
+    /// When the managed area already fits the queried size, this returns
+    /// without resizing and without repainting, so it is safe to call on every
+    /// resize report. Terminals send a report per pixel of a window drag while
+    /// the cell grid only changes at cell boundaries, so most reports ask for a
+    /// size the area already has. To re-establish the area whatever the size,
+    /// call [`Screen::resize`](crate::screen::Screen::resize) instead.
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than
@@ -1215,6 +1222,13 @@ where
     /// operating system already knows. On platforms whose size query carries
     /// no pixel dimensions (the Windows console), refresh those with
     /// [`request_window_pixel_size`](Self::request_window_pixel_size).
+    ///
+    /// When the managed area already fits the queried size, this returns
+    /// without resizing and without repainting, so it is safe to call on every
+    /// resize report. Terminals send a report per pixel of a window drag while
+    /// the cell grid only changes at cell boundaries, so most reports ask for a
+    /// size the area already has. To re-establish the area whatever the size,
+    /// call [`Screen::resize`](crate::screen::Screen::resize) instead.
     pub fn autoresize(&mut self) -> io::Result<()> {
         let Ok(ws) = self.terminal.get_window_size() else {
             // Keep the current size when the query fails rather than

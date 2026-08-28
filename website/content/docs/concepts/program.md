@@ -85,7 +85,7 @@ loop {
 The borrow ends at the binding's last use, so `program` is usable again on the
 next line, including inside an event loop like this one. Reach for
 `program.screen_mut()` inline when you only have a single call to make, such as
-a `resize` in a match arm.
+a draw call in a match arm.
 
 Drawing works here exactly as it does on any other
 [surface]({{< relref "surfaces.md" >}}). The screen is still just a grid of

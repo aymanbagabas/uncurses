@@ -134,6 +134,8 @@ impl App {
                 self.typed.pop();
             }
             AppEvent::Term(Event::Resize(_)) => {
+                // This closure returns (), so the ioctl error cannot be
+                // propagated; failing to read the size keeps the current one.
                 let _ = program.autoresize();
             }
             AppEvent::Term(_) => {}

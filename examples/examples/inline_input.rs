@@ -268,18 +268,20 @@ impl App {
                         self.buffer.insert_str(&text);
                     }
                 }
-                Event::Resize(ws) => {
-                    self.program
-                        .screen_mut()
-                        .resize((ws.col, self.buffer.lines.len() as u16));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                 }
                 _ => {}
             }
 
-            let w = self.program.screen().width();
-            self.program
-                .screen_mut()
-                .resize((w, self.buffer.lines.len() as u16));
+            // The prompt grows and shrinks with the buffer. Resizing
+            // re-establishes the region, so do it when the line count actually
+            // changes rather than on every keystroke.
+            let height = self.buffer.lines.len() as u16;
+            if self.program.screen().height() != height {
+                let width = self.program.screen().width();
+                self.program.screen_mut().resize((width, height));
+            }
             self.render()?;
         }
         Ok(())

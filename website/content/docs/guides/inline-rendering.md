@@ -67,17 +67,17 @@ the height actually changes rather than on every keystroke:
 
 ```rust
 let screen = program.screen_mut();
-let width = screen.width();
 let height = lines.len() as u16;
-if screen.size() != (width, height).into() {
+if screen.height() != height {
+    let width = screen.width();
     screen.resize((width, height));
 }
 ```
 
 To follow the terminal instead of your own content, use
 [`autoresize`](https://docs.rs/uncurses/latest/uncurses/program/struct.Program.html#method.autoresize):
-it reads the size the operating system already knows and skips reports that
-leave the cell grid unchanged.
+it reads the size the operating system already knows, keeps your inline height,
+and skips reports that leave the cell grid unchanged.
 
 The renderer keeps the block anchored in the normal buffer, so growing from two
 rows to ten expands the managed area instead of taking over the whole terminal.
