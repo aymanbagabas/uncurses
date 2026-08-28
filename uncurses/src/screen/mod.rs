@@ -575,8 +575,19 @@ impl<W: Write> Screen<W> {
     /// which reads as flicker.
     ///
     /// This only sets state; the markers are emitted on the next `render`.
+    /// Enabling this also turns on scroll detection, which is gated on it:
+    /// see [`set_scroll_optimize`](Self::set_scroll_optimize). A terminal
+    /// that advertises DEC 2026 but does not honour it therefore gets both
+    /// the markers and the scroll plans that rely on them, and a scroll's
+    /// corrective repaint may be visible. Disable scroll optimization on
+    /// such a terminal.
+    ///
     pub fn set_synchronized_output(&mut self, enabled: bool) {
         self.sync_updates = enabled;
+        // Scroll detection is gated on this: a scroll the renderer emits can
+        // move cells that should have stayed put, and the repaint that fixes
+        // them is only invisible inside a synchronized frame.
+        self.renderer.set_sync_output(enabled);
     }
 
     /// Whether [synchronized output](Self::set_synchronized_output) frame
@@ -591,14 +602,14 @@ impl<W: Write> Screen<W> {
     /// telling the terminal to move them costs a handful of bytes instead of
     /// a repaint.
     ///
-    /// **Turn it off only when both of these hold:** part of the screen does
-    /// not scroll with the rest — a sidebar, a file tree, a gutter, any fixed
-    /// column — *and* [synchronized output](Self::synchronized_output) is
-    /// off. With synchronized output on there is nothing to fix here; leave
-    /// detection on and keep the optimization.
+    /// Detection additionally requires [synchronized
+    /// output](Self::set_synchronized_output); see below. Turning this off
+    /// gives up scrolling entirely, including on frames where it would have
+    /// been safe.
     ///
-    /// A fixed column is a problem because the scrolls uncurses emits are
-    /// always full width: rows move with `SU`, `IL`/`DL` or a bare line feed,
+    /// A fixed column is why that requirement exists. The scrolls uncurses
+    /// emits are always full width: rows move with `SU`, `IL`/`DL` or a bare
+    /// line feed,
     /// and the renderer does not set the left/right margins
     /// ([DECLRMM](crate::ansi::mode::Mode::LEFT_RIGHT_MARGIN) and
     /// [DECSLRM](crate::ansi::screen::write_set_left_right_margins)) that
@@ -609,18 +620,18 @@ impl<W: Write> Screen<W> {
     /// wrong — but what the user sees is that region jumping and being put
     /// back, on every frame, for as long as they keep scrolling.
     ///
-    /// The scroll and the repaint go into the same frame, and
-    /// [synchronized output](Self::set_synchronized_output) wraps the whole
-    /// frame in DEC 2026, so the terminal presents it in one step and the
-    /// intermediate state never reaches the display.
+    /// Because that intermediate state is only hidden when the frame is
+    /// presented in one step, detection runs **only** under
+    /// [synchronized output](Self::set_synchronized_output), which wraps the
+    /// frame in DEC 2026. Without it no scroll is emitted at all, whatever
+    /// this setting says, and rows are redrawn directly instead.
     ///
-    /// Check [`synchronized_output`](Self::synchronized_output) rather than
-    /// assuming: it is off by default, and a
+    /// Synchronized output is off by default, and a
     /// [`Program`](crate::program::Program) turns it on only once the
     /// terminal has reported 2026 support, which takes an explicit
     /// [`query_capabilities`](crate::program::Program::query_capabilities).
-    /// An application that never asks never gets that cover, whatever its
-    /// terminal supports.
+    /// An application that never asks never gets scroll optimization,
+    /// whatever its terminal supports.
     ///
     /// Detection is skipped outside [fullscreen](Self::set_fullscreen)
     /// regardless of this setting.

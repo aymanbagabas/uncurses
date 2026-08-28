@@ -70,7 +70,7 @@ impl Renderer {
         if self.force_clear {
             self.clear_update(out, new_buf)?;
             self.force_clear = false;
-        } else if self.scroll_optimize && self.fullscreen {
+        } else if self.scroll_optimize && self.sync_output && self.fullscreen {
             let touched_lines = new_buf.touched_lines().count();
             let sparse_threshold = SCROLL_OPTIMIZE_MIN_TOUCHED_LINES
                 .max(height as usize / SCROLL_OPTIMIZE_TOUCHED_DIVISOR);

@@ -1809,7 +1809,7 @@ fn inline_render_without_background_emits_no_pen_resets() {
 ///   lines do, so repainting a row in place costs far more cells than
 ///   repainting the narrow tree after a scroll. With near-identical rows
 ///   the cost analysis correctly declines to grow.
-fn two_pane_second_frame(scroll_optimize: bool) -> String {
+fn two_pane_second_frame(scroll_optimize: bool, sync_output: bool) -> String {
     const W: u16 = 40;
     const H: u16 = 12;
     const SIDEBAR: u16 = 10;
@@ -1844,6 +1844,7 @@ fn two_pane_second_frame(scroll_optimize: bool) -> String {
     let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
     screen.set_alt_screen(true);
     screen.set_scroll_optimize(scroll_optimize);
+    screen.set_synchronized_output(sync_output);
 
     paint(&mut screen, 0);
     screen.render().unwrap();
@@ -1866,7 +1867,7 @@ fn scroll_detection_moves_a_fixed_column_and_paints_it_back() {
     // frame. The settled screen is correct either way, which is exactly why
     // this needs a byte-level assertion: comparing the finished screen sees
     // nothing.
-    let out = two_pane_second_frame(true);
+    let out = two_pane_second_frame(true, true);
 
     assert!(
         out.contains("\x1b[3S") || out.contains("\x1b[3M") || out.contains("\x1b[3L"),
@@ -1878,12 +1879,388 @@ fn scroll_detection_moves_a_fixed_column_and_paints_it_back() {
     );
 }
 
+/// A full-width scrolling view with no fixed column: every row genuinely
+/// moves, so a scroll is exactly right and nothing needs repainting. Used
+/// to pin that gating on synchronized output does not disable the
+/// optimization for the case it was built for.
+fn plain_scroll_frame(sync_output: bool, shift: i32) -> String {
+    const W: u16 = 40;
+    const H: u16 = 12;
+
+    fn paint(screen: &mut Screen<Vec<u8>>, offset: i32) {
+        for y in 0..H {
+            let n = (y as i32 + offset).rem_euclid(36) as usize;
+            let body: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+                .chars()
+                .cycle()
+                .skip(n * 7 % 36)
+                .take(W as usize)
+                .collect();
+            for (i, ch) in body.chars().enumerate() {
+                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+            }
+        }
+    }
+
+    let opts = Optimizations::default()
+        .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL);
+    let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
+    screen.set_alt_screen(true);
+    screen.set_scroll_optimize(true);
+    screen.set_synchronized_output(sync_output);
+
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    paint(&mut screen, shift);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    s(screen.writer())
+}
+
+/// Whether `out` contains any physical scroll, at any magnitude.
+///
+/// Matching a fixed shift (`\x1b[3S`) would read every other magnitude as
+/// "no scroll", so a regression at a different shift would pass silently.
+/// Scans for a CSI whose final byte is one of `S`/`T`/`M`/`L`, and for the
+/// single-row forms, which carry no CSI at all: `ESC M` and a bare line
+/// feed used as a scroll.
+fn scrolled(out: &str) -> bool {
+    if out.contains("\x1bM") {
+        return true;
+    }
+    let b = out.as_bytes();
+    for (i, w) in b.windows(2).enumerate() {
+        if w != b"\x1b[" {
+            continue;
+        }
+        let mut j = i + 2;
+        while j < b.len() && (b[j].is_ascii_digit() || b[j] == b';') {
+            j += 1;
+        }
+        // A parameterless CSI is some other sequence; a scroll always
+        // carries a count here.
+        if j > i + 2 && j < b.len() && matches!(b[j], b'S' | b'T' | b'M' | b'L') {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn plain_scroll_is_still_optimized_under_sync_output() {
+    // The optimization must survive the gate for the case it exists to
+    // serve: a whole view scrolling, where the scroll is exactly right.
+    let out = plain_scroll_frame(true, 3);
+    assert!(scrolled(&out), "expected a scroll: {out:?}");
+}
+
+#[test]
+fn plain_scroll_falls_back_to_redraw_without_sync_output() {
+    // The cost of the gate, pinned: the same frame redraws instead.
+    let scrolls = plain_scroll_frame(true, 3);
+    let out = plain_scroll_frame(false, 3);
+    assert!(
+        !scrolled(&out),
+        "no scroll should be emitted without synchronized output: {out:?}"
+    );
+    // Without this the test is satisfied by emitting nothing at all, which
+    // is not a fallback -- it is a blank screen.
+    assert!(
+        out.len() > scrolls.len() * 2,
+        "the rows must be redrawn instead ({} bytes vs {} scrolled): {out:?}",
+        out.len(),
+        scrolls.len()
+    );
+}
+
+#[test]
+fn downward_scroll_is_gated_too() {
+    // Detection runs in both directions; the gate must cover both. Every
+    // other scroll test here shifts upward.
+    let synced = plain_scroll_frame(true, -3);
+    assert!(scrolled(&synced), "expected a downward scroll: {synced:?}");
+
+    let guarded = plain_scroll_frame(false, -3);
+    assert!(
+        !scrolled(&guarded),
+        "downward scroll must be gated as well: {guarded:?}"
+    );
+    assert!(
+        guarded.len() > synced.len() * 2,
+        "the rows must be redrawn instead: {guarded:?}"
+    );
+}
+
+/// A scrollbar thumb beside a scrolling pane: column 0 holds a space on
+/// every row, and the thumb is a background colour parked at a fixed row.
+/// Every row's *content* is identical, so row hashes cannot tell the thumb
+/// apart from plain track -- only full cell equality can.
+fn thumb_second_frame(sync_output: bool) -> String {
+    const W: u16 = 40;
+    const H: u16 = 12;
+    const THUMB_ROW: u16 = 2;
+
+    fn paint(screen: &mut Screen<Vec<u8>>, offset: usize) {
+        for y in 0..H {
+            let track = if y == THUMB_ROW {
+                Cell::narrow("\u{2588}").style(Style::default().bg(Color::Red))
+            } else {
+                Cell::narrow(" ")
+            };
+            screen.set_cell((0, y), &track);
+            let n = y as usize + offset;
+            let body: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+                .chars()
+                .cycle()
+                .skip(n * 7 % 36)
+                .take((W - 1) as usize)
+                .collect();
+            for (i, ch) in body.chars().enumerate() {
+                screen.set_cell((1 + i as u16, y), &Cell::narrow(ch.to_string()));
+            }
+        }
+    }
+
+    let opts = Optimizations::default()
+        .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL);
+    // Pin the profile: `for_test` detects it from the live environment, so
+    // under NO_COLOR the thumb would repaint with no colour bytes at all
+    // and a colour-based assertion would pass vacuously.
+    let mut screen = Screen::for_test(Vec::new(), (W, H))
+        .with_optimizations(opts)
+        .with_color_profile(crate::color::Profile::TrueColor);
+    screen.set_alt_screen(true);
+    screen.set_scroll_optimize(true);
+    screen.set_synchronized_output(sync_output);
+
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    paint(&mut screen, 3);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    s(screen.writer())
+}
+
+#[test]
+fn styled_thumb_is_left_alone_without_sync_output() {
+    // A fixed column whose meaning is carried entirely by style. Row
+    // hashes cover content only, so this column is invisible to them; the
+    // gate does not depend on hashes and covers it anyway.
+    let out = thumb_second_frame(false);
+    assert!(
+        !scrolled(&out),
+        "no scroll should be emitted without synchronized output: {out:?}"
+    );
+    // The thumb glyph appears nowhere in the pane, so its absence means the
+    // fixed column was never touched, in any colour profile.
+    assert!(
+        !out.contains('\u{2588}'),
+        "an unmoved thumb must not be repainted: {out:?}"
+    );
+    // ... and the pane behind it must still have been redrawn, or an empty
+    // frame would satisfy the assertion above.
+    assert!(
+        out.len() > 300,
+        "the pane must be redrawn instead ({} bytes): {out:?}",
+        out.len()
+    );
+}
+
+#[test]
+fn styled_thumb_scrolls_and_is_repainted_under_sync_output() {
+    // With an atomic frame the cheaper plan is taken: the thumb moves with
+    // the scroll and the repaint that puts it back is hidden.
+    let out = thumb_second_frame(true);
+    assert!(scrolled(&out), "expected a scroll: {out:?}");
+    // The repaint is the whole justification for the gate: the scroll moved
+    // the thumb, so the frame has to put it back.
+    assert!(
+        out.contains('\u{2588}'),
+        "the scroll moved the thumb, so it must be painted back: {out:?}"
+    );
+}
+
+#[test]
+fn turning_sync_output_off_between_frames_stops_scrolling() {
+    // The renderer's copy of this must track the setting rather than latch
+    // on at the first frame that enabled it.
+    const W: u16 = 40;
+    const H: u16 = 12;
+    let paint = |screen: &mut Screen<Vec<u8>>, offset: usize| {
+        for y in 0..H {
+            let n = y as usize + offset;
+            let body: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+                .chars()
+                .cycle()
+                .skip(n * 7 % 36)
+                .take(W as usize)
+                .collect();
+            for (i, ch) in body.chars().enumerate() {
+                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+            }
+        }
+    };
+    let opts = Optimizations::default()
+        .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL);
+    let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
+    screen.set_alt_screen(true);
+    screen.set_scroll_optimize(true);
+    screen.set_synchronized_output(true);
+
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    // Scrolling while synchronized: the optimization is live.
+    paint(&mut screen, 3);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    assert!(
+        scrolled(&s(screen.writer())),
+        "expected a scroll while synchronized"
+    );
+    screen.writer_mut().clear();
+
+    screen.set_synchronized_output(false);
+    paint(&mut screen, 6);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    let out = s(screen.writer());
+    assert!(
+        !scrolled(&out),
+        "scrolling must stop once synchronized output is off: {out:?}"
+    );
+}
+
+#[test]
+fn scroll_detection_stays_off_inline() {
+    // Detection is fullscreen-only. Inline, the rows above belong to the
+    // user's real scrollback, and a physical scroll would move it.
+    const W: u16 = 40;
+    const H: u16 = 12;
+    let paint = |screen: &mut Screen<Vec<u8>>, offset: usize| {
+        for y in 0..H {
+            let n = y as usize + offset;
+            let body: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+                .chars()
+                .cycle()
+                .skip(n * 7 % 36)
+                .take(W as usize)
+                .collect();
+            for (i, ch) in body.chars().enumerate() {
+                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+            }
+        }
+    };
+    let opts = Optimizations::default()
+        .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL);
+    let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
+    screen.set_alt_screen(false);
+    screen.set_scroll_optimize(true);
+    screen.set_synchronized_output(true);
+
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    paint(&mut screen, 3);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    let out = s(screen.writer());
+    assert!(
+        !scrolled(&out),
+        "inline frames must not scroll even when synchronized: {out:?}"
+    );
+    assert!(
+        out.len() > 300,
+        "the rows must be redrawn instead ({} bytes): {out:?}",
+        out.len()
+    );
+}
+
+#[test]
+fn scroll_detection_is_off_until_synchronized_output_is_enabled() {
+    // The conservative default matters: a `Screen` that never touches
+    // `set_synchronized_output` must not scroll. Asserted through
+    // behaviour rather than the private flag.
+    const W: u16 = 40;
+    const H: u16 = 12;
+    let paint = |screen: &mut Screen<Vec<u8>>, offset: usize| {
+        for y in 0..H {
+            let n = y as usize + offset;
+            let body: String = "abcdefghijklmnopqrstuvwxyz0123456789"
+                .chars()
+                .cycle()
+                .skip(n * 7 % 36)
+                .take(W as usize)
+                .collect();
+            for (i, ch) in body.chars().enumerate() {
+                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+            }
+        }
+    };
+    let opts = Optimizations::default()
+        .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL);
+    let mut screen = Screen::for_test(Vec::new(), (W, H)).with_optimizations(opts);
+    screen.set_alt_screen(true);
+    screen.set_scroll_optimize(true);
+    // Deliberately never calls `set_synchronized_output`.
+
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    screen.writer_mut().clear();
+
+    paint(&mut screen, 3);
+    screen.render().unwrap();
+    screen.flush().unwrap();
+    let out = s(screen.writer());
+    assert!(
+        !scrolled(&out),
+        "detection must stay off until synchronized output is enabled: {out:?}"
+    );
+    assert!(out.len() > 300, "the rows must be redrawn instead: {out:?}");
+}
+
+#[test]
+fn scroll_detection_requires_synchronized_output() {
+    // A physical scroll is always full width, so any scroll may move cells
+    // that should have stayed put and then repaint them. Presented
+    // atomically that correction is invisible; otherwise it is on screen
+    // for a moment and reads as flicker. So detection does not run at all
+    // without synchronized output, even with the optimization enabled.
+    let out = two_pane_second_frame(true, false);
+
+    assert!(
+        !scrolled(&out),
+        "no scroll should be emitted without synchronized output: {out:?}"
+    );
+    assert!(
+        !out.contains("tree-"),
+        "an untouched fixed column must not be repainted: {out:?}"
+    );
+    // The pane still has to be redrawn; otherwise an empty frame passes.
+    assert!(
+        out.len() > 300,
+        "the pane must be redrawn instead ({} bytes): {out:?}",
+        out.len()
+    );
+}
+
 #[test]
 fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
     // The same frame with detection off: no scroll goes out, so the tree
     // never moves and never needs repainting. It is unchanged between the
     // two frames, so its cells must not appear in the output at all.
-    let out = two_pane_second_frame(false);
+    let out = two_pane_second_frame(false, true);
 
     assert!(
         !out.contains("\x1b[3S") && !out.contains("\x1b[3M") && !out.contains("\x1b[3L"),
