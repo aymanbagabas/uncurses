@@ -55,8 +55,8 @@ impl App {
                     modifiers,
                     ..
                 }) if modifiers.contains(KeyModifiers::CTRL) => break,
-                Event::Resize(ws) => {
-                    self.program.screen_mut().resize((ws.col, ws.row));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                     (w, h) = (
                         self.program.screen().width(),
                         self.program.screen().height(),

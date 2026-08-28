@@ -156,8 +156,8 @@ impl App {
                     self.cx = nx;
                     self.cy = ny;
                 }
-                Event::Resize(ws) => {
-                    self.program.screen_mut().resize((ws.col, ws.row));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                     let (nx, ny) = clamp_to_screen(self.program.screen(), self.cx, self.cy);
                     self.cx = nx;
                     self.cy = ny;

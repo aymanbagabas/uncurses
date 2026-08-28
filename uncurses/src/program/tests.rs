@@ -117,6 +117,168 @@ fn reset_and_restore_round_trip_grapheme_clusters() {
 /// Resizing drops the tracked terminal contents, so it costs a full repaint.
 /// `autoresize` runs on every resize report, including ones that leave the
 /// cell grid alone, so the same size must not pay that cost.
+///
+/// `Screen::resize` itself repaints unconditionally: an explicit call means
+/// the caller wants the area re-established. The skip lives here because only
+/// this path is driven by reports the application never asked for.
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn autoresize_at_the_same_size_does_not_repaint() {
+    use std::os::fd::AsRawFd;
+
+    let Some((master, slave)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    // Drain the master without blocking: the slave's writes are what the
+    // renderer emitted, and a same-size report must add nothing.
+    assert_eq!(
+        unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
+        0,
+        "set O_NONBLOCK on the pty master: {}",
+        std::io::Error::last_os_error()
+    );
+    let drain = || {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = unsafe { libc::read(master.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+            if n > 0 {
+                out.extend_from_slice(&buf[..n as usize]);
+                continue;
+            }
+            if n == 0 {
+                break;
+            }
+            // Only "nothing buffered right now" ends the drain. A signal means
+            // retry, and anything else is a real failure worth reporting
+            // rather than reading as an empty frame.
+            let err = std::io::Error::last_os_error();
+            match err.kind() {
+                std::io::ErrorKind::WouldBlock => break,
+                std::io::ErrorKind::Interrupted => continue,
+                _ => panic!("read from the pty master: {err}"),
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    };
+    let set_size = |rows: u16, cols: u16| {
+        let ws = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, &ws) },
+            0,
+            "TIOCSWINSZ on a fresh pty slave: {}",
+            std::io::Error::last_os_error()
+        );
+    };
+    set_size(24, 80);
+
+    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::EnvList::new());
+    let mut program = Program::new(term).expect("Program::new over a pty slave");
+    program.screen_mut().set_fullscreen(true);
+    program.autoresize().expect("initial autoresize");
+    program
+        .screen_mut()
+        .set_str((0, 0), "hello", crate::style::Style::default());
+    program.screen_mut().render().expect("first render");
+    program.screen_mut().flush().expect("first flush");
+    assert!(
+        drain().contains("hello"),
+        "the first frame must draw the tracked contents"
+    );
+
+    // A report that leaves the cell grid alone must not cost a repaint.
+    program.autoresize().expect("same-size autoresize");
+    program.screen_mut().render().expect("second render");
+    program.screen_mut().flush().expect("second flush");
+    assert_eq!(drain(), "", "a same-size report must not repaint");
+
+    // A height change repaints, and the repaint re-establishes the contents
+    // rather than merely emitting bytes.
+    set_size(25, 80);
+    program.autoresize().expect("taller autoresize");
+    program.screen_mut().render().expect("third render");
+    program.screen_mut().flush().expect("third flush");
+    assert!(
+        drain().contains("hello"),
+        "a taller terminal must redraw the tracked contents"
+    );
+
+    // So does a width change: the gate must compare both dimensions.
+    set_size(25, 100);
+    program.autoresize().expect("wider autoresize");
+    assert_eq!(program.screen().size(), Size::new(100, 25));
+    program.screen_mut().render().expect("fourth render");
+    program.screen_mut().flush().expect("fourth flush");
+    assert!(
+        drain().contains("hello"),
+        "a wider terminal must redraw the tracked contents"
+    );
+}
+
+/// The default event path caches the terminal size before the application
+/// ever sees the event: `read_event` runs `observe_event`, which records the
+/// new size and leaves refitting to the app. `autoresize` must therefore
+/// decide against the managed area, not against that cache — comparing a
+/// fresh read to a cache another writer already refreshed makes the call a
+/// no-op on exactly the path most applications use.
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn autoresize_refits_after_the_report_was_already_observed() {
+    use std::os::fd::AsRawFd;
+
+    let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let set_size = |rows: u16, cols: u16| {
+        let ws = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, &ws) },
+            0,
+            "TIOCSWINSZ on a fresh pty slave: {}",
+            std::io::Error::last_os_error()
+        );
+    };
+    set_size(24, 80);
+
+    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::EnvList::new());
+    let mut program = Program::new(term).expect("Program::new over a pty slave");
+    program.screen_mut().set_fullscreen(true);
+    program.autoresize().expect("initial autoresize");
+    assert_eq!(program.screen().size(), Size::new(80, 24));
+
+    set_size(30, 80);
+    // What `read_event` does before handing the event to the application.
+    program
+        .observe_event(&Event::Resize(crate::terminal::Winsize {
+            row: 30,
+            col: 80,
+            xpixel: 0,
+            ypixel: 0,
+        }))
+        .expect("observe the in-band resize report");
+    assert_eq!(
+        program.window_cells(),
+        Some(Size::new(80, 30)),
+        "observing the report refreshes the cache"
+    );
+
+    program.autoresize().expect("autoresize after the report");
+    assert_eq!(
+        program.screen().size(),
+        Size::new(80, 30),
+        "autoresize must still refit the managed area"
+    );
+}
 
 // --- end-to-end renderer tests ---
 //

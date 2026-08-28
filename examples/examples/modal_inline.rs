@@ -85,8 +85,12 @@ impl App {
                 Event::Resize(ws) => {
                     let nw = SURFACE_W.min(ws.col.max(1));
                     let nh = SURFACE_H.min(ws.row.max(1));
-                    self.program.screen_mut().resize((nw, nh));
-                    dirty = true;
+                    // Resizing re-establishes the region, so only do it when
+                    // the clamped size actually moved.
+                    if self.program.screen().size() != (nw, nh).into() {
+                        self.program.screen_mut().resize((nw, nh));
+                        dirty = true;
+                    }
                 }
                 _ => {}
             }

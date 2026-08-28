@@ -72,8 +72,8 @@ impl App {
                     self.count = self.count.saturating_add(1);
                     dirty = true;
                 }
-                Event::Resize(ws) => {
-                    self.program.screen_mut().resize((ws.col, ws.row));
+                Event::Resize(_) => {
+                    self.program.autoresize()?;
                     dirty = true;
                 }
                 _ => {}

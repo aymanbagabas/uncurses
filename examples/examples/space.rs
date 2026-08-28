@@ -175,8 +175,8 @@ impl App {
                             modifiers,
                             ..
                         }) if modifiers.contains(KeyModifiers::CTRL) => quit = true,
-                        Event::Resize(ws) => {
-                            self.program.screen_mut().resize((ws.col, ws.row));
+                        Event::Resize(_) => {
+                            self.program.autoresize()?;
                             self.field = Field::new();
                             needs_redraw = true;
                         }
