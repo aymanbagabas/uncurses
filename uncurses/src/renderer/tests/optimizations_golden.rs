@@ -23,6 +23,9 @@ use crate::style::Style;
 fn renderer_with(opts: Optimizations) -> Renderer {
     let mut r = Renderer::new();
     r.set_optimizations(opts);
+    // These pin which sequences a capability set produces, so scroll
+    // detection has to be reachable. It runs only on a synchronized frame.
+    r.set_sync_output(true);
     r
 }
 

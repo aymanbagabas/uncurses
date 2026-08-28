@@ -115,13 +115,13 @@ fn single_cell_change(b: &mut Bencher) {
 
 #[bench]
 fn scroll_shift_up_by_1(b: &mut Bencher) {
-    bench_swap_render(
-        b,
-        Renderer::new(),
-        filled_buffer(0),
-        shifted_up_buffer(),
-        |_| {},
-    );
+    // Scroll detection is fullscreen-only and requires synchronized output,
+    // so a bare `Renderer::new()` never reaches it and this measures a plain
+    // redraw instead of the path it names.
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.set_sync_output(true);
+    bench_swap_render(b, r, filled_buffer(0), shifted_up_buffer(), |_| {});
 }
 
 #[bench]
