@@ -243,16 +243,16 @@ fn a_burst_of_same_size_resizes_repaints_each_time() {
     screen.render().unwrap();
     screen.writer_mut().clear();
 
-    let mut sizes = Vec::new();
+    let mut rounds = Vec::new();
     for _ in 0..5 {
         screen.resize((80, 24));
         screen.render().unwrap();
-        sizes.push(screen.writer().len());
+        rounds.push(String::from_utf8_lossy(screen.writer()).into_owned());
         screen.writer_mut().clear();
     }
     assert!(
-        sizes.iter().all(|&n| n > 0),
-        "each explicit resize re-establishes the area: {sizes:?}"
+        rounds.iter().all(|out| out.contains("hello")),
+        "each explicit resize re-establishes the area: {rounds:?}"
     );
 }
 
@@ -268,21 +268,23 @@ fn resize_repaints_even_at_the_same_size() {
     let mut screen = Screen::for_test(Vec::new(), (80, 24));
     screen.set_str((0, 0), "hello", crate::style::Style::default());
     screen.render().unwrap();
+    screen.writer_mut().clear();
 
-    let after_first = screen.writer().len();
     screen.resize((80, 24));
     screen.render().unwrap();
+    let same = String::from_utf8_lossy(screen.writer()).into_owned();
     assert!(
-        screen.writer().len() > after_first,
-        "an explicit resize must repaint even at the same size"
+        same.contains("hello"),
+        "an explicit resize must redraw the tracked contents even at the same size: {same:?}"
     );
 
-    let after_same = screen.writer().len();
+    screen.writer_mut().clear();
     screen.resize((80, 25));
     screen.render().unwrap();
+    let changed = String::from_utf8_lossy(screen.writer()).into_owned();
     assert!(
-        screen.writer().len() > after_same,
-        "a changed size must repaint"
+        changed.contains("hello"),
+        "a changed size must redraw the tracked contents: {changed:?}"
     );
 }
 
