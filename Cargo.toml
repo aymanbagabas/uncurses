@@ -3,7 +3,7 @@ resolver = "3"
 members = ["uncurses", "uncurses-ratatui", "examples"]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
