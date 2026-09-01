@@ -57,10 +57,15 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
             // offers it only for a cluster of one code point. The two decide
             // eligibility together or the planner picks a move it cannot
             // emit.
-            // Exactly one code point, decided by asking for a second rather
-            // than counting them all. Matches the cost pass, which prices
-            // this move in bytes and so offers it only for such a cell.
-            let mut code_points = cell.content().chars();
+            // Matches the cost pass: the cell has to draw the columns the
+            // row credits it with, and it has to hold one code point.
+            let content = cell.content();
+            if usize::from(crate::text::WidthMode::Grapheme.grapheme_width(content, false))
+                != usize::from(cell.width().max(1))
+            {
+                return false;
+            }
+            let mut code_points = content.chars();
             if code_points.next().is_none() || code_points.next().is_some() {
                 return false;
             }
@@ -203,9 +208,14 @@ mod passes_agree {
             Cell::wide("\u{1f468}\u{200d}\u{1f469}"),
             Cell::continuation(),
             Cell::narrow("c"),
-            // Owns a column and has nothing to write, so drawing it crosses
-            // no columns at all.
+            // Cells whose content draws a different number of columns than
+            // the row credits them with. Each would let the walk arrive
+            // somewhere the planner did not record.
             Cell::narrow(""),
+            Cell::narrow("\u{301}"),
+            Cell::narrow("\u{8}"),
+            Cell::narrow("\u{4e16}"),
+            Cell::wide("a"),
         ]
     }
 
@@ -307,5 +317,44 @@ mod empty_content {
         assert_eq!(overwrite_cost(&line, &style, 0, 1), None);
         let mut out = Vec::new();
         assert!(!collect_overwrite_bytes(&mut out, &line, &style, 0, 1));
+    }
+}
+
+#[cfg(test)]
+mod width_honesty {
+    use super::*;
+    use crate::ansi::cost::overwrite_cost;
+
+    /// A cell has to draw the columns the row credits it with.
+    ///
+    /// Nothing stops a cell from claiming a width its content does not have,
+    /// and this move travels by drawing, so such a cell carries the cursor
+    /// somewhere other than where the planner recorded it. A combining mark
+    /// and a control character draw nothing, a narrow cell can hold a wide
+    /// glyph, and a wide one can hold a narrow glyph.
+    #[test]
+    fn a_cell_that_draws_a_width_it_does_not_claim_is_refused() {
+        let style = Style::default();
+        for cell in [
+            Cell::narrow("\u{301}"),
+            Cell::narrow("\u{8}"),
+            Cell::narrow("\u{4e16}"),
+            Cell::wide("a"),
+            Cell::narrow(""),
+        ] {
+            let line = vec![cell.clone(), Cell::narrow("z")];
+            let mut out = Vec::new();
+            assert_eq!(
+                overwrite_cost(&line, &style, 0, 1),
+                None,
+                "priced a move over {:?}",
+                cell.content()
+            );
+            assert!(
+                !collect_overwrite_bytes(&mut out, &line, &style, 0, 1),
+                "emitted a move over {:?}",
+                cell.content()
+            );
+        }
     }
 }
