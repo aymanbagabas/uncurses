@@ -10,6 +10,34 @@ use crate::cell::Cell;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 
+/// The first column at or before `at` that owns the cell it holds.
+///
+/// A diff finds its boundaries by comparing columns, so one can land inside
+/// a cluster. A terminal draws a glyph or does not, so emission has to begin
+/// on a whole one: the cursor is placed at a run's first column, and a
+/// continuation writes no bytes and moves no cursor, which would leave every
+/// glyph after it a column to the left of where it belongs.
+pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
+    let mut at = at.min(line.len().saturating_sub(1));
+    while at > 0 && line[at].is_continuation() {
+        at -= 1;
+    }
+    at
+}
+
+/// The last column of the cluster that owns `at`.
+///
+/// The mirror of [`cluster_start`]. A run ending on a cell whose
+/// continuations lie past it would cover part of a glyph, and which end a
+/// change exposes depends on the direction it grew in, so both are closed.
+pub(super) fn cluster_end(line: &[Cell], at: usize) -> usize {
+    let mut at = at;
+    while at + 1 < line.len() && line[at + 1].is_continuation() {
+        at += 1;
+    }
+    at
+}
+
 impl Renderer {
     /// Emit a range of cells from a line, handling style transitions.
     ///
@@ -34,6 +62,13 @@ impl Renderer {
         first: usize,
         last: usize,
     ) -> io::Result<bool> {
+        // The cursor is already parked at `first`, and a continuation emits
+        // nothing and moves nothing, so a run starting on one would put the
+        // next glyph a column to the left of where it belongs.
+        debug_assert!(
+            line.get(first).is_none_or(|c| !c.is_continuation()),
+            "emit_range starts on a continuation at column {first}"
+        );
         let surface_width = self.last_width;
         let surface_height = self.last_height;
         let has_ech = self.opts.contains(Optimizations::ECH);
@@ -270,12 +305,22 @@ impl Renderer {
                         // Run of matching cells exceeded the cost of an
                         // in-place cursor move; emit what we have, then
                         // skip past the run with a positioning jump.
+                        //
+                        // The jump lands where emission resumes, so it has
+                        // to name a column that owns its cell. Landing on a
+                        // continuation would park the cursor inside a glyph
+                        // that emits nothing, and the next one would go out
+                        // a column early. The segment just closed ends at
+                        // the last column of its own cluster for the same
+                        // reason, so neither end cuts a glyph in half.
+                        let resume = cluster_start(new_line, j);
                         let prev_end = j.saturating_sub(same).saturating_sub(1);
                         if prev_end >= seg_start {
-                            self.emit_range(out, new_buf, new_line, seg_start, prev_end)?;
+                            let stop = cluster_end(new_line, prev_end).min(resume - 1);
+                            self.emit_range(out, new_buf, new_line, seg_start, stop)?;
                         }
-                        self.move_to(out, new_buf, y, j as u16)?;
-                        seg_start = j;
+                        self.move_to(out, new_buf, y, resume as u16)?;
+                        seg_start = resume;
                     }
                     same = 0;
                 }
