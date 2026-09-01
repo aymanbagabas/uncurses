@@ -63,8 +63,8 @@ impl Row {
                 // follows, so it joins that cell rather than claiming one of
                 // its own. Giving it a column of its own would put the rest
                 // of the row one column to the right of where it belongs.
-                0 => {
-                    if let Some(last) = cells.last_mut() {
+                0 => match cells.last_mut() {
+                    Some(last) => {
                         let mut joined = last.content().to_string();
                         joined.push_str(cluster);
                         *last = if last.is_wide() {
@@ -73,7 +73,12 @@ impl Row {
                             Cell::narrow(joined)
                         };
                     }
-                }
+                    // Opening the row, it has nothing to share a column
+                    // with, so it takes one of its own. A terminal draws a
+                    // mark with no base on its own too, and dropping it
+                    // would lose text the row is meant to hold.
+                    None => cells.push(Cell::narrow(cluster)),
+                },
                 1 => cells.push(Cell::narrow(cluster)),
                 w => {
                     cells.push(Cell::wide(cluster));
