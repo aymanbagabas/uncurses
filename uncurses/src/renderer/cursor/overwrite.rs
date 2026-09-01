@@ -72,7 +72,9 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
             i += cell.width().max(1) as usize;
             continue;
         }
-        i += 1;
+        // No cell stepped over this continuation, so none owns it and
+        // nothing draws its column. Matches the cost pass.
+        return false;
     }
     // Landing past `to` means the last cluster reaches beyond the range, so
     // drawing it would carry the cursor further than the move promised.
@@ -356,5 +358,33 @@ mod width_honesty {
                 cell.content()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod unowned_continuation {
+    use super::*;
+    use crate::ansi::cost::overwrite_cost;
+
+    /// A continuation nothing owns is a column nothing draws.
+    ///
+    /// The walk steps over a continuation together with the cell that owns
+    /// it, so reaching one on its own means no cell will draw that column
+    /// while the move still counts it as crossed. `Buffer::resize` and the
+    /// shifting operations can both leave such a row behind.
+    #[test]
+    fn a_range_holding_an_unowned_continuation_is_refused() {
+        let style = Style::default();
+        let line = vec![Cell::narrow("a"), Cell::continuation()];
+        assert_eq!(overwrite_cost(&line, &style, 0, 2), None);
+        let mut out = Vec::new();
+        assert!(!collect_overwrite_bytes(&mut out, &line, &style, 0, 2));
+
+        // The same columns with an owner are still offered, and draw both.
+        let owned = vec![Cell::wide("\u{4e16}"), Cell::continuation()];
+        assert_eq!(overwrite_cost(&owned, &style, 0, 2), Some(3));
+        let mut out = Vec::new();
+        assert!(collect_overwrite_bytes(&mut out, &owned, &style, 0, 2));
+        assert_eq!(String::from_utf8_lossy(&out), "\u{4e16}");
     }
 }

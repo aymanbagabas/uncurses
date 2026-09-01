@@ -464,3 +464,30 @@ fn an_insert_starts_past_the_cluster_that_owns_its_column() {
         "expected both clusters on the wire: {text:?}"
     );
 }
+
+/// A row whose first column continues nothing still renders.
+///
+/// Shifting a row left can carry a wide cell off the edge and leave the
+/// continuation it owned at column zero. The library documents such a row as
+/// something a resize can produce, so the emitter meets one rather than
+/// declaring it impossible.
+#[test]
+fn a_row_opening_on_an_unowned_continuation_renders() {
+    let mut renderer = Renderer::new();
+    renderer.set_optimizations(Optimizations::none());
+    let mut buf = RenderBuffer::new(10, 1);
+    for x in (0..10).step_by(2) {
+        buf.set_cell((x, 0), &Cell::wide("\u{4e16}"));
+    }
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+
+    // The lead falls off the row and its continuation lands at column zero.
+    buf.delete_cells((0u16, 0u16), 1, 10, &Cell::BLANK);
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+    assert!(
+        String::from_utf8_lossy(&out).contains('\u{4e16}'),
+        "the row after the shift never reached the terminal"
+    );
+}
