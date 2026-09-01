@@ -329,7 +329,10 @@ pub fn overwrite_cost(
             i += w;
             continue;
         }
-        i += 1;
+        // Reaching a continuation here means nothing stepped over it, so no
+        // cell owns it and nothing will draw its column, while the walk
+        // would still count the column as crossed.
+        return None;
     }
     if i != to {
         return None;

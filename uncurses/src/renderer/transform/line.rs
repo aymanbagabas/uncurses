@@ -217,8 +217,10 @@ impl Renderer {
         // from owns the cell it holds. Every branch below places a cursor
         // there, and a continuation writes no bytes and moves no cursor.
         debug_assert!(
-            !new_line[first_cell].is_continuation(),
-            "first_cell {first_cell} on row {y} still points at a continuation"
+            !new_line[first_cell].is_continuation()
+                || first_cell == 0
+                || !new_line[first_cell - 1].is_wide(),
+            "first_cell {first_cell} on row {y} points at a continuation a cell owns"
         );
 
         let cur_slice = cur_line.as_deref();

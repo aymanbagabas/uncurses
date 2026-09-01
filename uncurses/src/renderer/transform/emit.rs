@@ -18,11 +18,19 @@ use crate::renderer::{RenderBuffer, Renderer};
 /// continuation writes no bytes and moves no cursor, which would leave every
 /// glyph after it a column to the left of where it belongs.
 pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
-    let mut at = at.min(line.len().saturating_sub(1));
-    while at > 0 && line[at].is_continuation() {
-        at -= 1;
+    let here = at.min(line.len().saturating_sub(1));
+    let mut start = here;
+    while start > 0 && line[start].is_continuation() {
+        start -= 1;
     }
-    at
+    // A continuation can reach the left edge without meeting a cell that
+    // owns it, which `Buffer::resize` and the shifting operations can both
+    // leave behind. It belongs to no cluster, so it stands as its own column
+    // rather than being folded into one that is not there.
+    if line.get(start).is_some_and(Cell::is_continuation) {
+        return here;
+    }
+    start
 }
 
 /// The last column of the cluster that owns `at`.
@@ -66,8 +74,10 @@ impl Renderer {
         // nothing and moves nothing, so a run starting on one would put the
         // next glyph a column to the left of where it belongs.
         debug_assert!(
-            line.get(first).is_none_or(|c| !c.is_continuation()),
-            "emit_range starts on a continuation at column {first}"
+            line.get(first).is_none_or(|c| !c.is_continuation())
+                || first == 0
+                || !line[first - 1].is_wide(),
+            "emit_range starts on a continuation at column {first}, and a cell owns it"
         );
         let surface_width = self.last_width;
         let surface_height = self.last_height;
@@ -450,11 +460,20 @@ mod cluster_bounds {
         assert_eq!(cluster_end(&line, 99), 99);
     }
 
-    /// A row opening on a continuation has no cell to close back to, so the
-    /// walk stops at the edge rather than running off it.
+    /// A continuation that reaches the left edge without meeting a cell
+    /// that owns it belongs to no cluster, so it stands as its own column.
+    ///
+    /// Folding it into a cluster that is not there would name a column the
+    /// row does not start a glyph at, and the shifting operations and
+    /// `Buffer::resize` can both leave such a row behind.
     #[test]
-    fn a_row_of_continuations_closes_at_the_edge() {
+    fn an_unowned_continuation_stands_on_its_own() {
         let line = vec![Cell::continuation(); 3];
-        assert_eq!(cluster_start(&line, 2), 0);
+        assert_eq!(cluster_start(&line, 2), 2);
+        assert_eq!(cluster_start(&line, 0), 0);
+
+        // One with an owner still closes back to it.
+        let owned = vec![Cell::wide("\u{4e16}"), Cell::continuation()];
+        assert_eq!(cluster_start(&owned, 1), 0);
     }
 }
