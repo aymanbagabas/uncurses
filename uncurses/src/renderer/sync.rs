@@ -62,12 +62,13 @@ impl Renderer {
                     x += 1;
                     continue;
                 };
-                // Skip continuation columns: their owning primary
-                // (written one or more columns to the left) already
-                // populated them via [`Buffer::set`]'s wide-cell
-                // bookkeeping. Visiting them directly would either be a
-                // no-op (continuation→continuation) or, worse, blank
-                // the primary we just mirrored.
+                // Skip continuation columns. Copying the primary places
+                // the continuation on the far side as part of the same
+                // write, so the column is already carrying the value this
+                // loop would ask for. `Buffer::set` ignores a continuation
+                // offered on its own, so passing one on would be a wasted
+                // call rather than a wrong one, and stepping over it keeps
+                // the walk in step with the widths it advances by.
                 if new_cell.is_continuation() {
                     x += 1;
                     continue;
