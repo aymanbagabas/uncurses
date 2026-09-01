@@ -9,8 +9,9 @@ use crate::cell::Cell;
 pub type Line = Vec<Cell>;
 
 /// Fill an existing row slot in place with `fill`. Wide fills
-/// (`fill.width() > 1`) lay down primary + continuation pairs; any
-/// trailing slot too narrow to fit another pair is a plain blank.
+/// (`fill.width() > 1`) lay down primary + continuation pairs whose
+/// continuation carries the fill's style; any trailing slot too narrow to
+/// fit another pair is a plain blank.
 pub(crate) fn fill_line_into(slot: &mut [Cell], fill: &Cell) {
     let width = slot.len();
     if fill.width() <= 1 {
@@ -18,11 +19,15 @@ pub(crate) fn fill_line_into(slot: &mut [Cell], fill: &Cell) {
         return;
     }
     let step = fill.width() as usize;
+    // A continuation is the rest of the cell that owns it, so it answers
+    // for that cell's colours too. Leaving it default paints a hole in the
+    // second column of every pair when the fill carries a background.
+    let cont = Cell::continuation().style(fill.style.clone());
     let mut x = 0;
     while x + step <= width {
         slot[x] = fill.clone();
         for i in 1..step {
-            slot[x + i] = Cell::continuation();
+            slot[x + i] = cont.clone();
         }
         x += step;
     }
