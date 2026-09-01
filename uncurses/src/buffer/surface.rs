@@ -292,6 +292,9 @@ pub trait SurfaceMut: Surface {
     /// Out-of-bounds writes should be ignored. Use this method instead of
     /// [`Self::cell_mut`] whenever changing content could affect display
     /// width or neighboring continuation slots.
+    // A continuation belongs to the wide cell on its left and is placed by
+    // that cell's own write, so an implementor ignores one passed on its
+    // own rather than storing it.
     fn set_cell(&mut self, pos: Position, cell: &Cell);
 
     /// Mutable handle to the cell at `pos`. Returns `None` for
