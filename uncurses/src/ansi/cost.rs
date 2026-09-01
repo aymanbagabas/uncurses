@@ -305,6 +305,21 @@ pub fn overwrite_cost(
             // move off sequences whose rendered width a terminal may not
             // agree about. Asking for a second code point answers both
             // without walking the rest of a long one.
+            // The cell has to draw the columns the row credits it with, or
+            // the walk arrives somewhere the planner did not record. A cell
+            // can claim a width its content does not have: a combining mark
+            // or a control character draws nothing, a narrow cell can hold a
+            // wide glyph, and a wide one can hold a narrow glyph. Measuring
+            // the content answers that directly, where counting code points
+            // only guessed at it.
+            if usize::from(crate::text::WidthMode::Grapheme.grapheme_width(content, false))
+                != usize::from(cell.width().max(1))
+            {
+                return None;
+            }
+            // Beyond that, one code point at a time, which keeps the move
+            // off sequences whose rendered width a terminal may not agree
+            // about however the table measures them.
             let mut code_points = content.chars();
             if code_points.next().is_none() || code_points.next().is_some() {
                 return None;

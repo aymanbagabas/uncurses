@@ -316,7 +316,13 @@ impl Renderer {
                         let resume = cluster_start(new_line, j);
                         let prev_end = j.saturating_sub(same).saturating_sub(1);
                         if prev_end >= seg_start {
-                            let stop = cluster_end(new_line, prev_end).min(resume - 1);
+                            // `resume` is zero when every column back to
+                            // the start of the row continues one cluster,
+                            // and an unsaturated subtraction there wraps,
+                            // which discards the clamp instead of applying
+                            // it.
+                            let stop =
+                                cluster_end(new_line, prev_end).min(resume.saturating_sub(1));
                             self.emit_range(out, new_buf, new_line, seg_start, stop)?;
                         }
                         self.move_to(out, new_buf, y, resume as u16)?;

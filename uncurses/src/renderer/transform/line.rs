@@ -352,8 +352,16 @@ impl Renderer {
 
             let n = o_lc.min(n_lc);
             if n >= first_cell as isize {
+                // The walk stops where the rows agree again, which can be a
+                // cell that owns a column past it. `emit_range` draws whole
+                // glyphs, so the run reaches further than `n` and the cursor
+                // rests past the cluster; the insert branch below then
+                // back-shifts over the continuation and draws the same glyph
+                // a second time. Ending on the cluster's own last column
+                // keeps the two in step.
+                let last = super::emit::cluster_end(new_line, n as usize);
                 self.move_to(out, new_buf, y, first_cell as u16)?;
-                self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, n as usize)?;
+                self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, last)?;
             }
 
             if o_lc < n_lc {
