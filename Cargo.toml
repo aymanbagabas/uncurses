@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["uncurses", "uncurses-ratatui", "examples"]
+members = ["uncurses", "uncurses-ratatui", "examples", "e2e"]
 
 [workspace.package]
 version = "0.0.4"
