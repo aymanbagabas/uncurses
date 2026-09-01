@@ -227,6 +227,9 @@ impl Cell {
     ///
     /// # Usage notes
     ///
+    /// A continuation passed to a surface write is ignored, because the
+    /// wide cell that owns the column places it as part of its own write.
+    ///
     /// Most callers should not construct continuations directly. Prefer
     /// writing a [`Cell::wide`] through a surface so the primary and
     /// continuation remain adjacent.
