@@ -238,22 +238,31 @@ pub const fn tab_cost(n: u16) -> usize {
 
 // ---------- Overwrite (re-emit row cells as a forward move) ----------------
 
-/// Approximate byte cost of re-emitting the cells in `line[from..to]`
-/// as a forward-move candidate.
+/// Byte cost of re-emitting the cells in `line[from..to]` as a
+/// forward-move candidate.
 ///
-/// Returns [`None`] when any `width > 0` cell in the range has a
-/// style or link that does not match the active pen — in that case
-/// the row cannot be re-emitted without an interleaved pen change
-/// and the candidate is not eligible.
+/// The cost is the summed byte length of the cells' content, which is what
+/// the move writes, so it compares directly against the byte cost of a
+/// cursor sequence.
 ///
-/// The cost approximation is the sum of `cell.width()` over occupied
-/// cells in the range. For plain ASCII this equals the emitted byte
-/// length exactly. For wide CJK glyphs (`width == 2`, multi-byte
-/// content) and other multi-byte single-width glyphs (combining
-/// sequences, emoji selectors) the prediction underestimates the
-/// emitted length, so an overwrite candidate may be picked here that
-/// a strict byte minimisation would have rejected. Accepting this
-/// approximation keeps the predictor allocation-free.
+/// Returns [`None`] when the range is not eligible. This move travels by
+/// drawing, so what it draws has to span exactly the columns it claims to
+/// cross, and the pen has to survive the trip:
+///
+/// - the range opens on a continuation, which begins inside a glyph whose
+///   bytes have already gone out, so the walk would arrive a column short
+/// - the last cluster in the range reaches past `to`, so drawing it would
+///   carry the cursor a column too far
+/// - an occupied cell has a style or link the active pen does not match,
+///   which would need an interleaved pen change
+/// - an occupied cell holds anything other than exactly one code point,
+///   which keeps the byte cost equal to the columns crossed and keeps the
+///   candidate off sequences whose rendered width a terminal may disagree
+///   about
+///
+/// The renderer decides eligibility the same way when it emits the move,
+/// and the two have to agree or the planner picks a move it cannot
+/// produce.
 pub fn overwrite_cost(
     line: &[crate::cell::Cell],
     style: &crate::style::Style,
@@ -265,6 +274,18 @@ pub fn overwrite_cost(
     if to > line.len() {
         return None;
     }
+    // This candidate travels by drawing, so it is only usable when what it
+    // draws spans exactly the columns it claims to cross. Opening inside a
+    // glyph leaves nothing to draw for that column, and a last cluster
+    // reaching past `to` draws a column too many; either way the cursor
+    // stops somewhere other than the planner records. The same rule decides
+    // eligibility in the emit pass, and the two have to agree.
+    if line
+        .get(from)
+        .is_some_and(crate::cell::Cell::is_continuation)
+    {
+        return None;
+    }
     let mut i = from;
     let mut cost = 0usize;
     while i < to {
@@ -273,11 +294,30 @@ pub fn overwrite_cost(
             if &cell.style != style {
                 return None;
             }
-            cost += cell.width() as usize;
-            i += cell.width() as usize;
+            let content = cell.content();
+            // A cell with nothing to write still owns its column, so drawing
+            // it advances the cursor by nothing while the planner records a
+            // column crossed. A cluster of several code points has the
+            // opposite problem: it costs what it takes to write, which is
+            // its bytes, and a joined emoji is closer to thirty of those
+            // than to the two columns it occupies. Taking one code point at
+            // a time keeps the price and the distance equal, and keeps the
+            // move off sequences whose rendered width a terminal may not
+            // agree about. Asking for a second code point answers both
+            // without walking the rest of a long one.
+            let mut code_points = content.chars();
+            if code_points.next().is_none() || code_points.next().is_some() {
+                return None;
+            }
+            cost += content.len();
+            let w = cell.width().max(1) as usize;
+            i += w;
             continue;
         }
         i += 1;
+    }
+    if i != to {
+        return None;
     }
     Some(cost)
 }

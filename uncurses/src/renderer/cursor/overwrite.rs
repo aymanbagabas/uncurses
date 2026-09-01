@@ -9,9 +9,17 @@ use crate::style::Style;
 /// style matches the active pen into `out`. Returns `true` when the
 /// run is compatible with the pen and the bytes have been written;
 /// returns `false` (and leaves `out` unchanged) when a width>0 cell
-/// would require a pen change, or when the requested column range
-/// extends past the row. Continuation cells (`width == 0`) are
-/// silently skipped.
+/// would require a pen change, when the requested column range
+/// extends past the row, or when either end of the range falls inside
+/// a cluster.
+///
+/// This candidate moves the cursor by drawing, so the columns it draws
+/// have to add up to the distance it claims to travel. A range starting
+/// on a continuation begins inside a glyph whose bytes have already gone
+/// out, so it draws one column fewer than it owes; a range whose last
+/// cell reaches past `to_x` draws one more. Either leaves the terminal's
+/// cursor somewhere other than where the planner recorded it, and every
+/// later move inherits the error.
 pub(in crate::renderer) fn collect_overwrite_bytes(
     out: &mut Vec<u8>,
     line: &[Cell],
@@ -32,6 +40,12 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
         // happily choose over a real move.
         return false;
     }
+    // A continuation here means the range opens inside a glyph the
+    // terminal has already drawn, so no bytes are owed for the column and
+    // the walk would arrive short.
+    if line.get(from).is_some_and(Cell::is_continuation) {
+        return false;
+    }
     let mut i = from;
     while i < to {
         let cell = &line[i];
@@ -39,10 +53,26 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
             if &cell.style != style {
                 return false;
             }
-            i += cell.width() as usize;
+            // Matches the cost pass, which prices this move in bytes and so
+            // offers it only for a cluster of one code point. The two decide
+            // eligibility together or the planner picks a move it cannot
+            // emit.
+            // Exactly one code point, decided by asking for a second rather
+            // than counting them all. Matches the cost pass, which prices
+            // this move in bytes and so offers it only for such a cell.
+            let mut code_points = cell.content().chars();
+            if code_points.next().is_none() || code_points.next().is_some() {
+                return false;
+            }
+            i += cell.width().max(1) as usize;
             continue;
         }
         i += 1;
+    }
+    // Landing past `to` means the last cluster reaches beyond the range, so
+    // drawing it would carry the cursor further than the move promised.
+    if i != to {
+        return false;
     }
     out.clear();
     let mut i = from;
@@ -50,7 +80,7 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
         let cell = &line[i];
         if !cell.is_continuation() {
             out.extend_from_slice(cell.content().as_bytes());
-            i += cell.width() as usize;
+            i += cell.width().max(1) as usize;
             continue;
         }
         i += 1;
@@ -84,5 +114,198 @@ mod tests {
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(&mut out, &line, &style, 0, 3));
         assert_eq!(out, b"xxx");
+    }
+}
+
+#[cfg(test)]
+mod cluster_bounds_tests {
+    use super::*;
+
+    /// A row of two-column clusters, so column `2n` owns one and `2n + 1`
+    /// is its continuation.
+    fn wide_line() -> Vec<Cell> {
+        let mut line = Vec::new();
+        for _ in 0..5 {
+            line.push(Cell::wide("\u{4e16}"));
+            line.push(Cell::continuation());
+        }
+        line
+    }
+
+    /// The candidate moves the cursor by drawing, so it is only usable when
+    /// what it draws spans exactly the columns it claims to cross.
+    #[test]
+    fn a_move_opening_inside_a_glyph_is_refused() {
+        let line = wide_line();
+        let mut out = Vec::new();
+        // Column 1 is the second half of the cluster at 0. Its bytes went
+        // out with that cluster, so there is nothing left to draw for it and
+        // the walk would arrive a column short.
+        assert!(!collect_overwrite_bytes(
+            &mut out,
+            &line,
+            &Style::default(),
+            1,
+            6
+        ));
+    }
+
+    /// The mirror: a range whose last cluster reaches past the end.
+    #[test]
+    fn a_move_ending_inside_a_glyph_is_refused() {
+        let line = wide_line();
+        let mut out = Vec::new();
+        // The cluster at column 4 occupies 4 and 5, so stopping at 5 would
+        // draw a glyph that carries the cursor one column past the target.
+        assert!(!collect_overwrite_bytes(
+            &mut out,
+            &line,
+            &Style::default(),
+            0,
+            5
+        ));
+    }
+
+    /// A range covering whole clusters draws exactly the columns it crosses.
+    #[test]
+    fn a_move_over_whole_clusters_draws_what_it_crosses() {
+        let line = wide_line();
+        let mut out = Vec::new();
+        assert!(collect_overwrite_bytes(
+            &mut out,
+            &line,
+            &Style::default(),
+            0,
+            6
+        ));
+        // Three clusters of two columns each, and nothing for the
+        // continuations, which the clusters already account for.
+        assert_eq!(String::from_utf8_lossy(&out), "\u{4e16}\u{4e16}\u{4e16}");
+    }
+}
+
+#[cfg(test)]
+mod passes_agree {
+    use super::*;
+    use crate::ansi::cost::overwrite_cost;
+
+    /// Cells covering the shapes the planner meets: narrow, wide with its
+    /// continuation, and clusters of several code points.
+    fn cells() -> Vec<Cell> {
+        vec![
+            Cell::narrow("a"),
+            Cell::wide("\u{4e16}"),
+            Cell::continuation(),
+            Cell::narrow("b"),
+            Cell::wide("\u{1f1ef}\u{1f1f5}"),
+            Cell::continuation(),
+            Cell::narrow("e\u{301}"),
+            Cell::wide("\u{1f468}\u{200d}\u{1f469}"),
+            Cell::continuation(),
+            Cell::narrow("c"),
+            // Owns a column and has nothing to write, so drawing it crosses
+            // no columns at all.
+            Cell::narrow(""),
+        ]
+    }
+
+    /// The planner prices this move in one pass and emits it in another. A
+    /// range one accepts and the other refuses makes it choose a move it
+    /// cannot produce, which the assertion in `axis` reports at runtime.
+    #[test]
+    fn the_cost_pass_and_the_emit_pass_accept_the_same_ranges() {
+        let line = cells();
+        let style = Style::default();
+        for from in 0..=line.len() {
+            for to in from..=line.len() {
+                let priced = overwrite_cost(&line, &style, from as u16, to as u16).is_some();
+                let mut out = Vec::new();
+                let emitted =
+                    collect_overwrite_bytes(&mut out, &line, &style, from as u16, to as u16);
+                assert_eq!(
+                    priced, emitted,
+                    "range {from}..{to}: the cost pass says {priced} and the emit pass says {emitted}"
+                );
+            }
+        }
+    }
+
+    /// What the move draws has to span exactly the columns it crosses, or
+    /// the cursor stops somewhere the planner did not record.
+    #[test]
+    fn an_accepted_range_draws_the_columns_it_crosses() {
+        let line = cells();
+        let style = Style::default();
+        for from in 0..=line.len() {
+            for to in from..=line.len() {
+                let mut out = Vec::new();
+                if !collect_overwrite_bytes(&mut out, &line, &style, from as u16, to as u16) {
+                    continue;
+                }
+                let drawn: usize = String::from_utf8_lossy(&out)
+                    .chars()
+                    .map(|c| {
+                        usize::from(
+                            crate::text::WidthMode::Grapheme
+                                .grapheme_width(c.encode_utf8(&mut [0u8; 4]), false),
+                        )
+                    })
+                    .sum();
+                assert_eq!(drawn, to - from, "range {from}..{to} drew {drawn} columns");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod still_useful {
+    use super::*;
+    use crate::ansi::cost::overwrite_cost;
+
+    /// The rules refuse ranges that cut a glyph, not ranges that contain
+    /// one. A wide cell is stepped over together with the continuation it
+    /// owns, so a range covering whole clusters is still priced and still
+    /// emitted.
+    #[test]
+    fn a_range_over_whole_wide_clusters_is_still_offered() {
+        let line = vec![
+            Cell::wide("\u{4e16}"),
+            Cell::continuation(),
+            Cell::wide("\u{754c}"),
+            Cell::continuation(),
+            Cell::narrow("a"),
+        ];
+        let style = Style::default();
+
+        // Both clusters plus the narrow cell.
+        assert_eq!(overwrite_cost(&line, &style, 0, 5), Some(7));
+        let mut out = Vec::new();
+        assert!(collect_overwrite_bytes(&mut out, &line, &style, 0, 5));
+        assert_eq!(String::from_utf8_lossy(&out), "\u{4e16}\u{754c}a");
+
+        // And a single cluster on its own.
+        assert_eq!(overwrite_cost(&line, &style, 0, 2), Some(3));
+    }
+}
+
+#[cfg(test)]
+mod empty_content {
+    use super::*;
+    use crate::ansi::cost::overwrite_cost;
+
+    /// A cell that owns a column and has nothing to write cannot carry the
+    /// cursor across it.
+    ///
+    /// Its content is empty while its width is one, so pricing the move by
+    /// bytes would call it free and drawing it would cross no columns, while
+    /// the planner recorded one crossed. Refusing it keeps what the move
+    /// draws equal to the distance it claims.
+    #[test]
+    fn a_cell_with_nothing_to_write_cannot_carry_the_cursor() {
+        let line = vec![Cell::narrow(""), Cell::narrow("a")];
+        let style = Style::default();
+        assert_eq!(overwrite_cost(&line, &style, 0, 1), None);
+        let mut out = Vec::new();
+        assert!(!collect_overwrite_bytes(&mut out, &line, &style, 0, 1));
     }
 }
