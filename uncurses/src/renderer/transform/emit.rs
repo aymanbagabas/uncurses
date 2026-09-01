@@ -402,3 +402,53 @@ impl Renderer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod cluster_bounds {
+    use super::*;
+
+    /// A row of two-column clusters: column `2n` owns one, `2n + 1`
+    /// continues it.
+    fn line() -> Vec<Cell> {
+        (0..6)
+            .map(|i| {
+                if i % 2 == 0 {
+                    Cell::wide("\u{4e16}")
+                } else {
+                    Cell::continuation()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_column_owning_its_cell_is_already_closed() {
+        let line = line();
+        assert_eq!(cluster_start(&line, 2), 2);
+        assert_eq!(cluster_end(&line, 2), 3);
+    }
+
+    #[test]
+    fn a_continuation_closes_back_to_the_cell_that_owns_it() {
+        let line = line();
+        assert_eq!(cluster_start(&line, 3), 2);
+        assert_eq!(cluster_start(&line, 5), 4);
+    }
+
+    #[test]
+    fn closing_stays_inside_the_row() {
+        let line = line();
+        assert_eq!(cluster_start(&line, 0), 0);
+        assert_eq!(cluster_end(&line, 5), 5);
+        assert_eq!(cluster_start(&[], 3), 0);
+        assert_eq!(cluster_end(&line, 99), 99);
+    }
+
+    /// A row opening on a continuation has no cell to close back to, so the
+    /// walk stops at the edge rather than running off it.
+    #[test]
+    fn a_row_of_continuations_closes_at_the_edge() {
+        let line = vec![Cell::continuation(); 3];
+        assert_eq!(cluster_start(&line, 2), 0);
+    }
+}
