@@ -240,6 +240,22 @@ pub fn write_request_extended_cursor_position<W: Write>(w: &mut W) -> io::Result
     w.write_all(b"\x1b[?6n")
 }
 
+/// The visual shape of the text cursor, independent of whether it blinks.
+///
+/// DECSCUSR interleaves the two: each shape has a blinking and a steady
+/// parameter. [`CursorStyle::new`] combines them, and
+/// [`CursorStyle::shape`] / [`CursorStyle::blinking`] take them apart again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CursorShape {
+    /// A full-cell block.
+    #[default]
+    Block,
+    /// A horizontal underline at the bottom of the cell.
+    Underline,
+    /// A vertical bar at the left of the cell.
+    Bar,
+}
+
 /// Cursor style values for DECSCUSR (`ESC [ Ps SP q`).
 ///
 /// The variants map directly to the numeric `Ps` parameter used by
@@ -258,9 +274,8 @@ pub enum CursorStyle {
     /// whatever that user chose, and terminals do not even agree on the
     /// blink, with kitty and Windows Terminal forcing it on where the
     /// others restore it from configuration too. So this names no shape and
-    /// no blink state, and
-    /// [`CursorShape::from_style`](crate::program::CursorShape::from_style)
-    /// answers `None` for it. Ask with
+    /// no blink state, and [`shape`](CursorStyle::shape) and
+    /// [`blinking`](CursorStyle::blinking) answer `None` for it. Ask with
     /// [`Program::request_cursor_style`](crate::program::Program::request_cursor_style)
     /// when you need to know what the cursor actually is.
     #[default]
@@ -308,6 +323,51 @@ impl CursorStyle {
             5 => CursorStyle::BlinkingBar,
             6 => CursorStyle::SteadyBar,
             _ => return None,
+        })
+    }
+
+    /// The style that draws `shape`, blinking or steady.
+    pub fn new(shape: CursorShape, blinking: bool) -> Self {
+        match (shape, blinking) {
+            (CursorShape::Block, true) => CursorStyle::BlinkingBlock,
+            (CursorShape::Block, false) => CursorStyle::SteadyBlock,
+            (CursorShape::Underline, true) => CursorStyle::BlinkingUnderline,
+            (CursorShape::Underline, false) => CursorStyle::SteadyUnderline,
+            (CursorShape::Bar, true) => CursorStyle::BlinkingBar,
+            (CursorShape::Bar, false) => CursorStyle::SteadyBar,
+        }
+    }
+
+    /// The shape this style draws.
+    ///
+    /// # Returns
+    ///
+    /// `None` for [`CursorStyle::Default`], which defers to the terminal
+    /// rather than naming a shape.
+    pub fn shape(self) -> Option<CursorShape> {
+        Some(match self {
+            CursorStyle::Default => return None,
+            CursorStyle::BlinkingBlock | CursorStyle::SteadyBlock => CursorShape::Block,
+            CursorStyle::BlinkingUnderline | CursorStyle::SteadyUnderline => CursorShape::Underline,
+            CursorStyle::BlinkingBar | CursorStyle::SteadyBar => CursorShape::Bar,
+        })
+    }
+
+    /// Whether this style blinks.
+    ///
+    /// # Returns
+    ///
+    /// `None` for [`CursorStyle::Default`], which defers to the terminal
+    /// rather than choosing.
+    pub fn blinking(self) -> Option<bool> {
+        Some(match self {
+            CursorStyle::Default => return None,
+            CursorStyle::BlinkingBlock
+            | CursorStyle::BlinkingUnderline
+            | CursorStyle::BlinkingBar => true,
+            CursorStyle::SteadyBlock | CursorStyle::SteadyUnderline | CursorStyle::SteadyBar => {
+                false
+            }
         })
     }
 }
@@ -365,6 +425,24 @@ mod tests {
         }
         assert_eq!(CursorStyle::from_param(7), None);
         assert_eq!(CursorStyle::from_param(u32::MAX), None);
+    }
+
+    #[test]
+    fn shape_and_blinking_round_trip_through_a_style() {
+        for shape in [CursorShape::Block, CursorShape::Underline, CursorShape::Bar] {
+            for blinking in [true, false] {
+                let style = CursorStyle::new(shape, blinking);
+                assert_eq!(style.shape(), Some(shape));
+                assert_eq!(style.blinking(), Some(blinking));
+            }
+        }
+    }
+
+    #[test]
+    fn the_terminal_default_names_neither_shape_nor_blink() {
+        // DECSCUSR 0 defers to the terminal, so there is nothing to report.
+        assert_eq!(CursorStyle::Default.shape(), None);
+        assert_eq!(CursorStyle::Default.blinking(), None);
     }
 
     #[test]

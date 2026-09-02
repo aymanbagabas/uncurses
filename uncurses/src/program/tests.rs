@@ -2189,9 +2189,9 @@ fn request_cursor_style_asks_decrqss_for_decscusr() {
 
 #[test]
 fn a_cursor_style_reply_reads_back_in_the_terms_it_was_set_with() {
+    use crate::ansi::cursor::CursorShape;
     use crate::ansi::cursor::CursorStyle;
     use crate::event::SettingReport;
-    use crate::program::CursorShape;
 
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (10, 3));
@@ -2206,8 +2206,8 @@ fn a_cursor_style_reply_reads_back_in_the_terms_it_was_set_with() {
         unreachable!()
     };
     assert_eq!(
-        CursorShape::from_style(style),
-        Some((CursorShape::Bar, false)),
+        (style.shape(), style.blinking()),
+        (Some(CursorShape::Bar), Some(false)),
         "the reply decomposes into the arguments set_cursor_style took"
     );
 }

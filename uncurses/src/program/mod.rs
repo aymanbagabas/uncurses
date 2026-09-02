@@ -63,13 +63,11 @@
 //! [`Terminal`]: crate::terminal::Terminal
 //! [`EventSource`]: crate::event::EventSource
 
-mod cursor;
 mod modes;
 mod state;
 #[cfg(test)]
 mod tests;
 
-pub use cursor::CursorShape;
 pub use state::Capabilities;
 
 use std::collections::VecDeque;
