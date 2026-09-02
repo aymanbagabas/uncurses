@@ -135,10 +135,20 @@ impl RenderBuffer {
     ///
     /// Delegates wide-cell accounting to [`Buffer::set`]. If the new
     /// value equals the existing cell, no touched span is recorded. When
-    /// a wide cell is overwritten by a narrower cell, the touched span is
-    /// widened to cover stale continuation columns.
+    /// a wide cell is overwritten by a narrower cell, the touched span
+    /// covers the whole cluster being broken, both the column written and
+    /// the primary to its left that the write blanks.
+    ///
+    /// A continuation is placed by the cell that owns it, so [`Buffer::set`]
+    /// ignores one arriving on its own and this records no damage for it.
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
         let pos = pos.into();
+        // The buffer leaves the column as its owner wrote it, so there is
+        // nothing for the diff to look at.
+        if cell.is_continuation() {
+            return;
+        }
+
         let existing = self.buffer.cell(pos);
         let changed = existing.is_none_or(|e| e != cell);
 
@@ -146,12 +156,18 @@ impl RenderBuffer {
             let new_width = cell.width().max(1) as u16;
             let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
             let width = new_width.max(prev_width);
+            // Writing over a continuation blanks the primary one column to
+            // the left, so the damage starts there. Recording only the
+            // column written would leave the diff blind to half of what the
+            // buffer changed.
+            let first_col = if existing.is_some_and(Cell::is_continuation) && pos.x > 0 {
+                pos.x - 1
+            } else {
+                pos.x
+            };
             self.buffer.set(pos, cell);
-            // Touch the range of columns this cell occupies, extending
-            // to cover any wider cell being overwritten so the touched
-            // span includes the orphaned continuation column(s).
             let end_col = pos.x + width - 1;
-            self.touch_line(pos.y, pos.x, end_col);
+            self.touch_line(pos.y, first_col, end_col);
         }
     }
 

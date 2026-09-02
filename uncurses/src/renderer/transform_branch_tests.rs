@@ -397,3 +397,97 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
         std::str::from_utf8(&out)
     );
 }
+
+/// A frame whose first difference is a continuation still reaches the wire.
+///
+/// The column scan can stop on the second half of a cluster. Emission places
+/// the cursor at that column, and a continuation writes no bytes and moves no
+/// cursor, so the run was dropped and the terminal kept the frame before it.
+/// Closing the run back to the cell that owns the column re-emits the whole
+/// cluster instead.
+#[test]
+fn a_difference_on_a_continuation_re_emits_its_cluster() {
+    let mut renderer = Renderer::new();
+    renderer.set_optimizations(Optimizations::none());
+    let mut buf = RenderBuffer::new(24, 1);
+    for x in (0..24).step_by(2) {
+        buf.set_cell((x, 0), &Cell::wide("\u{4e16}"));
+    }
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+
+    // Disturb a continuation and leave its lead alone. Reaching the row
+    // directly is the only way there, because `set` leaves a continuation to
+    // the cluster that owns it.
+    if let Some(line) = buf.line_mut(0) {
+        line[13] = Cell::continuation().style(Style::default().bg(Color::Red));
+    }
+    buf.touch_line(0, 13, 13);
+
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains('\u{4e16}'),
+        "the cluster owning column 13 never reached the terminal: {text:?}"
+    );
+}
+
+/// An insert begins past the cluster that owns the column it starts from.
+///
+/// The walk that finds where two rows diverge steps one column at a time and
+/// stops at column zero, so it can come to rest on the second half of a
+/// glyph. Inserting there starts inside that glyph and destroys it.
+#[test]
+fn an_insert_starts_past_the_cluster_that_owns_its_column() {
+    let mut renderer = Renderer::new();
+    renderer.set_optimizations(Optimizations::none());
+    let mut buf = RenderBuffer::new(8, 1);
+    buf.set_cell((0, 0), &Cell::wide("\u{4e16}"));
+    buf.set_cell((2, 0), &Cell::narrow("a"));
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+
+    // A second cluster appears, pushing the narrow cell right. The walk back
+    // from the divergence at column 2 runs to column 0, which is a lead.
+    buf.set_cell((2, 0), &Cell::wide("\u{4e16}"));
+    buf.set_cell((4, 0), &Cell::narrow("a"));
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+
+    // The row the terminal ends up with has to hold both clusters, so two
+    // glyphs have to go out. One means the insert landed inside the first.
+    let text = String::from_utf8_lossy(&out);
+    assert_eq!(
+        text.matches('\u{4e16}').count(),
+        2,
+        "expected both clusters on the wire: {text:?}"
+    );
+}
+
+/// A row whose first column continues nothing still renders.
+///
+/// Shifting a row left can carry a wide cell off the edge and leave the
+/// continuation it owned at column zero. The library documents such a row as
+/// something a resize can produce, so the emitter meets one rather than
+/// declaring it impossible.
+#[test]
+fn a_row_opening_on_an_unowned_continuation_renders() {
+    let mut renderer = Renderer::new();
+    renderer.set_optimizations(Optimizations::none());
+    let mut buf = RenderBuffer::new(10, 1);
+    for x in (0..10).step_by(2) {
+        buf.set_cell((x, 0), &Cell::wide("\u{4e16}"));
+    }
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+
+    // The lead falls off the row and its continuation lands at column zero.
+    buf.delete_cells((0u16, 0u16), 1, 10, &Cell::BLANK);
+    let mut out = Vec::new();
+    renderer.render(&mut out, &mut buf).unwrap();
+    assert!(
+        String::from_utf8_lossy(&out).contains('\u{4e16}'),
+        "the row after the shift never reached the terminal"
+    );
+}
