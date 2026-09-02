@@ -46,6 +46,27 @@ impl<I: Input, O: Write> Program<I, O> {
         self.screen.flush()
     }
 
+    /// Hand the cursor style back to the terminal (`DECSCUSR` parameter 0)
+    /// and flush.
+    ///
+    /// Every terminal surveyed for this reads its own configuration here:
+    /// kitty, foot, rio, Alacritty, wezterm, VTE, Konsole and Windows
+    /// Terminal all restore the shape their user chose. xterm documents the
+    /// parameter as a blinking block instead, so what appears is the
+    /// terminal's to decide either way.
+    ///
+    /// That makes this the portable way to undo
+    /// [`set_cursor_style`](Self::set_cursor_style) without knowing what
+    /// came before. To put back the cursor *this session* found rather than
+    /// the one the user configured, read it with
+    /// [`request_cursor_style`](Self::request_cursor_style) before changing
+    /// it and set that style again.
+    pub fn reset_cursor_style(&mut self) -> io::Result<()> {
+        cursor::write_cursor_style(&mut self.screen, CursorStyle::Default)?;
+        self.state.cursor_style = CursorStyle::Default;
+        self.screen.flush()
+    }
+
     /// Ring the terminal bell (`BEL`) and flush.
     pub fn beep(&mut self) -> io::Result<()> {
         self.screen.write_all(b"\x07")?;
