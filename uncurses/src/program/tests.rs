@@ -2211,3 +2211,24 @@ fn a_cursor_style_reply_reads_back_in_the_terms_it_was_set_with() {
         "the reply decomposes into the arguments set_cursor_style took"
     );
 }
+
+#[test]
+fn reset_cursor_style_hands_the_cursor_back() {
+    use crate::ansi::cursor::CursorShape;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.set_cursor_style(CursorShape::Bar, true).unwrap();
+    buf.borrow_mut().clear();
+
+    program.reset_cursor_style().unwrap();
+    assert_eq!(buf.borrow().as_slice(), b"\x1b[0 q");
+
+    // Teardown re-emits only for a style this session set, and the cursor
+    // is already back, so there is nothing left to undo.
+    buf.borrow_mut().clear();
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
+    let out = String::from_utf8_lossy(&buf.borrow()).into_owned();
+    assert!(!out.contains(" q"), "teardown repeated the reset: {out:?}");
+}
