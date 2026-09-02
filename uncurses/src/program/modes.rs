@@ -898,6 +898,29 @@ impl<I: Input, O: Write> Program<I, O> {
         self.screen.flush()
     }
 
+    /// Request the current cursor style (DECRQSS for `DECSCUSR`). Reply:
+    /// [`Event::SettingReport`](crate::event::Event::SettingReport) carrying
+    /// [`SettingReport::CursorStyle`](crate::event::SettingReport::CursorStyle).
+    ///
+    /// The reply says what the cursor is *now*, so ask before changing it if
+    /// you mean to put it back. Teardown writes
+    /// [`CursorStyle::Default`](crate::ansi::cursor::CursorStyle::Default),
+    /// which returns the cursor the terminal's user configured; keeping the
+    /// one this session found is yours to do, because only you know when you
+    /// asked.
+    ///
+    /// A terminal that does not implement DECRQSS may answer
+    /// [`SettingReport::Unrecognized`](crate::event::SettingReport::Unrecognized)
+    /// or stay silent, so treat the reply as optional.
+    ///
+    /// Pair it with [`CursorShape::from_style`](super::CursorShape::from_style)
+    /// to read the answer in the same terms
+    /// [`set_cursor_style`](Self::set_cursor_style) takes.
+    pub fn request_cursor_style(&mut self) -> io::Result<()> {
+        crate::ansi::status::write_decrqss(&mut self.screen, " q")?;
+        self.screen.flush()
+    }
+
     /// Request the current color scheme (`CSI ? 996 n`): whether the
     /// terminal's scheme is dark or light. This reports only the dark/light
     /// preference, not the actual colors. Reply:

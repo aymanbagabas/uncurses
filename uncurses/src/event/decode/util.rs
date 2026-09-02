@@ -22,7 +22,7 @@
 //! Windows surrogate state live on the decoder impls instead.
 use crate::event::{Event, Key, KeyCode, KeyModifiers, decode::DecoderFlags};
 
-pub(super) use crate::ansi::params::Params;
+pub(super) use crate::ansi::params::{ControlSequence, Params};
 
 /// Decode an ASCII hex byte string (e.g. `"61"` → `b"a"`). Returns `None` if
 /// the input has an odd length or contains a non-hex byte.

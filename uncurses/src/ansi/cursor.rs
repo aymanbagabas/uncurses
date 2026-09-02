@@ -246,7 +246,23 @@ pub fn write_request_extended_cursor_position<W: Write>(w: &mut W) -> io::Result
 /// [`write_cursor_style`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CursorStyle {
-    /// Use terminal default cursor style, DECSCUSR parameter `0`.
+    /// Terminal default, DECSCUSR parameter `0`.
+    ///
+    /// Writing this asks the terminal for the cursor its user configured.
+    /// kitty, foot, rio, Alacritty, VTE, Konsole and Windows Terminal all
+    /// read the shape back from configuration here, so it is the way to
+    /// hand the cursor back at the end of a session. xterm documents `0` as
+    /// a blinking block instead, which matches none of them.
+    ///
+    /// What it draws is therefore not knowable from the parameter: it is
+    /// whatever that user chose, and terminals do not even agree on the
+    /// blink, with kitty and Windows Terminal forcing it on where the
+    /// others restore it from configuration too. So this names no shape and
+    /// no blink state, and
+    /// [`CursorShape::from_style`](crate::program::CursorShape::from_style)
+    /// answers `None` for it. Ask with
+    /// [`Program::request_cursor_style`](crate::program::Program::request_cursor_style)
+    /// when you need to know what the cursor actually is.
     #[default]
     Default,
     /// Blinking block cursor, DECSCUSR parameter `1`.
@@ -274,6 +290,25 @@ impl CursorStyle {
             CursorStyle::BlinkingBar => 5,
             CursorStyle::SteadyBar => 6,
         }
+    }
+
+    /// The style a DECSCUSR parameter selects.
+    ///
+    /// # Returns
+    ///
+    /// `None` for a parameter outside `0..=6`, which selects no style this
+    /// library knows. Used to read the style back out of a DECRPSS reply.
+    pub fn from_param(n: u32) -> Option<Self> {
+        Some(match n {
+            0 => CursorStyle::Default,
+            1 => CursorStyle::BlinkingBlock,
+            2 => CursorStyle::SteadyBlock,
+            3 => CursorStyle::BlinkingUnderline,
+            4 => CursorStyle::SteadyUnderline,
+            5 => CursorStyle::BlinkingBar,
+            6 => CursorStyle::SteadyBar,
+            _ => return None,
+        })
     }
 }
 
@@ -312,6 +347,25 @@ pub fn write_backtab<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_style_round_trips_its_parameter() {
+        // `from_param` reads back what DECSCUSR wrote, which is what makes a
+        // DECRPSS reply decodable.
+        for style in [
+            CursorStyle::Default,
+            CursorStyle::BlinkingBlock,
+            CursorStyle::SteadyBlock,
+            CursorStyle::BlinkingUnderline,
+            CursorStyle::SteadyUnderline,
+            CursorStyle::BlinkingBar,
+            CursorStyle::SteadyBar,
+        ] {
+            assert_eq!(CursorStyle::from_param(style.param() as u32), Some(style));
+        }
+        assert_eq!(CursorStyle::from_param(7), None);
+        assert_eq!(CursorStyle::from_param(u32::MAX), None);
+    }
 
     #[test]
     fn test_cup_origin() {

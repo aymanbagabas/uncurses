@@ -20,7 +20,10 @@
 //! making the whole reply fail.
 use super::Decoder;
 use super::result::ParseResult;
-use super::util::{decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len};
+use super::util::{
+    ControlSequence, decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len,
+};
+use crate::ansi::cursor::CursorStyle;
 use crate::event::{Event, SettingReport};
 
 impl Decoder {
@@ -43,41 +46,28 @@ impl Decoder {
 
 /// Builtin DCS recogniser: XTGETTCAP, DECRPSS, XTVersion, tertiary DA.
 ///
-/// Splits the payload into its private prefix / parameter / intermediate /
-/// final-byte / data regions and matches the known reply shapes. Returns
-/// `None` for anything unrecognised or malformed so the caller falls back
-/// to [`Event::UnknownDcs`].
+/// Reads the command section with [`ControlSequence`] and matches the known
+/// reply shapes. Returns `None` for anything unrecognised or malformed so
+/// the caller falls back to [`Event::UnknownDcs`].
 fn recognize(payload: &[u8]) -> Option<Event> {
-    let (private, head_start) = match payload.first() {
-        Some(&b) if matches!(b, b'?' | b'<' | b'>' | b'=') => (Some(b), 1),
-        _ => (None, 0),
-    };
-    let mut i = head_start;
-    let final_pos = loop {
-        let b = *payload.get(i)?;
-        if (0x40..=0x7e).contains(&b) {
-            break i;
-        }
-        if !((0x30..=0x3f).contains(&b) || (0x20..=0x2f).contains(&b) || b == b';' || b == b':') {
-            return None;
-        }
-        i += 1;
-    };
-    let head = &payload[head_start..final_pos];
-    let mid = head
-        .iter()
-        .position(|&x| (0x20..=0x2f).contains(&x))
-        .unwrap_or(head.len());
-    let (params_raw, intermediates) = head.split_at(mid);
-    let final_byte = payload[final_pos];
-    let data = &payload[final_pos + 1..];
+    // A DCS carries a command section shaped exactly like a CSI body, then
+    // its payload, so the same parser reads the header here and the setting
+    // a DECRPSS reply spells out below.
+    let (seq, data) = ControlSequence::parse(payload)?;
+    let private = seq.private();
+    let params_raw = seq.params().raw();
+    let intermediate = seq.intermediate();
+    let final_byte = seq.final_byte();
 
     // XTGETTCAP response: DCS 1 + r Pt ST (valid) / DCS 0 + r Pt ST
     // (failure). Pt is `cap_hex=value_hex` pairs separated by `;`. The
     // payload is decoded the same way in both cases (a failure echoes the
     // requested, now known-unsupported, cap names); `recognized` carries
     // the 1-vs-0 distinction so a failure is reported rather than dropped.
-    if intermediates == b"+" && final_byte == b'r' && (params_raw == b"1" || params_raw == b"0") {
+    if intermediate == Some(b'+')
+        && final_byte == b'r'
+        && (params_raw == b"1" || params_raw == b"0")
+    {
         return Some(Event::Termcap {
             recognized: params_raw == b"1",
             entries: decode_termcap_payload(data),
@@ -92,9 +82,12 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     // VT510 manual documents 0 as valid and 1 as invalid, and it is wrong:
     // testing a VT420 in 1996 showed the two reversed, and vttest, DEC STD
     // 070 and xterm all agree that 1 is the valid one.
-    if (params_raw == b"1" || params_raw == b"0") && intermediates == b"$" && final_byte == b'r' {
+    if (params_raw == b"1" || params_raw == b"0")
+        && intermediate == Some(b'$')
+        && final_byte == b'r'
+    {
         return Some(Event::SettingReport(if params_raw == b"1" {
-            SettingReport::Raw(String::from_utf8_lossy(data).into_owned())
+            recognize_setting(data)
         } else {
             SettingReport::Unrecognized
         }));
@@ -111,7 +104,7 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     // hex-encoded byte string identifying the terminal; decode it so the
     // event carries the raw identifier bytes (as a UTF-8 string when
     // possible, otherwise the lossy decoding).
-    if intermediates == b"!" && final_byte == b'|' {
+    if intermediate == Some(b'!') && final_byte == b'|' {
         let decoded = match hex_decode(data) {
             Some(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             None => String::from_utf8_lossy(data).into_owned(),
@@ -120,4 +113,31 @@ fn recognize(payload: &[u8]) -> Option<Event> {
     }
 
     None
+}
+
+/// Decode the setting a valid DECRPSS reply carries.
+///
+/// The reply spells the control function out the way a CSI would, without
+/// the introducer, so `2 q` is the terminal reporting a steady block for
+/// DECSCUSR. Anything this does not recognize is handed back verbatim.
+fn recognize_setting(data: &[u8]) -> SettingReport {
+    let raw = || SettingReport::Raw(String::from_utf8_lossy(data).into_owned());
+    let Some((seq, rest)) = ControlSequence::parse(data) else {
+        return raw();
+    };
+    // A setting is the whole reply. Anything left over means this was read
+    // as something it is not.
+    if !rest.is_empty() {
+        return raw();
+    }
+    match (seq.private(), seq.intermediate(), seq.final_byte()) {
+        // DECSCUSR: CSI Ps SP q. A reply states the current setting, so an
+        // omitted parameter is not expected here; read as 0, the terminal
+        // default. Terminals do not agree on that reading when *setting* a
+        // style: kitty and Konsole take a bare `CSI SP q` as a blinking
+        // block, while foot, VTE and Windows Terminal take it as 0.
+        (None, Some(b' '), b'q') => CursorStyle::from_param(seq.params().get_or(0, 0))
+            .map_or_else(raw, SettingReport::CursorStyle),
+        _ => raw(),
+    }
 }
