@@ -23,11 +23,13 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
     while start > 0 && line[start].is_continuation() {
         start -= 1;
     }
-    // A continuation can reach the left edge without meeting a cell that
-    // owns it, which `Buffer::resize` and the shifting operations can both
-    // leave behind. It belongs to no cluster, so it stands as its own column
-    // rather than being folded into one that is not there.
-    if line.get(start).is_some_and(Cell::is_continuation) {
+    // Only a wide cell owns the columns past itself, so a walk that ends
+    // anywhere else ends on a continuation nothing owns: the left edge, which
+    // `Buffer::resize` and the shifting operations both leave behind, or a
+    // narrow cell that `delete_cells` shifted in beside one. Either way it
+    // belongs to no cluster and stands as its own column rather than being
+    // folded into one that is not there.
+    if start != here && !line[start].is_wide() {
         return here;
     }
     start
@@ -39,11 +41,23 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
 /// continuations lie past it would cover part of a glyph, and which end a
 /// change exposes depends on the direction it grew in, so both are closed.
 pub(super) fn cluster_end(line: &[Cell], at: usize) -> usize {
-    let mut at = at;
-    while at + 1 < line.len() && line[at + 1].is_continuation() {
-        at += 1;
+    // The mirror of the ownership rule above. A cell that is not wide draws
+    // one column and owns nothing past itself, so its cluster ends on it even
+    // when a continuation nothing owns follows. A wide cell owns exactly the
+    // columns its width accounts for and no more, so the walk stops there
+    // rather than swallowing a continuation past the pair.
+    let Some(cell) = line.get(at) else {
+        return at;
+    };
+    if !cell.is_wide() {
+        return at;
     }
-    at
+    let owned = at + usize::from(cell.width()) - 1;
+    let mut end = at;
+    while end < owned && end + 1 < line.len() && line[end + 1].is_continuation() {
+        end += 1;
+    }
+    end
 }
 
 impl Renderer {
@@ -445,6 +459,36 @@ mod cluster_bounds {
                 }
             })
             .collect()
+    }
+
+    /// Only a wide cell owns the column to its right. `delete_cells`
+    /// shifting a row left past a wide lead leaves its continuation beside
+    /// whatever narrow cell now precedes it, and neither helper may credit
+    /// that narrow cell with a two-column cluster.
+    #[test]
+    fn a_narrow_cell_does_not_own_a_following_continuation() {
+        let line = vec![Cell::narrow("a"), Cell::continuation()];
+        assert_eq!(cluster_start(&line, 1), 1);
+        assert_eq!(cluster_end(&line, 0), 0);
+    }
+
+    /// A wide cell owns the columns its width accounts for and no more, so a
+    /// continuation past the pair belongs to no cluster and the close stops
+    /// short of it. `Buffer::resize` and the row shifts both leave such a row.
+    #[test]
+    fn a_cluster_closes_on_the_columns_its_owner_accounts_for() {
+        let chained = vec![
+            Cell::wide("\u{4e16}"),
+            Cell::continuation(),
+            Cell::continuation(),
+        ];
+        assert_eq!(
+            cluster_end(&chained, 0),
+            1,
+            "the pair, not the orphan past it"
+        );
+        assert_eq!(cluster_end(&chained, 1), 1, "already the last owned column");
+        assert_eq!(cluster_end(&chained, 2), 2, "an orphan stands alone");
     }
 
     #[test]

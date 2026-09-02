@@ -60,9 +60,10 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
             // Matches the cost pass: the cell has to draw the columns the
             // row credits it with, and it has to hold one code point.
             let content = cell.content();
-            if usize::from(crate::text::WidthMode::Grapheme.grapheme_width(content, false))
-                != usize::from(cell.width().max(1))
-            {
+            if !crate::ansi::cost::crossable_under_every_policy(
+                content,
+                usize::from(cell.width().max(1)),
+            ) {
                 return false;
             }
             let mut code_points = content.chars();
