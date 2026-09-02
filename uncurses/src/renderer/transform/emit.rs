@@ -23,11 +23,13 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
     while start > 0 && line[start].is_continuation() {
         start -= 1;
     }
-    // A continuation can reach the left edge without meeting a cell that
-    // owns it, which `Buffer::resize` and the shifting operations can both
-    // leave behind. It belongs to no cluster, so it stands as its own column
-    // rather than being folded into one that is not there.
-    if line.get(start).is_some_and(Cell::is_continuation) {
+    // Only a wide cell owns the columns past itself, so a walk that ends
+    // anywhere else ends on a continuation nothing owns: the left edge, which
+    // `Buffer::resize` and the shifting operations both leave behind, or a
+    // narrow cell that `delete_cells` shifted in beside one. Either way it
+    // belongs to no cluster and stands as its own column rather than being
+    // folded into one that is not there.
+    if start != here && !line[start].is_wide() {
         return here;
     }
     start
@@ -39,6 +41,12 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
 /// continuations lie past it would cover part of a glyph, and which end a
 /// change exposes depends on the direction it grew in, so both are closed.
 pub(super) fn cluster_end(line: &[Cell], at: usize) -> usize {
+    // The mirror of the ownership rule above: a cell that is not wide draws
+    // one column and owns nothing past itself, so its cluster ends on it even
+    // when a continuation nothing owns follows.
+    if !line.get(at).is_some_and(Cell::is_wide) {
+        return at;
+    }
     let mut at = at;
     while at + 1 < line.len() && line[at + 1].is_continuation() {
         at += 1;
@@ -445,6 +453,17 @@ mod cluster_bounds {
                 }
             })
             .collect()
+    }
+
+    /// Only a wide cell owns the column to its right. `delete_cells`
+    /// shifting a row left past a wide lead leaves its continuation beside
+    /// whatever narrow cell now precedes it, and neither helper may credit
+    /// that narrow cell with a two-column cluster.
+    #[test]
+    fn a_narrow_cell_does_not_own_a_following_continuation() {
+        let line = vec![Cell::narrow("a"), Cell::continuation()];
+        assert_eq!(cluster_start(&line, 1), 1);
+        assert_eq!(cluster_end(&line, 0), 0);
     }
 
     #[test]
