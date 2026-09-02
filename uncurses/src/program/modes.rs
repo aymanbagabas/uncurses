@@ -19,7 +19,7 @@ use crate::event::Input;
 use super::MouseTracking;
 use super::Program;
 use super::ProgressState;
-use super::cursor::CursorShape;
+use crate::ansi::cursor::{CursorShape, CursorStyle};
 
 /// DEC private modes for the mouse tracking modes and encodings this
 /// library supports. Reset together to unconditionally turn mouse
@@ -40,7 +40,7 @@ impl<I: Input, O: Write> Program<I, O> {
     ///   [`Underline`](CursorShape::Underline), or [`Bar`](CursorShape::Bar)).
     /// * `blinking` — whether the cursor blinks.
     pub fn set_cursor_style(&mut self, shape: CursorShape, blinking: bool) -> io::Result<()> {
-        let style = shape.style(blinking);
+        let style = CursorStyle::new(shape, blinking);
         cursor::write_cursor_style(&mut self.screen, style)?;
         self.state.cursor_style = style;
         self.screen.flush()
@@ -903,8 +903,7 @@ impl<I: Input, O: Write> Program<I, O> {
     /// [`SettingReport::CursorStyle`](crate::event::SettingReport::CursorStyle).
     ///
     /// The reply says what the cursor is *now*, so ask before changing it if
-    /// you mean to put it back. Teardown writes
-    /// [`CursorStyle::Default`](crate::ansi::cursor::CursorStyle::Default),
+    /// you mean to put it back. Teardown writes [`CursorStyle::Default`],
     /// which returns the cursor the terminal's user configured; keeping the
     /// one this session found is yours to do, because only you know when you
     /// asked.
@@ -913,8 +912,8 @@ impl<I: Input, O: Write> Program<I, O> {
     /// [`SettingReport::Unrecognized`](crate::event::SettingReport::Unrecognized)
     /// or stay silent, so treat the reply as optional.
     ///
-    /// Pair it with [`CursorShape::from_style`](super::CursorShape::from_style)
-    /// to read the answer in the same terms
+    /// Read the answer with [`CursorStyle::shape`] and
+    /// [`CursorStyle::blinking`], the same terms
     /// [`set_cursor_style`](Self::set_cursor_style) takes.
     pub fn request_cursor_style(&mut self) -> io::Result<()> {
         crate::ansi::status::write_decrqss(&mut self.screen, " q")?;
