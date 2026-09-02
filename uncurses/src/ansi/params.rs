@@ -2,9 +2,11 @@
 //!
 //! ## Category
 //!
-//! [`Params`] and [`Group`] expose the bytes between a control-sequence
-//! introducer and its final byte. They handle semicolon-separated parameters and
-//! colon-separated subparameters without allocating.
+//! [`ControlSequence`] splits a sequence into the regions ECMA-48 names:
+//! parameter bytes, intermediate bytes, and the final byte that identifies
+//! the control function. [`Params`] and [`Group`] then walk the parameter
+//! region, handling semicolon-separated parameters and colon-separated
+//! subparameters without allocating.
 //!
 //! ## Parameter grammar
 //!
@@ -236,6 +238,108 @@ fn is_colon(b: &u8) -> bool {
     *b == b':'
 }
 
+/// A control sequence as ECMA-48 5th edition section 5.4 defines it:
+/// parameter bytes, intermediate bytes, and a final byte identifying the
+/// control function.
+///
+/// The introducer is not part of this view. Section 5.4 counts it as part of
+/// the sequence, but leaving it out is what lets one type serve every place
+/// the shape appears: a CSI body, the command section a DCS carries before
+/// its payload, and the setting a DECRPSS reply spells out with no
+/// introducer at all.
+///
+/// ```text
+/// ? 2 0 4 8  h          $ r          2  SP q
+/// ┬ ───┬──── ┬          ┬ ┬          ┬  ─┬ ┬
+/// │  params  final      │ final      │   │ final
+/// private               intermediate │   intermediate
+///                                  params
+/// ```
+#[derive(Copy, Clone, Debug)]
+pub struct ControlSequence<'a> {
+    private: Option<u8>,
+    params: Params<'a>,
+    intermediate: Option<u8>,
+    final_byte: u8,
+}
+
+impl<'a> ControlSequence<'a> {
+    /// Parse a leading control sequence and return it with the bytes that
+    /// follow its final byte.
+    ///
+    /// The tail is empty for a CSI body, which ends at the final byte, and
+    /// carries the payload for a DCS. A caller that expects nothing to follow
+    /// checks that for itself.
+    ///
+    /// # Returns
+    ///
+    /// `None` when `body` holds no final byte, when a byte falls outside the
+    /// region it appears in, or when more than one intermediate is present.
+    /// Every control function in use carries at most one, so a second means
+    /// this is not a sequence worth recognizing.
+    pub fn parse(body: &'a [u8]) -> Option<(Self, &'a [u8])> {
+        let (private, rest) = match body.first() {
+            Some(&b) if (0x3c..=0x3f).contains(&b) => (Some(b), &body[1..]),
+            _ => (None, body),
+        };
+
+        // One scan to the end of the parameter bytes. A single `position`
+        // over a byte range compiles to a tighter search than stepping an
+        // index by hand, which shows up on the long parameter lists SGR
+        // produces.
+        let mid = rest
+            .iter()
+            .position(|&b| !(0x30..=0x3b).contains(&b))
+            .unwrap_or(rest.len());
+        let params = Params::from_raw(&rest[..mid]);
+
+        // What follows is at most one intermediate, then the final byte. A
+        // second intermediate leaves a byte that is not final, so the check
+        // below rejects it.
+        let (intermediate, final_pos) = match rest.get(mid) {
+            Some(&b) if (0x20..=0x2f).contains(&b) => (Some(b), mid + 1),
+            _ => (None, mid),
+        };
+
+        let final_byte = *rest.get(final_pos)?;
+        if !(0x40..=0x7e).contains(&final_byte) {
+            return None;
+        }
+
+        Some((
+            Self {
+                private,
+                params,
+                intermediate,
+                final_byte,
+            },
+            &rest[final_pos + 1..],
+        ))
+    }
+
+    /// The first parameter byte when it falls in the private-use range 03/12
+    /// to 03/15 (`<`, `=`, `>`, `?`), which may only appear there.
+    pub fn private(&self) -> Option<u8> {
+        self.private
+    }
+
+    /// The parameter bytes, as a lazy walker over the `;`-separated list.
+    pub fn params(&self) -> Params<'a> {
+        self.params
+    }
+
+    /// The intermediate byte, from the range 02/00 to 02/15.
+    pub fn intermediate(&self) -> Option<u8> {
+        self.intermediate
+    }
+
+    /// The final byte, from the range 04/00 to 07/14. It identifies the
+    /// control function.
+    pub fn final_byte(&self) -> u8 {
+        self.final_byte
+    }
+}
+
 fn parse_u32(bytes: &[u8]) -> Option<u32> {
     if bytes.is_empty() {
         return None;
@@ -355,5 +459,55 @@ mod tests {
     fn debug_format_matches_flat_list() {
         let p = Params::from_raw(b"1;2");
         assert_eq!(format!("{:?}", p), "[Some(1), Some(2)]");
+    }
+
+    #[test]
+    fn control_sequence_splits_each_region() {
+        // Private prefix, parameters, final byte: DECSET of mode 2048.
+        let (s, rest) = ControlSequence::parse(b"?2048h").unwrap();
+        assert_eq!(s.private(), Some(b'?'));
+        assert_eq!(s.params().get_or(0, 0), 2048);
+        assert_eq!(s.intermediate(), None);
+        assert_eq!(s.final_byte(), b'h');
+        assert!(rest.is_empty());
+
+        // An intermediate, and a parameter that may be omitted: DECSCUSR.
+        let (s, _) = ControlSequence::parse(b"2 q").unwrap();
+        assert_eq!(s.params().get_or(0, 0), 2);
+        assert_eq!(s.intermediate(), Some(b' '));
+        assert_eq!(s.final_byte(), b'q');
+
+        let (s, _) = ControlSequence::parse(b" q").unwrap();
+        assert_eq!(s.params().get_or(0, 0), 0, "an omitted parameter is 0");
+        assert_eq!(s.intermediate(), Some(b' '));
+
+        // Subparameters stay available through `Params`.
+        let (s, _) = ControlSequence::parse(b"38:2::255:100:50m").unwrap();
+        assert_eq!(s.final_byte(), b'm');
+        assert_eq!(s.params().group(0).unwrap().nth(3), Some(255));
+    }
+
+    #[test]
+    fn control_sequence_returns_what_follows_the_final_byte() {
+        // A DCS carries its payload after the command section, which is why
+        // the tail is handed back rather than rejected.
+        let (s, rest) = ControlSequence::parse(b"1$r2 q").unwrap();
+        assert_eq!(s.params().get_or(0, 0), 1);
+        assert_eq!(s.intermediate(), Some(b'$'));
+        assert_eq!(s.final_byte(), b'r');
+        assert_eq!(rest, b"2 q");
+    }
+
+    #[test]
+    fn control_sequence_rejects_what_it_cannot_name() {
+        // No final byte at all.
+        assert!(ControlSequence::parse(b"").is_none());
+        assert!(ControlSequence::parse(b"12").is_none());
+        assert!(ControlSequence::parse(b"2 ").is_none());
+
+        // Two intermediates. Every control function in use carries at most
+        // one, so this is not a sequence worth recognizing. Taking the last
+        // would answer a question that was never asked.
+        assert!(ControlSequence::parse(b"1!!p").is_none());
     }
 }

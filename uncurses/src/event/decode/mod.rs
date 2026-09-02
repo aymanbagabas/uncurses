@@ -41,6 +41,10 @@
 //! bytes are streamed as raw [`Event::PasteChunk`] payloads.
 use super::key::{Key, KeyCode, KeyModifiers};
 mod apc;
+// Benches need the test harness `#[bench]` runs under; without it the
+// functions are stripped and only their helpers would remain.
+#[cfg(all(uncurses_bench, test))]
+mod bench;
 mod csi;
 mod dcs;
 mod escape;
@@ -564,6 +568,7 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ansi::cursor::CursorStyle;
     use crate::color::Color;
     use crate::event::ClipboardSelection;
     use crate::event::ColorScheme;
@@ -1684,11 +1689,11 @@ mod tests {
             evs[0],
             Event::SettingReport(SettingReport::Raw("0;1m".to_string()))
         );
-        // DECSCUSR, whose control function is an intermediate and a final.
+        // DECSCUSR is decoded rather than handed back as a string.
         let evs = p.parse(b"\x1bP1$r2 q\x1b\\");
         assert_eq!(
             evs[0],
-            Event::SettingReport(SettingReport::Raw("2 q".to_string()))
+            Event::SettingReport(SettingReport::CursorStyle(CursorStyle::SteadyBlock))
         );
         // XTQMODKEYS, whose private prefix is what tells it apart from SGR.
         let evs = p.parse(b"\x1bP1$r>4;2m\x1b\\");
@@ -1699,6 +1704,33 @@ mod tests {
         // The unrecognized form carries no data at all.
         let evs = p.parse(b"\x1bP0$r\x1b\\");
         assert_eq!(evs[0], Event::SettingReport(SettingReport::Unrecognized));
+    }
+
+    #[test]
+    fn test_dcs_decrqss_cursor_style_edges() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+
+        // An omitted DECSCUSR parameter means 0, the terminal's default.
+        let evs = p.parse(b"\x1bP1$r q\x1b\\");
+        assert_eq!(
+            evs[0],
+            Event::SettingReport(SettingReport::CursorStyle(CursorStyle::Default))
+        );
+
+        // A parameter outside 0..=6 names no style we know, so the reply is
+        // handed back rather than coerced into one.
+        let evs = p.parse(b"\x1bP1$r9 q\x1b\\");
+        assert_eq!(
+            evs[0],
+            Event::SettingReport(SettingReport::Raw("9 q".to_string()))
+        );
+
+        // Every style the terminal can name decodes.
+        let evs = p.parse(b"\x1bP1$r5 q\x1b\\");
+        assert_eq!(
+            evs[0],
+            Event::SettingReport(SettingReport::CursorStyle(CursorStyle::BlinkingBar))
+        );
     }
 
     #[test]
