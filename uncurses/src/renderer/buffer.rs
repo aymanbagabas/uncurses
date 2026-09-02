@@ -148,6 +148,13 @@ impl RenderBuffer {
         if cell.is_continuation() {
             return;
         }
+        // `Buffer::set` ignores a write outside the grid, and the damage has
+        // to agree with it. `cell` answers `None` there, which reads as
+        // changed, so the span would be recorded for a row nothing wrote to,
+        // and `pos.x + width` can overflow reaching it.
+        if pos.y >= self.height() || pos.x >= self.width() {
+            return;
+        }
 
         let existing = self.buffer.cell(pos);
         let changed = existing.is_none_or(|e| e != cell);
@@ -458,6 +465,34 @@ mod tests {
 
         assert_ne!(before, after, "precondition: the primary was blanked");
         assert_eq!(span.first, 0, "damage must reach the primary it blanked");
+    }
+
+    /// `Buffer::set` ignores a write outside the grid, so the damage must
+    /// too. Without the bounds check the span is recorded for a row nothing
+    /// wrote to, and a column near `u16::MAX` overflows computing `end_col`.
+    #[test]
+    fn a_write_outside_the_grid_records_no_damage() {
+        let mut rb = RenderBuffer::new(6, 1);
+        // Fill the row with continuations so the back-walk would run if the
+        // guard above it ever let an out-of-bounds position through.
+        rb.set_cell((0, 0), &Cell::wide("\u{4e16}"));
+        for x in 2..6 {
+            rb.buffer.line_mut(0).unwrap()[x] = Cell::continuation();
+        }
+        rb.clear_touched();
+
+        // x past the right edge, y in bounds: the exact shape the review names.
+        rb.set_cell((6, 0), &Cell::narrow("A"));
+        rb.set_cell((100, 0), &Cell::narrow("A"));
+        rb.set_cell((u16::MAX, 0), &Cell::narrow("A"));
+        assert!(
+            !rb.has_changes(),
+            "an out-of-bounds write must change nothing"
+        );
+
+        // y past the bottom edge too.
+        rb.set_cell((0, 9), &Cell::narrow("A"));
+        assert!(!rb.has_changes());
     }
 
     #[test]
