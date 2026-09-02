@@ -180,7 +180,14 @@ impl RenderBuffer {
                 pos.x
             };
             self.buffer.set(pos, cell);
-            let end_col = pos.x + width - 1;
+            // `Buffer::set` truncates a cell that does not fit, so the span
+            // must not claim a column the row does not have either. The
+            // saturating add is what keeps a row as wide as `u16` can
+            // describe from overflowing on the way to that clamp.
+            let end_col = pos
+                .x
+                .saturating_add(width - 1)
+                .min(self.width().saturating_sub(1));
             self.touch_line(pos.y, first_col, end_col);
         }
     }
@@ -493,6 +500,22 @@ mod tests {
         // y past the bottom edge too.
         rb.set_cell((0, 9), &Cell::narrow("A"));
         assert!(!rb.has_changes());
+    }
+
+    /// `Buffer::set` truncates a wide cell that does not fit, so the damage
+    /// span must not claim the column past it, and the arithmetic reaching
+    /// that clamp must survive the widest row a `u16` can describe.
+    #[test]
+    fn a_span_stops_at_the_last_column_of_the_row() {
+        let mut rb = RenderBuffer::new(6, 1);
+        rb.set_cell((5, 0), &Cell::wide("\u{4e16}"));
+        let span = rb.touched(0).expect("row 0 touched");
+        assert_eq!(span.last, 5, "the span must stop at the last column");
+
+        let mut rb = RenderBuffer::new(u16::MAX, 1);
+        rb.set_cell((u16::MAX - 1, 0), &Cell::wide("\u{4e16}"));
+        let span = rb.touched(0).expect("row 0 touched");
+        assert_eq!(span.last, u16::MAX - 1);
     }
 
     #[test]
