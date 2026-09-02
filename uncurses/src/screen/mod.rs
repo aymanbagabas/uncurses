@@ -203,6 +203,8 @@ impl<W: Write> Screen<W> {
     // --- Drawing -------------------------------------------------------
 
     /// Write `cell` at `pos` in the desired frame.
+    /// A continuation is placed by the wide cell that owns it, so one passed
+    /// here is ignored and the column keeps the value its owner gave it.
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
         self.front_buf.set_cell(pos.into(), cell);
     }

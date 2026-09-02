@@ -104,7 +104,7 @@ impl Renderer {
         // first_cell, but the EL-1 emission also clears columns to the
         // left of first_cell, so copy_from stays at the pre-erase
         // first_cell in that case.
-        let copy_from;
+        let mut copy_from;
         if can_clear_with(leading_blank, self.opts.contains(Optimizations::BCE)) {
             let mut o_first = 0usize;
             if let Some(cur) = cur_line.as_deref() {
@@ -196,6 +196,33 @@ impl Renderer {
             return Ok(None);
         }
 
+        // The scan compares columns, so it can stop on the second half of a
+        // cluster: a continuation whose lead matched. Emission begins by
+        // placing the cursor at this column, and a continuation writes no
+        // bytes and moves no cursor, so the next glyph would go out a column
+        // to the left of where it belongs. Backing up to the column that
+        // owns the cell re-emits the whole cluster instead.
+        //
+        // `copy_from` follows, because the wrapper mirrors
+        // `new_line[copy_from..]` into the back buffer. Left where it was,
+        // the re-emitted lead would never be recorded and the same
+        // difference would be found again on every later frame.
+        let owner = super::emit::cluster_start(new_line, first_cell);
+        if owner != first_cell {
+            first_cell = owner;
+            copy_from = copy_from.min(owner);
+        }
+
+        // After the correction above, the leftmost column emission starts
+        // from owns the cell it holds. Every branch below places a cursor
+        // there, and a continuation writes no bytes and moves no cursor.
+        debug_assert!(
+            !new_line[first_cell].is_continuation()
+                || first_cell == 0
+                || !new_line[first_cell - 1].is_wide(),
+            "first_cell {first_cell} on row {y} points at a continuation a cell owns"
+        );
+
         let cur_slice = cur_line.as_deref();
 
         // === Step 2: trailing-uncolorable fast path ===
@@ -218,6 +245,13 @@ impl Renderer {
                     break;
                 }
             }
+            // Close the walk-back over its own cluster. Stopping on the
+            // continuation of a lead that matched leaves the diff blind
+            // to the lead itself: the equal-run scan in `put_range`
+            // starts one column before the continuation, sees a
+            // continuation on both sides, and skips a lead that may
+            // have moved between frames.
+            n_last = super::emit::cluster_end(new_line, n_last);
             if n_last >= first_cell {
                 self.move_to(out, new_buf, y, first_cell as u16)?;
                 self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, n_last)?;
@@ -240,13 +274,30 @@ impl Renderer {
             n_last -= 1;
         }
 
+        // Close the walk-back over the cluster that owns its stopping
+        // point. If the last non-blank column happens to be a lead, its
+        // continuation lies past `n_last`, and every branch below that
+        // treats `n_last + 1` as the cursor's resting column after the
+        // range would name a spot inside the cluster the lead spans.
+        // The mirror of the DCH branch's cursor-off-by-one, at the outer
+        // range boundary.
+        n_last = super::emit::cluster_end(new_line, n_last);
+        if let Some(cur) = cur_slice {
+            o_last = super::emit::cluster_end(cur, o_last);
+        }
+
         let el0 = self.el0_cost();
 
         if n_last == first_cell && el0 < o_last.saturating_sub(n_last) {
             // === Step 4a: single non-blank cell + erase the rest ===
             self.move_to(out, new_buf, y, first_cell as u16)?;
             if &new_line[first_cell] != blank {
-                self.emit_range(out, new_buf, new_line, first_cell, first_cell)?;
+                // The single non-blank column may be the lead of a wide
+                // cluster whose continuation sits at `first_cell + 1`.
+                // Close the range so the emitter sees the whole glyph
+                // and its cursor lands past it, not on the second half.
+                let last = super::emit::cluster_end(new_line, first_cell);
+                self.emit_range(out, new_buf, new_line, first_cell, last)?;
             }
             self.clear_to_end(out, cur_slice, blank, width, false)?;
         } else if n_last != o_last && new_line.get(n_last) != cur_slice.and_then(|c| c.get(o_last))
@@ -303,8 +354,16 @@ impl Renderer {
 
             let n = o_lc.min(n_lc);
             if n >= first_cell as isize {
+                // The walk stops where the rows agree again, which can be a
+                // cell that owns a column past it. `emit_range` draws whole
+                // glyphs, so the run reaches further than `n` and the cursor
+                // rests past the cluster; the insert branch below then
+                // back-shifts over the continuation and draws the same glyph
+                // a second time. Ending on the cluster's own last column
+                // keeps the two in step.
+                let last = super::emit::cluster_end(new_line, n as usize);
                 self.move_to(out, new_buf, y, first_cell as u16)?;
-                self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, n as usize)?;
+                self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, last)?;
             }
 
             if o_lc < n_lc {
@@ -328,14 +387,23 @@ impl Renderer {
                             _ => break,
                         }
                     }
-                } else if n >= first_cell as isize
-                    && cell_at_isize(new_line, n).is_some_and(|c| c.is_wide())
-                {
-                    while cell_at_isize(new_line, n + 1).is_some_and(|c| c.is_continuation()) {
-                        n += 1;
-                        o_lc += 1;
-                    }
                 }
+                // Whichever way the walk went, the insert begins at `n + 1`,
+                // and that column has to own the cell it holds. The
+                // backward walk stops when it reaches column zero, and the
+                // forward walk only ran for a lead, so either can leave the
+                // insert pointing inside a glyph. Stepping past the cluster
+                // moves `o_lc` with it, keeping the two rows in lockstep.
+                while cell_at_isize(new_line, n + 1).is_some_and(|c| c.is_continuation()) {
+                    n += 1;
+                    o_lc += 1;
+                }
+                debug_assert!(
+                    (n + 1) as usize >= new_line.len()
+                        || !new_line[(n + 1) as usize].is_continuation(),
+                    "ICH move_to({}) on row {y} lands inside a cluster",
+                    n + 1
+                );
                 self.move_to(out, new_buf, y, (n + 1) as u16)?;
                 let ich_count = (n_lc - o_lc) as usize;
                 let ich_cost = ansi::cost::ich_cost(ich_count as u16);
@@ -355,24 +423,47 @@ impl Renderer {
                 }
             } else if o_lc > n_lc {
                 // Deletion: new row has fewer non-blank cells than old.
-                self.move_to(out, new_buf, y, (n + 1) as u16)?;
+                //
+                // Wide-cell adjustment: put_range emitted through `n`
+                // in new, and if `new[n]` is a lead, its continuation
+                // was painted too and the cursor rests past it, not at
+                // `n + 1`. Moving to `n + 1` on a lead would step back
+                // into the continuation of a glyph we just wrote, and
+                // a DCH there would cut the glyph in half. Slide the
+                // cursor to the column past the cluster, where the
+                // wide-glyph emission already left it. The mirror of
+                // the ICH branch's back-shift above, taken forward
+                // because deletion pulls content leftward while
+                // insertion pushes it right.
+                let n_effective = if n >= 0 {
+                    super::emit::cluster_end(new_line, n as usize) as isize
+                } else {
+                    n
+                };
+                debug_assert!(
+                    (n_effective + 1) as usize >= new_line.len()
+                        || !new_line[(n_effective + 1) as usize].is_continuation(),
+                    "DCH move_to({}) on row {y} lands inside a cluster",
+                    n_effective + 1
+                );
+                self.move_to(out, new_buf, y, (n_effective + 1) as u16)?;
                 let dch_count = (o_lc - n_lc) as usize;
                 let dch_cost = ansi::cost::dch_cost(dch_count as u16) as isize;
                 let el_cost = ansi::cost::el_cost(0) as isize;
-                let tail = n_last_nonblank as isize - (n + 1);
+                let tail = n_last_nonblank as isize - (n_effective + 1);
                 if !self.opts.contains(Optimizations::DCH) || dch_cost > el_cost + tail {
-                    // (n+1) may exceed n_last_nonblank when the
-                    // walk-back left n_lc at n_last_nonblank; the
-                    // reference relies on Go's signed arithmetic so
-                    // putRange becomes a no-op for the inverted span.
-                    if (n + 1) <= n_last_nonblank as isize {
+                    // (n_effective+1) may exceed n_last_nonblank when
+                    // the cluster covers the last non-blank column;
+                    // signed arithmetic keeps put_range a no-op for an
+                    // inverted span, mirroring the pre-adjustment path.
+                    if (n_effective + 1) <= n_last_nonblank as isize {
                         let eoi = self.put_range(
                             out,
                             new_buf,
                             cur_slice,
                             new_line,
                             y,
-                            (n + 1) as usize,
+                            (n_effective + 1) as usize,
                             n_last_nonblank,
                         )?;
                         if eoi {

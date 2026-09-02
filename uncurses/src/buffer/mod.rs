@@ -302,6 +302,10 @@ impl Buffer {
     ///
     /// # Usage notes
     ///
+    /// A continuation is placed by the wide cell that owns it, as part of
+    /// that cell's own write, so a continuation passed here is ignored and
+    /// the column keeps the value its owner gave it.
+    ///
     /// This is the implementation behind [`SurfaceMut::set_cell`] for
     /// `Buffer`. Use it instead of [`Buffer::cell_mut`] whenever the write
     /// might affect the width or role of neighboring cells.
@@ -317,14 +321,27 @@ impl Buffer {
 
         let line = &mut self.cells[y * width..(y + 1) * width];
 
+        // A continuation is placed by the wide cell to its left, as part of
+        // that cell's own write, so one arriving here has nothing to say
+        // that the owning write did not already say. Ignoring it keeps the
+        // column exactly as its owner left it, which is what a caller
+        // mirroring a buffer cell by cell wants: it walks continuations
+        // because they are in the grid, not because it means to move them.
+        //
+        // Ignoring is also the only safe answer. Storing the cell would let
+        // a column carry a style its owner never had. Blanking it would put
+        // a one-column cell where the owner accounts for two, so the row
+        // would emit more columns than it holds. Refusing loudly would make
+        // a redundant write in an otherwise correct mirror fatal.
+        if cell.is_continuation() {
+            return;
+        }
+
         // If we're overwriting a wide cell's continuation, blank the primary
-        // cell that owns it — but only when the *incoming* cell is not itself
-        // a continuation. A continuation-to-continuation write is a no-op on
-        // the cell's identity (e.g. it happens when a render buffer mirrors
-        // a model buffer cell-by-cell after the primary wide cell has just
-        // been written one column to the left) and must not destroy the
-        // wide cell we are in the middle of mirroring.
-        if x > 0 && line[x].is_continuation() && !cell.is_continuation() {
+        // cell that owns it, so the wide grapheme does not survive with one
+        // half replaced. The branch above already returned for an incoming
+        // continuation, so the cell arriving here is narrow or wide.
+        if x > 0 && line[x].is_continuation() {
             // Walk backward to find the primary cell
             let mut pc = x - 1;
             while pc > 0 && line[pc].is_continuation() {
