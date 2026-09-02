@@ -10,12 +10,17 @@
 //! program through a pty and reads the screen back, so what it asserts is
 //! what a person would see.
 //!
-//! Two oracles, used for different questions:
+//! The screen is the oracle. It is the only one here that answers without
+//! a model of its own: a real terminal consumed the bytes, and what it shows
+//! is what a person would see.
 //!
-//! - the screen, for what the terminal ended up showing
-//! - `UNCURSES_OUTPUT_TRACE`, for the bytes that put it there, one entry per
-//!   flush, which is how a cursor that drifts a column is caught before the
-//!   frame that reveals it
+//! `UNCURSES_OUTPUT_TRACE` is worth reaching for when a test fails, and it
+//! is what found the defect these tests guard. It is not an oracle, though.
+//! The frames it records show a move that keeps the column, which is correct
+//! or not depending on where the cursor already was, and answering that
+//! needs a model of the terminal. A model written here would inherit the
+//! assumptions it is meant to check, which is how an earlier attempt at one
+//! came to pass on code it was written to fail on.
 //!
 //! Every test names the change it guards and describes the shape it needs,
 //! because these reproductions depend on geometry that is easy to lose: the
