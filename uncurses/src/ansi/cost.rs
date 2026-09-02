@@ -238,6 +238,34 @@ pub const fn tab_cost(n: u16) -> usize {
 
 // ---------- Overwrite (re-emit row cells as a forward move) ----------------
 
+/// Whether `content` draws exactly `want` columns however the terminal
+/// measures it.
+///
+/// [`overwrite_cost`] and the emit pass both travel by drawing, and neither
+/// knows the width policy the row was painted under. Refusing a cell whose
+/// width moves with the policy costs a cursor sequence; accepting one lands
+/// the cursor somewhere the planner did not record.
+pub(crate) fn crossable_under_every_policy(content: &str, want: usize) -> bool {
+    use crate::text::WidthMode;
+    // Printable ASCII is one column under every policy, and it is what the
+    // planner meets on nearly every candidate, so answer it without four
+    // table lookups.
+    if want == 1 && content.len() == 1 {
+        let b = content.as_bytes()[0];
+        if b.is_ascii_graphic() || b == b' ' {
+            return true;
+        }
+    }
+    for mode in [WidthMode::Grapheme, WidthMode::Wc] {
+        for eaw_wide in [false, true] {
+            if usize::from(mode.grapheme_width(content, eaw_wide)) != want {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Byte cost of re-emitting the cells in `line[from..to]` as a
 /// forward-move candidate.
 ///
@@ -312,9 +340,14 @@ pub fn overwrite_cost(
             // wide glyph, and a wide one can hold a narrow glyph. Measuring
             // the content answers that directly, where counting code points
             // only guessed at it.
-            if usize::from(crate::text::WidthMode::Grapheme.grapheme_width(content, false))
-                != usize::from(cell.width().max(1))
-            {
+            // The policy the row was measured under is not known here, so a
+            // cell is crossable only when its content draws the same number
+            // of columns under every policy a terminal may be using. A cell
+            // whose width is policy-dependent -- an East Asian Ambiguous
+            // glyph, or a regional indicator that `Wc` and `Grapheme`
+            // disagree about -- is refused rather than guessed at, because
+            // guessing wrong here accepts the move instead of declining it.
+            if !crossable_under_every_policy(content, usize::from(cell.width().max(1))) {
                 return None;
             }
             // Beyond that, one code point at a time, which keeps the move
@@ -343,6 +376,42 @@ pub fn overwrite_cost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cell whose rendered width moves with the terminal's width policy
+    /// cannot be crossed by drawing, because the planner records
+    /// `cell.width()` columns either way.
+    #[test]
+    fn an_overwrite_declines_a_cell_whose_width_depends_on_the_policy() {
+        use crate::cell::Cell;
+        use crate::style::Style;
+        use crate::text::WidthMode;
+
+        let dot = "\u{00b7}";
+        assert_eq!(WidthMode::Grapheme.grapheme_width(dot, false), 1);
+        assert_eq!(WidthMode::Grapheme.grapheme_width(dot, true), 2);
+
+        let flag = "\u{1f1ef}";
+        assert_eq!(WidthMode::Grapheme.grapheme_width(flag, false), 2);
+        assert_eq!(WidthMode::Wc.grapheme_width(flag, false), 1);
+
+        let style = Style::default();
+        assert_eq!(
+            overwrite_cost(&[Cell::narrow(dot), Cell::narrow("a")], &style, 0, 2),
+            None,
+            "ambiguous width draws two columns in a CJK locale"
+        );
+        assert_eq!(
+            overwrite_cost(&[Cell::wide(flag), Cell::continuation()], &style, 0, 2),
+            None,
+            "a lone regional indicator draws one column under wcwidth"
+        );
+        // A cell every policy agrees on is still crossable.
+        assert!(
+            overwrite_cost(&[Cell::narrow("a"), Cell::narrow("b")], &style, 0, 2).is_some(),
+            "plain ASCII must remain crossable"
+        );
+    }
+
     use crate::ansi::cursor::{
         write_backtab, write_cha, write_cht, write_cub, write_cud, write_cuf, write_cup, write_cuu,
         write_hpa, write_reverse_index, write_vpa,

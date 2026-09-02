@@ -148,6 +148,13 @@ impl RenderBuffer {
         if cell.is_continuation() {
             return;
         }
+        // `Buffer::set` ignores a write outside the grid, and the damage has
+        // to agree with it. `cell` answers `None` there, which reads as
+        // changed, so the span would be recorded for a row nothing wrote to,
+        // and `pos.x + width` can overflow reaching it.
+        if pos.y >= self.height() || pos.x >= self.width() {
+            return;
+        }
 
         let existing = self.buffer.cell(pos);
         let changed = existing.is_none_or(|e| e != cell);
@@ -156,17 +163,39 @@ impl RenderBuffer {
             let new_width = cell.width().max(1) as u16;
             let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
             let width = new_width.max(prev_width);
-            // Writing over a continuation blanks the primary one column to
-            // the left, so the damage starts there. Recording only the
-            // column written would leave the diff blind to half of what the
-            // buffer changed.
+            // Writing over a continuation blanks the primary that owns it,
+            // so the damage starts there. `Buffer::set` walks back over
+            // chained continuations to find that primary, and the damage has
+            // to walk with it: stopping one column short leaves the diff
+            // blind to half of what the buffer changed.
             let first_col = if existing.is_some_and(Cell::is_continuation) && pos.x > 0 {
-                pos.x - 1
+                // `Buffer::set` blanks a primary only when the walk lands on
+                // a cell wide enough to own the column, so the damage may
+                // only reach back that far under the same condition. A
+                // continuation beside a narrow cell, or one that reaches the
+                // edge, leaves its neighbour untouched and blanks at most the
+                // column written.
+                let mut pc = pos.x - 1;
+                let mut owned = false;
+                if let Some(line) = self.buffer.line(pos.y) {
+                    while pc > 0 && line[pc as usize].is_continuation() {
+                        pc -= 1;
+                    }
+                    owned = line[pc as usize].is_wide();
+                }
+                if owned { pc } else { pos.x }
             } else {
                 pos.x
             };
             self.buffer.set(pos, cell);
-            let end_col = pos.x + width - 1;
+            // `Buffer::set` truncates a cell that does not fit, so the span
+            // must not claim a column the row does not have either. The
+            // saturating add is what keeps a row as wide as `u16` can
+            // describe from overflowing on the way to that clamp.
+            let end_col = pos
+                .x
+                .saturating_add(width - 1)
+                .min(self.width().saturating_sub(1));
             self.touch_line(pos.y, first_col, end_col);
         }
     }
@@ -431,6 +460,116 @@ mod tests {
         assert_eq!(rb.width(), 80);
         assert_eq!(rb.height(), 24);
         assert!(!rb.has_changes());
+    }
+
+    /// A wide primary can sit two or more columns from the continuation
+    /// being written over, which `Buffer::resize` and the row shifts both
+    /// leave behind. `Buffer::set` walks back to it and blanks from there,
+    /// so the damage span has to reach it too.
+    #[test]
+    fn damage_reaches_a_primary_blanked_through_chained_continuations() {
+        let mut rb = RenderBuffer::new(6, 1);
+        rb.set_cell((0, 0), &Cell::wide("\u{4e16}"));
+        rb.buffer.line_mut(0).unwrap()[2] = Cell::continuation();
+        rb.clear_touched();
+
+        let before = rb.buffer.cell(Position::new(0, 0)).unwrap().clone();
+        rb.set_cell((2, 0), &Cell::narrow("A"));
+        let after = rb.buffer.cell(Position::new(0, 0)).unwrap().clone();
+        let span = rb.touched(0).expect("row 0 touched");
+
+        assert_ne!(before, after, "precondition: the primary was blanked");
+        assert_eq!(span.first, 0, "damage must reach the primary it blanked");
+    }
+
+    /// `Buffer::set` ignores a write outside the grid, so the damage must
+    /// too. Without the bounds check the span is recorded for a row nothing
+    /// wrote to, and a column near `u16::MAX` overflows computing `end_col`.
+    #[test]
+    fn a_write_outside_the_grid_records_no_damage() {
+        let mut rb = RenderBuffer::new(6, 1);
+        // Fill the row with continuations so the back-walk would run if the
+        // guard above it ever let an out-of-bounds position through.
+        rb.set_cell((0, 0), &Cell::wide("\u{4e16}"));
+        for x in 2..6 {
+            rb.buffer.line_mut(0).unwrap()[x] = Cell::continuation();
+        }
+        rb.clear_touched();
+
+        // x past the right edge, y in bounds: the exact shape the review names.
+        rb.set_cell((6, 0), &Cell::narrow("A"));
+        rb.set_cell((100, 0), &Cell::narrow("A"));
+        rb.set_cell((u16::MAX, 0), &Cell::narrow("A"));
+        assert!(
+            !rb.has_changes(),
+            "an out-of-bounds write must change nothing"
+        );
+
+        // y past the bottom edge too.
+        rb.set_cell((0, 9), &Cell::narrow("A"));
+        assert!(!rb.has_changes());
+    }
+
+    /// `Buffer::set` truncates a wide cell that does not fit, so the damage
+    /// span must not claim the column past it, and the arithmetic reaching
+    /// that clamp must survive the widest row a `u16` can describe.
+    #[test]
+    fn a_span_stops_at_the_last_column_of_the_row() {
+        let mut rb = RenderBuffer::new(6, 1);
+        rb.set_cell((5, 0), &Cell::wide("\u{4e16}"));
+        let span = rb.touched(0).expect("row 0 touched");
+        assert_eq!(span.last, 5, "the span must stop at the last column");
+
+        let mut rb = RenderBuffer::new(u16::MAX, 1);
+        rb.set_cell((u16::MAX - 1, 0), &Cell::wide("\u{4e16}"));
+        let span = rb.touched(0).expect("row 0 touched");
+        assert_eq!(span.last, u16::MAX - 1);
+    }
+
+    /// The walk back to a primary follows `Buffer::set`'s ownership rule,
+    /// which acts only on a wide cell. A continuation nothing owns leaves its
+    /// neighbour alone, so the damage may not claim it.
+    #[test]
+    fn damage_reaches_back_only_to_a_primary_that_owns_the_column() {
+        let cases: [(&str, Vec<Cell>, u16); 3] = [
+            (
+                "a wide owner is reached",
+                vec![
+                    Cell::wide("\u{4e16}"),
+                    Cell::continuation(),
+                    Cell::continuation(),
+                ],
+                0,
+            ),
+            (
+                "a narrow neighbour is left alone",
+                vec![
+                    Cell::narrow("a"),
+                    Cell::continuation(),
+                    Cell::continuation(),
+                ],
+                2,
+            ),
+            (
+                "a continuation reaching the edge owns nothing",
+                vec![
+                    Cell::continuation(),
+                    Cell::continuation(),
+                    Cell::continuation(),
+                ],
+                2,
+            ),
+        ];
+        for (name, cells, want_first) in cases {
+            let mut rb = RenderBuffer::new(6, 1);
+            for (x, c) in cells.iter().enumerate() {
+                rb.buffer.line_mut(0).unwrap()[x] = c.clone();
+            }
+            rb.clear_touched();
+            rb.set_cell((2, 0), &Cell::narrow("A"));
+            let span = rb.touched(0).expect("row 0 touched");
+            assert_eq!(span.first, want_first, "{name}");
+        }
     }
 
     #[test]
