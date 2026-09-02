@@ -381,6 +381,16 @@ impl Renderer {
         if count == 0 {
             return Ok(());
         }
+        // `count` is a column count, and a cell can occupy two of them, so
+        // the window can end between a cell and the column it owns. The
+        // cells are written whole either way, so the room has to cover the
+        // whole of the last one: under insert mode each glyph opens its own
+        // room as it arrives, and a glyph wider than the room left carries
+        // the tail one column further than was asked for.
+        let count = match line.get(count - 1) {
+            Some(_) => cluster_end(line, count - 1) + 1,
+            None => count,
+        };
         let use_ich = self.opts.contains(Optimizations::ICH);
         if use_ich {
             ansi::screen::write_ich(out, count as u16)?;
