@@ -593,16 +593,12 @@ where
     /// [`window_pixels`](Self::window_pixels), and the render-affecting
     /// reports are applied to the [`Screen`].
     ///
-    /// A reply is recorded only when it says what it is about: a mode report
+    /// A reply is recorded when it says what it is about: a mode report
     /// carries its mode, an XTGETTCAP reply its capability names, a palette
-    /// reply its index. The DECRPSS setting report
-    /// ([`Event::SettingReport`]) is the one reply that does not. An
-    /// unrecognized reply names nothing at all, and a success spells the
-    /// setting out as one CSI string, with the control function and its
-    /// parameters run together.
-    /// Which setting was asked about is knowable only from the DECRQSS
-    /// request, and that request is yours, so the report reaches you
-    /// unchanged and nothing is stored.
+    /// reply its index. A DECRPSS setting report
+    /// ([`Event::SettingReport`]) is identified by the DECRQSS request that
+    /// provoked it, and that request is yours, so the report is delivered to
+    /// you to match against what you asked.
     ///
     /// Observing is otherwise passive, with one class of exception: a mode
     /// report proving support for grapheme clusters or in-band resize enables

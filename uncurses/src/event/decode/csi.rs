@@ -33,8 +33,8 @@ use super::DecoderFlags;
 use super::kitty;
 use super::result::ParseResult;
 use super::util::{
-    Params, csi_kitty_phase, csi_modifiers, intro_prefix_len, key_event_for_phase, key_with_mods,
-    lookup_legacy_key, remap_tilde, tilde_code_to_keycode, xterm_modifiers,
+    ControlSequence, Params, csi_kitty_phase, csi_modifiers, intro_prefix_len, key_event_for_phase,
+    key_with_mods, lookup_legacy_key, remap_tilde, tilde_code_to_keycode, xterm_modifiers,
 };
 use crate::event::mouse::{
     decode_sgr_mouse, decode_urxvt_mouse, decode_utf8_mouse, decode_x10_mouse,
@@ -97,15 +97,24 @@ impl Decoder {
         has_private: bool,
         consumed: usize,
     ) -> ParseResult {
-        let view = split_csi(seq);
-        let final_byte = view.final_byte;
+        let Some((view, _)) = ControlSequence::parse(seq) else {
+            // Not a sequence ECMA-48 would recognize. URxvt terminates some
+            // keys with `$`, which is an intermediate byte, so the legacy
+            // table still gets a look before this is called unknown.
+            let raw = &buf[..consumed];
+            let evt = lookup_legacy_key(raw, self.flags)
+                .map(Event::KeyPress)
+                .unwrap_or_else(|| Event::UnknownCsi(raw.to_vec()));
+            return ParseResult::Event(evt, consumed);
+        };
+        let final_byte = view.final_byte();
 
         // X10 / UTF-8 mouse: CSI M followed by 3 raw bytes (or 3 UTF-8
         // codepoints in mode 1005). Needs access to the input buffer
         // beyond `consumed`, so it stays inline above `recognize`. The
-        // byte-level `params_raw.is_empty()` check avoids a parameter
+        // byte-level parameter check avoids a parameter
         // allocation on every CSI.
-        if !has_private && final_byte == b'M' && view.params_raw.is_empty() {
+        if !has_private && final_byte == b'M' && view.params().raw().is_empty() {
             if self.utf8_mouse {
                 if let Some((event, n)) = decode_utf8_mouse(&buf[consumed..]) {
                     return ParseResult::Event(event, consumed + n);
@@ -129,7 +138,7 @@ impl Decoder {
         // allocating to parse the parameter list.
         if final_byte == b'_'
             && !has_private
-            && view.params_raw.iter().filter(|&&b| b == b';').count() == 5
+            && view.params().raw().iter().filter(|&&b| b == b';').count() == 5
         {
             return self.dispatch_win32_input(view.params(), consumed);
         }
@@ -147,13 +156,15 @@ impl Decoder {
 /// CSI view, or `None` when the sequence isn't one this library knows
 /// about. `raw_with_intro` is the original byte slice including the
 /// `ESC [` introducer, used by the legacy-key lookup table.
-fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Option<Event> {
-    let final_byte = view.final_byte;
+fn recognize(
+    view: &ControlSequence<'_>,
+    raw_with_intro: &[u8],
+    flags: DecoderFlags,
+) -> Option<Event> {
+    let final_byte = view.final_byte();
     let params = view.params();
-    // Currently the spec uses at most one intermediate; expose it as
-    // `Option<u8>` to mirror the previous single-byte detection.
-    let intermediate = view.intermediates.last().copied();
-    let no_private = view.private.is_none();
+    let intermediate = view.intermediate();
+    let no_private = view.private().is_none();
     let no_intermediate = intermediate.is_none();
 
     // URxvt mouse: CSI Cb;Cx;Cy M  (no `<` prefix, semicolon params,
@@ -171,7 +182,7 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
     // 0-based regardless of encoding; callers using SGR-Pixel (1016)
     // interpret the result as pixel offsets. Exactly 3 params, no
     // intermediate.
-    if view.private == Some(b'<')
+    if view.private() == Some(b'<')
         && no_intermediate
         && (final_byte == b'M' || final_byte == b'm')
         && params.len() == 3
@@ -224,7 +235,7 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
     // Sent both as reply to `CSI ? 996 n` and unsolicited when DEC mode
     // 2031 is enabled. Exactly two params and no intermediate.
     if final_byte == b'n'
-        && view.private == Some(b'?')
+        && view.private() == Some(b'?')
         && no_intermediate
         && params.len() == 2
         && params.get_or(0, 0) == 997
@@ -240,7 +251,7 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
     // Sent both as reply to `CSI ? 998 n` and unsolicited when DEC mode
     // 2033 is enabled. Exactly two params and no intermediate.
     if final_byte == b'n'
-        && view.private == Some(b'?')
+        && view.private() == Some(b'?')
         && no_intermediate
         && params.len() == 2
         && params.get_or(0, 0) == 999
@@ -253,14 +264,14 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
     }
 
     // DA1 response: CSI ? ... c. No intermediate.
-    if final_byte == b'c' && view.private == Some(b'?') && no_intermediate {
+    if final_byte == b'c' && view.private() == Some(b'?') && no_intermediate {
         return Some(Event::PrimaryDeviceAttributes(
             params.iter().map(|g| g.first()).collect(),
         ));
     }
 
     // DA2 response: CSI > ... c. No intermediate.
-    if final_byte == b'c' && view.private == Some(b'>') && no_intermediate {
+    if final_byte == b'c' && view.private() == Some(b'>') && no_intermediate {
         return Some(Event::SecondaryDeviceAttributes(
             params.iter().map(|g| g.first()).collect(),
         ));
@@ -282,7 +293,7 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
 
     // Kitty keyboard protocol active-enhancements report: CSI ? flags u.
     // No intermediate, exactly 1 param.
-    if final_byte == b'u' && view.private == Some(b'?') && no_intermediate && params.len() == 1 {
+    if final_byte == b'u' && view.private() == Some(b'?') && no_intermediate && params.len() == 1 {
         let bits = params.get_or(0, 0) as u8;
         return Some(Event::KittyKeyboardEnhancements(
             crate::ansi::kitty::KittyKeyboardFlags::from_bits_truncate(bits),
@@ -365,7 +376,7 @@ fn recognize(view: &Csi<'_>, raw_with_intro: &[u8], flags: DecoderFlags) -> Opti
     // modifyOtherKeys report: CSI > 4 ; Pn m. No intermediate, exactly
     // 2 params.
     if final_byte == b'm'
-        && view.private == Some(b'>')
+        && view.private() == Some(b'>')
         && no_intermediate
         && params.len() == 2
         && params.get_or(0, 0) == 4
@@ -456,47 +467,4 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
         key_with_mods(key_code, mods),
         csi_kitty_phase(params),
     ))
-}
-
-/// Structured view over a CSI body: the private prefix, parameter and
-/// intermediate regions, and final byte split out so the recogniser can
-/// match on shape. The parameter body is exposed lazily via [`Csi::params`];
-/// no parameter `Vec` is ever materialised.
-struct Csi<'a> {
-    private: Option<u8>,
-    params_raw: &'a [u8],
-    intermediates: &'a [u8],
-    final_byte: u8,
-}
-
-impl<'a> Csi<'a> {
-    /// Lazy walker over the `;`-separated parameter list. Each group
-    /// may carry colon-separated sub-parameters; see
-    /// [`crate::ansi::params::Params`].
-    #[inline]
-    fn params(&self) -> Params<'a> {
-        Params::from_raw(self.params_raw)
-    }
-}
-
-/// Split a CSI body (private prefix + params + intermediates + final byte)
-/// into a structured view. `seq` must end with the final byte.
-fn split_csi(seq: &[u8]) -> Csi<'_> {
-    let final_byte = *seq.last().unwrap_or(&0);
-    let body = &seq[..seq.len().saturating_sub(1)];
-    let (private, rest) = match body.first() {
-        Some(&b) if matches!(b, b'?' | b'<' | b'>' | b'=') => (Some(b), &body[1..]),
-        _ => (None, body),
-    };
-    let mid = rest
-        .iter()
-        .position(|&b| (0x20..=0x2f).contains(&b))
-        .unwrap_or(rest.len());
-    let (params_raw, intermediates) = rest.split_at(mid);
-    Csi {
-        private,
-        params_raw,
-        intermediates,
-        final_byte,
-    }
 }
