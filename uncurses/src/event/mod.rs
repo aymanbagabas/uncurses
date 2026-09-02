@@ -388,14 +388,19 @@ pub enum Event {
 
 /// The payload of a DECRPSS reply, [`Event::SettingReport`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SettingReport {
     /// The terminal did not recognize the requested setting (`DCS 0 $ r ST`).
     /// The reply carries no data at all, so only the request that provoked it
     /// says which setting was turned down.
     Unrecognized,
-    /// The setting as the terminal spelled it: the whole CSI sequence for the
-    /// control function without its introducer, so `0;1m` for SGR, `2 q` for
-    /// `DECSCUSR`, `>4;2m` for xterm's `XTQMODKEYS`.
+    /// The cursor style the terminal is using, from a DECRPSS reply
+    /// reporting its `DECSCUSR` setting. Ask for it with
+    /// [`Program::request_cursor_style`](crate::program::Program::request_cursor_style).
+    CursorStyle(crate::ansi::cursor::CursorStyle),
+    /// The setting as the terminal spelled it, for a control function this
+    /// library does not decode: the whole CSI sequence without its
+    /// introducer, so `0;1m` for SGR or `>4;2m` for xterm's `XTQMODKEYS`.
     Raw(String),
 }
 

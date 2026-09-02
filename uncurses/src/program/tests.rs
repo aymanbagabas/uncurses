@@ -2175,3 +2175,39 @@ fn visibility_support_comes_from_the_generic_mode_report() {
         );
     }
 }
+
+#[test]
+fn request_cursor_style_asks_decrqss_for_decscusr() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.request_cursor_style().unwrap();
+
+    // DECRQSS names the control function by its intermediate and final
+    // bytes, so DECSCUSR (`CSI Ps SP q`) is selected by `SP q`.
+    assert_eq!(buf.borrow().as_slice(), b"\x1bP$q q\x1b\\");
+}
+
+#[test]
+fn a_cursor_style_reply_reads_back_in_the_terms_it_was_set_with() {
+    use crate::ansi::cursor::CursorStyle;
+    use crate::event::SettingReport;
+    use crate::program::CursorShape;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.set_cursor_style(CursorShape::Bar, false).unwrap();
+    buf.borrow_mut().clear();
+
+    // What a terminal answering DECRQSS would send back for that style.
+    let reply = Event::SettingReport(SettingReport::CursorStyle(CursorStyle::SteadyBar));
+    program.observe_event(&reply).unwrap();
+
+    let Event::SettingReport(SettingReport::CursorStyle(style)) = reply else {
+        unreachable!()
+    };
+    assert_eq!(
+        CursorShape::from_style(style),
+        Some((CursorShape::Bar, false)),
+        "the reply decomposes into the arguments set_cursor_style took"
+    );
+}
