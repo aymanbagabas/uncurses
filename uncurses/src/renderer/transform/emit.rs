@@ -41,17 +41,23 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
 /// continuations lie past it would cover part of a glyph, and which end a
 /// change exposes depends on the direction it grew in, so both are closed.
 pub(super) fn cluster_end(line: &[Cell], at: usize) -> usize {
-    // The mirror of the ownership rule above: a cell that is not wide draws
+    // The mirror of the ownership rule above. A cell that is not wide draws
     // one column and owns nothing past itself, so its cluster ends on it even
-    // when a continuation nothing owns follows.
-    if !line.get(at).is_some_and(Cell::is_wide) {
+    // when a continuation nothing owns follows. A wide cell owns exactly the
+    // columns its width accounts for and no more, so the walk stops there
+    // rather than swallowing a continuation past the pair.
+    let Some(cell) = line.get(at) else {
+        return at;
+    };
+    if !cell.is_wide() {
         return at;
     }
-    let mut at = at;
-    while at + 1 < line.len() && line[at + 1].is_continuation() {
-        at += 1;
+    let owned = at + usize::from(cell.width()) - 1;
+    let mut end = at;
+    while end < owned && end + 1 < line.len() && line[end + 1].is_continuation() {
+        end += 1;
     }
-    at
+    end
 }
 
 impl Renderer {
@@ -464,6 +470,25 @@ mod cluster_bounds {
         let line = vec![Cell::narrow("a"), Cell::continuation()];
         assert_eq!(cluster_start(&line, 1), 1);
         assert_eq!(cluster_end(&line, 0), 0);
+    }
+
+    /// A wide cell owns the columns its width accounts for and no more, so a
+    /// continuation past the pair belongs to no cluster and the close stops
+    /// short of it. `Buffer::resize` and the row shifts both leave such a row.
+    #[test]
+    fn a_cluster_closes_on_the_columns_its_owner_accounts_for() {
+        let chained = vec![
+            Cell::wide("\u{4e16}"),
+            Cell::continuation(),
+            Cell::continuation(),
+        ];
+        assert_eq!(
+            cluster_end(&chained, 0),
+            1,
+            "the pair, not the orphan past it"
+        );
+        assert_eq!(cluster_end(&chained, 1), 1, "already the last owned column");
+        assert_eq!(cluster_end(&chained, 2), 2, "an orphan stands alone");
     }
 
     #[test]
