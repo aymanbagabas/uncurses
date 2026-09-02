@@ -169,13 +169,21 @@ impl RenderBuffer {
             // to walk with it: stopping one column short leaves the diff
             // blind to half of what the buffer changed.
             let first_col = if existing.is_some_and(Cell::is_continuation) && pos.x > 0 {
+                // `Buffer::set` blanks a primary only when the walk lands on
+                // a cell wide enough to own the column, so the damage may
+                // only reach back that far under the same condition. A
+                // continuation beside a narrow cell, or one that reaches the
+                // edge, leaves its neighbour untouched and blanks at most the
+                // column written.
                 let mut pc = pos.x - 1;
+                let mut owned = false;
                 if let Some(line) = self.buffer.line(pos.y) {
                     while pc > 0 && line[pc as usize].is_continuation() {
                         pc -= 1;
                     }
+                    owned = line[pc as usize].is_wide();
                 }
-                pc
+                if owned { pc } else { pos.x }
             } else {
                 pos.x
             };
@@ -516,6 +524,52 @@ mod tests {
         rb.set_cell((u16::MAX - 1, 0), &Cell::wide("\u{4e16}"));
         let span = rb.touched(0).expect("row 0 touched");
         assert_eq!(span.last, u16::MAX - 1);
+    }
+
+    /// The walk back to a primary follows `Buffer::set`'s ownership rule,
+    /// which acts only on a wide cell. A continuation nothing owns leaves its
+    /// neighbour alone, so the damage may not claim it.
+    #[test]
+    fn damage_reaches_back_only_to_a_primary_that_owns_the_column() {
+        let cases: [(&str, Vec<Cell>, u16); 3] = [
+            (
+                "a wide owner is reached",
+                vec![
+                    Cell::wide("\u{4e16}"),
+                    Cell::continuation(),
+                    Cell::continuation(),
+                ],
+                0,
+            ),
+            (
+                "a narrow neighbour is left alone",
+                vec![
+                    Cell::narrow("a"),
+                    Cell::continuation(),
+                    Cell::continuation(),
+                ],
+                2,
+            ),
+            (
+                "a continuation reaching the edge owns nothing",
+                vec![
+                    Cell::continuation(),
+                    Cell::continuation(),
+                    Cell::continuation(),
+                ],
+                2,
+            ),
+        ];
+        for (name, cells, want_first) in cases {
+            let mut rb = RenderBuffer::new(6, 1);
+            for (x, c) in cells.iter().enumerate() {
+                rb.buffer.line_mut(0).unwrap()[x] = c.clone();
+            }
+            rb.clear_touched();
+            rb.set_cell((2, 0), &Cell::narrow("A"));
+            let span = rb.touched(0).expect("row 0 touched");
+            assert_eq!(span.first, want_first, "{name}");
+        }
     }
 
     #[test]
