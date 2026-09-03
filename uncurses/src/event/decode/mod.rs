@@ -1338,6 +1338,54 @@ mod tests {
         }
     }
 
+    /// X10 mouse is `CSI M` exactly: no private byte, no intermediate, no
+    /// parameters. An intermediate selects a different control function, and
+    /// reading one as a mouse report is expensive rather than merely wrong,
+    /// because the report takes its three coordinates from the bytes that
+    /// follow it. Whatever the application typed next is eaten.
+    #[test]
+    fn an_intermediate_byte_is_not_an_x10_mouse_report() {
+        for seq in [&b"\x1b[ Mabc"[..], &b"\x1b[!Mabc"[..]] {
+            let mut parser = Decoder::new(DecoderFlags::empty());
+            let events = parser.parse(seq);
+            let printable = String::from_utf8_lossy(seq).into_owned();
+            assert!(
+                !matches!(
+                    events.first(),
+                    Some(
+                        Event::MouseClick(_)
+                            | Event::MouseRelease(_)
+                            | Event::MouseWheel(_)
+                            | Event::MouseMove(_)
+                    )
+                ),
+                "{printable:?} decoded as a mouse report: {events:?}"
+            );
+            let typed: String = events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::KeyPress(k) => k.text.clone(),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(typed, "abc", "{printable:?} swallowed the keys after it");
+        }
+    }
+
+    /// The same guard on the other branch that dispatches before `recognize`.
+    #[test]
+    fn an_intermediate_byte_is_not_a_win32_input_record() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[1;2;3;4;5;6 _");
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::KeyPress(_) | Event::KeyRepeat(_) | Event::KeyRelease(_)
+            )),
+            "an intermediate byte decoded as a win32 input record: {events:?}"
+        );
+    }
+
     #[test]
     fn test_parse_sgr_pixel_mouse_decoded_as_offsets() {
         // SGR-Pixel (mode 1016) uses the same wire format as SGR (1006). The
