@@ -109,12 +109,18 @@ impl Decoder {
         };
         let final_byte = view.final_byte();
 
+        // These two dispatch inline, above `recognize`, so they repeat the
+        // region checks it would otherwise apply. An intermediate byte selects
+        // a different control function, and neither of these has one, so a
+        // sequence carrying one is not the function being matched here.
+        let no_intermediate = view.intermediate().is_none();
+
         // X10 / UTF-8 mouse: CSI M followed by 3 raw bytes (or 3 UTF-8
         // codepoints in mode 1005). Needs access to the input buffer
         // beyond `consumed`, so it stays inline above `recognize`. The
         // byte-level parameter check avoids a parameter
         // allocation on every CSI.
-        if !has_private && final_byte == b'M' && view.params().raw().is_empty() {
+        if !has_private && no_intermediate && final_byte == b'M' && view.params().raw().is_empty() {
             if self.utf8_mouse {
                 if let Some((event, n)) = decode_utf8_mouse(&buf[consumed..]) {
                     return ParseResult::Event(event, consumed + n);
@@ -138,6 +144,7 @@ impl Decoder {
         // allocating to parse the parameter list.
         if final_byte == b'_'
             && !has_private
+            && no_intermediate
             && view.params().raw().iter().filter(|&&b| b == b';').count() == 5
         {
             return self.dispatch_win32_input(view.params(), consumed);
