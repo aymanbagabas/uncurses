@@ -44,6 +44,28 @@ impl<'a> Params<'a> {
         Self { raw }
     }
 
+    /// Whether a private-use byte appeared inside the parameter string.
+    ///
+    /// ECMA-48 reserves 03/12 to 03/15 for private use. One at the head of the
+    /// string makes the whole string private, and a [`ControlSequence`] carries
+    /// that byte separately, so it never reaches here. One further in leaves
+    /// the string structurally sound and its meaning undefined, which is not
+    /// the same as malformed: the bytes are legal, and nothing standard says
+    /// what the numbers around them mean.
+    ///
+    /// A caller decoding a control function it knows should decline rather than
+    /// read the numbers anyway. Reading them is how `CSI 1 ? ; 2 A` came to be
+    /// answered as shift with up, by taking the second group and never looking
+    /// at the first.
+    ///
+    /// Read on demand rather than recorded during parsing, because `Params` is
+    /// copied on every path that touches a sequence and a byte of state costs
+    /// eight after padding.
+    #[inline]
+    pub fn has_private_use(&self) -> bool {
+        self.raw.iter().any(|&b| (0x3c..=0x3f).contains(&b))
+    }
+
     /// The raw parameter bytes, exactly as they appeared on the wire.
     #[inline]
     pub fn raw(&self) -> &'a [u8] {
@@ -287,9 +309,17 @@ impl<'a> ControlSequence<'a> {
         // over a byte range compiles to a tighter search than stepping an
         // index by hand, which shows up on the long parameter lists SGR
         // produces.
+        //
+        // The range runs to 03/15, which is what ECMA-48 gives the parameter
+        // bytes. The four at the top are reserved for private use, and a
+        // string beginning with one is private as a whole, which is the byte
+        // taken above. One appearing later leaves the string structurally
+        // sound and semantically undefined, so it is read and marked rather
+        // than refused: whether that is worth acting on belongs to whoever
+        // knows the control function, not here.
         let mid = rest
             .iter()
-            .position(|&b| !(0x30..=0x3b).contains(&b))
+            .position(|&b| !(0x30..=0x3f).contains(&b))
             .unwrap_or(rest.len());
         let params = Params::from_raw(&rest[..mid]);
 
@@ -509,5 +539,35 @@ mod tests {
         // one, so this is not a sequence worth recognizing. Taking the last
         // would answer a question that was never asked.
         assert!(ControlSequence::parse(b"1!!p").is_none());
+    }
+
+    /// The bytes ECMA-48 reserves for private use, appearing inside the
+    /// parameter string rather than at its head.
+    ///
+    /// They are parameter bytes, so a sequence carrying one is structurally
+    /// sound and is read rather than refused. What it means is undefined, and
+    /// that is the part worth reporting: a caller that knows the control
+    /// function can decline, and one that does not would otherwise read the
+    /// numbers around the byte as though it had not been sent.
+    #[test]
+    fn control_sequence_marks_private_use_parameters() {
+        for (body, private) in [
+            (&b"1;2A"[..], false),
+            (&b"1?;2A"[..], true),
+            (&b"1?m"[..], true),
+            (&b"?1?c"[..], true),
+            // The byte at the head is the marker the sequence carries
+            // separately, so the parameter string it introduces is ordinary.
+            (&b"?2026h"[..], false),
+        ] {
+            let printable = String::from_utf8_lossy(body).into_owned();
+            let (s, _) = ControlSequence::parse(body)
+                .unwrap_or_else(|| panic!("{printable:?} is structurally sound but was refused"));
+            assert_eq!(
+                s.params().has_private_use(),
+                private,
+                "{printable:?} reported the wrong private-use mark"
+            );
+        }
     }
 }

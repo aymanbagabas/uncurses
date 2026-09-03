@@ -168,6 +168,20 @@ fn recognize(
 ) -> Option<Event> {
     let final_byte = view.final_byte();
     let params = view.params();
+
+    // A private-use byte inside the parameter string leaves the sequence
+    // structurally sound and its meaning undefined, so none of the functions
+    // below can claim it. Every one of them reads particular groups and would
+    // otherwise read the numbers around the byte as though it had not been
+    // sent, which is how `CSI 1 ? ; 2 A` came to be answered as shift with up.
+    //
+    // The byte at the head of the string is a different thing. It marks which
+    // private convention the sequence belongs to, the sequence carries it
+    // separately, and the functions below match on it.
+    if params.has_private_use() {
+        return None;
+    }
+
     let intermediate = view.intermediate();
     let no_private = view.private().is_none();
     let no_intermediate = intermediate.is_none();
