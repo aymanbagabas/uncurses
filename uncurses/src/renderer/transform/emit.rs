@@ -32,7 +32,7 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
     //
     // A wide cell owns exactly the columns its width accounts for, so a
     // continuation lying past the pair is unowned too, and for the same
-    // reason. [`cluster_end`] bounds its walk the same way, which is what
+    // reason. `cluster_end` bounds its walk the same way, which is what
     // makes the two answer alike about the same column.
     if start != here && (!line[start].is_wide() || here >= start + usize::from(line[start].width()))
     {
