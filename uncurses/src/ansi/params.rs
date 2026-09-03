@@ -299,7 +299,28 @@ impl<'a> ControlSequence<'a> {
     /// region it appears in, or when more than one intermediate is present.
     /// Every control function in use carries at most one, so a second means
     /// this is not a sequence worth recognizing.
+    ///
+    /// A caller reading bytes as they arrive needs to tell those apart, since
+    /// only the first may be waiting on more input. [`ControlSequence::frame`]
+    /// says which happened.
+    #[inline]
     pub fn parse(body: &'a [u8]) -> Option<(Self, &'a [u8])> {
+        match Self::frame(body) {
+            Framing::Sequence(seq, rest) => Some((seq, rest)),
+            _ => None,
+        }
+    }
+
+    /// Read a leading control sequence, reporting where it ends separately
+    /// from whether its regions name a control function.
+    ///
+    /// The walk runs to the final byte whether or not what precedes it is a
+    /// sequence worth naming, because those are separate questions and a
+    /// caller reading a stream needs the first answer even when the second is
+    /// no: without it there is no way to tell how much to leave behind, and
+    /// the bytes of a body that broke arrive as though they had been typed.
+    #[inline]
+    pub fn frame(body: &'a [u8]) -> Framing<'a> {
         let (private, rest) = match body.first() {
             Some(&b) if (0x3c..=0x3f).contains(&b) => (Some(b), &body[1..]),
             _ => (None, body),
@@ -323,28 +344,30 @@ impl<'a> ControlSequence<'a> {
             .unwrap_or(rest.len());
         let params = Params::from_raw(&rest[..mid]);
 
-        // What follows is at most one intermediate, then the final byte. A
-        // second intermediate leaves a byte that is not final, so the check
-        // below rejects it.
+        // What follows is at most one intermediate, then the final byte.
         let (intermediate, final_pos) = match rest.get(mid) {
             Some(&b) if (0x20..=0x2f).contains(&b) => (Some(b), mid + 1),
             _ => (None, mid),
         };
 
-        let final_byte = *rest.get(final_pos)?;
-        if !(0x40..=0x7e).contains(&final_byte) {
-            return None;
+        match rest.get(final_pos) {
+            Some(&final_byte) if (0x40..=0x7e).contains(&final_byte) => Framing::Sequence(
+                Self {
+                    private,
+                    params,
+                    intermediate,
+                    final_byte,
+                },
+                &rest[final_pos + 1..],
+            ),
+            // The body ended before a final byte. More may still be coming.
+            None => Framing::Incomplete,
+            // Something sits where the final byte belongs. Where the sequence
+            // ends is a separate question from whether it names anything, and
+            // the caller needs that answer either way, so the search carries
+            // on down a path the shapes in use never take.
+            Some(_) => frame_beyond(private, params, intermediate, rest, final_pos),
         }
-
-        Some((
-            Self {
-                private,
-                params,
-                intermediate,
-                final_byte,
-            },
-            &rest[final_pos + 1..],
-        ))
     }
 
     /// The first parameter byte when it falls in the private-use range 03/12
@@ -368,6 +391,65 @@ impl<'a> ControlSequence<'a> {
     pub fn final_byte(&self) -> u8 {
         self.final_byte
     }
+}
+
+/// What [`ControlSequence::frame`] found at the head of a body.
+#[derive(Copy, Clone, Debug)]
+pub enum Framing<'a> {
+    /// A control sequence, with the bytes that follow its final byte.
+    Sequence(ControlSequence<'a>, &'a [u8]),
+    /// A body framed to its final byte whose regions name no control
+    /// function: more than one intermediate, or a parameter after one.
+    ///
+    /// The regions read and the tail are reported anyway, because a caller
+    /// reading a stream still has to know how far the sequence reached in
+    /// order to know what to leave behind.
+    Unnamed(ControlSequence<'a>, &'a [u8]),
+    /// The body ended before a final byte. More may still be arriving.
+    Incomplete,
+    /// A byte belonging to no region of a control sequence, with the body
+    /// from that byte onward.
+    Invalid(&'a [u8]),
+}
+
+/// Keep reading past the point where a control sequence stopped looking like
+/// one, to find where it ends.
+///
+/// Reached only when the byte where the final belongs is neither final nor
+/// missing, which means a second intermediate, a parameter after an
+/// intermediate, or a byte from no region at all. Every control function in
+/// use carries at most one intermediate with its parameters before it, so
+/// nothing that arrives in practice comes here.
+#[cold]
+fn frame_beyond<'a>(
+    private: Option<u8>,
+    params: Params<'a>,
+    mut intermediate: Option<u8>,
+    rest: &'a [u8],
+    from: usize,
+) -> Framing<'a> {
+    for (offset, &b) in rest[from..].iter().enumerate() {
+        let i = from + offset;
+        match b {
+            0x40..=0x7e => {
+                return Framing::Unnamed(
+                    ControlSequence {
+                        private,
+                        params,
+                        intermediate,
+                        final_byte: b,
+                    },
+                    &rest[i + 1..],
+                );
+            }
+            0x20..=0x2f => intermediate = Some(b),
+            0x30..=0x3f => {}
+            // Outside every region, so this is not a control sequence at all
+            // and there is no final byte to look for.
+            _ => return Framing::Invalid(&rest[i..]),
+        }
+    }
+    Framing::Incomplete
 }
 
 fn parse_u32(bytes: &[u8]) -> Option<u32> {
