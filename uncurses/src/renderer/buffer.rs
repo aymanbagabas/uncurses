@@ -117,30 +117,6 @@ impl RenderBuffer {
         }
     }
 
-    /// Mark an entire line as touched. `y` is the 0-based row.
-    pub fn touch_full_line(&mut self, y: u16) {
-        if self.width() > 0 {
-            self.touch_line(y, 0, self.width() - 1);
-        }
-    }
-
-    /// Set a cell and mark its occupied columns touched if changed.
-    ///
-    /// # Parameters
-    ///
-    /// - `pos`: zero-based destination coordinate.
-    /// - `cell`: cell to clone into the buffer.
-    ///
-    /// # Behavior
-    ///
-    /// Delegates wide-cell accounting to [`Buffer::set`]. If the new
-    /// value equals the existing cell, no touched span is recorded. When
-    /// a wide cell is overwritten by a narrower cell, the touched span
-    /// covers the whole cluster being broken, both the column written and
-    /// the primary to its left that the write blanks.
-    ///
-    /// A continuation is placed by the cell that owns it, so [`Buffer::set`]
-    /// ignores one arriving on its own and this records no damage for it.
     /// The column a write at `pos` starts changing.
     ///
     /// That is `pos.x` itself, unless `pos` holds a continuation whose owning
@@ -179,6 +155,30 @@ impl RenderBuffer {
         }
     }
 
+    /// Mark an entire line as touched. `y` is the 0-based row.
+    pub fn touch_full_line(&mut self, y: u16) {
+        if self.width() > 0 {
+            self.touch_line(y, 0, self.width() - 1);
+        }
+    }
+
+    /// Set a cell and mark its occupied columns touched if changed.
+    ///
+    /// # Parameters
+    ///
+    /// - `pos`: zero-based destination coordinate.
+    /// - `cell`: cell to clone into the buffer.
+    ///
+    /// # Behavior
+    ///
+    /// Delegates wide-cell accounting to [`Buffer::set`]. If the new
+    /// value equals the existing cell, no touched span is recorded. When
+    /// a wide cell is overwritten by a narrower cell, the touched span
+    /// covers the whole cluster being broken, both the column written and
+    /// the primary to its left that the write blanks.
+    ///
+    /// A continuation is placed by the cell that owns it, so [`Buffer::set`]
+    /// ignores one arriving on its own and this records no damage for it.
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
         let pos = pos.into();
         // The buffer leaves the column as its owner wrote it, so there is
@@ -437,14 +437,14 @@ impl SurfaceMut for RenderBuffer {
         // primary that owns it and blank from there, which can be a column
         // outside the rect. Ask each row where its damage really begins before
         // the fill rewrites the evidence.
-        let first_cols: Vec<u16> = (clipped.top()..clipped.bottom())
-            .map(|y| self.owned_from(Position::new(clipped.left(), y)))
-            .collect();
-        self.buffer.fill_rect(rect, cell);
+        // `touch_line` only merges a span into the row's record, so it does not
+        // care that the fill has not run yet.
         let last_col = clipped.right().saturating_sub(1);
-        for (i, y) in (clipped.top()..clipped.bottom()).enumerate() {
-            self.touch_line(y, first_cols[i], last_col);
+        for y in clipped.top()..clipped.bottom() {
+            let first_col = self.owned_from(Position::new(clipped.left(), y));
+            self.touch_line(y, first_col, last_col);
         }
+        self.buffer.fill_rect(rect, cell);
     }
 
     /// Delegate to [`RenderBuffer::insert_lines`] for the row-swap fast
