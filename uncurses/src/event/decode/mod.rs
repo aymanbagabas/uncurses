@@ -1279,6 +1279,61 @@ mod tests {
         }
     }
 
+    /// A mode report for an ANSI mode reaches the caller. `$` is an
+    /// intermediate byte, and URxvt ends some keys with it, so the scanner
+    /// claims one before the grammar gets a say. Claiming it here left the row
+    /// unread and let the `y` arrive as a keystroke, which is a reply this
+    /// library both asks for and writes.
+    #[test]
+    fn an_ansi_mode_report_is_decoded() {
+        for (seq, mode) in [
+            (&b"\x1b[4;1$y"[..], 4u16),
+            (&b"\x1b[2;1$y"[..], 2),
+            (&b"\x1b[20;1$y"[..], 20),
+        ] {
+            let mut parser = Decoder::new(DecoderFlags::empty());
+            let events = parser.parse(seq);
+            let printable = String::from_utf8_lossy(seq).into_owned();
+            assert_eq!(events.len(), 1, "{printable:?} decoded {events:?}");
+            match &events[0] {
+                Event::ModeReport { mode: m, setting } => {
+                    assert_eq!(*m, crate::ansi::mode::Mode::Ansi(mode), "{printable:?}");
+                    assert_eq!(
+                        *setting,
+                        crate::ansi::mode::ModeSetting::Set,
+                        "{printable:?}"
+                    );
+                }
+                other => panic!("{printable:?} decoded {other:?}, want a mode report"),
+            }
+        }
+    }
+
+    /// The keys the shortcut exists for still reach the caller. Each carries a
+    /// single number, so a digit run is what tells them from a function that
+    /// merely uses the same intermediate.
+    #[test]
+    fn urxvt_modifier_suffix_keys_still_decode() {
+        for (seq, want) in [
+            (&b"\x1b[23$"[..], (KeyCode::F(11), KeyModifiers::SHIFT)),
+            (&b"\x1b[24^"[..], (KeyCode::F(12), KeyModifiers::CTRL)),
+            (
+                &b"\x1b[25@"[..],
+                (KeyCode::F(13), KeyModifiers::SHIFT | KeyModifiers::CTRL),
+            ),
+        ] {
+            let mut parser = Decoder::new(DecoderFlags::empty());
+            let events = parser.parse(seq);
+            let printable = String::from_utf8_lossy(seq).into_owned();
+            match events.first() {
+                Some(Event::KeyPress(k)) => {
+                    assert_eq!((k.code, k.modifiers), want, "{printable:?}");
+                }
+                other => panic!("{printable:?} decoded {other:?}, want a key"),
+            }
+        }
+    }
+
     #[test]
     fn test_parse_sgr_pixel_mouse_decoded_as_offsets() {
         // SGR-Pixel (mode 1016) uses the same wire format as SGR (1006). The

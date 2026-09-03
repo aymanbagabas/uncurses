@@ -65,18 +65,6 @@ impl Decoder {
                 let consumed = i + 1;
                 return self.dispatch_csi(buf, seq, has_private, consumed);
             }
-            // URxvt-style: `$` after digits/separators is treated as a final byte
-            // (e.g. `\x1b[23$` for Shift+F11). Skip this when `$` is followed by
-            // another final byte (e.g. DECRPM `\x1b[?1;1$y`), in which case `$`
-            // is a real intermediate.
-            if b == b'$' && !has_private {
-                // URxvt: `\x1b[23$` (Shift+F11) — `$` is a final byte when
-                // there's no private prefix. With a private prefix (e.g.
-                // DECRPM `\x1b[?1;1$y`), `$` remains an intermediate.
-                let seq = &buf[prefix_len..=i];
-                let consumed = i + 1;
-                return self.dispatch_csi(buf, seq, has_private, consumed);
-            }
             if !((0x30..=0x3f).contains(&b) || b == b';' || b == b':') {
                 // Intermediate byte
                 if !(0x20..=0x2f).contains(&b) {
@@ -85,6 +73,16 @@ impl Decoder {
                 }
             }
             i += 1;
+        }
+
+        // The grammar ran out of bytes without reaching a final one. URxvt ends
+        // some keys with an intermediate instead of a final byte, so a body
+        // that stops there may be one of those rather than a sequence still
+        // arriving. They are the exception, so they are asked about last: the
+        // table is what knows which ones exist, and a body it does not name is
+        // simply incomplete.
+        if let Some(key) = lookup_legacy_key(buf, self.flags) {
+            return ParseResult::Event(Event::KeyPress(key), buf.len());
         }
 
         ParseResult::Incomplete
