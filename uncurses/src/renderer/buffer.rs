@@ -155,6 +155,54 @@ impl RenderBuffer {
         }
     }
 
+    /// The last column a write reaching `pos` changes.
+    ///
+    /// That is `pos.x` itself, unless `pos` holds a wide primary whose
+    /// continuation lies past it: writing over a primary blanks the whole
+    /// cluster it owns, so a column outside the write changes with it. The
+    /// mirror of [`RenderBuffer::owned_from`], answering the same question on
+    /// the other side, and needed for the same reason: a span that stops one
+    /// column short leaves the diff blind to a cell the write rewrote, and the
+    /// stale half of the cluster survives the frame.
+    ///
+    /// The reach is clamped to the row, because `Buffer::set` truncates a cell
+    /// that does not fit and the span may not claim a column the row does not
+    /// have. Only a wide cell owns the column to its right, so a narrow cell or
+    /// a continuation reaches no further than itself.
+    ///
+    /// This reads the row as it stands, so callers ask before writing: the
+    /// write is what destroys the evidence.
+    fn owned_through(&self, pos: Position) -> u16 {
+        let Some(line) = self.buffer.line(pos.y) else {
+            return pos.x;
+        };
+        let Some(cell) = line.get(pos.x as usize) else {
+            return pos.x;
+        };
+        if !cell.is_wide() {
+            return pos.x;
+        }
+        pos.x
+            .saturating_add(cell.width() as u16 - 1)
+            .min(self.width().saturating_sub(1))
+    }
+
+    /// The columns a row shift bounded by `bounds_right` actually changes.
+    ///
+    /// Both ends close over the clusters the shift breaks, the way a write's
+    /// do: the shift can pull a continuation out from beside the primary that
+    /// owns it, or carry a primary off and leave its continuation behind, and
+    /// either half left standing has to be repainted even though it sits
+    /// outside the region asked for. The row is read before the shift, which
+    /// is what destroys the evidence.
+    fn shift_span(&self, pos: Position, bounds_right: u16) -> (u16, u16) {
+        let last = bounds_right.min(self.width()).saturating_sub(1);
+        (
+            self.owned_from(pos),
+            self.owned_through(Position::new(last, pos.y)),
+        )
+    }
+
     /// Mark an entire line as touched. `y` is the 0-based row.
     pub fn touch_full_line(&mut self, y: u16) {
         if self.width() > 0 {
@@ -175,7 +223,9 @@ impl RenderBuffer {
     /// value equals the existing cell, no touched span is recorded. When
     /// a wide cell is overwritten by a narrower cell, the touched span
     /// covers the whole cluster being broken, both the column written and
-    /// the primary to its left that the write blanks.
+    /// the primary to its left that the write blanks. A write that lands on
+    /// a wide neighbour reaches the continuation that neighbour owns, which
+    /// can sit past the columns the write itself covers.
     ///
     /// A continuation is placed by the cell that owns it, so [`Buffer::set`]
     /// ignores one arriving on its own and this records no damage for it.
@@ -202,7 +252,6 @@ impl RenderBuffer {
             let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
             let width = new_width.max(prev_width);
             let first_col = self.owned_from(pos);
-            self.buffer.set(pos, cell);
             // `Buffer::set` truncates a cell that does not fit, so the span
             // must not claim a column the row does not have either. The
             // saturating add is what keeps a row as wide as `u16` can
@@ -211,7 +260,9 @@ impl RenderBuffer {
                 .x
                 .saturating_add(width - 1)
                 .min(self.width().saturating_sub(1));
-            self.touch_line(pos.y, first_col, end_col);
+            let last_col = self.owned_through(Position::new(end_col, pos.y));
+            self.buffer.set(pos, cell);
+            self.touch_line(pos.y, first_col, last_col);
         }
     }
 
@@ -361,7 +412,9 @@ impl RenderBuffer {
     /// Insert `n` cells at `pos` within a row-bounded region.
     ///
     /// Delegates to [`Buffer::insert_cells`], fills freed cells with
-    /// `fill`, and marks the affected row span touched.
+    /// `fill`, and marks the affected row span touched. The span closes over
+    /// the clusters the shift breaks at either end, which
+    /// [`RenderBuffer::shift_span`] works out from the row as it stands.
     #[allow(dead_code)]
     pub fn insert_cells(
         &mut self,
@@ -371,18 +424,17 @@ impl RenderBuffer {
         fill: &Cell,
     ) {
         let pos = pos.into();
+        let (first_col, last_col) = self.shift_span(pos, bounds_right);
         self.buffer.insert_cells(pos, n, bounds_right, fill);
-        self.touch_line(
-            pos.y,
-            pos.x,
-            bounds_right.min(self.width()).saturating_sub(1),
-        );
+        self.touch_line(pos.y, first_col, last_col);
     }
 
     /// Delete `n` cells at `pos` within a row-bounded region.
     ///
     /// Delegates to [`Buffer::delete_cells`], fills freed right-edge
-    /// cells with `fill`, and marks the affected row span touched.
+    /// cells with `fill`, and marks the affected row span touched. The span
+    /// closes over the clusters the shift breaks at either end, the way
+    /// [`RenderBuffer::insert_cells`] does.
     #[allow(dead_code)]
     pub fn delete_cells(
         &mut self,
@@ -392,12 +444,9 @@ impl RenderBuffer {
         fill: &Cell,
     ) {
         let pos = pos.into();
+        let (first_col, last_col) = self.shift_span(pos, bounds_right);
         self.buffer.delete_cells(pos, n, bounds_right, fill);
-        self.touch_line(
-            pos.y,
-            pos.x,
-            bounds_right.min(self.width()).saturating_sub(1),
-        );
+        self.touch_line(pos.y, first_col, last_col);
     }
 }
 
@@ -434,15 +483,17 @@ impl SurfaceMut for RenderBuffer {
             return;
         }
         // A fill starting on a continuation makes the buffer walk back to the
-        // primary that owns it and blank from there, which can be a column
-        // outside the rect. Ask each row where its damage really begins before
-        // the fill rewrites the evidence.
+        // primary that owns it and blank from there, and a fill ending on a
+        // primary blanks the continuation that primary owns, which lies past
+        // the rect. Ask each row where its damage really begins and ends
+        // before the fill rewrites the evidence.
         // `touch_line` only merges a span into the row's record, so it does not
         // care that the fill has not run yet.
         let last_col = clipped.right().saturating_sub(1);
         for y in clipped.top()..clipped.bottom() {
-            let first_col = self.owned_from(Position::new(clipped.left(), y));
-            self.touch_line(y, first_col, last_col);
+            let first = self.owned_from(Position::new(clipped.left(), y));
+            let last = self.owned_through(Position::new(last_col, y));
+            self.touch_line(y, first, last);
         }
         self.buffer.fill_rect(rect, cell);
     }
@@ -475,6 +526,27 @@ impl SurfaceMut for RenderBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Assert that every column the operation rewrote lies inside `span`.
+    ///
+    /// The row is compared cell by cell against how it stood beforehand, so
+    /// the test does not depend on having guessed which columns move: a span
+    /// that misses one the buffer changed leaves that column stale on screen,
+    /// and this is what says so.
+    fn assert_span_covers_changes(span: TouchedSpan, before: &[Cell], after: &[Cell], what: &str) {
+        for (x, (b, a)) in before.iter().zip(after).enumerate() {
+            if b == a {
+                continue;
+            }
+            let x = x as u16;
+            assert!(
+                (span.first..=span.last).contains(&x),
+                "{what}: column {x} changed but the recorded span is {}..={}",
+                span.first,
+                span.last,
+            );
+        }
+    }
 
     #[test]
     fn test_new_render_buffer() {
@@ -592,6 +664,37 @@ mod tests {
             let span = rb.touched(0).expect("row 0 touched");
             assert_eq!(span.first, want_first, "{name}");
         }
+    }
+
+    /// A wide write covers the column to its right, and a wide primary
+    /// standing there owns one further out still. `Buffer::set` blanks that
+    /// whole cluster, so the damage has to reach past the columns the write
+    /// itself covers or the orphaned continuation survives the frame.
+    #[test]
+    fn damage_reaches_the_continuation_a_wide_neighbour_owns() {
+        let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((3, 0), &Cell::wide("\u{6f22}"));
+        rb.clear_touched();
+
+        let before = rb.line(0).expect("row 0").to_vec();
+        rb.set_cell((2, 0), &Cell::wide("\u{4e16}"));
+        let after = rb.line(0).expect("row 0").to_vec();
+        let span = rb.touched(0).expect("row 0 must be dirty");
+
+        assert!(
+            before[4].is_continuation(),
+            "precondition: the neighbour owned column 4",
+        );
+        assert!(
+            !after[4].is_continuation(),
+            "precondition: the write must have blanked it",
+        );
+        assert_span_covers_changes(span, &before, &after, "a wide write over a wide neighbour");
+        assert_eq!(
+            (span.first, span.last),
+            (2, 4),
+            "damage must reach the neighbour's continuation at column 4",
+        );
     }
 
     #[test]
@@ -764,6 +867,38 @@ mod tests {
     }
 
     #[test]
+    fn fill_rect_damage_reaches_the_continuation_it_blanks() {
+        // The bulk fill blanks the continuation owned by a primary it
+        // overwrites, and that continuation sits one column past the rect.
+        // The rect is not the damage: recording it alone leaves the diff
+        // blind to a column the fill rewrote, and the stale half of the
+        // cluster survives the frame.
+        let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((5, 0), &Cell::wide("\u{6f22}"));
+        rb.clear_touched();
+
+        let before = rb.line(0).expect("row 0").to_vec();
+        rb.fill_rect(Rect::new(3, 0, 3, 1), &Cell::BLANK);
+        let after = rb.line(0).expect("row 0").to_vec();
+        let span = rb.touched(0).expect("row 0 must be dirty");
+
+        assert!(
+            before[6].is_continuation(),
+            "precondition: the primary at the rect's edge owned column 6",
+        );
+        assert!(
+            !after[6].is_continuation(),
+            "precondition: the fill must have blanked it",
+        );
+        assert_span_covers_changes(span, &before, &after, "a fill ending on a wide primary");
+        assert_eq!(
+            (span.first, span.last),
+            (3, 6),
+            "damage must reach the blanked continuation at column 6",
+        );
+    }
+
+    #[test]
     fn fill_rect_width1_clears_orphan_continuation_at_right_edge() {
         // A wide cell straddling `hi - 1`: primary at col 5,
         // continuation at col 6. The fill region `[3, 6)` overwrites
@@ -789,5 +924,138 @@ mod tests {
             "right-straddle orphan continuation must be cleared",
         );
         assert!(rb.buffer.cell(Position::new(6, 0)).unwrap().is_blank());
+    }
+
+    #[test]
+    fn insert_cells_damage_reaches_the_primary_it_orphans() {
+        // Starting the shift on a continuation drags it out from beside the
+        // primary that owns it, leaving a wide cell claiming a column that
+        // now holds something else. The primary sits left of the shift and
+        // its own bytes never change, so only the damage can tell the diff to
+        // repaint it.
+        let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((2, 0), &Cell::wide("\u{6f22}"));
+        rb.clear_touched();
+
+        let before = rb.line(0).expect("row 0").to_vec();
+        rb.insert_cells((3, 0), 1, 8, &Cell::BLANK);
+        let after = rb.line(0).expect("row 0").to_vec();
+        let span = rb.touched(0).expect("row 0 must be dirty");
+
+        assert!(
+            after[2].is_wide(),
+            "precondition: the primary outlives the shift",
+        );
+        assert!(
+            !after[3].is_continuation(),
+            "precondition: the shift took its continuation away",
+        );
+        assert_span_covers_changes(
+            span,
+            &before,
+            &after,
+            "an insert starting on a continuation",
+        );
+        assert_eq!(
+            (span.first, span.last),
+            (2, 7),
+            "damage must reach the orphaned primary at column 2",
+        );
+    }
+
+    #[test]
+    fn insert_cells_damage_reaches_the_continuation_it_orphans() {
+        // The far end breaks the same way. A primary at the last column of
+        // the region is carried off by the shift while the continuation it
+        // owned stays put outside the region, so the damage has to reach one
+        // column past `bounds_right`.
+        let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((5, 0), &Cell::wide("\u{6f22}"));
+        rb.clear_touched();
+
+        let before = rb.line(0).expect("row 0").to_vec();
+        rb.insert_cells((0, 0), 1, 6, &Cell::BLANK);
+        let after = rb.line(0).expect("row 0").to_vec();
+        let span = rb.touched(0).expect("row 0 must be dirty");
+
+        assert!(
+            !after[5].is_wide(),
+            "precondition: the shift carried the primary off",
+        );
+        assert!(
+            after[6].is_continuation(),
+            "precondition: its continuation stayed behind",
+        );
+        assert_span_covers_changes(span, &before, &after, "an insert ending on a wide primary");
+        assert_eq!(
+            (span.first, span.last),
+            (0, 6),
+            "damage must reach the orphaned continuation at column 6",
+        );
+    }
+
+    #[test]
+    fn delete_cells_damage_reaches_the_primary_it_orphans() {
+        // A left shift breaks a cluster at its start exactly as a right one
+        // does, and the primary it strands is just as invisible to a diff
+        // that only reads the region asked for.
+        let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((2, 0), &Cell::wide("\u{6f22}"));
+        rb.clear_touched();
+
+        let before = rb.line(0).expect("row 0").to_vec();
+        rb.delete_cells((3, 0), 1, 8, &Cell::BLANK);
+        let after = rb.line(0).expect("row 0").to_vec();
+        let span = rb.touched(0).expect("row 0 must be dirty");
+
+        assert!(
+            after[2].is_wide(),
+            "precondition: the primary outlives the shift",
+        );
+        assert!(
+            !after[3].is_continuation(),
+            "precondition: the shift took its continuation away",
+        );
+        assert_span_covers_changes(span, &before, &after, "a delete starting on a continuation");
+        assert_eq!(
+            (span.first, span.last),
+            (2, 7),
+            "damage must reach the orphaned primary at column 2",
+        );
+    }
+
+    #[test]
+    fn delete_cells_damage_reaches_the_continuation_it_orphans() {
+        // A primary at the last column of the region is pulled left, and the
+        // continuation it owned sits outside the region where the shift
+        // cannot reach it. Nothing but the damage says that column now holds
+        // half of a cluster whose other half moved.
+        let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((5, 0), &Cell::wide("\u{6f22}"));
+        rb.clear_touched();
+
+        let before = rb.line(0).expect("row 0").to_vec();
+        rb.delete_cells((0, 0), 1, 6, &Cell::BLANK);
+        let after = rb.line(0).expect("row 0").to_vec();
+        let span = rb.touched(0).expect("row 0 must be dirty");
+
+        assert!(
+            after[4].is_wide(),
+            "precondition: the shift pulled the primary left",
+        );
+        assert!(
+            !after[5].is_continuation(),
+            "precondition: it landed without its continuation",
+        );
+        assert!(
+            after[6].is_continuation(),
+            "precondition: the continuation stayed behind",
+        );
+        assert_span_covers_changes(span, &before, &after, "a delete ending on a wide primary");
+        assert_eq!(
+            (span.first, span.last),
+            (0, 6),
+            "damage must reach the orphaned continuation at column 6",
+        );
     }
 }
