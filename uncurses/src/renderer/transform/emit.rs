@@ -29,7 +29,13 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
     // narrow cell that `delete_cells` shifted in beside one. Either way it
     // belongs to no cluster and stands as its own column rather than being
     // folded into one that is not there.
-    if start != here && !line[start].is_wide() {
+    //
+    // A wide cell owns exactly the columns its width accounts for, so a
+    // continuation lying past the pair is unowned too, and for the same
+    // reason. `cluster_end` bounds its walk the same way, which is what
+    // makes the two answer alike about the same column.
+    if start != here && (!line[start].is_wide() || here >= start + usize::from(line[start].width()))
+    {
         return here;
     }
     start
@@ -489,6 +495,21 @@ mod cluster_bounds {
         );
         assert_eq!(cluster_end(&chained, 1), 1, "already the last owned column");
         assert_eq!(cluster_end(&chained, 2), 2, "an orphan stands alone");
+
+        // `cluster_start` is the mirror, so it has to answer alike about the
+        // same column: an orphan past the pair opens its own cluster, and a
+        // column the pair does own still folds back into it.
+        assert_eq!(
+            cluster_start(&chained, 2),
+            2,
+            "an orphan past the pair stands alone"
+        );
+        assert_eq!(cluster_start(&chained, 1), 0, "inside the pair");
+        assert_eq!(
+            cluster_start(&chained, 2),
+            cluster_end(&chained, 2),
+            "the mirrors must agree on a column that is its own cluster"
+        );
     }
 
     #[test]
