@@ -141,6 +141,44 @@ impl RenderBuffer {
     ///
     /// A continuation is placed by the cell that owns it, so [`Buffer::set`]
     /// ignores one arriving on its own and this records no damage for it.
+    /// The column a write at `pos` starts changing.
+    ///
+    /// That is `pos.x` itself, unless `pos` holds a continuation whose owning
+    /// primary lies further left: writing over a continuation blanks that
+    /// primary, so the damage starts there. `Buffer::set` walks back over
+    /// chained continuations to find it, and the damage has to walk with it,
+    /// since stopping one column short leaves the diff blind to half of what
+    /// the write changed.
+    ///
+    /// `Buffer::set` blanks a primary only when the walk lands on a cell wide
+    /// enough to own the column, so the damage may only reach back that far
+    /// under the same condition. A continuation beside a narrow cell, or one
+    /// that reaches the edge, leaves its neighbour untouched and blanks at
+    /// most the column written.
+    ///
+    /// This reads the row as it stands, so callers ask before writing: the
+    /// write is what destroys the evidence.
+    fn owned_from(&self, pos: Position) -> u16 {
+        if pos.x == 0 {
+            return pos.x;
+        }
+        if !self.buffer.cell(pos).is_some_and(Cell::is_continuation) {
+            return pos.x;
+        }
+        let Some(line) = self.buffer.line(pos.y) else {
+            return pos.x;
+        };
+        let mut pc = pos.x - 1;
+        while pc > 0 && line[pc as usize].is_continuation() {
+            pc -= 1;
+        }
+        if line[pc as usize].is_wide() {
+            pc
+        } else {
+            pos.x
+        }
+    }
+
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
         let pos = pos.into();
         // The buffer leaves the column as its owner wrote it, so there is
@@ -163,30 +201,7 @@ impl RenderBuffer {
             let new_width = cell.width().max(1) as u16;
             let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
             let width = new_width.max(prev_width);
-            // Writing over a continuation blanks the primary that owns it,
-            // so the damage starts there. `Buffer::set` walks back over
-            // chained continuations to find that primary, and the damage has
-            // to walk with it: stopping one column short leaves the diff
-            // blind to half of what the buffer changed.
-            let first_col = if existing.is_some_and(Cell::is_continuation) && pos.x > 0 {
-                // `Buffer::set` blanks a primary only when the walk lands on
-                // a cell wide enough to own the column, so the damage may
-                // only reach back that far under the same condition. A
-                // continuation beside a narrow cell, or one that reaches the
-                // edge, leaves its neighbour untouched and blanks at most the
-                // column written.
-                let mut pc = pos.x - 1;
-                let mut owned = false;
-                if let Some(line) = self.buffer.line(pos.y) {
-                    while pc > 0 && line[pc as usize].is_continuation() {
-                        pc -= 1;
-                    }
-                    owned = line[pc as usize].is_wide();
-                }
-                if owned { pc } else { pos.x }
-            } else {
-                pos.x
-            };
+            let first_col = self.owned_from(pos);
             self.buffer.set(pos, cell);
             // `Buffer::set` truncates a cell that does not fit, so the span
             // must not claim a column the row does not have either. The
@@ -418,10 +433,17 @@ impl SurfaceMut for RenderBuffer {
         if clipped.is_empty() {
             return;
         }
+        // A fill starting on a continuation makes the buffer walk back to the
+        // primary that owns it and blank from there, which can be a column
+        // outside the rect. Ask each row where its damage really begins before
+        // the fill rewrites the evidence.
+        let first_cols: Vec<u16> = (clipped.top()..clipped.bottom())
+            .map(|y| self.owned_from(Position::new(clipped.left(), y)))
+            .collect();
         self.buffer.fill_rect(rect, cell);
         let last_col = clipped.right().saturating_sub(1);
-        for y in clipped.top()..clipped.bottom() {
-            self.touch_line(y, clipped.left(), last_col);
+        for (i, y) in (clipped.top()..clipped.bottom()).enumerate() {
+            self.touch_line(y, first_cols[i], last_col);
         }
     }
 
@@ -715,6 +737,30 @@ mod tests {
         for x in 3..6 {
             assert!(rb.buffer.cell(Position::new(x, 0)).unwrap().is_blank());
         }
+    }
+
+    #[test]
+    fn fill_rect_damage_reaches_the_primary_it_blanks() {
+        // The bulk fill blanks the primary that owns a continuation it
+        // overwrites, and that primary can sit left of the rect. The damage
+        // has to reach it: recording only the rect leaves the diff blind to a
+        // column the write changed, and the stale glyph survives the frame.
+        let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((2, 0), &Cell::wide("漢"));
+        rb.clear_touched();
+
+        rb.fill_rect(Rect::new(3, 0, 3, 1), &Cell::BLANK);
+
+        assert!(
+            rb.buffer.cell(Position::new(2, 0)).unwrap().is_blank(),
+            "precondition: the fill must have blanked the primary",
+        );
+        let span = rb.touched(0).expect("row 0 must be dirty");
+        assert_eq!(
+            (span.first, span.last),
+            (2, 5),
+            "damage must reach the blanked primary at column 2",
+        );
     }
 
     #[test]
