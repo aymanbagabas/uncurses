@@ -1325,8 +1325,12 @@ mod tests {
             let mut parser = Decoder::new(DecoderFlags::empty());
             let events = parser.parse(seq);
             let printable = String::from_utf8_lossy(seq).into_owned();
-            match events.first() {
-                Some(Event::KeyPress(k)) => {
+            // The count matters as much as the key. Leaking a second event is
+            // the failure this change exists to fix, so a test that read only
+            // the first would pass while the byte after it escaped.
+            assert_eq!(events.len(), 1, "{printable:?} decoded {events:?}");
+            match &events[0] {
+                Event::KeyPress(k) => {
                     assert_eq!((k.code, k.modifiers), want, "{printable:?}");
                 }
                 other => panic!("{printable:?} decoded {other:?}, want a key"),
