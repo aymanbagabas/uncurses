@@ -1386,6 +1386,37 @@ mod tests {
         );
     }
 
+    /// The bytes 03/12 to 03/15 are parameter bytes reserved for private use.
+    /// One at the head of the string says which private convention the sequence
+    /// belongs to, and several of those are decoded here. One further in leaves
+    /// the sequence structurally sound and says nothing about what the numbers
+    /// around it mean, so no control function here can claim it. Reading them
+    /// anyway is how `CSI 1 ? ; 2 A` came to be answered as shift with up, by
+    /// taking the second group and never looking at the first.
+    #[test]
+    fn a_private_use_parameter_is_not_interpreted() {
+        for seq in [&b"\x1b[1?;2A"[..], &b"\x1b[1?m"[..], &b"\x1b[?1?c"[..]] {
+            let mut parser = Decoder::new(DecoderFlags::empty());
+            let events = parser.parse(seq);
+            let printable = String::from_utf8_lossy(seq).into_owned();
+            assert_eq!(events.len(), 1, "{printable:?} decoded {events:?}");
+            assert!(
+                matches!(events[0], Event::UnknownCsi(_)),
+                "{printable:?} decoded {:?}; a private-use parameter names no function here",
+                events[0]
+            );
+        }
+
+        // A marker at the head is the convention the sequence belongs to, and
+        // is decoded as usual.
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[?2026;2$y");
+        assert!(
+            matches!(events.first(), Some(Event::ModeReport { .. })),
+            "a leading private marker must still decode: {events:?}"
+        );
+    }
+
     #[test]
     fn test_parse_sgr_pixel_mouse_decoded_as_offsets() {
         // SGR-Pixel (mode 1016) uses the same wire format as SGR (1006). The
