@@ -366,13 +366,23 @@ impl<I: Input, O: Write> Program<I, O> {
     ///
     /// Cursor visibility and the Kitty keyboard stack are per-screen-buffer
     /// on some terminals, so both are re-asserted on the newly active buffer.
+    ///
+    /// Autowrap (DECAWM) is turned off for the alternate screen and handed
+    /// back on the way out. A full-screen frame addresses rows absolutely,
+    /// which holds only while the screen has the rows the program painted: a
+    /// terminal that draws a grapheme wider than it reports makes a row
+    /// overrun, and autowrap would turn that overrun into an extra row that
+    /// moves every row below it. Off, the overrun is clipped at the last
+    /// column instead, which costs one mis-drawn glyph and leaves every other
+    /// cell where the program put it.
     pub fn enter_alt_screen(&mut self) -> io::Result<()> {
         self.set_alt_screen(true)
     }
 
     /// Leave the alternate screen buffer (DECRST 1049) and flush, restoring
     /// the normal buffer and its scrollback. The managed area becomes an
-    /// inline band again, addressed with relative moves.
+    /// inline band again, addressed with relative moves, and autowrap goes
+    /// back to the reader who owns the shell.
     pub fn exit_alt_screen(&mut self) -> io::Result<()> {
         self.set_alt_screen(false)
     }
@@ -409,8 +419,38 @@ impl<I: Input, O: Write> Program<I, O> {
                     kitty::KittyKeyboardMode::Set,
                 )?;
             }
+            // Autowrap belongs to the reader on the normal buffer and to this
+            // program on the alternate one, so it follows the switch.
+            //
+            // A full-screen frame addresses rows absolutely, which holds only
+            // while the screen has as many rows as the program painted. A
+            // terminal that draws a grapheme wider than it reports makes a row
+            // overrun, and autowrap turns that overrun into an extra row:
+            // every row below it moves, the bottom one scrolls the screen, and
+            // from then on each absolute address lands somewhere else. With
+            // autowrap off the overrun is clipped at the last column instead,
+            // which costs one mis-drawn glyph and keeps every other cell where
+            // the program put it.
+            self.set_autowrap(!enter)?;
         }
         self.screen.flush()
+    }
+
+    /// Turn the terminal's autowrap on or off, and tell the screen which it
+    /// is.
+    ///
+    /// The two travel together on purpose. The renderer plans the cursor
+    /// around what the terminal does at the last column, so a mode emitted
+    /// without the screen hearing about it leaves every move from the margin
+    /// planned for the other terminal.
+    pub(super) fn set_autowrap(&mut self, on: bool) -> io::Result<()> {
+        if on {
+            mode::Mode::AUTO_WRAP.set(&mut self.screen)?;
+        } else {
+            mode::Mode::AUTO_WRAP.reset(&mut self.screen)?;
+        }
+        self.screen.set_autowrap(on);
+        Ok(())
     }
 
     /// Show the terminal cursor (DECSET 25) and flush.
@@ -679,6 +719,12 @@ impl<I: Input, O: Write> Program<I, O> {
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.reset(&mut self.screen)?;
         }
+        // Autowrap belongs to whoever runs the shell. A program that took it
+        // for the alternate screen gives it back here, which is the path
+        // `finish` and `pause` both leave through.
+        if self.state.alt_screen {
+            self.set_autowrap(true)?;
+        }
         self.screen.invalidate_cursor();
         Ok(())
     }
@@ -716,6 +762,12 @@ impl<I: Input, O: Write> Program<I, O> {
         }
         if self.state.grapheme_clusters {
             mode::Mode::UNICODE_CORE.set(&mut self.screen)?;
+        }
+        // A session resumed onto the alternate screen takes autowrap off
+        // again with it. Coming back without this leaves the terminal
+        // wrapping while the renderer plans for a terminal that does not.
+        if fullscreen {
+            self.set_autowrap(false)?;
         }
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.screen)?;

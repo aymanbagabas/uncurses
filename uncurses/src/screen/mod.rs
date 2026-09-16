@@ -120,6 +120,8 @@ pub struct Screen<W: Write> {
     eaw_wide: bool,
     /// Whether the managed area is the whole viewport or an inline band.
     fullscreen: bool,
+    /// Whether the terminal wraps at the last column, as last told.
+    autowrap: bool,
     /// Cursor visibility (DECTCEM). Render-coupled: a frame hides a *visible*
     /// cursor around the cell diff, and bracketing a cursor the caller
     /// deliberately hid would turn it back on.
@@ -167,6 +169,7 @@ impl<W: Write> Screen<W> {
             height: 0,
             eaw_wide: false,
             fullscreen: false,
+            autowrap: true,
             cursor_visible: true,
             sync_updates: false,
             grapheme_clusters: false,
@@ -590,6 +593,25 @@ impl<W: Write> Screen<W> {
         // move cells that should have stayed put, and the repaint that fixes
         // them is only invisible inside a synchronized frame.
         self.renderer.set_sync_output(enabled);
+    }
+
+    /// Record whether the terminal wraps a write that reaches the last
+    /// column, so the renderer plans the cursor for the terminal it has.
+    ///
+    /// This records; it emits nothing. Autowrap is a terminal mode, and
+    /// whoever emits it says so here. With it on the cursor parks in the
+    /// right-margin phantom cell after a write that fills the row; with it
+    /// off the cursor stays on the last column, and a move planned from the
+    /// wrong one of those lands a column out.
+    pub fn set_autowrap(&mut self, on: bool) {
+        self.autowrap = on;
+        self.renderer.set_autowrap(on);
+    }
+
+    /// Whether the terminal wraps a write that reaches the last column, as
+    /// last recorded by [`set_autowrap`](Self::set_autowrap).
+    pub fn autowrap(&self) -> bool {
+        self.autowrap
     }
 
     /// Whether [synchronized output](Self::set_synchronized_output) frame

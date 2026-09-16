@@ -719,6 +719,101 @@ fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
     assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 3);
 }
 
+/// A full-screen frame addresses rows absolutely, which holds only while
+/// the screen has the rows the program painted. Autowrap turns a row that
+/// overruns into an extra row, and the extra row at the bottom scrolls the
+/// screen, so every address after that lands somewhere else.
+#[test]
+fn the_alternate_screen_is_entered_with_autowrap_off() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.set_alt_screen(true).unwrap();
+        program.screen_mut().flush().unwrap();
+    }
+    let out = written(&buf);
+    assert!(out.contains("\x1b[?7l"), "autowrap stayed on: {out:?}");
+    assert!(
+        !out.contains("\x1b[?7h"),
+        "autowrap was handed back while the alternate screen was in use: {out:?}"
+    );
+}
+
+/// Teardown is where `finish` and `pause` both leave through, and it does
+/// not go past the alternate-screen transition, so the mode has to be handed
+/// back there as well. Without this the reader's shell keeps a terminal that
+/// stopped wrapping, which is obscure to diagnose and sticky to undo.
+#[test]
+fn teardown_hands_autowrap_back() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.set_alt_screen(true).unwrap();
+        program.reset().unwrap();
+        program.screen_mut().flush().unwrap();
+    }
+    let out = written(&buf);
+    let off = out.find("\x1b[?7l").expect("autowrap was taken");
+    let on = out.rfind("\x1b[?7h").expect("autowrap was handed back");
+    assert!(off < on, "it was handed back before it went off: {out:?}");
+}
+
+/// The other half of the same seam: a session resumed onto the alternate
+/// screen takes the mode with it. Coming back without it leaves the terminal
+/// wrapping while the renderer plans for one that does not.
+#[test]
+fn a_resumed_session_takes_autowrap_off_again() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.set_alt_screen(true).unwrap();
+        program.reset().unwrap();
+        program.restore().unwrap();
+        program.screen_mut().flush().unwrap();
+    }
+    let out = written(&buf);
+    assert_eq!(
+        out.matches("\x1b[?7l").count(),
+        2,
+        "once on the way in and once on the way back: {out:?}"
+    );
+}
+
+/// The mode and the screen travel together. The renderer plans the cursor
+/// around what the terminal does at the last column, so a mode emitted
+/// without the screen hearing about it leaves every move from the margin
+/// planned for the other terminal.
+#[test]
+fn the_screen_is_told_which_terminal_it_has() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    assert!(program.screen().autowrap(), "a terminal wraps until told");
+    program.set_alt_screen(true).unwrap();
+    assert!(!program.screen().autowrap());
+    program.set_alt_screen(false).unwrap();
+    assert!(program.screen().autowrap());
+}
+
+/// Autowrap on the normal buffer belongs to whoever runs the shell, so a
+/// program that turned it off gives it back on the way out.
+#[test]
+fn leaving_the_alternate_screen_gives_autowrap_back() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.set_alt_screen(true).unwrap();
+        program.set_alt_screen(false).unwrap();
+        program.screen_mut().flush().unwrap();
+    }
+    let out = written(&buf);
+    let off = out.find("\x1b[?7l").expect("autowrap was turned off");
+    let on = out.find("\x1b[?7h").expect("autowrap was given back");
+    assert!(
+        off < on,
+        "autowrap was given back before it went off: {out:?}"
+    );
+}
+
 #[test]
 fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
     use crate::ansi::kitty::KittyKeyboardFlags;
