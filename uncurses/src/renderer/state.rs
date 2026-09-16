@@ -215,6 +215,13 @@ pub struct Renderer {
     pub(super) color_profile: ColorCache,
     /// Whether we're in fullscreen mode (alt screen).
     pub(super) fullscreen: bool,
+    /// Whether the terminal wraps a write that reaches the last column.
+    ///
+    /// What the terminal was told, not what the renderer would prefer:
+    /// [`Screen`](crate::screen::Screen) records the mode it emitted and the
+    /// renderer only reads it. The two have to agree, because the cursor is
+    /// somewhere different at the margin depending on the answer.
+    pub(super) autowrap: bool,
     /// Whether to use relative cursor positioning.
     pub(super) relative_cursor: bool,
     /// Whether scroll optimization is enabled.
@@ -270,6 +277,7 @@ impl Renderer {
             opts: Optimizations::default(),
             color_profile: ColorCache::new(Profile::TrueColor),
             fullscreen: false,
+            autowrap: true,
             relative_cursor: true,
             scroll_optimize: true,
             sync_output: false,
@@ -337,6 +345,14 @@ impl Renderer {
     /// output relative to the application surface.
     pub(crate) fn set_fullscreen(&mut self, fullscreen: bool) {
         self.fullscreen = fullscreen;
+    }
+
+    /// Record whether the terminal wraps at the last column.
+    ///
+    /// Emitting the mode belongs to whoever owns the terminal; this is how
+    /// the answer reaches the renderer, which plans the cursor around it.
+    pub(crate) fn set_autowrap(&mut self, on: bool) {
+        self.autowrap = on;
     }
 
     /// Set whether cursor moves should be planned relative to the

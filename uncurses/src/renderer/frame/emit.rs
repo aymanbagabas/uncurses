@@ -6,7 +6,6 @@
 
 use std::io;
 
-use crate::ansi;
 use crate::layout::{Position, Size};
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
@@ -245,9 +244,14 @@ impl Renderer {
         self.cur.y = None;
     }
 
-    /// Write a single grapheme to the output buffer, handling the
-    /// right-margin auto-wrap "phantom" state and protecting the lower
-    /// right corner from triggering an unwanted scroll in fullscreen mode.
+    /// Write a single grapheme to the output buffer, tracking what the
+    /// terminal's cursor does at the right margin.
+    ///
+    /// With autowrap on the cursor parks in the right-margin "phantom"
+    /// cell; with it off the terminal holds the cursor on the last column.
+    /// Which of those is true comes from
+    /// [`Screen::set_autowrap`](crate::screen::Screen::set_autowrap), so the
+    /// model follows the mode that was actually emitted.
     ///
     /// Returns whether the cell was written. `width` here is the buffer
     /// width — the column count of the surface we render into.
@@ -278,42 +282,23 @@ impl Renderer {
             self.cur.at_phantom = false;
         }
 
-        // True lower-right corner: cursor sitting at (width-1, height-1)
-        // with a single-column cell about to be written. Multi-column
-        // cells that merely *reach* the last column don't apply — a
-        // width-2 cell starting at width-2 occupies the last column but
-        // the cursor itself is at width-2, not width-1, so writing it
-        // doesn't trigger the bottom-right scroll quirk.
-        let is_lower_right_corner = self.fullscreen
-            && cell_width == 1
-            && self.cur.pos().x + 1 == surface_width
-            && self.cur.pos().y + 1 == surface_height;
-
-        if is_lower_right_corner {
-            // Writing the bottom-right corner in alt-screen normally pushes
-            // the cursor into pending-wrap. The very next emission (or
-            // sometimes even the next CSI) can then provoke an auto-wrap
-            // that scrolls the alt screen up by one row. Disable auto-wrap
-            // for just this glyph and restore it immediately.
-            ansi::mode::Mode::AUTO_WRAP.reset(out)?;
-            out.extend_from_slice(content);
-            ansi::mode::Mode::AUTO_WRAP.set(out)?;
-            // Cursor stays at the corner — explicitly. No phantom.
-            // (Some terminals leave it at width-1, others at width; treat
-            // it as width-1 since auto-wrap is now off and a subsequent
-            // print would just overwrite the same cell.)
-            self.cur.x = Some(surface_width.saturating_sub(1));
-            self.cur.at_phantom = false;
-            return Ok(());
-        }
-
         out.extend_from_slice(content);
         let new_x = self.cur.pos().x.saturating_add(cell_width);
         if new_x >= surface_width {
-            // Park at the right-margin phantom; clamp tracked column so it
-            // doesn't drift past `surface_width` over successive writes.
-            self.cur.x = Some(surface_width);
-            self.cur.at_phantom = true;
+            if !self.autowrap {
+                // The terminal holds the cursor on the last column rather
+                // than moving it. A phantom recorded instead would plan the
+                // next move from a column the cursor never reached, and at
+                // the bottom-right corner it would also invite the wrap that
+                // scrolls the whole screen by a row.
+                self.cur.x = Some(surface_width.saturating_sub(1));
+                self.cur.at_phantom = false;
+            } else {
+                // Park at the right-margin phantom; clamp tracked column so it
+                // doesn't drift past `surface_width` over successive writes.
+                self.cur.x = Some(surface_width);
+                self.cur.at_phantom = true;
+            }
         } else {
             self.cur.x = Some(new_x);
         }

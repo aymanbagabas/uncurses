@@ -290,8 +290,9 @@ fn ech_clears_trailing_blanks_with_el_when_row_shrinks() {
 #[test]
 fn scroll_up_by_one_in_fullscreen_uses_lf_with_rep_terminator() {
     // With REP available the new bottom row collapses to `F\x1b[8b`
-    // for the run, followed by a manual autowrap-off cell so the
-    // cursor does not pre-wrap.
+    // for the run, followed by the last cell written plainly. Autowrap
+    // is off for the whole alternate screen, so the corner needs no
+    // toggles of its own.
     let opts = Optimizations::none()
         .union(Optimizations::SU_SD)
         .union(Optimizations::REP);
@@ -310,7 +311,7 @@ fn scroll_up_by_one_in_fullscreen_uses_lf_with_rep_terminator() {
     }
     fill_row(&mut buf, 4, "F");
     let actual = render_to_vec(&mut r, &mut buf);
-    assert_golden(actual, b"\r\nF\x1b[8b\x1b[?7lF\x1b[?7h");
+    assert_golden(actual, b"\r\nF\x1b[8bF");
 }
 
 #[test]
@@ -333,7 +334,7 @@ fn scroll_up_by_one_in_fullscreen_without_su_sd_falls_back_to_lf() {
     }
     fill_row(&mut buf, 4, "F");
     let actual = render_to_vec(&mut r, &mut buf);
-    assert_golden(actual, b"\r\nF\x1b[8b\x1b[?7lF\x1b[?7h");
+    assert_golden(actual, b"\r\nF\x1b[8bF");
 }
 
 // --- ICH --------------------------------------------------------------------

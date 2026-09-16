@@ -1280,7 +1280,7 @@ fn color_downsampling_emits_profile_specific_sgr() {
 // without runtime mutation.
 
 #[test]
-fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
+fn a_glyph_on_the_last_column_needs_no_autowrap_toggle() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (5, 3));
@@ -1292,11 +1292,11 @@ fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
         screen.flush().unwrap();
     }
     let out = s(&buf);
-    assert!(
-        out.contains("\x1b[?7lX\x1b[?7h"),
-        "missing autowrap wrap: {out:?}"
-    );
     assert_eq!(out.matches('X').count(), 3);
+    assert!(
+        !out.contains("\x1b[?7l") && !out.contains("\x1b[?7h"),
+        "the frame toggled autowrap around a cell: {out:?}"
+    );
 }
 
 // --- line clearing / repeated content ---
