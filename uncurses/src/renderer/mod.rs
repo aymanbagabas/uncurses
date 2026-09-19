@@ -97,6 +97,10 @@ mod render_tests;
 #[path = "tests/optimizations_golden.rs"]
 mod optimizations_golden;
 
+#[cfg(test)]
+#[path = "tests/replay.rs"]
+mod replay;
+
 pub use buffer::RenderBuffer;
 pub use caps::Optimizations;
 pub use state::Renderer;
