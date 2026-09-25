@@ -1070,6 +1070,41 @@ fn request_origin_is_a_no_op_in_fullscreen() {
     assert!(written(&buf).is_empty(), "{:?}", written(&buf));
 }
 
+/// `ProgramOptions` is where an application says how it wants the ambiguous
+/// legacy keys read, and the decoder behind the source is the only thing
+/// that can act on it. Taking the options is what carries it there.
+///
+/// This drives a real pty because `init_with` enters raw mode and sizes
+/// itself from the terminal, so there is no reaching it otherwise.
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn init_carries_the_legacy_key_choice_to_the_decoder() {
+    use crate::event::DecoderFlags;
+
+    // The master must outlive the slave, so bind it for the whole test.
+    let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let term = crate::terminal::Terminal::new(&slave, &slave, crate::terminal::EnvList::new());
+    let mut program = Program::new(term).expect("Program::new over a pty slave");
+    assert!(
+        program.source.lock().unwrap().decoder_flags().is_empty(),
+        "each byte reads as the named key until an application says otherwise"
+    );
+
+    program
+        .init_with(ProgramOptions {
+            legacy_keys: DecoderFlags::CTRL_M,
+            ..ProgramOptions::default()
+        })
+        .expect("init over a pty slave");
+
+    assert_eq!(
+        program.source.lock().unwrap().decoder_flags(),
+        DecoderFlags::CTRL_M
+    );
+}
+
 /// `init` must grant the line-discipline optimizations from the state the
 /// terminal is in *after* `make_raw`, not the one it was in before. Raw mode
 /// clears `OPOST`, so tabs and backspace reach the terminal untouched and `\n`
