@@ -149,11 +149,11 @@ impl Decoder {
 
     /// Force-drain any buffered partial escape sequence as best-effort events.
     ///
-    /// A leading `ESC` byte is emitted as [`KeyCode::Escape`] by this legacy
-    /// buffered drain path; the remaining bytes are then re-parsed normally (so
-    /// e.g. `ESC '['` becomes an `Esc` keypress followed by a `Char('[')`
-    /// keypress). Source-driven timeout expiry uses a separate leading-byte
-    /// helper that can honor [`DecoderFlags::CTRL_OPEN_BRACKET`].
+    /// A leading `ESC` byte resolves to whichever key
+    /// [`DecoderFlags::CTRL_OPEN_BRACKET`] says it is, the same answer the
+    /// source's timeout path gives; the remaining bytes are then re-parsed
+    /// normally, so e.g. `ESC '['` becomes that keypress followed by a
+    /// `Char('[')` keypress.
     ///
     /// While a bracketed paste is in progress this is a no-op — paste content
     /// is allowed to span arbitrary time.
