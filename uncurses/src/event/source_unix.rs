@@ -478,6 +478,59 @@ mod tests {
         assert!(src.try_read().is_none());
     }
 
+    /// The flags reach the decoder, and what they change is which key a byte
+    /// is called. `0x0d` is `enter` by default and `ctrl+m` when a caller
+    /// asks for that reading.
+    #[test]
+    fn the_decoder_flags_a_caller_chose_are_the_ones_used() {
+        use crate::event::DecoderFlags;
+
+        let (rx, tx) = make_pipe();
+        let mut src = EventSource::new(rx).unwrap();
+        write_byte(&tx, 0x0d);
+        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        let Event::KeyPress(k) = src.read().unwrap() else {
+            panic!("expected a key")
+        };
+        assert_eq!(k.code, KeyCode::Enter, "the reading a terminal means");
+
+        let (rx, tx) = make_pipe();
+        let mut src = EventSource::new(rx)
+            .unwrap()
+            .with_decoder_flags(DecoderFlags::CTRL_M);
+        assert_eq!(src.decoder_flags(), DecoderFlags::CTRL_M);
+        write_byte(&tx, 0x0d);
+        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        let Event::KeyPress(k) = src.read().unwrap() else {
+            panic!("expected a key")
+        };
+        assert_eq!(k.code, KeyCode::Char('m'));
+        assert_eq!(k.modifiers, crate::event::KeyModifiers::CTRL);
+    }
+
+    /// The same choice on a source already in use, which is the seam
+    /// [`Program::init_with`](crate::program::Program::init_with) reaches
+    /// through when it carries `ProgramOptions::legacy_keys`.
+    #[test]
+    fn the_flags_can_be_chosen_on_a_source_already_built() {
+        use crate::event::DecoderFlags;
+
+        let (rx, tx) = make_pipe();
+        let mut src = EventSource::new(rx).unwrap();
+        assert!(
+            src.decoder_flags().is_empty(),
+            "a source reads each as the named key until told otherwise"
+        );
+        src.set_decoder_flags(DecoderFlags::CTRL_I);
+        write_byte(&tx, 0x09);
+        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        let Event::KeyPress(k) = src.read().unwrap() else {
+            panic!("expected a key")
+        };
+        assert_eq!(k.code, KeyCode::Char('i'));
+        assert_eq!(k.modifiers, crate::event::KeyModifiers::CTRL);
+    }
+
     #[test]
     fn esc_deadline_does_not_fire_during_paste() {
         // Pre-fix latent bug: while in paste, a partial ESC at the
