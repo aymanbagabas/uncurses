@@ -281,12 +281,7 @@ impl Decoder {
     /// event; the caller should advance its buffer by one byte.
     pub(crate) fn expire_leading(&self, b0: u8) -> Option<Event> {
         if b0 == 0x1b {
-            let key = if self.flags.contains(DecoderFlags::CTRL_OPEN_BRACKET) {
-                Key::new(KeyCode::Char('['), KeyModifiers::CTRL).normalized()
-            } else {
-                Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized()
-            };
-            Some(Event::KeyPress(key))
+            Some(Event::KeyPress(self.lone_escape()))
         } else if is_c1_introducer(b0) {
             // 0x80..=0x9F → '@'..'_' (Ctrl+Alt+letter convention).
             // Lowercase ASCII letters so `normalize()` doesn't
@@ -298,6 +293,21 @@ impl Decoder {
             ))
         } else {
             None
+        }
+    }
+
+    /// What a lone `ESC` is, once nothing more is coming for it.
+    ///
+    /// `0x1b` is the Escape key and `ctrl+[` both, and
+    /// [`CTRL_OPEN_BRACKET`](DecoderFlags::CTRL_OPEN_BRACKET) is how an
+    /// application says which it wants. Said in one place because a byte
+    /// resolves on more than one path, and a reader who asked for the Ctrl
+    /// reading means it wherever the byte lands.
+    pub(super) fn lone_escape(&self) -> Key {
+        if self.flags.contains(DecoderFlags::CTRL_OPEN_BRACKET) {
+            Key::new(KeyCode::Char('['), KeyModifiers::CTRL).normalized()
+        } else {
+            Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized()
         }
     }
 
@@ -2296,6 +2306,165 @@ mod tests {
         let k = press(p.parse(b"\x1b\x1b[A"));
         assert_eq!(k.code, KeyCode::Up);
         assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn esc_cr_is_alt_enter() {
+        // The legacy spelling of Alt+Enter, and what an editor with no
+        // Kitty keyboard support binds Shift+Enter to. What tells it apart
+        // from a reader pressing Escape and then Enter is the escape
+        // deadline, not a read boundary: the decoder holds a lone ESC across
+        // reads, so a CR arriving in a later read is still Alt+Enter while
+        // the deadline runs.
+        let mut p = Decoder::new(DecoderFlags::empty());
+        let k = press(p.parse(b"\x1b\r"));
+        assert_eq!(k.code, KeyCode::Enter);
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn esc_lf_is_alt_enter() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        let k = press(p.parse(b"\x1b\n"));
+        assert_eq!(k.code, KeyCode::Enter);
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn esc_tab_is_alt_tab() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        let k = press(p.parse(b"\x1b\t"));
+        assert_eq!(k.code, KeyCode::Tab);
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn a_lone_escape_follows_the_flag_that_renames_it_wherever_it_lands() {
+        // `0x1b` is the Escape key and `ctrl+[` both, so an application that
+        // asked for the Ctrl reading means it on every path the byte can
+        // resolve through, not only the one the source happens to take.
+        let mut p = Decoder::new(DecoderFlags::CTRL_OPEN_BRACKET);
+        assert!(p.parse(b"\x1b").is_empty(), "a lone ESC waits");
+        let k = press(p.drain());
+        assert_eq!(k.code, KeyCode::Char('['));
+        assert_eq!(k.modifiers, KeyModifiers::CTRL);
+
+        // And the inner one of a run, which the outer ESC promotes. The run
+        // waits too: the inner ESC is a prefix until the deadline says it is
+        // not.
+        let mut p = Decoder::new(DecoderFlags::CTRL_OPEN_BRACKET);
+        assert!(p.parse(b"\x1b\x1b").is_empty());
+        let k = press(p.drain());
+        assert_eq!(k.code, KeyCode::Char('['));
+        assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::ALT);
+    }
+
+    /// Without the flag the same bytes are the Escape key, which is what a
+    /// terminal means by them.
+    #[test]
+    fn a_lone_escape_is_the_escape_key_by_default() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        assert!(p.parse(b"\x1b").is_empty());
+        let k = press(p.drain());
+        assert_eq!(k.code, KeyCode::Escape);
+        assert_eq!(k.modifiers, KeyModifiers::empty());
+    }
+
+    #[test]
+    fn esc_nul_is_alt_ctrl_space() {
+        // Every C0 byte has a key in the bare mapping, so every one of them
+        // has an Alt spelling. `0x00` is the one at the bottom of the range.
+        let mut p = Decoder::new(DecoderFlags::empty());
+        let k = press(p.parse(b"\x1b\x00"));
+        assert_eq!(k.code, KeyCode::Space);
+        assert_eq!(k.modifiers, KeyModifiers::ALT | KeyModifiers::CTRL);
+    }
+
+    #[test]
+    fn esc_the_top_of_the_c0_range_is_alt_ctrl_punctuation() {
+        // `0x1c` to `0x1f` are Ctrl+\, Ctrl+], Ctrl+^ and Ctrl+_, which sit
+        // above the Ctrl-letter range and were reached by no Alt spelling.
+        for (byte, glyph) in [(0x1c_u8, '\\'), (0x1d, ']'), (0x1e, '^'), (0x1f, '_')] {
+            let mut p = Decoder::new(DecoderFlags::empty());
+            let k = press(p.parse(&[0x1b, byte]));
+            assert_eq!(k.code, KeyCode::Char(glyph), "for {byte:#04x}");
+            assert_eq!(
+                k.modifiers,
+                KeyModifiers::ALT | KeyModifiers::CTRL,
+                "for {byte:#04x}"
+            );
+        }
+    }
+
+    #[test]
+    fn esc_del_follows_the_flag_that_renames_the_bare_byte() {
+        // `BACKSPACE_IS_DELETE` renames a bare `0x7f`, and the prefixed form
+        // is the same key with Alt because it is asked for rather than
+        // named again.
+        let mut p = Decoder::new(DecoderFlags::empty());
+        let k = press(p.parse(b"\x1b\x7f"));
+        assert_eq!(k.code, KeyCode::Backspace);
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+
+        let mut p = Decoder::new(DecoderFlags::BACKSPACE_IS_DELETE);
+        let k = press(p.parse(b"\x1b\x7f"));
+        assert_eq!(k.code, KeyCode::Delete);
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn esc_cr_follows_the_flag_that_renames_the_bare_byte() {
+        // `CTRL_M` makes a bare `0x0d` Ctrl+M rather than Enter. The
+        // prefixed form is the same key with Alt added, because it is
+        // decoded by asking the bare mapping rather than by naming the key
+        // again.
+        let mut p = Decoder::new(DecoderFlags::CTRL_M);
+        let k = press(p.parse(b"\x1b\r"));
+        assert_eq!(k.code, KeyCode::Char('m'));
+        assert_eq!(k.modifiers, KeyModifiers::ALT | KeyModifiers::CTRL);
+
+        let mut p = Decoder::new(DecoderFlags::CTRL_I);
+        let k = press(p.parse(b"\x1b\t"));
+        assert_eq!(k.code, KeyCode::Char('i'));
+        assert_eq!(k.modifiers, KeyModifiers::ALT | KeyModifiers::CTRL);
+    }
+
+    #[test]
+    fn a_cr_in_a_later_read_still_joins_the_escape_before_it() {
+        // The decoder holds a lone ESC across reads, so what separates
+        // `alt+enter` from Escape-then-Enter is the deadline rather than a
+        // read boundary. This is the half that keeps `alt+enter` working
+        // when the two bytes land in different reads.
+        let mut p = Decoder::new(DecoderFlags::empty());
+        assert!(p.parse(b"\x1b").is_empty(), "a lone ESC waits");
+        let k = press(p.parse(b"\r"));
+        assert_eq!(k.code, KeyCode::Enter);
+        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn a_lone_esc_still_waits_for_its_timeout_before_enter() {
+        // Escape typed on its own, and Enter afterwards: the two are
+        // separate keys, which is what the timeout is for. Nothing resolves
+        // until it expires.
+        let mut p = Decoder::new(DecoderFlags::empty());
+        assert!(p.parse(b"\x1b").is_empty(), "a lone ESC waits");
+        // What `EventSource::expire_partial` does once the deadline has
+        // passed, before it reads again: it drains the parser, which
+        // resolves the buffered ESC. Only then has the Enter nothing left to
+        // attach to. Feeding the CR without draining first would join them,
+        // whichever read it came in on.
+        let mut events = p.drain();
+        events.extend(p.parse(b"\r"));
+        match events.as_slice() {
+            [Event::KeyPress(esc), Event::KeyPress(enter)] => {
+                assert_eq!(esc.code, KeyCode::Escape);
+                assert_eq!(esc.modifiers, KeyModifiers::empty());
+                assert_eq!(enter.code, KeyCode::Enter);
+                assert_eq!(enter.modifiers, KeyModifiers::empty());
+            }
+            other => panic!("expected [Esc, Enter], got {other:?}"),
+        }
     }
 
     #[test]
