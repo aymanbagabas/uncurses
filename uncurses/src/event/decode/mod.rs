@@ -168,6 +168,19 @@ impl Decoder {
         events
     }
 
+    /// Choose a different reading for the ambiguous legacy keys.
+    ///
+    /// Buffered input is left alone: the flags decide how a byte is named,
+    /// not how it is framed, so a sequence half-read keeps being read.
+    pub fn set_flags(&mut self, flags: DecoderFlags) {
+        self.flags = flags;
+    }
+
+    /// The reading currently chosen for the ambiguous legacy keys.
+    pub fn flags(&self) -> DecoderFlags {
+        self.flags
+    }
+
     /// Enable or disable UTF-8 mouse decoding (xterm mode 1005).
     ///
     /// When enabled, X10-style `CSI M` mouse reports read their three values as
@@ -199,19 +212,6 @@ impl Decoder {
     /// returns `(0, None)`. The caller (typically an `EventSource`)
     /// must apply its own timeout policy and synthesise a bare
     /// [`KeyCode::Escape`] when desired.
-    /// Choose a different reading for the ambiguous legacy keys.
-    ///
-    /// Buffered input is left alone: the flags decide how a byte is named,
-    /// not how it is framed, so a sequence half-read keeps being read.
-    pub fn set_flags(&mut self, flags: DecoderFlags) {
-        self.flags = flags;
-    }
-
-    /// The reading currently chosen for the ambiguous legacy keys.
-    pub fn flags(&self) -> DecoderFlags {
-        self.flags
-    }
-
     pub fn parse_one(&mut self, data: &[u8]) -> (usize, Option<Event>) {
         if let Some(evt) = self.pending.borrow_mut().pop_front() {
             return (0, Some(evt));
