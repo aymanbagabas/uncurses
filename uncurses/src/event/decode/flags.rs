@@ -26,6 +26,7 @@ bitflags! {
     /// With no flag set, the decoder reports the following mappings:
     ///
     /// * `0x00` → `Ctrl+Space`
+    /// * `0x08` → `Ctrl+h`
     /// * `0x09` → `Tab`
     /// * `0x0d` → `Enter`
     /// * `0x7f` → `Backspace`
@@ -34,8 +35,20 @@ bitflags! {
     ///
     /// Set the corresponding flag to swap each mapping to its alternative
     /// reading.
+    ///
+    /// `0x08` is the one byte with three readings rather than two, so two
+    /// flags choose between them:
+    ///
+    /// | flags | `0x08` reads as |
+    /// | --- | --- |
+    /// | neither | `Ctrl+h` |
+    /// | [`BS_IS_BACKSPACE`](Self::BS_IS_BACKSPACE) | `Backspace` |
+    /// | [`BS_IS_CTRL_BACKSPACE`](Self::BS_IS_CTRL_BACKSPACE) | `Ctrl+Backspace` |
+    ///
+    /// The second of those holds the first, so the two cannot disagree: it
+    /// is the Backspace reading with a modifier on it.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub struct DecoderFlags: u8 {
+    pub struct DecoderFlags: u16 {
         /// Report `0x00` as `Ctrl+@` instead of `Ctrl+Space`.
         const CTRL_AT             = 1 << 0;
         /// Report `0x09` as `Ctrl+i` instead of `Tab`.
@@ -50,6 +63,24 @@ bitflags! {
         /// sequence that never finished, and the inner `ESC` of a run of
         /// them, which reads as `Alt+Ctrl+[`.
         const CTRL_OPEN_BRACKET   = 1 << 3;
+        /// Report `0x08` as `Backspace` instead of `Ctrl+h`.
+        ///
+        /// A terminal whose erase character is `^H` sends this for the
+        /// Backspace key, which is the VT100 reading and what `stty erase
+        /// ^H` asks for. Such a terminal usually sends `0x7f` for Delete,
+        /// which is [`BACKSPACE_IS_DELETE`](Self::BACKSPACE_IS_DELETE).
+        const BS_IS_BACKSPACE     = 1 << 7;
+        /// Report `0x08` as `Ctrl+Backspace` instead of `Ctrl+h`.
+        ///
+        /// A terminal that sends `0x7f` for Backspace has this byte spare,
+        /// and several spend it on `Ctrl+Backspace`, which has no encoding
+        /// of its own otherwise.
+        ///
+        /// This holds [`BS_IS_BACKSPACE`](Self::BS_IS_BACKSPACE) as well,
+        /// because it is that reading with a modifier on it. Asking for both
+        /// is therefore asking for this one, rather than for two readings of
+        /// a byte that can only have one.
+        const BS_IS_CTRL_BACKSPACE = (1 << 8) | Self::BS_IS_BACKSPACE.bits();
         /// Report `0x7f` as `Delete` instead of `Backspace`.
         const BACKSPACE_IS_DELETE = 1 << 4;
         /// Report `CSI 1 ~` as the VT220 `Find` key instead of `Home`.
