@@ -508,6 +508,31 @@ mod tests {
         assert_eq!(k.modifiers, crate::event::KeyModifiers::CTRL);
     }
 
+    /// `0x1b` is the Escape key and `ctrl+[` both, and an application that
+    /// asked for the Ctrl reading gets it for a real lone `ESC`: the one the
+    /// source resolves itself once the escape deadline passes, which is the
+    /// only way that byte ever arrives alone.
+    #[test]
+    fn a_lone_escape_from_the_terminal_follows_the_flag() {
+        use crate::event::DecoderFlags;
+
+        let (rx, tx) = make_pipe();
+        let mut src = EventSource::new(rx)
+            .unwrap()
+            .with_esc_timeout(Duration::from_millis(20))
+            .with_decoder_flags(DecoderFlags::CTRL_OPEN_BRACKET);
+        write_byte(&tx, 0x1b);
+        // The first poll buffers it; the deadline is what resolves it, so
+        // give the source long enough to reach its own.
+        let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
+        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        let Event::KeyPress(k) = src.read().unwrap() else {
+            panic!("expected a key")
+        };
+        assert_eq!(k.code, KeyCode::Char('['));
+        assert_eq!(k.modifiers, crate::event::KeyModifiers::CTRL);
+    }
+
     /// The same choice on a source already in use, which is the seam
     /// [`Program::init_with`](crate::program::Program::init_with) reaches
     /// through when it carries `ProgramOptions::legacy_keys`.
