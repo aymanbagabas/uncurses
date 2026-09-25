@@ -80,7 +80,7 @@ use bitflags::bitflags;
 use crate::ansi::{mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
-use crate::event::{Event, EventSource};
+use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
 use crate::screen::Screen;
@@ -203,6 +203,14 @@ pub struct ProgramOptions {
     ///
     /// [`Screen::set_synchronized_output`]: crate::screen::Screen::set_synchronized_output
     pub prefer_synchronized_output: bool,
+    /// How to read the ambiguous legacy keys.
+    ///
+    /// A terminal using its legacy encoding sends one control byte for a key
+    /// and for a Ctrl combination that collides with it, and which of the two
+    /// a reader meant is not in the bytes. See [`DecoderFlags`] for the
+    /// collisions and what each flag chooses. Defaults to
+    /// [`empty`](DecoderFlags::empty), which reads each as the named key.
+    pub legacy_keys: DecoderFlags,
 }
 
 bitflags! {
@@ -266,6 +274,7 @@ impl Default for ProgramOptions {
             prefer_grapheme_clusters: true,
             prefer_in_band_resize: true,
             prefer_synchronized_output: true,
+            legacy_keys: DecoderFlags::empty(),
         }
     }
 }
@@ -1024,6 +1033,12 @@ where
     /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
+        // The decoder is the only thing that can act on this, and it is
+        // behind the source, so the option is carried there as it is taken.
+        self.source
+            .lock()
+            .unwrap()
+            .set_decoder_flags(self.options.legacy_keys);
         self.terminal.make_raw()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
@@ -1179,6 +1194,12 @@ where
     /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
+        // The decoder is the only thing that can act on this, and it is
+        // behind the source, so the option is carried there as it is taken.
+        self.source
+            .lock()
+            .unwrap()
+            .set_decoder_flags(self.options.legacy_keys);
         self.terminal.make_raw()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;

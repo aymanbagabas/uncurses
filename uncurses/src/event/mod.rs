@@ -83,6 +83,7 @@ mod source_windows;
 #[cfg(feature = "async")]
 mod stream;
 
+pub use decode::DecoderFlags;
 pub use key::{Key, KeyCode, KeyModifiers, ParseKeyError};
 pub use mouse::{Mouse, MouseButton, mouse_pixel_to_cell};
 pub use source::{DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, Waker};
