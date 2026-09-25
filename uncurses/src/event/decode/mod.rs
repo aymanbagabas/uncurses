@@ -309,6 +309,27 @@ impl Decoder {
         }
     }
 
+    /// What `0x08` is.
+    ///
+    /// The byte is `ctrl+h` and the Backspace key and `ctrl+backspace`, and
+    /// which one depends on the terminal: one whose erase character is `^H`
+    /// spends it on Backspace, one that sends `0x7f` for Backspace has it
+    /// spare and often spends it on `ctrl+backspace`, and otherwise it is
+    /// the Ctrl-letter it looks like.
+    /// [`BS_IS_CTRL_BACKSPACE`](DecoderFlags::BS_IS_CTRL_BACKSPACE) and
+    /// [`BS_IS_BACKSPACE`](DecoderFlags::BS_IS_BACKSPACE) say which. The
+    /// first holds the second, so it is asked about first: a byte has one
+    /// reading, and the two flags cannot name a different one each.
+    pub(super) fn backspace_byte(&self) -> Key {
+        if self.flags.contains(DecoderFlags::BS_IS_CTRL_BACKSPACE) {
+            Key::new(KeyCode::Backspace, KeyModifiers::CTRL).normalized()
+        } else if self.flags.contains(DecoderFlags::BS_IS_BACKSPACE) {
+            Key::new(KeyCode::Backspace, KeyModifiers::empty()).normalized()
+        } else {
+            Key::new(KeyCode::Char('h'), KeyModifiers::CTRL).normalized()
+        }
+    }
+
     /// What a lone `ESC` is, once nothing more is coming for it.
     ///
     /// `0x1b` is the Escape key and `ctrl+[` both, and
@@ -456,8 +477,10 @@ impl Decoder {
 
         match buf[0] {
             0x1b => self.parse_escape(buf),
-            0x01..=0x08 | 0x0b..=0x0c | 0x0e..=0x1a => {
-                // Ctrl+A through Ctrl+Z (excluding Tab/LF/CR/Esc which have dedicated keys).
+            0x08 => ParseResult::Event(Event::KeyPress(self.backspace_byte()), 1),
+            0x01..=0x07 | 0x0b..=0x0c | 0x0e..=0x1a => {
+                // Ctrl+A through Ctrl+Z (excluding BS/Tab/LF/CR/Esc which
+                // have dedicated keys).
                 let c = (buf[0] - 1 + b'a') as char;
                 ParseResult::Event(
                     Event::KeyPress(Key::new(KeyCode::Char(c), KeyModifiers::CTRL).normalized()),
@@ -2382,6 +2405,75 @@ mod tests {
         let k = press(p.drain());
         assert_eq!(k.code, KeyCode::Escape);
         assert_eq!(k.modifiers, KeyModifiers::empty());
+    }
+
+    /// `0x08` is three keys at once, and which one it is depends on the
+    /// terminal rather than on the byte. The default is the Ctrl-letter it
+    /// looks like, and the ESC-prefixed spelling follows whichever reading
+    /// is chosen, because it asks the bare mapping rather than naming a key.
+    #[test]
+    fn the_backspace_byte_reads_the_way_it_was_asked_to() {
+        let cases = [
+            (
+                DecoderFlags::empty(),
+                KeyCode::Char('h'),
+                KeyModifiers::CTRL,
+            ),
+            (
+                DecoderFlags::BS_IS_BACKSPACE,
+                KeyCode::Backspace,
+                KeyModifiers::empty(),
+            ),
+            (
+                DecoderFlags::BS_IS_CTRL_BACKSPACE,
+                KeyCode::Backspace,
+                KeyModifiers::CTRL,
+            ),
+            // Asking for both is asking for the Ctrl reading, because that
+            // is the same value: see the assertion below.
+            (
+                DecoderFlags::BS_IS_BACKSPACE.union(DecoderFlags::BS_IS_CTRL_BACKSPACE),
+                KeyCode::Backspace,
+                KeyModifiers::CTRL,
+            ),
+        ];
+        // A byte has one reading, so the two flags are built not to be able
+        // to name a different one each: the Ctrl reading is the plain one
+        // with a modifier on it, and holds its bit.
+        assert_eq!(
+            DecoderFlags::BS_IS_BACKSPACE | DecoderFlags::BS_IS_CTRL_BACKSPACE,
+            DecoderFlags::BS_IS_CTRL_BACKSPACE
+        );
+        assert!(DecoderFlags::BS_IS_CTRL_BACKSPACE.contains(DecoderFlags::BS_IS_BACKSPACE));
+        for (flags, code, modifiers) in cases {
+            let mut p = Decoder::new(flags);
+            let k = press(p.parse(b"\x08"));
+            assert_eq!(k.code, code, "for {flags:?}");
+            assert_eq!(k.modifiers, modifiers, "for {flags:?}");
+
+            let mut p = Decoder::new(flags);
+            let k = press(p.parse(b"\x1b\x08"));
+            assert_eq!(k.code, code, "prefixed, for {flags:?}");
+            assert_eq!(
+                k.modifiers,
+                modifiers | KeyModifiers::ALT,
+                "prefixed, for {flags:?}"
+            );
+        }
+    }
+
+    /// `0x08` was taken out of the Ctrl-letter range to get a reading of its
+    /// own, and the bytes on either side of it kept theirs.
+    #[test]
+    fn the_bytes_around_the_backspace_byte_are_still_ctrl_letters() {
+        let mut p = Decoder::new(DecoderFlags::BS_IS_BACKSPACE);
+        let k = press(p.parse(b"\x07"));
+        assert_eq!(k.code, KeyCode::Char('g'));
+        assert_eq!(k.modifiers, KeyModifiers::CTRL);
+
+        let mut p = Decoder::new(DecoderFlags::BS_IS_BACKSPACE);
+        let k = press(p.parse(b"\x09"));
+        assert_eq!(k.code, KeyCode::Tab, "0x09 keeps its own reading too");
     }
 
     #[test]
