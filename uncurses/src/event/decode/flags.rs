@@ -42,12 +42,12 @@ bitflags! {
         const CTRL_I              = 1 << 1;
         /// Report `0x0d` as `Ctrl+m` instead of `Enter`.
         const CTRL_M              = 1 << 2;
-        /// Report a source-expired lone `0x1b` as `Ctrl+[` instead of `Escape`.
+        /// Report a lone `0x1b` as `Ctrl+[` instead of `Escape`.
         ///
-        /// This applies to the [`EventSource`](crate::event::EventSource)
-        /// timeout path that calls the decoder's leading-byte expiry helper.
-        /// The legacy buffered [`Decoder::drain`](super::Decoder::drain)
-        /// method still emits Escape for a lone `ESC`.
+        /// Wherever the byte resolves: the
+        /// [`EventSource`](crate::event::EventSource) timeout path, a
+        /// buffered [`drain`](super::Decoder::drain), and the inner `ESC` of
+        /// a run of them, which reads as `Alt+Ctrl+[`.
         const CTRL_OPEN_BRACKET   = 1 << 3;
         /// Report `0x7f` as `Delete` instead of `Backspace`.
         const BACKSPACE_IS_DELETE = 1 << 4;
