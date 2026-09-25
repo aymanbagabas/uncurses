@@ -44,10 +44,11 @@ bitflags! {
         const CTRL_M              = 1 << 2;
         /// Report a lone `0x1b` as `Ctrl+[` instead of `Escape`.
         ///
-        /// Wherever the byte resolves: the
-        /// [`EventSource`](crate::event::EventSource) timeout path, a
-        /// buffered [`drain`](super::Decoder::drain), and the inner `ESC` of
-        /// a run of them, which reads as `Alt+Ctrl+[`.
+        /// Wherever that byte resolves as a key of its own: an
+        /// [`EventSource`](crate::event::EventSource) reaching its escape
+        /// deadline, whether the `ESC` was alone or at the head of a
+        /// sequence that never finished, and the inner `ESC` of a run of
+        /// them, which reads as `Alt+Ctrl+[`.
         const CTRL_OPEN_BRACKET   = 1 << 3;
         /// Report `0x7f` as `Delete` instead of `Backspace`.
         const BACKSPACE_IS_DELETE = 1 << 4;

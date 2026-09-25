@@ -417,29 +417,15 @@ impl Decoder {
                 }
                 ParseResult::Incomplete => {
                     if self.expired {
-                        // Timeout reached: resolve the partial sequence as
-                        // best-effort. A leading ESC becomes a standalone
-                        // Escape keypress; a leading 8-bit C1 introducer
-                        // becomes its Ctrl+Alt+<code-0x40> fallback; anything
-                        // else is reported as Unknown so no bytes are
-                        // silently dropped.
+                        // Timeout reached: resolve the leading byte the way
+                        // the source resolves one, so a partial sequence that
+                        // expired here and one that expired there agree about
+                        // what its `ESC` was. Anything with no key of its own
+                        // is reported as Unknown, so no bytes are silently
+                        // dropped.
                         let b0 = self.buf[0];
-                        if b0 == 0x1b {
-                            events.push(Event::KeyPress(
-                                Key::new(KeyCode::Escape, KeyModifiers::empty()).normalized(),
-                            ));
-                            self.buf.drain(..1);
-                            continue;
-                        }
-                        if is_c1_introducer(b0) {
-                            // See `expire_leading`: lowercase ASCII
-                            // letters so SHIFT is not synthesized for
-                            // the Ctrl+Alt+letter fallback.
-                            let c = ((b0 - 0x40) as char).to_ascii_lowercase();
-                            events.push(Event::KeyPress(
-                                Key::new(KeyCode::Char(c), KeyModifiers::CTRL | KeyModifiers::ALT)
-                                    .normalized(),
-                            ));
+                        if let Some(event) = self.expire_leading(b0) {
+                            events.push(event);
                             self.buf.drain(..1);
                             continue;
                         }
@@ -2370,6 +2356,21 @@ mod tests {
         let k = press(p.drain());
         assert_eq!(k.code, KeyCode::Char('['));
         assert_eq!(k.modifiers, KeyModifiers::CTRL | KeyModifiers::ALT);
+
+        // And the one at the head of a sequence that never finished, which
+        // resolves as its own key with the rest re-parsed after it.
+        let mut p = Decoder::new(DecoderFlags::CTRL_OPEN_BRACKET);
+        assert!(p.parse(b"\x1b[").is_empty(), "a partial CSI waits");
+        let events = p.drain();
+        match events.as_slice() {
+            [Event::KeyPress(esc), Event::KeyPress(bracket)] => {
+                assert_eq!(esc.code, KeyCode::Char('['));
+                assert_eq!(esc.modifiers, KeyModifiers::CTRL);
+                assert_eq!(bracket.code, KeyCode::Char('['));
+                assert_eq!(bracket.modifiers, KeyModifiers::empty());
+            }
+            other => panic!("expected [ctrl+[, '['], got {other:?}"),
+        }
     }
 
     /// Without the flag the same bytes are the Escape key, which is what a
