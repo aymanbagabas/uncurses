@@ -205,12 +205,10 @@ fn test_blank_row_after_content_clears_to_eol() {
 }
 
 #[test]
-fn test_wide_cell_at_last_column_skips_lr_dance() {
-    // A width-2 cell that occupies the last two columns of the
-    // bottom row does NOT sit "in" the lower-right corner; the
-    // cursor when emitting it is at width-2, not width-1. The LR
-    // DECAWM dance must not fire — it would needlessly emit
-    // DECAWM toggles around an ordinary write.
+fn test_wide_cell_at_last_column_needs_no_autowrap_toggle() {
+    // A width-2 cell filling the last two columns of the bottom row is an
+    // ordinary write: autowrap is already off for the whole alternate
+    // screen, so nothing has to be toggled around it.
     let mut r = Renderer::new();
     r.set_fullscreen(true);
     let mut rb = RenderBuffer::new(10, 3);
@@ -223,23 +221,18 @@ fn test_wide_cell_at_last_column_skips_lr_dance() {
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
     let out = String::from_utf8_lossy(&sink).to_string();
-    // The DECAWM dance markers must NOT appear: the wide cell at
-    // col 8 isn't the LR corner cell.
     assert!(
-        !out.contains("\x1b[?7l"),
-        "wide cell reaching the last column should not trigger DECAWM-off: {out:?}"
-    );
-    assert!(
-        !out.contains("\x1b[?7h"),
-        "wide cell reaching the last column should not trigger DECAWM-on: {out:?}"
+        !out.contains("\x1b[?7l") && !out.contains("\x1b[?7h"),
+        "the frame toggled autowrap around a wide cell: {out:?}"
     );
 }
 
 #[test]
-fn test_lower_right_corner_disables_autowrap() {
-    // In fullscreen mode, writing the bottom-right cell must wrap the
-    // glyph between DECAWM-off / DECAWM-on so the terminal does not
-    // auto-wrap and scroll the alt-screen up by one row.
+fn test_lower_right_corner_is_written_plainly() {
+    // Autowrap is off for the whole alternate screen, so the bottom-right
+    // cell is an ordinary write. Toggling it per cell would spend bytes
+    // turning off a mode that is already off, and turning it back on would
+    // hand the rest of the frame back to the hazard.
     let mut r = Renderer::new();
     r.set_fullscreen(true);
     let mut rb = RenderBuffer::new(10, 3);
@@ -249,18 +242,10 @@ fn test_lower_right_corner_disables_autowrap() {
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
     let out = String::from_utf8_lossy(&sink).to_string();
-    let last_z = out.rfind('Z').expect("expected Z in output");
-    let before = &out[..last_z];
-    let after = &out[last_z + 1..];
+    assert!(out.contains('Z'), "expected Z in output: {out:?}");
     assert!(
-        before.ends_with("\x1b[?7l"),
-        "expected DECAWM-off immediately before bottom-right write, got tail {:?}",
-        &before[before.len().saturating_sub(20)..]
-    );
-    assert!(
-        after.starts_with("\x1b[?7h"),
-        "expected DECAWM-on immediately after bottom-right write, got {:?}",
-        &after[..after.len().min(20)]
+        !out.contains("\x1b[?7l") && !out.contains("\x1b[?7h"),
+        "the frame toggled autowrap around a cell: {out:?}"
     );
 }
 
@@ -299,6 +284,39 @@ fn test_phantom_after_line_filling_write() {
         130,
         "tracked cursor parks one past last column"
     );
+}
+
+/// With autowrap off the terminal holds the cursor on the last column
+/// instead of parking it past the margin. Recording a phantom there would
+/// plan the next move from a column the cursor never reached.
+#[test]
+fn autowrap_off_holds_the_cursor_on_the_last_column() {
+    let mut r = Renderer::new();
+    r.set_autowrap(false);
+    r.last_width = 10;
+    r.last_height = 3;
+    r.cur.set_pos(Position { y: 0, x: 9 });
+    let mut sink = Vec::new();
+    r.put_glyph_bytes(&mut sink, b"Z", 1, 10, 3).unwrap();
+    assert!(!r.cur.at_phantom, "no phantom without autowrap");
+    assert_eq!(r.cur.pos().x, 9, "the cursor stays on the column it wrote");
+}
+
+/// Being full screen is not being told anything about autowrap: the render
+/// property changes no terminal mode, and a caller that sets it directly, or
+/// a bare `Screen` that never enters an alternate screen at all, still has a
+/// terminal that wraps. The cursor model follows the mode, not the property.
+#[test]
+fn fullscreen_alone_leaves_the_margin_where_it_was() {
+    let mut r = Renderer::new();
+    r.set_fullscreen(true);
+    r.last_width = 10;
+    r.last_height = 3;
+    r.cur.set_pos(Position { y: 0, x: 9 });
+    let mut sink = Vec::new();
+    r.put_glyph_bytes(&mut sink, b"Z", 1, 10, 3).unwrap();
+    assert!(r.cur.at_phantom, "the terminal still wraps");
+    assert_eq!(r.cur.pos().x, 10, "so the cursor parks past the margin");
 }
 
 #[test]
