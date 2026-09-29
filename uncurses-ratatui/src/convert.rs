@@ -198,10 +198,40 @@ pub(crate) fn cell_from_ratatui(rc: &ratatui::buffer::Cell) -> CzCell {
     };
     let style = to_uncurses_style(style);
     let symbol = rc.symbol();
-    let cell = if str_cell_width(symbol) >= 2 {
-        CzCell::new(symbol, 2)
-    } else {
-        CzCell::new(symbol, 1)
-    };
+    // A ratatui cell carries whatever symbol the caller stored, and a cell
+    // here is credited with the columns that symbol measures. Clamping the
+    // count would let the two grids disagree about where the next column
+    // starts. The floor of one keeps a zero-width symbol occupying the
+    // column ratatui gave it.
+    let width = str_cell_width(symbol).clamp(1, u8::MAX as u16) as u8;
+    let cell = CzCell::new(symbol, width);
     cell.style(style)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cell_from_ratatui;
+
+    fn width_of(symbol: &str) -> u8 {
+        let mut rc = ratatui::buffer::Cell::default();
+        rc.set_symbol(symbol);
+        cell_from_ratatui(&rc).width()
+    }
+
+    #[test]
+    fn a_converted_cell_keeps_the_columns_its_symbol_measures() {
+        assert_eq!(width_of("a"), 1);
+        assert_eq!(width_of("世"), 2);
+        // ratatui lets a caller store any string in a cell. Capping the
+        // count would leave this grid crediting the symbol with fewer
+        // columns than the terminal advances, and every later column on the
+        // row would disagree.
+        assert_eq!(width_of("abc"), 3);
+    }
+
+    #[test]
+    fn a_symbol_that_measures_nothing_still_holds_its_column() {
+        // ratatui gave the symbol a cell, so it keeps one here too.
+        assert_eq!(width_of("\u{200b}"), 1);
+    }
 }
