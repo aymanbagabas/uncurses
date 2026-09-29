@@ -340,3 +340,25 @@ fn write_string_with_link() {
         Some(("https://example.com", ""))
     );
 }
+
+#[test]
+fn a_cell_too_wide_for_the_row_leaves_no_continuation_behind() {
+    // `set` decides a cell does not fit by looking at the columns the row
+    // has left, and replaces it with a blank. The continuations it would
+    // have owned must never reach the grid: a continuation with no primary
+    // to its left is a column no cell accounts for, and every later column
+    // on the row reads one place off.
+    let mut buf = Buffer::new(5, 1);
+    buf.set(
+        Position::new(0, 0),
+        &Cell::new("\u{1f468}\u{200d}\u{1f469}", 8),
+    );
+
+    assert!(buf.cell(Position::new(0, 0)).unwrap().is_blank());
+    for x in 0..5 {
+        assert!(
+            !buf.cell(Position::new(x, 0)).unwrap().is_continuation(),
+            "column {x} holds a continuation with no primary that owns it"
+        );
+    }
+}

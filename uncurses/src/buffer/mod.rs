@@ -375,26 +375,29 @@ impl Buffer {
 
         // If the new cell is wide, blank cells it will cover
         if cell.is_wide() {
-            for i in x + 1..x + cell_width {
-                if i < width {
-                    // If we'd overwrite a wide cell's primary, blank its continuations
-                    if line[i].is_wide() {
-                        let w = line[i].width() as usize;
-                        let end = (i + w).min(width);
-                        let blank = Cell::BLANK.style(line[i].style.clone());
-                        line[i + 1..end].fill(blank);
-                    }
-                    // Continuations inherit the wide primary's style so the
-                    // cell's bg/attributes are coherent across both columns.
-                    line[i] = Cell::new("", 0).style(cell.style.clone());
-                }
-            }
-
-            // Truncate at end of line: if wide cell doesn't fit, replace with
-            // a blank that keeps the wide cell's bg/attributes.
+            // Truncate at end of line: if the wide cell doesn't fit, replace
+            // it with a blank that keeps the wide cell's bg/attributes.
+            //
+            // This has to be settled before any continuation is written. A
+            // cell can claim more columns than the row has left, and laying
+            // the continuations down first would leave the row holding the
+            // tail of a cell whose primary this branch then replaces.
             if x + cell_width > width {
                 line[x] = Cell::BLANK.style(cell.style.clone());
                 return;
+            }
+
+            for i in x + 1..x + cell_width {
+                // If we'd overwrite a wide cell's primary, blank its continuations
+                if line[i].is_wide() {
+                    let w = line[i].width() as usize;
+                    let end = (i + w).min(width);
+                    let blank = Cell::BLANK.style(line[i].style.clone());
+                    line[i + 1..end].fill(blank);
+                }
+                // Continuations inherit the wide primary's style so the
+                // cell's bg/attributes are coherent across both columns.
+                line[i] = Cell::new("", 0).style(cell.style.clone());
             }
         }
 
