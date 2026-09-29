@@ -57,7 +57,7 @@ use crate::cell::Cell;
 use crate::layout::{Position, Rect};
 use crate::style::{Style, read_style};
 
-use super::{TextSurface, WidthMode, WrapMode};
+use super::{TextSurface, WidthMode, WrapMode, overruns};
 
 /// Paint styled strings into a [`TextSurface`].
 ///
@@ -218,7 +218,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     }
                     let g = unsafe { std::str::from_utf8_unchecked(text) };
                     let cw = width as u8;
-                    if x + cw as u16 > clip.right() {
+                    if overruns(x, u16::from(cw), clip.right()) {
                         match wrap {
                             WrapMode::Truncate => {
                                 if let Some(tail) = tail {
@@ -234,7 +234,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                                 if y >= clip.bottom() {
                                     return Position::new(x, y);
                                 }
-                                if x + cw as u16 > clip.right() {
+                                if overruns(x, u16::from(cw), clip.right()) {
                                     return Position::new(x, y);
                                 }
                             }
