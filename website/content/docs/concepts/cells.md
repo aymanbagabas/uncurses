@@ -33,10 +33,8 @@ CJK character like `世` wants two columns, not one. uncurses models that as a
 for each further column. A continuation has no content of its own and reports
 width zero, because its column belongs to the primary on its left.
 
-A cell can be wider than two columns. On a terminal that measures text the
-older way, a joined emoji sequence such as a family emoji draws each face in
-turn, so it occupies eight columns and owns seven continuations. The
-[Width]({{< relref "width.md" >}}) page explains when that happens.
+A primary is not limited to two columns. It owns as many as its grapheme
+measures, and holds one continuation for each column after the first.
 
 | row / col | 1 | 2 | 3 |
 | --- | --- | --- | --- |
@@ -45,7 +43,6 @@ turn, so it occupies eight columns and owns seven continuations. The
 One terminal row. The wide glyph `世` is a primary cell in column 1 with a
 zero-width continuation cell in column 2, and the narrow `A` sits in column 3.
 
-The grid keeps the wide `世` and its *continuation* side by side as two cells.
 You almost never create a continuation by hand: writing a wide grapheme into a
 grid lays down the primary and its continuations together. The
 [Width]({{< relref "width.md" >}}) page digs into how uncurses decides what is

@@ -9,10 +9,16 @@ Guess wrong by one, and everything after it shifts and the row smears.
 
 ## Not every character is one cell
 
-Terminal text comes in three cell widths. Most characters are *narrow* and take
-one cell. A few are *wide* and take two cells, like CJK characters. Some take
+A single character takes one of three widths. Most are *narrow* and take one
+cell. A few are *wide* and take two cells, like CJK characters. Some take
 *zero*: a combining accent stacks onto the glyph before it rather than claiming
 a column of its own.
+
+A cluster is a separate question. Several characters can join into one cluster,
+and how many cells that cluster takes depends on how it is measured. Under one
+policy the answer is never more than two; under the other it is the sum of the
+parts, which can be more. [Two ways to measure](#two-ways-to-measure) covers
+the difference.
 
 | row / col | 1 | 2 | 3 | 4 |
 | --- | --- | --- | --- | --- |
