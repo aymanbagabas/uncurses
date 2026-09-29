@@ -130,7 +130,8 @@ fn str_width_follows_mode_and_eaw_and_counts_escapes_literally() {
 #[test]
 fn grapheme_width_and_cells_use_screen_policy() {
     let mut screen = Screen::for_test(Vec::new(), (20, 1));
-    // Wc mode is cluster-blind: the VS15 tail is ignored, base '✋' is 2.
+    // Wc mode reads no presentation meaning in the VS15 tail; it is
+    // zero-width, so the sum is base '✋' alone at 2.
     assert_eq!(screen.grapheme_width("\u{270b}\u{fe0e}"), 2);
     screen.set_grapheme_clusters(true);
     // Grapheme mode honours VS15 → text presentation, one column.
@@ -2537,4 +2538,74 @@ fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
     screen.set_str((0, 3), "grown", st.clone());
     screen.render().unwrap();
     assert_eq!(screen.diverge(), None, "after a resize");
+}
+
+#[test]
+fn wc_mode_gives_a_flag_the_two_columns_the_terminal_advances() {
+    // A regional-indicator pair is two code points of width one. A terminal
+    // without grapheme segmentation advances two columns for it, so the
+    // cluster must own two cells or every later column on the row is off
+    // by one.
+    let mut screen = Screen::for_test(Vec::new(), (20, 1));
+    screen.set_str(
+        (0, 0),
+        "\u{1f1fa}\u{1f1f8}X",
+        crate::style::Style::default(),
+    );
+    let cell = |x| {
+        screen
+            .front_buf
+            .cell(crate::layout::Position::new(x, 0))
+            .unwrap()
+    };
+    assert_eq!(cell(0).width(), 2);
+    assert_eq!(cell(1).width(), 0, "flag must claim a continuation cell");
+    assert_eq!(cell(2).content(), "X");
+}
+
+#[test]
+fn wc_mode_gives_a_joined_emoji_every_column_the_terminal_advances() {
+    // A terminal without grapheme segmentation draws each emoji in a ZWJ
+    // sequence separately, advancing two columns per emoji and none for the
+    // joiners. The grid has to credit the cluster with all eight columns or
+    // everything after it sits in the wrong place.
+    let mut screen = Screen::for_test(Vec::new(), (20, 1));
+    let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    let text = format!("{fam}X");
+    screen.set_str((0, 0), &text, crate::style::Style::default());
+    let cell = |x| {
+        screen
+            .front_buf
+            .cell(crate::layout::Position::new(x, 0))
+            .unwrap()
+    };
+    assert_eq!(cell(0).width(), 8);
+    assert_eq!(cell(0).content(), fam);
+    for x in 1..8 {
+        assert!(
+            cell(x).is_continuation(),
+            "column {x} must be a continuation"
+        );
+    }
+    assert_eq!(cell(8).content(), "X");
+}
+
+#[test]
+fn a_cluster_wider_than_the_row_is_not_written() {
+    // Eight columns do not fit in five. Writing part of the cluster would
+    // leave the row claiming columns the terminal never advanced past.
+    let mut screen = Screen::for_test(Vec::new(), (5, 1));
+    let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    screen.set_str((0, 0), fam, crate::style::Style::default());
+    for x in 0..5u16 {
+        let c = screen
+            .front_buf
+            .cell(crate::layout::Position::new(x, 0))
+            .unwrap();
+        assert!(
+            c.is_blank(),
+            "column {x} should stay blank, got {:?}",
+            c.content()
+        );
+    }
 }

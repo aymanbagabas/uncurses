@@ -245,9 +245,9 @@ impl<'a> Iterator for Tokenizer<'a> {
         // one multi-byte ASCII cluster and it cannot appear here: both bytes
         // are controls, taken by the branch above.
         //
-        // True in either width mode. `Wc` measures the cluster's first code
-        // point and `Grapheme` measures the whole cluster; for a lone
-        // printable ASCII character those are the same one column. The mode
+        // True in either width mode. `Wc` sums the cluster's code points and
+        // `Grapheme` measures the whole cluster; for a lone printable ASCII
+        // character those are the same one column. The mode
         // is deliberately not tested here - it was, once, and since `Wc` is
         // the default the fast path then applied to nothing that mattered.
         if b < 0x80 {

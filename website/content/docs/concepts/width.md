@@ -36,9 +36,12 @@ and shove the rest of the row sideways.
 How a cluster is measured is a policy, captured by
 [`WidthMode`](/api/uncurses/text/enum.WidthMode.html):
 
-- **`Wc`** is wcwidth-style: it measures each cluster by its first code point
-  and ignores the rest. It is simple, and it matches how older or plainer
-  terminals behave. This is the default.
+- **`Wc`** is wcwidth-style: it adds up the widths of the code points in the
+  cluster. Combining marks and joiners are zero-width, so they add nothing and
+  an accented letter still takes one cell. A joined emoji sequence adds up to
+  more: a family emoji counts each face, so it claims eight columns. This
+  matches how older or plainer terminals behave, because they advance the
+  cursor once per code point. It is the default.
 - **`Grapheme`** measures the whole cluster, accounting for variation
   selectors, regional-indicator flags, and zero-width-joiner emoji sequences.
   The cluster boundaries follow the Unicode text-segmentation rules in

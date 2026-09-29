@@ -58,6 +58,27 @@ fn main() -> io::Result<()> {
         }
         writeln!(out, "{}", line.trim_end())?;
     }
+
+    // A cell is not limited to one or two columns. Under the default
+    // `WidthMode::Wc` a joined emoji sequence measures the sum of its code
+    // points, because a terminal that does not group graphemes draws each
+    // face in turn. The grid credits the primary with every column it takes
+    // and fills the rest with continuations, so whatever follows lands where
+    // the terminal actually leaves the cursor.
+    let mut wide = TextBuffer::new(16, 1);
+    let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    wide.set_str((0, 0), family, Style::default());
+    wide.set_str(
+        (wide.str_width(family), 0),
+        "<- ends here",
+        Style::default(),
+    );
+    let primary = wide.cell(Position::new(0, 0)).map_or(0, Cell::width);
+    writeln!(
+        out,
+        "\nA family emoji reserves {primary} columns, so the text after it starts at column {}.",
+        wide.str_width(family)
+    )?;
     out.flush()
 }
 

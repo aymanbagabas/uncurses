@@ -33,6 +33,11 @@ CJK character like `世` wants two columns, not one. uncurses models that as a
 for each further column. A continuation has no content of its own and reports
 width zero, because its column belongs to the primary on its left.
 
+A cell can be wider than two columns. On a terminal that measures text the
+older way, a joined emoji sequence such as a family emoji draws each face in
+turn, so it occupies eight columns and owns seven continuations. The
+[Width]({{< relref "width.md" >}}) page explains when that happens.
+
 | row / col | 1 | 2 | 3 |
 | --- | --- | --- | --- |
 | row 1 | 世 | cont | A |
