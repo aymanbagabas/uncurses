@@ -107,7 +107,7 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, should_panic)]
     fn out_of_bounds_range_refuses_candidate() {
-        let line = vec![Cell::narrow("a"); 4];
+        let line = vec![Cell::new("a", 1); 4];
         let style = Style::default();
         let mut out = Vec::new();
         let accepted = collect_overwrite_bytes(&mut out, &line, &style, 0, 8);
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn in_bounds_pen_match_writes_bytes() {
-        let line = vec![Cell::narrow("x"); 3];
+        let line = vec![Cell::new("x", 1); 3];
         let style = Style::default();
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(&mut out, &line, &style, 0, 3));
@@ -134,8 +134,8 @@ mod cluster_bounds_tests {
     fn wide_line() -> Vec<Cell> {
         let mut line = Vec::new();
         for _ in 0..5 {
-            line.push(Cell::wide("\u{4e16}"));
-            line.push(Cell::continuation());
+            line.push(Cell::new("\u{4e16}", 2));
+            line.push(Cell::new("", 0));
         }
         line
     }
@@ -201,24 +201,24 @@ mod passes_agree {
     /// continuation, and clusters of several code points.
     fn cells() -> Vec<Cell> {
         vec![
-            Cell::narrow("a"),
-            Cell::wide("\u{4e16}"),
-            Cell::continuation(),
-            Cell::narrow("b"),
-            Cell::wide("\u{1f1ef}\u{1f1f5}"),
-            Cell::continuation(),
-            Cell::narrow("e\u{301}"),
-            Cell::wide("\u{1f468}\u{200d}\u{1f469}"),
-            Cell::continuation(),
-            Cell::narrow("c"),
+            Cell::new("a", 1),
+            Cell::new("\u{4e16}", 2),
+            Cell::new("", 0),
+            Cell::new("b", 1),
+            Cell::new("\u{1f1ef}\u{1f1f5}", 2),
+            Cell::new("", 0),
+            Cell::new("e\u{301}", 1),
+            Cell::new("\u{1f468}\u{200d}\u{1f469}", 2),
+            Cell::new("", 0),
+            Cell::new("c", 1),
             // Cells whose content draws a different number of columns than
             // the row credits them with. Each would let the walk arrive
             // somewhere the planner did not record.
-            Cell::narrow(""),
-            Cell::narrow("\u{301}"),
-            Cell::narrow("\u{8}"),
-            Cell::narrow("\u{4e16}"),
-            Cell::wide("a"),
+            Cell::new("", 1),
+            Cell::new("\u{301}", 1),
+            Cell::new("\u{8}", 1),
+            Cell::new("\u{4e16}", 1),
+            Cell::new("a", 2),
         ]
     }
 
@@ -282,11 +282,11 @@ mod still_useful {
     #[test]
     fn a_range_over_whole_wide_clusters_is_still_offered() {
         let line = vec![
-            Cell::wide("\u{4e16}"),
-            Cell::continuation(),
-            Cell::wide("\u{754c}"),
-            Cell::continuation(),
-            Cell::narrow("a"),
+            Cell::new("\u{4e16}", 2),
+            Cell::new("", 0),
+            Cell::new("\u{754c}", 2),
+            Cell::new("", 0),
+            Cell::new("a", 1),
         ];
         let style = Style::default();
 
@@ -315,7 +315,7 @@ mod empty_content {
     /// draws equal to the distance it claims.
     #[test]
     fn a_cell_with_nothing_to_write_cannot_carry_the_cursor() {
-        let line = vec![Cell::narrow(""), Cell::narrow("a")];
+        let line = vec![Cell::new("", 1), Cell::new("a", 1)];
         let style = Style::default();
         assert_eq!(overwrite_cost(&line, &style, 0, 1), None);
         let mut out = Vec::new();
@@ -339,13 +339,13 @@ mod width_honesty {
     fn a_cell_that_draws_a_width_it_does_not_claim_is_refused() {
         let style = Style::default();
         for cell in [
-            Cell::narrow("\u{301}"),
-            Cell::narrow("\u{8}"),
-            Cell::narrow("\u{4e16}"),
-            Cell::wide("a"),
-            Cell::narrow(""),
+            Cell::new("\u{301}", 1),
+            Cell::new("\u{8}", 1),
+            Cell::new("\u{4e16}", 1),
+            Cell::new("a", 2),
+            Cell::new("", 1),
         ] {
-            let line = vec![cell.clone(), Cell::narrow("z")];
+            let line = vec![cell.clone(), Cell::new("z", 1)];
             let mut out = Vec::new();
             assert_eq!(
                 overwrite_cost(&line, &style, 0, 1),
@@ -376,13 +376,13 @@ mod unowned_continuation {
     #[test]
     fn a_range_holding_an_unowned_continuation_is_refused() {
         let style = Style::default();
-        let line = vec![Cell::narrow("a"), Cell::continuation()];
+        let line = vec![Cell::new("a", 1), Cell::new("", 0)];
         assert_eq!(overwrite_cost(&line, &style, 0, 2), None);
         let mut out = Vec::new();
         assert!(!collect_overwrite_bytes(&mut out, &line, &style, 0, 2));
 
         // The same columns with an owner are still offered, and draw both.
-        let owned = vec![Cell::wide("\u{4e16}"), Cell::continuation()];
+        let owned = vec![Cell::new("\u{4e16}", 2), Cell::new("", 0)];
         assert_eq!(overwrite_cost(&owned, &style, 0, 2), Some(3));
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(&mut out, &owned, &style, 0, 2));

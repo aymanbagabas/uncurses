@@ -194,11 +194,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 && let Some((px, py, content, w)) = pending.take()
                 && clip.contains(Position::new(px, py))
             {
-                let cell = if w == 2 {
-                    Cell::wide(&content)
-                } else {
-                    Cell::narrow(&content)
-                };
+                let cell = Cell::new(&content, w);
                 self.target
                     .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
             }
@@ -278,11 +274,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         if let Some((px, py, content, w)) = pending.take()
             && clip.contains(Position::new(px, py))
         {
-            let cell = if w == 2 {
-                Cell::wide(&content)
-            } else {
-                Cell::narrow(&content)
-            };
+            let cell = Cell::new(&content, w);
             self.target
                 .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
         }

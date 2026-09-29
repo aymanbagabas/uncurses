@@ -28,7 +28,7 @@
 //! use uncurses::layout::Position;
 //!
 //! let mut buf = Buffer::new(4, 2);
-//! buf.set_cell(Position::new(0, 0), &Cell::narrow("x"));
+//! buf.set_cell(Position::new(0, 0), &Cell::new("x", 1));
 //! assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "x");
 //! ```
 //!
@@ -386,7 +386,7 @@ impl Buffer {
                     }
                     // Continuations inherit the wide primary's style so the
                     // cell's bg/attributes are coherent across both columns.
-                    line[i] = Cell::continuation().style(cell.style.clone());
+                    line[i] = Cell::new("", 0).style(cell.style.clone());
                 }
             }
 

@@ -68,22 +68,22 @@ impl Row {
                         let mut joined = last.content().to_string();
                         joined.push_str(cluster);
                         *last = if last.is_wide() {
-                            Cell::wide(joined)
+                            Cell::new(joined, 2)
                         } else {
-                            Cell::narrow(joined)
+                            Cell::new(joined, 1)
                         };
                     }
                     // Opening the row, it has nothing to share a column
                     // with, so it takes one of its own. A terminal draws a
                     // mark with no base on its own too, and dropping it
                     // would lose text the row is meant to hold.
-                    None => cells.push(Cell::narrow(cluster)),
+                    None => cells.push(Cell::new(cluster, 1)),
                 },
-                1 => cells.push(Cell::narrow(cluster)),
+                1 => cells.push(Cell::new(cluster, 1)),
                 w => {
-                    cells.push(Cell::wide(cluster));
+                    cells.push(Cell::new(cluster, 2));
                     for _ in 1..w {
-                        cells.push(Cell::continuation());
+                        cells.push(Cell::new("", 0));
                     }
                 }
             }

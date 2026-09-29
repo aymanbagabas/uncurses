@@ -396,18 +396,18 @@ mod tests {
 
         let style = Style::default();
         assert_eq!(
-            overwrite_cost(&[Cell::narrow(dot), Cell::narrow("a")], &style, 0, 2),
+            overwrite_cost(&[Cell::new(dot, 1), Cell::new("a", 1)], &style, 0, 2),
             None,
             "ambiguous width draws two columns in a CJK locale"
         );
         assert_eq!(
-            overwrite_cost(&[Cell::wide(flag), Cell::continuation()], &style, 0, 2),
+            overwrite_cost(&[Cell::new(flag, 2), Cell::new("", 0)], &style, 0, 2),
             None,
             "a lone regional indicator draws one column under wcwidth"
         );
         // A cell every policy agrees on is still crossable.
         assert!(
-            overwrite_cost(&[Cell::narrow("a"), Cell::narrow("b")], &style, 0, 2).is_some(),
+            overwrite_cost(&[Cell::new("a", 1), Cell::new("b", 1)], &style, 0, 2).is_some(),
             "plain ASCII must remain crossable"
         );
     }

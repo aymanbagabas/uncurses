@@ -56,8 +56,8 @@ use uncurses::layout::Position;
 
 fn main() {
     let mut frame = Buffer::new(20, 5);   // 20 columns, 5 rows of blank cells
-    frame.set_cell(Position::new(0, 0), &Cell::narrow("H"));
-    frame.set_cell(Position::new(1, 0), &Cell::narrow("i"));
+    frame.set_cell(Position::new(0, 0), &Cell::new("H", 1));
+    frame.set_cell(Position::new(1, 0), &Cell::new("i", 1));
     assert_eq!(frame.width(), 20);
     assert_eq!(frame.height(), 5);
 }

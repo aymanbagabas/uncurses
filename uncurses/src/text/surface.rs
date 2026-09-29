@@ -45,7 +45,7 @@ use super::{WidthMode, WrapMode, grapheme_cells};
 pub trait TextSurface: SurfaceMut {
     /// Return the width-measurement mode used when shaping strings.
     ///
-    /// [`WidthMode::Wc`] uses the first code point of each grapheme cluster;
+    /// [`WidthMode::Wc`] sums the code points of each grapheme cluster;
     /// [`WidthMode::Grapheme`] measures the whole cluster. The selected mode is
     /// used by the `set_str` family and [`str_width`](Self::str_width).
     ///
@@ -497,7 +497,8 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
         if truncated || w == 0 {
             continue;
         }
-        let w = w as u16;
+        let cw = w;
+        let w = u16::from(w);
         if x + w > clip.right() {
             match wrap {
                 WrapMode::Truncate => {
@@ -521,11 +522,7 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
             }
         }
         if clip.contains(Position::new(x, y)) {
-            let cell = if w == 2 {
-                Cell::wide(cluster)
-            } else {
-                Cell::narrow(cluster)
-            };
+            let cell = Cell::new(cluster, cw);
             target.set_cell(Position::new(x, y), &cell.style(style.clone()));
         }
         x += w;

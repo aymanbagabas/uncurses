@@ -37,7 +37,7 @@ fn assert_golden(actual: Vec<u8>, expected: &[u8]) {
 
 fn set_text(buf: &mut RenderBuffer, y: u16, text: &str) {
     for (x, ch) in text.chars().enumerate() {
-        buf.set_cell((x as u16, y), &Cell::narrow(ch.to_string()));
+        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1));
     }
 }
 
@@ -63,7 +63,7 @@ fn golden_single_cell_change_at_origin() {
     let mut renderer = renderer();
     let mut buf = RenderBuffer::new(80, 24);
     let _ = render_to_vec(&mut renderer, &mut buf);
-    buf.set_cell((0, 0), &Cell::narrow("X"));
+    buf.set_cell((0, 0), &Cell::new("X", 1));
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
@@ -78,7 +78,7 @@ fn golden_single_cell_change_at_middle() {
     let mut renderer = renderer();
     let mut buf = RenderBuffer::new(80, 24);
     let _ = render_to_vec(&mut renderer, &mut buf);
-    buf.set_cell((40, 12), &Cell::narrow("X"));
+    buf.set_cell((40, 12), &Cell::new("X", 1));
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
@@ -154,7 +154,7 @@ fn golden_relative_cursor_mode() {
     renderer.set_relative_cursor(true);
     let mut buf = RenderBuffer::new(80, 24);
     let _ = render_to_vec(&mut renderer, &mut buf);
-    buf.set_cell((0, 5), &Cell::narrow("X"));
+    buf.set_cell((0, 5), &Cell::new("X", 1));
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 

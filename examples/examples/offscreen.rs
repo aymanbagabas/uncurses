@@ -67,7 +67,7 @@ fn draw_card(buf: &mut TextBuffer) {
 
     // Rounded border.
     let border = Style::default().fg(Color::BrightBlack);
-    let edge = |s: &str| Cell::narrow(s).style(border.clone());
+    let edge = |s: &str| Cell::new(s, 1).style(border.clone());
     buf.fill_rect(Rect::new(1, 0, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(1, h - 1, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(0, 1, 1, h - 2), &edge("│"));
@@ -104,7 +104,7 @@ fn draw_card(buf: &mut TextBuffer) {
     for i in 0..bar.width {
         let left = gradient_color(u32::from(i) * 2, cols);
         let right = gradient_color(u32::from(i) * 2 + 1, cols);
-        let cell = Cell::narrow("▌").style(Style::default().fg(left).bg(right));
+        let cell = Cell::new("▌", 1).style(Style::default().fg(left).bg(right));
         buf.set_cell((bar.x + i, bar.y).into(), &cell);
     }
     buf.set_str(
