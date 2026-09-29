@@ -571,7 +571,7 @@ pub trait SurfaceMut: Surface {
         for (src_x, cell) in primaries.iter().rev() {
             let dst_x = src_x.saturating_add(n);
             let cw = (cell.width() as u16).max(1);
-            if dst_x >= right || dst_x + cw > right {
+            if overruns(dst_x, cw, right) {
                 continue;
             }
             self.set_cell(Position::new(dst_x, pos.y), cell);
@@ -631,7 +631,7 @@ pub trait SurfaceMut: Surface {
             }
             let dst_x = src_x - n;
             let cw = (cell.width() as u16).max(1);
-            if dst_x + cw > right {
+            if overruns(dst_x, cw, right) {
                 continue;
             }
             self.set_cell(Position::new(dst_x, pos.y), cell);
@@ -675,7 +675,7 @@ fn fill_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16, f
     }
     let fill_w = (fill.width() as u16).max(1);
     let mut col = left;
-    while col + fill_w <= right {
+    while !overruns(col, fill_w, right) {
         s.set_cell(Position::new(col, y), fill);
         col += fill_w;
     }
@@ -727,6 +727,22 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::buffer::View;
+
+    #[test]
+    fn the_default_row_edits_fill_a_row_as_wide_as_the_address_space() {
+        // `Buffer` overrides both of these, so the default walks need their
+        // own cover. Both fill a freed span with a cell that can claim 255
+        // columns, and near the end of the address space the column plus
+        // that width no longer fits a `u16`.
+        let mut buf = Buffer::new(u16::MAX, 1);
+        let mut view = View::new(&mut buf, Rect::new(0, 0, u16::MAX, 1));
+        let wide = Cell::new("\u{1f468}\u{200d}\u{1f469}", 255);
+
+        view.insert_cells(Position::new(u16::MAX - 1, 0), 1, u16::MAX, &wide);
+        view.delete_cells(Position::new(0, 0), 1, u16::MAX, &wide);
+
+        assert!(!buf.cell(Position::new(u16::MAX - 1, 0)).unwrap().is_wide());
+    }
 
     #[test]
     fn the_default_wide_fill_spans_a_row_as_wide_as_the_address_space() {

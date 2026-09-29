@@ -1,7 +1,7 @@
 //! Buffer insert/delete operations.
 
 use crate::cell::Cell;
-use crate::layout::Position;
+use crate::layout::{Position, overruns};
 
 use super::{Buffer, fill_line_into};
 
@@ -26,7 +26,7 @@ fn fill_range(buf: &mut Buffer, y: u16, lo: u16, hi: u16, fill: &Cell) {
     }
     let step = fill.width().max(1) as u16;
     let mut x = lo;
-    while x + step <= hi {
+    while !overruns(x, step, hi) {
         buf.set((x, y), fill);
         x += step;
     }
@@ -303,6 +303,22 @@ impl Buffer {
 mod tests {
     use super::*;
     use crate::buffer::Surface;
+
+    #[test]
+    fn a_wide_fill_at_the_last_addressable_column_does_not_overflow() {
+        // A cell can claim 255 columns, so one column short of the end of
+        // the address space the column plus that width no longer fits a
+        // `u16`. The freed slot is narrower than the fill either way, so
+        // it takes a blank.
+        let mut buf = Buffer::new(u16::MAX, 1);
+        let wide = Cell::new("\u{1f468}\u{200d}\u{1f469}", 255);
+
+        buf.insert_cells((u16::MAX - 1, 0), 1, u16::MAX, &wide);
+        assert!(!buf.cell(Position::new(u16::MAX - 1, 0)).unwrap().is_wide());
+
+        buf.delete_cells((u16::MAX - 1, 0), 1, u16::MAX, &wide);
+        assert!(!buf.cell(Position::new(u16::MAX - 1, 0)).unwrap().is_wide());
+    }
 
     #[test]
     fn test_insert_lines() {
