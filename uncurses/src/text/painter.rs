@@ -54,10 +54,10 @@ use crate::ansi::params::Params;
 use crate::ansi::text::{Token, string_width, tokenize};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
-use crate::layout::{Position, Rect};
+use crate::layout::{Position, Rect, overruns};
 use crate::style::{Style, read_style};
 
-use super::{TextSurface, WidthMode, WrapMode, overruns};
+use super::{TextSurface, WidthMode, WrapMode};
 
 /// Paint styled strings into a [`TextSurface`].
 ///

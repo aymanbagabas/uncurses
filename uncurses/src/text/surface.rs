@@ -25,10 +25,10 @@
 
 use crate::buffer::SurfaceMut;
 use crate::cell::Cell;
-use crate::layout::{Position, Rect};
+use crate::layout::{Position, Rect, overruns};
 use crate::style::Style;
 
-use super::{WidthMode, WrapMode, grapheme_cells, overruns};
+use super::{WidthMode, WrapMode, grapheme_cells};
 
 /// A [`SurfaceMut`] with a text-measurement policy and string-painting helpers.
 ///
@@ -580,14 +580,5 @@ mod tests {
             Style::default(),
         );
         wide.set_str((u16::MAX - 2, 0), family, Style::default());
-    }
-
-    #[test]
-    fn overruns_reports_an_overflowing_placement_as_past_the_edge() {
-        assert!(!overruns(0, 2, 10));
-        assert!(!overruns(8, 2, 10));
-        assert!(overruns(9, 2, 10));
-        assert!(overruns(u16::MAX, 1, u16::MAX));
-        assert!(overruns(u16::MAX - 1, 255, u16::MAX));
     }
 }

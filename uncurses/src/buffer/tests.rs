@@ -362,3 +362,18 @@ fn a_cell_too_wide_for_the_row_leaves_no_continuation_behind() {
         );
     }
 }
+
+#[test]
+fn a_wide_fill_spans_a_row_as_wide_as_the_address_space() {
+    // The stepped fill walks a row by the fill's own width. On a row this
+    // wide the column reaches far enough that adding the step to it leaves
+    // a `u16` behind, so the walk has to ask whether the next cell fits
+    // without computing where it would end.
+    let mut buf = Buffer::new(u16::MAX, 1);
+    buf.fill_rect(
+        Rect::new(0, 0, u16::MAX, 1),
+        &Cell::new("\u{1f468}\u{200d}\u{1f469}", 255),
+    );
+
+    assert!(buf.cell(Position::new(0, 0)).unwrap().is_wide());
+}

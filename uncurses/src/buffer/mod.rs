@@ -78,7 +78,7 @@ pub use view::View;
 pub use window::Window;
 
 use crate::cell::Cell;
-use crate::layout::{Position, Rect};
+use crate::layout::{Position, Rect, overruns};
 
 /// Off-screen storage for a rectangular grid of terminal cells.
 ///
@@ -498,7 +498,7 @@ impl SurfaceMut for Buffer {
             // through this impl in both arms.
             for y in clipped.top()..clipped.bottom() {
                 let mut x = clipped.left();
-                while x + step <= clipped.right() {
+                while !overruns(x, step, clipped.right()) {
                     self.set(Position::new(x, y), cell);
                     x += step;
                 }

@@ -48,7 +48,7 @@
 //! would be split by a source slice, a destination edge, or a fill region.
 
 use crate::cell::Cell;
-use crate::layout::{Position, Rect};
+use crate::layout::{Position, Rect, overruns};
 
 /// A value with a rectangular extent in terminal-cell coordinates.
 ///
@@ -377,7 +377,7 @@ pub trait SurfaceMut: Surface {
         let step = (cell.width() as u16).max(1);
         for y in clipped.top()..clipped.bottom() {
             let mut x = clipped.left();
-            while x + step <= clipped.right() {
+            while !overruns(x, step, clipped.right()) {
                 self.set_cell(Position::new(x, y), cell);
                 x += step;
             }
@@ -726,6 +726,22 @@ impl Bounded for Rect {
 mod tests {
     use super::*;
     use crate::buffer::Buffer;
+    use crate::buffer::View;
+
+    #[test]
+    fn the_default_wide_fill_spans_a_row_as_wide_as_the_address_space() {
+        // `Buffer` inlines its own copy of this walk, so the two have to
+        // agree about a row wide enough that the column plus the step no
+        // longer fits a `u16`.
+        let mut buf = Buffer::new(u16::MAX, 1);
+        let mut view = View::new(&mut buf, Rect::new(0, 0, u16::MAX, 1));
+        view.fill_rect(
+            Rect::new(0, 0, u16::MAX, 1),
+            &Cell::new("\u{1f468}\u{200d}\u{1f469}", 255),
+        );
+
+        assert!(buf.cell(Position::new(0, 0)).unwrap().is_wide());
+    }
 
     fn wide(s: &str) -> Cell {
         Cell::new(s, 2)

@@ -80,14 +80,3 @@ pub use mode::{WidthMode, WrapMode, grapheme_cells};
 pub use painter::Painter;
 pub use surface::TextSurface;
 pub use width::{char_width, grapheme_width};
-
-/// Whether a cluster `w` columns wide, placed at column `x`, runs past the
-/// exclusive right edge `right`.
-///
-/// A cluster measured under [`WidthMode::Wc`] can claim up to 255 columns, so
-/// `x + w` is not guaranteed to fit in a `u16` on a row near the end of the
-/// address space. An overflow means the cluster runs off the row by any
-/// measure, so it counts as overrunning rather than panicking.
-pub(crate) fn overruns(x: u16, w: u16, right: u16) -> bool {
-    x.checked_add(w).is_none_or(|end| end > right)
-}
