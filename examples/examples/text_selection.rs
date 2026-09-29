@@ -63,15 +63,17 @@ impl Row {
                 // follows, so it joins that cell rather than claiming one of
                 // its own. Giving it a column of its own would put the rest
                 // of the row one column to the right of where it belongs.
-                0 => match cells.last_mut() {
-                    Some(last) => {
+                //
+                // It joins the primary, which is the cell that owns the
+                // column. A wide cluster leaves its continuations at the end
+                // of the row, and a continuation holds no content to join.
+                0 => match cells.iter().rposition(|c| !c.is_continuation()) {
+                    Some(i) => {
+                        let last = &mut cells[i];
                         let mut joined = last.content().to_string();
                         joined.push_str(cluster);
-                        *last = if last.is_wide() {
-                            Cell::new(joined, 2)
-                        } else {
-                            Cell::new(joined, 1)
-                        };
+                        let w = last.width();
+                        *last = Cell::new(joined, w);
                     }
                     // Opening the row, it has nothing to share a column
                     // with, so it takes one of its own. A terminal draws a
@@ -80,8 +82,13 @@ impl Row {
                     None => cells.push(Cell::new(cluster, 1)),
                 },
                 1 => cells.push(Cell::new(cluster, 1)),
+                // The primary is credited with every column the cluster
+                // measures, and the rest of the run holds its continuations.
+                // Crediting it with two while pushing `w - 1` continuations
+                // would leave the row claiming more columns than the cell
+                // accounts for.
                 w => {
-                    cells.push(Cell::new(cluster, 2));
+                    cells.push(Cell::new(cluster, w));
                     for _ in 1..w {
                         cells.push(Cell::new("", 0));
                     }
