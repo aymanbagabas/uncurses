@@ -127,7 +127,7 @@ impl Renderer {
         // accounts for it and every later frame inherits it. Clipping at
         // the margin keeps the disagreement inside the row that caused it.
         ansi::mode::Mode::AUTO_WRAP.reset(out)?;
-        self.emit_range(out, new_buf, new_line, from, last)?;
+        self.emit_range(out, new_buf, new_line, from, last, true)?;
         ansi::mode::Mode::AUTO_WRAP.set(out)?;
         self.reanchor_to_row_start(out);
         Ok(())

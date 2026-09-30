@@ -328,7 +328,7 @@ impl Renderer {
                 // Close the range so the emitter sees the whole glyph
                 // and its cursor lands past it, not on the second half.
                 let last = super::emit::cluster_end(new_line, first_cell);
-                self.emit_range(out, new_buf, new_line, first_cell, last)?;
+                self.emit_range(out, new_buf, new_line, first_cell, last, false)?;
             }
             self.clear_to_end(out, cur_slice, blank, width, false)?;
         } else if n_last != o_last && new_line.get(n_last) != cur_slice.and_then(|c| c.get(o_last))

@@ -361,3 +361,33 @@ fn golden_grapheme_widths_need_no_repaint() {
         "\r  \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Z\r\n".as_bytes(),
     );
 }
+
+/// A blank run long enough to earn ECH sits between a ligatable cluster
+/// and a trailing glyph. ECH itself is safe, since it erases forward
+/// from wherever the cursor really is, but the move that skips past the
+/// run is not: with `TABS` granted, the cheapest way to cross 32 columns
+/// is four tabs, and a tab lands on the terminal's stop, not on the
+/// model's. The terminal counts columns from where it drew the cluster,
+/// so tabbing from there arrives somewhere the model never names. The
+/// repaint asks for a forward move by the run's own length instead,
+/// which measures the same in both frames.
+#[test]
+fn golden_a_blank_run_after_a_ligatable_cluster_is_skipped_by_a_relative_move() {
+    let mut renderer = renderer_with(
+        Optimizations::none()
+            .with_ech(true)
+            .with_tabs(true)
+            .with_bs(true),
+    );
+    renderer.fullscreen = true;
+    renderer.set_width_mode(crate::text::WidthMode::Wc);
+
+    let mut buf = RenderBuffer::new(70, 2);
+    set_family_row(&mut buf, 0, "");
+    buf.set_cell((40, 0), &Cell::new("Z", 1));
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[32X\x1b[32CZ\x1b[?7h\r".as_bytes(),
+    );
+}
