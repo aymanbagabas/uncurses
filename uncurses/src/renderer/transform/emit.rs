@@ -169,7 +169,7 @@ impl Renderer {
             }
 
             let ech_b = ansi::cost::ech_cost(count);
-            let cup_b = if sequential {
+            let move_b = if sequential {
                 ansi::cost::cuf_cost(count)
             } else {
                 ansi::cost::cup_cost(self.cur.pos().y, self.cur.pos().x.saturating_add(count))
@@ -177,7 +177,7 @@ impl Renderer {
             let rep_b = ansi::cost::rep_cost(count);
 
             if has_ech
-                && (count as usize) > ech_b + cup_b
+                && (count as usize) > ech_b + move_b
                 && can_clear_with(cell0, self.opts.contains(Optimizations::BCE))
             {
                 self.update_pen(out, Some(cell0))?;
