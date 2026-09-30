@@ -1,6 +1,8 @@
 use super::*;
 use crate::cell::Cell;
+use crate::color::Color;
 use crate::renderer::RenderBuffer;
+use crate::style::Style;
 
 fn renderer() -> Renderer {
     renderer_with(Optimizations::none())
@@ -178,4 +180,184 @@ fn golden_a_cell_that_stores_nothing_is_blanked_across_its_whole_width() {
 
     let out = render_to_vec(&mut renderer, &mut buf);
     assert_golden(out, b"\r   XY\r");
+}
+
+/// A cluster whose code points sum to more columns than a ligating
+/// terminal draws. Under [`WidthMode::Wc`] this measures eight columns,
+/// and a terminal that draws the family as one glyph advances over two.
+const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}";
+
+/// Write `FAMILY` at `x` on row 0, followed by `tail`.
+fn set_family_row(buf: &mut RenderBuffer, x: u16, tail: &str) {
+    buf.set_cell((x, 0), &Cell::new(FAMILY, 8));
+    for c in x + 1..x + 8 {
+        buf.set_cell((c, 0), &Cell::new("", 0));
+    }
+    for (i, ch) in tail.chars().enumerate() {
+        buf.set_cell((x + 8 + i as u16, 0), &Cell::new(ch.to_string(), 1));
+    }
+}
+
+#[test]
+fn golden_a_ligatable_cluster_repaints_the_row_from_the_cluster() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    set_family_row(&mut buf, 2, "Z");
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\r  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Z\x1b[?7h\r\n".as_bytes(),
+    );
+}
+
+#[test]
+fn golden_a_change_after_a_ligatable_cluster_repaints_from_the_cluster() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+    set_family_row(&mut buf, 2, "Z");
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // The cluster itself does not change. A terminal that ligated it put
+    // this `Y` at column four, so the diff's column ten is wrong and the
+    // row has to be laid out again from the cluster.
+    buf.set_cell((10, 0), &Cell::new("Y", 1));
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\x1b[A  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Y\x1b[?7h\r".as_bytes(),
+    );
+}
+
+#[test]
+fn golden_a_change_before_a_ligatable_cluster_keeps_the_diff() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+    set_family_row(&mut buf, 2, "Z");
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // Every column left of the cluster sits where the diff believes it
+    // does, so the ordinary diff still holds there.
+    buf.set_cell((0, 0), &Cell::new("A", 1));
+
+    assert_golden(render_to_vec(&mut renderer, &mut buf), b"\x1b[AA ");
+}
+
+#[test]
+fn golden_removing_a_ligatable_cluster_repaints_from_where_it_stood() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+    set_family_row(&mut buf, 2, "Z");
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // The cluster is gone from the new row, but the old row still had it
+    // when the terminal drew `Z`, so `Z`'s column is unknown too.
+    for x in 2..10u16 {
+        buf.set_cell((x, 0), &Cell::BLANK);
+    }
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        b"\x1b[A  \x1b[K\x1b[?7l        Z\x1b[?7h\r",
+    );
+}
+
+#[test]
+fn golden_a_shrinking_tail_leaves_no_residue() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+    set_family_row(&mut buf, 2, "HELLO");
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    for x in 11..15u16 {
+        buf.set_cell((x, 0), &Cell::BLANK);
+    }
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\x1b[A  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}H\x1b[?7h\r".as_bytes(),
+    );
+}
+
+#[test]
+fn golden_an_unclearable_right_edge_is_written_out() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    let mut buf = RenderBuffer::new(12, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // An underlined blank is not what an erase leaves behind, so the tail
+    // has to be written out to the right edge instead of erased.
+    let underlined = Cell::new(" ", 1).style(Style::default().underline());
+    for x in 0..12u16 {
+        buf.set_cell((x, 0), &underlined.clone());
+    }
+    set_family_row(&mut buf, 2, "");
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\r\x1b[4m  \x1b[?7l\x1b[m\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[4m  \x1b[?7h\r\n\x1b[m".as_bytes(),
+    );
+}
+
+#[test]
+fn golden_a_colored_tail_is_erased_with_bce() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true).with_bce(true));
+    let mut buf = RenderBuffer::new(14, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    let red = Style::default().bg(Color::Red);
+    for x in 0..14u16 {
+        buf.set_cell((x, 0), &Cell::new(" ", 1).style(red.clone()));
+    }
+    buf.set_cell((2, 0), &Cell::new(FAMILY, 8).style(red.clone()));
+    for c in 3..10u16 {
+        buf.set_cell((c, 0), &Cell::new("", 0).style(red.clone()));
+    }
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\r\x1b[41m  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[?7h\r\x1b[m\n".as_bytes(),
+    );
+}
+
+#[test]
+fn golden_a_single_code_point_wide_cell_needs_no_repaint() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // One code point is measured the way the terminal draws it, whatever
+    // the terminal's shaping does with its neighbors.
+    buf.set_cell((2, 0), &Cell::new("\u{4E16}", 2));
+    buf.set_cell((3, 0), &Cell::new("", 0));
+    buf.set_cell((4, 0), &Cell::new("Z", 1));
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\r  \u{4E16}Z\r\n".as_bytes(),
+    );
+}
+
+#[test]
+fn golden_grapheme_widths_need_no_repaint() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    renderer.set_width_mode(crate::text::WidthMode::Grapheme);
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // Measured whole, the cluster claims the two columns the terminal
+    // draws, so the diff's columns hold and it runs as usual.
+    buf.set_cell((2, 0), &Cell::new(FAMILY, 2));
+    buf.set_cell((3, 0), &Cell::new("", 0));
+    buf.set_cell((4, 0), &Cell::new("Z", 1));
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\r  \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Z\r\n".as_bytes(),
+    );
 }

@@ -10,6 +10,7 @@ use crate::renderer::caps::Optimizations;
 use crate::renderer::color_cache::ColorCache;
 use crate::renderer::{scroll, tabstops};
 use crate::style::Style;
+use crate::text::WidthMode;
 
 /// The renderer's tracked cursor: the on-screen position, the active
 /// pen (style — including any open hyperlink) used for subsequent
@@ -244,6 +245,11 @@ pub struct Renderer {
     /// reused across frames; cleared and resized to `(H + 1) * 2`
     /// entries at the start of each call.
     pub(super) hashtab: Vec<scroll::HashEntry>,
+    /// The policy the buffered cells were measured with. Tells the
+    /// transform which rows carry a cluster the terminal may measure
+    /// differently, and so have to be repainted rather than diffed. See
+    /// [`Renderer::width_is_uncertain`].
+    pub(super) width_mode: WidthMode,
 }
 
 impl Renderer {
@@ -278,6 +284,7 @@ impl Renderer {
             last_height: 0,
             tabs: tabstops::TabStops::default_for(0),
             hashtab: Vec::new(),
+            width_mode: WidthMode::default(),
         }
     }
 }
@@ -362,6 +369,37 @@ impl Renderer {
     /// brackets. See [`Renderer::sync_output`].
     pub(crate) fn set_sync_output(&mut self, enabled: bool) {
         self.sync_output = enabled;
+    }
+
+    /// Tell the renderer which policy measured the cells it is given.
+    ///
+    /// The transform needs this to know which rows carry a cluster whose
+    /// column count the terminal may not agree with. Changing the policy
+    /// changes what is already on screen, so the caller owns the repaint;
+    /// [`crate::screen::Screen::set_grapheme_clusters`] does that.
+    pub(crate) fn set_width_mode(&mut self, mode: WidthMode) {
+        self.width_mode = mode;
+    }
+
+    /// Whether the terminal may disagree with `cell` about how many
+    /// columns it takes.
+    ///
+    /// [`WidthMode::Wc`] measures a cluster by summing its code points,
+    /// which is what a terminal that advances once per code point does. A
+    /// terminal that instead ligates the cluster into one glyph advances
+    /// over that glyph alone, so a four-person family emoji takes two
+    /// columns where this says eight. The two only disagree when the
+    /// cluster has parts to sum: one code point measures the same either
+    /// way, so a CJK ideograph is never uncertain.
+    ///
+    /// [`WidthMode::Grapheme`] measures the whole cluster, which is what a
+    /// terminal in DEC mode 2027 does, and that mode is only enabled once
+    /// the terminal reports it. A terminal is therefore never asked to
+    /// place a cluster it measures more widely than this does.
+    pub(super) fn width_is_uncertain(&self, cell: &Cell) -> bool {
+        self.width_mode == WidthMode::Wc
+            && cell.is_wide()
+            && cell.content().chars().nth(1).is_some()
     }
 
     /// Current cursor position as last tracked by the renderer.

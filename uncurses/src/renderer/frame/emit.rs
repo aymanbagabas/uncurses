@@ -245,6 +245,20 @@ impl Renderer {
         self.cur.y = None;
     }
 
+    /// Park the cursor on the left edge of the row it is already on.
+    ///
+    /// A carriage return is the one horizontal move whose outcome does not
+    /// depend on the current column, which is what makes it the way back to
+    /// a known column after the terminal advanced by an amount the renderer
+    /// did not predict. The row it lands on is the row it started on, so
+    /// this recovers the column only, and the caller owns keeping the row
+    /// trustworthy.
+    pub(crate) fn reanchor_to_row_start(&mut self, out: &mut Vec<u8>) {
+        out.push(b'\r');
+        self.cur.x = Some(0);
+        self.cur.at_phantom = false;
+    }
+
     /// Write a single grapheme to the output buffer, handling the
     /// right-margin auto-wrap "phantom" state and protecting the lower
     /// right corner from triggering an unwanted scroll in fullscreen mode.

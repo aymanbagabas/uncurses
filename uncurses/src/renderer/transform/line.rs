@@ -90,8 +90,39 @@ impl Renderer {
             return Ok(None);
         }
 
-        // === Step 1: find firstCell ===
+        // === Step 0: give up on the diff at a cluster of uncertain width ===
         //
+        // Every step below plans from how many columns it believes each cell
+        // takes, and a cluster the terminal draws narrower than the sum of
+        // its parts breaks that belief for itself and for every column to
+        // its right. The row is repainted from there instead.
+        //
+        // This comes first because the leading-blank branch of step 1 emits
+        // an erase of its own. That erase reaches the columns a ligated
+        // cluster was drawn into, and no later step would redraw what it
+        // wiped.
+        if let Some(bail) = self.uncertain_bail(new_line, cur_line.as_deref()) {
+            let cur_slice = cur_line.as_deref();
+            // Columns left of the cluster are measured the way the terminal
+            // draws them, so an ordinary comparison still holds there.
+            let mut first = 0usize;
+            while first < bail
+                && cur_slice
+                    .and_then(|c| c.get(first))
+                    .is_some_and(|o| o == &new_line[first])
+            {
+                first += 1;
+            }
+            let first = super::emit::cluster_start(new_line, first);
+            if first < bail {
+                self.move_to(out, new_buf, y, first as u16)?;
+                self.put_range(out, new_buf, cur_slice, new_line, y, first, bail - 1)?;
+            }
+            self.repaint_tail(out, new_buf, new_line, y, bail)?;
+            return Ok(Some(first));
+        }
+
+        // === Step 1: find firstCell ===
         // When the new row begins with cells that the terminal can
         // reproduce by erasing (default-style blanks), we may be able
         // to use EL-1 to wipe a leading run. Otherwise just scan
