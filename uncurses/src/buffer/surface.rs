@@ -357,10 +357,10 @@ pub trait SurfaceMut: Surface {
     ///
     /// # Behavior
     ///
-    /// Stepped by `cell.width()` so wide cells lay down clean
-    /// primary/continuation pairs; a trailing partial slot at the
-    /// right edge falls back to a blank. Implementations may override
-    /// for a bulk-blit fast path.
+    /// Stepped by `cell.width()` so a wide cell lays down a clean primary
+    /// and its continuations; whatever region is left at the right edge,
+    /// narrower than one more cell, falls back to blanks. Implementations
+    /// may override for a bulk-blit fast path.
     ///
     /// # Panics
     ///
@@ -369,9 +369,10 @@ pub trait SurfaceMut: Surface {
     ///
     /// # Usage notes
     ///
-    /// Empty intersections are no-ops. A wide fill into an odd-width region
-    /// leaves the final single column blank because a two-column grapheme
-    /// cannot fit there.
+    /// Empty intersections are no-ops. A region whose width is not a
+    /// multiple of `cell.width()` ends in blanks, because the cell cannot be
+    /// drawn in fewer columns than it takes: a width-8 fill into ten columns
+    /// leaves the last two blank.
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         let step = (cell.width() as u16).max(1);

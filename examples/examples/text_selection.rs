@@ -6,12 +6,14 @@
 //! takes when it owns a grid of cells and repaints it each frame.
 //!
 //! Two rules keep a wide cluster intact. A continuation belongs to the cell
-//! on its left and is placed by that cell's own write, so the painter writes
-//! leads only. And a selection is closed over whole clusters, because a
-//! terminal draws a glyph or does not, and cannot draw half of one.
+//! that owns its column, which can be several columns to its left, and is
+//! placed by that cell's own write, so the painter writes leads only. And a
+//! selection is closed over whole clusters, because a terminal draws a glyph
+//! or does not, and cannot draw half of one.
 //!
-//! The content mixes CJK, a joined family, a flag, and ASCII, so a drag
-//! crosses clusters of one column and of two.
+//! The content mixes CJK, a joined family, a flag, and ASCII. Under the
+//! default per-code-point measurement the family claims six columns, so a
+//! drag crosses clusters of one, two, and six columns.
 //!
 //! Run with `cargo run --example text_selection`. Drag with the left button
 //! to select; press `q`, `esc`, or `Ctrl-C` to quit.

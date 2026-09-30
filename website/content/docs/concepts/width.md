@@ -32,22 +32,25 @@ cell).
 
 That last one is the catch. An `é` might be a single code point, or it might be
 an `e` followed by a separate combining accent. Either way, a human sees one
-character, and it fills one cell. uncurses measures the way a human counts: by
-*extended grapheme cluster*, so a cluster built from several code points still
-lands in the right number of cells. Counting bytes or code points would overcount
-and shove the rest of the row sideways.
+character, and it fills one cell. uncurses splits text the way a human reads
+it, into *extended grapheme clusters*, so a cluster built from several code
+points is one unit however many pieces it is made of. Splitting on bytes or
+code points would break that unit apart and shove the rest of the row sideways.
+
+Splitting is settled. How many columns one of those clusters takes is the
+open question, and the next section is about the two answers.
 
 ## Two ways to measure
 
 How a cluster is measured is a policy, captured by
 [`WidthMode`](/api/uncurses/text/enum.WidthMode.html):
 
-- **`Wc`** is wcwidth-style: it adds up the widths of the code points in the
-  cluster. Combining marks and joiners are zero-width, so they add nothing and
-  an accented letter still takes one cell. A joined emoji sequence adds up to
-  more: a family emoji counts each face, so it claims eight columns. This
-  matches how older or plainer terminals behave, because they advance the
-  cursor once per code point. It is the default.
+- **`Wc`** is wcwidth-style: it adds up the widths of the code points inside
+  the cluster. Combining marks and joiners are zero-width, so they add nothing
+  and an accented letter still takes one cell. A joined emoji sequence adds up
+  to more, because each face in it counts. This matches how older or plainer
+  terminals behave, since they advance the cursor once per code point. It is
+  the default.
 - **`Grapheme`** measures the whole cluster, accounting for variation
   selectors, regional-indicator flags, and zero-width-joiner emoji sequences.
   The cluster boundaries follow the Unicode text-segmentation rules in
