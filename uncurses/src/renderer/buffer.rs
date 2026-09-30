@@ -167,8 +167,11 @@ impl RenderBuffer {
     ///
     /// The reach is clamped to the row, because `Buffer::set` truncates a cell
     /// that does not fit and the span may not claim a column the row does not
-    /// have. Only a wide cell owns the column to its right, so a narrow cell or
-    /// a continuation reaches no further than itself.
+    /// have. A narrow cell reaches no further than itself.
+    ///
+    /// A continuation reaches as far as the primary that owns it, because a
+    /// write landing on one breaks the whole cluster and the buffer blanks
+    /// every column the primary held.
     ///
     /// This reads the row as it stands, so callers ask before writing: the
     /// write is what destroys the evidence.
@@ -179,12 +182,22 @@ impl RenderBuffer {
         let Some(cell) = line.get(pos.x as usize) else {
             return pos.x;
         };
-        if !cell.is_wide() {
+        let owner = if cell.is_continuation() && pos.x > 0 {
+            let mut pc = pos.x - 1;
+            while pc > 0 && line[pc as usize].is_continuation() {
+                pc -= 1;
+            }
+            pc
+        } else {
+            pos.x
+        };
+        if !line[owner as usize].is_wide() {
             return pos.x;
         }
-        pos.x
-            .saturating_add(cell.width() as u16 - 1)
+        owner
+            .saturating_add(line[owner as usize].width() as u16 - 1)
             .min(self.width().saturating_sub(1))
+            .max(pos.x)
     }
 
     /// The columns a row shift bounded by `bounds_right` actually changes.
@@ -730,6 +743,24 @@ mod tests {
         let mut rb = RenderBuffer::new(10, 5);
         rb.touch_all();
         assert_eq!(rb.touched_line_count(), 5);
+    }
+
+    #[test]
+    fn a_fill_inside_a_wide_cell_damages_every_column_it_blanks() {
+        // The fill lands wholly inside an eight-column cell. Blanking the
+        // primary takes all eight columns with it, so the damage span has
+        // to cover all eight. The right end is read at the fill's last
+        // column, which is a continuation, so it has to reach back to the
+        // primary to learn how far the blanking goes.
+        let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+        let mut rb = RenderBuffer::new(12, 1);
+        rb.set_cell((0, 0), &Cell::new(fam, 8));
+        rb.clear_touched();
+
+        rb.fill_rect(Rect::new(2, 0, 2, 1), &Cell::new("x", 1));
+        let (_, span) = rb.touched_lines().next().expect("the row changed");
+        assert_eq!(span.first, 0, "the primary blanked with the fill");
+        assert_eq!(span.last, 7, "so did every column it owned");
     }
 
     #[test]

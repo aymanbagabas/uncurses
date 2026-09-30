@@ -377,3 +377,61 @@ fn a_wide_fill_spans_a_row_as_wide_as_the_address_space() {
 
     assert!(buf.cell(Position::new(0, 0)).unwrap().is_wide());
 }
+
+#[test]
+fn a_fill_inside_a_wide_cell_leaves_no_orphan_continuation() {
+    // A cell may own more than two columns, so a fill can land wholly
+    // inside one: it starts after the primary and stops before the last
+    // column the primary holds. The left-edge pass blanks the primary, and
+    // the right-edge pass walks back only as far as the fill's own left
+    // edge, so it never reaches a primary sitting before that. The columns
+    // past the fill would keep pointing at an owner that no longer exists.
+    let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    let mut buf = Buffer::new(12, 1);
+    buf.set(Position::new(0, 0), &Cell::new(fam, 8));
+    buf.fill_rect(Rect::new(2, 0, 2, 1), &Cell::new("x", 1));
+
+    for x in 0..2 {
+        assert!(buf.cell(Position::new(x, 0)).unwrap().is_blank());
+    }
+    for x in 2..4 {
+        assert_eq!(buf.cell(Position::new(x, 0)).unwrap().content(), "x");
+    }
+    for x in 4..8 {
+        let c = buf.cell(Position::new(x, 0)).unwrap();
+        assert!(
+            !c.is_continuation(),
+            "column {x} still continues a cell that was blanked: {c:?}"
+        );
+    }
+}
+
+#[test]
+fn no_fill_of_any_width_leaves_a_continuation_without_an_owner() {
+    // Every fill that overlaps a cell has to leave the row well formed:
+    // each continuation still sits inside the footprint of a primary to
+    // its left. Two columns can never produce the gap above, because a
+    // fill strictly inside a two-column cell is empty.
+    for w in 2u8..=6 {
+        for lo in 0..w as u16 {
+            for hi in (lo + 1)..=(w as u16) {
+                let mut buf = Buffer::new(12, 1);
+                buf.set(Position::new(0, 0), &Cell::new("W", w));
+                buf.fill_rect(Rect::new(lo, 0, hi - lo, 1), &Cell::new("x", 1));
+
+                let mut owner_reaches = 0u16;
+                for x in 0..12u16 {
+                    let c = buf.cell(Position::new(x, 0)).unwrap();
+                    if c.is_continuation() {
+                        assert!(
+                            x < owner_reaches,
+                            "w={w} fill=[{lo},{hi}): column {x} has no owner"
+                        );
+                    } else {
+                        owner_reaches = x + c.width() as u16;
+                    }
+                }
+            }
+        }
+    }
+}

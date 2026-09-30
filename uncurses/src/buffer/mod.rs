@@ -479,9 +479,10 @@ impl SurfaceMut for Buffer {
     /// Fill the clipped intersection of `rect` with `cell`. For
     /// width-1 fills this collapses the trait default's per-cell
     /// `set_cell` loop into one `slice::fill` per row, with explicit
-    /// wide-cell edge-straddle cleanup at the left and right boundaries
-    /// so any wide cell crossing the fill region leaves no orphan
-    /// primary or continuation behind. Wide fills (`cell.width() > 1`)
+    /// wide-cell cleanup around the fill so any cell overlapping the
+    /// region leaves no orphan primary or continuation behind. A cell
+    /// wide enough can hold the whole region, in which case the cleanup
+    /// reaches past both edges of the fill. Wide fills (`cell.width() > 1`)
     /// stay on the stepped `set_cell` path so primary/continuation
     /// pairing and the trailing-partial-slot blank are placed by the
     /// same wide-cell handling that `set` already implements.
@@ -534,6 +535,18 @@ impl SurfaceMut for Buffer {
                     let end = (p + pw).min(lo);
                     for slot in &mut line[p..end] {
                         *slot = Cell::BLANK;
+                    }
+                    // The same cell can also reach past `hi`, which is what
+                    // happens when the fill lands wholly inside it. Those
+                    // columns just lost the primary that owned them, so
+                    // they cannot stay continuations. The right-edge pass
+                    // below will not reach them: it walks back only as far
+                    // as `lo`, and this primary sits before that.
+                    if p + pw > hi {
+                        let tail = (p + pw).min(row_width);
+                        for slot in &mut line[hi..tail] {
+                            *slot = Cell::BLANK;
+                        }
                     }
                 }
             }

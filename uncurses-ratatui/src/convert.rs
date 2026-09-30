@@ -188,10 +188,11 @@ fn str_cell_width(s: &str) -> usize {
 
 /// Convert a concrete buffer cell into the uncurses cell staged in the buffer.
 ///
-/// The symbol is classified as wide when its terminal-cell width is at least
-/// two; otherwise it is stored as a narrow cell. The source cell's foreground,
-/// background, underline color, and modifiers are converted through
-/// [`to_uncurses_style`].
+/// The cell is credited with the number of columns its symbol measures, so a
+/// cluster wider than two columns keeps every column it takes. A symbol that
+/// measures nothing still occupies the one column ratatui gave it. The source
+/// cell's foreground, background, underline color, and modifiers are converted
+/// through [`to_uncurses_style`].
 pub(crate) fn cell_from_ratatui(rc: &ratatui::buffer::Cell) -> CzCell {
     let style = RtStyle {
         fg: Some(rc.fg),
