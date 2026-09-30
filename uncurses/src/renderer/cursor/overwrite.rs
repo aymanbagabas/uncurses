@@ -135,7 +135,7 @@ mod cluster_bounds_tests {
         let mut line = Vec::new();
         for _ in 0..5 {
             line.push(Cell::new("\u{4e16}", 2));
-            line.push(Cell::new("", 0));
+            line.push(Cell::CONTINUATION);
         }
         line
     }
@@ -203,13 +203,13 @@ mod passes_agree {
         vec![
             Cell::new("a", 1),
             Cell::new("\u{4e16}", 2),
-            Cell::new("", 0),
+            Cell::CONTINUATION,
             Cell::new("b", 1),
             Cell::new("\u{1f1ef}\u{1f1f5}", 2),
-            Cell::new("", 0),
+            Cell::CONTINUATION,
             Cell::new("e\u{301}", 1),
             Cell::new("\u{1f468}\u{200d}\u{1f469}", 2),
-            Cell::new("", 0),
+            Cell::CONTINUATION,
             Cell::new("c", 1),
             // Cells whose content draws a different number of columns than
             // the row credits them with. Each would let the walk arrive
@@ -283,9 +283,9 @@ mod still_useful {
     fn a_range_over_whole_wide_clusters_is_still_offered() {
         let line = vec![
             Cell::new("\u{4e16}", 2),
-            Cell::new("", 0),
+            Cell::CONTINUATION,
             Cell::new("\u{754c}", 2),
-            Cell::new("", 0),
+            Cell::CONTINUATION,
             Cell::new("a", 1),
         ];
         let style = Style::default();
@@ -376,13 +376,13 @@ mod unowned_continuation {
     #[test]
     fn a_range_holding_an_unowned_continuation_is_refused() {
         let style = Style::default();
-        let line = vec![Cell::new("a", 1), Cell::new("", 0)];
+        let line = vec![Cell::new("a", 1), Cell::CONTINUATION];
         assert_eq!(overwrite_cost(&line, &style, 0, 2), None);
         let mut out = Vec::new();
         assert!(!collect_overwrite_bytes(&mut out, &line, &style, 0, 2));
 
         // The same columns with an owner are still offered, and draw both.
-        let owned = vec![Cell::new("\u{4e16}", 2), Cell::new("", 0)];
+        let owned = vec![Cell::new("\u{4e16}", 2), Cell::CONTINUATION];
         assert_eq!(overwrite_cost(&owned, &style, 0, 2), Some(3));
         let mut out = Vec::new();
         assert!(collect_overwrite_bytes(&mut out, &owned, &style, 0, 2));

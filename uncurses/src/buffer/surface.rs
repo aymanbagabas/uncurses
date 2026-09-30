@@ -765,7 +765,7 @@ mod tests {
     }
 
     fn cont() -> Cell {
-        Cell::new("", 0)
+        Cell::CONTINUATION
     }
 
     #[test]

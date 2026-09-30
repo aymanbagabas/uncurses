@@ -27,9 +27,9 @@
 //! rather than assuming it. The constructor uses the default [`Style`]; use
 //! [`Cell::style()`] to attach a style afterwards.
 //!
-//! `Cell::new("", 0)` creates the internal placeholder used for the columns
-//! after a multi-column grapheme. Most callers should not write
-//! continuations directly; writing a multi-column cell through
+//! [`Cell::CONTINUATION`] is the placeholder that stands in the columns
+//! after a multi-column grapheme. Most callers never write one; writing a
+//! multi-column cell through
 //! [`Buffer::set`](crate::buffer::Buffer::set) or
 //! [`SurfaceMut::set_cell`](crate::buffer::SurfaceMut::set_cell) creates the
 //! placeholders automatically.
@@ -136,13 +136,44 @@ impl Cell {
         width: 1,
     };
 
+    /// A continuation placeholder with default style.
+    ///
+    /// The placeholder stores no content, uses [`Style::EMPTY`], and has
+    /// width `0`. [`Cell::is_continuation`] reports `true` for it.
+    ///
+    /// # Returns
+    ///
+    /// This is a constant value, so use it directly wherever a continuation
+    /// is needed.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// A wide cell is followed by [`width`](Cell::width) `- 1` of these, one
+    /// for every column the cell owns beyond its first. The surface write
+    /// path lays them down; application code needs them only when it builds
+    /// a row by hand.
+    ///
+    /// Under background color erase a continuation carries the style of the
+    /// cell that owns it, so clone the constant and give it that style
+    /// rather than leaving it default.
+    pub const CONTINUATION: Cell = Cell {
+        content: CompactString::const_new(""),
+        style: Style::EMPTY,
+        width: 0,
+    };
+
     /// Create a cell holding `content` across `width` terminal columns.
     ///
     /// # Parameters
     ///
     /// - `content`: grapheme content to store in the cell.
-    /// - `width`: number of terminal columns the content occupies. Pass `0`
-    ///   together with empty content to build a continuation placeholder.
+    /// - `width`: number of terminal columns the content occupies. Use
+    ///   [`Cell::CONTINUATION`] for a placeholder rather than passing `0`
+    ///   with empty content.
     ///
     /// # Returns
     ///
@@ -327,10 +358,19 @@ mod tests {
 
     #[test]
     fn test_continuation_cell() {
-        let c = Cell::new("", 0);
+        let c = Cell::CONTINUATION;
         assert!(c.is_continuation());
         assert_eq!(c.width(), 0);
         assert!(c.is_blank());
+    }
+
+    #[test]
+    fn the_continuation_constant_matches_one_built_by_hand() {
+        // Rows built before the constant existed pass `Cell::new("", 0)`,
+        // and `PartialEq` weighs content, width, and style. A constant that
+        // differed in any of the three would compare unequal and make the
+        // renderer redraw a column that did not change.
+        assert_eq!(Cell::CONTINUATION, Cell::new("", 0));
     }
 
     #[test]
@@ -349,7 +389,7 @@ mod tests {
     fn width_and_content_together_decide_the_structural_role() {
         // A continuation is empty and owns no column. A cell that is empty
         // but claims a column is malformed and is not a wide cell.
-        assert!(Cell::new("", 0).is_continuation());
+        assert!(Cell::CONTINUATION.is_continuation());
         assert!(!Cell::new("a", 0).is_continuation());
         assert!(!Cell::new("", 2).is_wide());
         assert!(Cell::new("\u{1f469}", 2).is_wide());

@@ -90,7 +90,7 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
     let mut buf = Buffer::new(10, 1);
     buf.set((3, 0), &Cell::new("中", 2));
     // Now write a continuation into col 4 (where one already lives).
-    let cont = Cell::new("", 0);
+    let cont = Cell::CONTINUATION;
     buf.set((4, 0), &cont);
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "中");
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().width(), 2);

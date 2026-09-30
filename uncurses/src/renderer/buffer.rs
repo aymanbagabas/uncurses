@@ -564,7 +564,7 @@ mod tests {
     fn damage_reaches_a_primary_blanked_through_chained_continuations() {
         let mut rb = RenderBuffer::new(6, 1);
         rb.set_cell((0, 0), &Cell::new("\u{4e16}", 2));
-        rb.buffer.line_mut(0).unwrap()[2] = Cell::new("", 0);
+        rb.buffer.line_mut(0).unwrap()[2] = Cell::CONTINUATION;
         rb.clear_touched();
 
         let before = rb.buffer.cell(Position::new(0, 0)).unwrap().clone();
@@ -586,7 +586,7 @@ mod tests {
         // guard above it ever let an out-of-bounds position through.
         rb.set_cell((0, 0), &Cell::new("\u{4e16}", 2));
         for x in 2..6 {
-            rb.buffer.line_mut(0).unwrap()[x] = Cell::new("", 0);
+            rb.buffer.line_mut(0).unwrap()[x] = Cell::CONTINUATION;
         }
         rb.clear_touched();
 
@@ -628,17 +628,21 @@ mod tests {
         let cases: [(&str, Vec<Cell>, u16); 3] = [
             (
                 "a wide owner is reached",
-                vec![Cell::new("\u{4e16}", 2), Cell::new("", 0), Cell::new("", 0)],
+                vec![
+                    Cell::new("\u{4e16}", 2),
+                    Cell::CONTINUATION,
+                    Cell::CONTINUATION,
+                ],
                 0,
             ),
             (
                 "a narrow neighbour is left alone",
-                vec![Cell::new("a", 1), Cell::new("", 0), Cell::new("", 0)],
+                vec![Cell::new("a", 1), Cell::CONTINUATION, Cell::CONTINUATION],
                 2,
             ),
             (
                 "a continuation reaching the edge owns nothing",
-                vec![Cell::new("", 0), Cell::new("", 0), Cell::new("", 0)],
+                vec![Cell::CONTINUATION, Cell::CONTINUATION, Cell::CONTINUATION],
                 2,
             ),
         ];

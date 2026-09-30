@@ -401,7 +401,7 @@ mod tests {
             "ambiguous width draws two columns in a CJK locale"
         );
         assert_eq!(
-            overwrite_cost(&[Cell::new(flag, 2), Cell::new("", 0)], &style, 0, 2),
+            overwrite_cost(&[Cell::new(flag, 2), Cell::CONTINUATION], &style, 0, 2),
             None,
             "a lone regional indicator draws one column under wcwidth"
         );

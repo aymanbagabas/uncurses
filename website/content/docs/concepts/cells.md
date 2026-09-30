@@ -44,7 +44,9 @@ One terminal row. The wide glyph `世` is a primary cell in column 1 with a
 zero-width continuation cell in column 2, and the narrow `A` sits in column 3.
 
 You almost never create a continuation by hand: writing a wide grapheme into a
-grid lays down the primary and its continuations together. The
+grid lays down the primary and its continuations together. When you do build a
+row yourself, `Cell::CONTINUATION` is the placeholder to put in each column
+after the first. The
 [Width]({{< relref "width.md" >}}) page digs into how uncurses decides what is
 narrow and what is wide, and why getting it wrong smears a whole row.
 

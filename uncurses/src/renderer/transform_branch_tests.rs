@@ -420,7 +420,7 @@ fn a_difference_on_a_continuation_re_emits_its_cluster() {
     // directly is the only way there, because `set` leaves a continuation to
     // the cluster that owns it.
     if let Some(line) = buf.line_mut(0) {
-        line[13] = Cell::new("", 0).style(Style::default().bg(Color::Red));
+        line[13] = Cell::CONTINUATION.style(Style::default().bg(Color::Red));
     }
     buf.touch_line(0, 13, 13);
 

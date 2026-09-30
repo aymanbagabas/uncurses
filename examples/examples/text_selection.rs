@@ -92,7 +92,7 @@ impl Row {
                 w => {
                     cells.push(Cell::new(cluster, w));
                     for _ in 1..w {
-                        cells.push(Cell::new("", 0));
+                        cells.push(Cell::CONTINUATION);
                     }
                 }
             }

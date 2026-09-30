@@ -397,7 +397,7 @@ impl Buffer {
                 }
                 // Continuations inherit the wide primary's style so the
                 // cell's bg/attributes are coherent across both columns.
-                line[i] = Cell::new("", 0).style(cell.style.clone());
+                line[i] = Cell::CONTINUATION.style(cell.style.clone());
             }
         }
 
