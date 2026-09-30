@@ -527,6 +527,15 @@ impl<W: Write> Screen<W> {
     /// Measuring differently from the terminal misplaces every cell after the
     /// first cluster on a line, so the two must agree.
     ///
+    /// Under the per-code-point model the renderer covers the one difference
+    /// it can predict: a cluster of several code points, which a terminal is
+    /// free to ligate into a single narrower glyph. It stops diffing that row
+    /// at the cluster and repaints the rest of it in one run, which asks
+    /// nothing about where the terminal put the glyph. That keeps the row
+    /// honest on a terminal that ligates without reporting DECSET 2027.
+    /// Measuring whole clusters means the terminal reported the mode and
+    /// counts them the same way, so every row takes the ordinary path.
+    ///
     /// Changing the mode discards the tracked terminal contents, so the next
     /// [`render`](Self::render) is a full repaint: what is already on screen
     /// was measured the other way. Setting the current value is a no-op.
@@ -542,6 +551,7 @@ impl<W: Write> Screen<W> {
             return;
         }
         self.grapheme_clusters = enabled;
+        self.renderer.set_width_mode(self.width_mode());
         // Whatever is on screen was measured under the old model, so the
         // tracked terminal contents no longer describe it. Diffing against
         // that record would leave the two disagreeing about which column

@@ -74,6 +74,25 @@ everything after it is off by a column: the cursor lands in the wrong place, the
 next write lands on top of the wrong cell, and the careful diff falls apart.
 Measuring right is what keeps the grid honest.
 
+For one class of cluster the answer is genuinely the terminal's to give, and it
+can differ from the one the grid picked. Under `Wc` a joined emoji sequence
+counts each of its faces, and a terminal that ligates the sequence into a single
+glyph takes fewer columns than that. The disagreement is not confined to the
+cluster: once it is drawn, every column to its right on that row sits somewhere
+the grid cannot name.
+
+So a [screen]({{< relref "screen.md" >}}) stops diffing that row at the cluster
+and repaints the rest of it. One absolute move reaches the cluster, and the
+tail is written in a single run, which asks nothing about where the terminal
+put anything. Whichever way the terminal counted, the row reads correctly and
+the next row starts clean.
+
+The columns left of the cluster are measured the way the terminal draws them,
+so they keep the ordinary diff. The cost is a repainted tail on the rows that
+carry one of these clusters, and nothing at all on the rows that do not. Answer
+mode 2027 and the question stops arising: the grid then counts clusters the way
+the terminal does, and every row takes the ordinary path.
+
 ## Where width lives
 
 You rarely call the measurement functions yourself. Any
