@@ -162,12 +162,16 @@ const HALFWIDTH_KATAKANA_SEMI_VOICED_SOUND_MARK: char = '\u{FF9F}';
 /// width for strings. Includes a fast path for single-byte ASCII and a `+1`
 /// compensation for each halfwidth dakuten/handakuten that `unicode-width`
 /// reports as zero.
-fn str_cell_width(s: &str) -> u16 {
+///
+/// The count is returned whole. A caller that stores it in a narrower type
+/// has to bound it there, where the bound can be applied to the real width
+/// rather than to a wrapped one.
+fn str_cell_width(s: &str) -> usize {
     use unicode_width::UnicodeWidthStr;
     if s.len() == 1 {
         1
     } else {
-        let width = s.width() as u16;
+        let width = s.width();
         let extra = s
             .chars()
             .filter(|c| {
@@ -177,8 +181,8 @@ fn str_cell_width(s: &str) -> u16 {
                         | HALFWIDTH_KATAKANA_SEMI_VOICED_SOUND_MARK
                 )
             })
-            .count() as u16;
-        width.saturating_add(extra)
+            .count();
+        width + extra
     }
 }
 
@@ -203,7 +207,7 @@ pub(crate) fn cell_from_ratatui(rc: &ratatui::buffer::Cell) -> CzCell {
     // count would let the two grids disagree about where the next column
     // starts. The floor of one keeps a zero-width symbol occupying the
     // column ratatui gave it.
-    let width = str_cell_width(symbol).clamp(1, u8::MAX as u16) as u8;
+    let width = str_cell_width(symbol).clamp(1, u8::MAX as usize) as u8;
     let cell = CzCell::new(symbol, width);
     cell.style(style)
 }
@@ -227,6 +231,18 @@ mod tests {
         // columns than the terminal advances, and every later column on the
         // row would disagree.
         assert_eq!(width_of("abc"), 3);
+    }
+
+    #[test]
+    fn a_symbol_too_wide_for_a_cell_keeps_the_widest_count_one_can_hold() {
+        // A cell records its width in a `u8`, so a symbol measuring more
+        // columns than that takes the largest count the type holds. Reading
+        // the width into a narrower type first would wrap it: 65,536
+        // columns would come back as none at all, and the cap meant to
+        // catch that would read it as a single column instead.
+        let huge = "\u{4e16}".repeat(32_768);
+        assert_eq!(super::str_cell_width(&huge), 65_536);
+        assert_eq!(width_of(&huge), u8::MAX);
     }
 
     #[test]
