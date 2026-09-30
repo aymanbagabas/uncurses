@@ -532,9 +532,10 @@ impl<W: Write> Screen<W> {
     /// free to ligate into a single narrower glyph. It stops diffing that row
     /// at the cluster and repaints the rest of it in one run, which asks
     /// nothing about where the terminal put the glyph. That keeps the row
-    /// honest on a terminal that ligates without reporting DECSET 2027.
-    /// Measuring whole clusters means the terminal reported the mode and
-    /// counts them the same way, so every row takes the ordinary path.
+    /// honest on a terminal that ligates while measurement is per code
+    /// point. Measuring whole clusters asserts that the terminal counts
+    /// them the same way, so every row takes the ordinary path, and it is
+    /// on you to have put the terminal in that mode.
     ///
     /// Changing the mode discards the tracked terminal contents, so the next
     /// [`render`](Self::render) is a full repaint: what is already on screen

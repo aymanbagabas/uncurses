@@ -393,9 +393,13 @@ impl Renderer {
     /// way, so a CJK ideograph is never uncertain.
     ///
     /// [`WidthMode::Grapheme`] measures the whole cluster, which is what a
-    /// terminal in DEC mode 2027 does, and that mode is only enabled once
-    /// the terminal reports it. A terminal is therefore never asked to
-    /// place a cluster it measures more widely than this does.
+    /// terminal in DEC mode 2027 does. Selecting it asserts that the
+    /// terminal counts clusters the same way, so nothing here is
+    /// uncertain. Keeping that true is the caller's job:
+    /// [`crate::program::Program::enable_grapheme_clusters`] sets the mode
+    /// and the measurement together, while
+    /// [`crate::screen::Screen::set_grapheme_clusters`] sets only the
+    /// measurement and leaves the terminal to whoever owns it.
     pub(super) fn width_is_uncertain(&self, cell: &Cell) -> bool {
         self.width_mode == WidthMode::Wc
             && cell.is_wide()

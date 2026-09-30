@@ -81,17 +81,16 @@ glyph takes fewer columns than that. The disagreement is not confined to the
 cluster: once it is drawn, every column to its right on that row sits somewhere
 the grid cannot name.
 
-So a [screen]({{< relref "screen.md" >}}) stops diffing that row at the cluster
-and repaints the rest of it. One absolute move reaches the cluster, and the
-tail is written in a single run, which asks nothing about where the terminal
-put anything. Whichever way the terminal counted, the row reads correctly and
-the next row starts clean.
+So a [screen]({{< relref "screen.md" >}}) absorbs the disagreement inside the
+row that caused it. Columns left of the cluster are measured the way the
+terminal draws them and are unaffected; the rest of the row is brought back
+into agreement, whichever way the terminal counted. Rows that carry no such
+cluster pay nothing.
 
-The columns left of the cluster are measured the way the terminal draws them,
-so they keep the ordinary diff. The cost is a repainted tail on the rows that
-carry one of these clusters, and nothing at all on the rows that do not. Answer
-mode 2027 and the question stops arising: the grid then counts clusters the way
-the terminal does, and every row takes the ordinary path.
+Measure whole clusters and the question stops arising, because the grid then
+counts them the way the terminal does. For how the row is recovered, see
+[`Screen::set_grapheme_clusters`](/api/uncurses/screen/struct.Screen.html#method.set_grapheme_clusters)
+and the `wide_clusters` example.
 
 ## Where width lives
 

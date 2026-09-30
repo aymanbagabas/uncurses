@@ -3,8 +3,8 @@
 //! A terminal decides for itself how many columns a joined emoji takes. One
 //! draws every face in the sequence; another ligates the whole thing into a
 //! single double-wide glyph. The grid had to pick a number when the cell was
-//! written, so on half the terminals in the world that number is wrong, and
-//! everything after the cluster on that line slides out of place.
+//! written, and a terminal that counts the cluster differently puts
+//! everything after it on that line out of place.
 //!
 //! [`Screen`] gives up on the diff at such a cluster and repaints the row
 //! from there to its right edge. One absolute move reaches the cluster, and
@@ -24,7 +24,8 @@ use uncurses::cell::Cell;
 use uncurses::screen::Screen;
 use uncurses::text::WidthMode;
 
-/// A four-person family. Six code points joined by zero-width joiners.
+/// A four-person family: seven code points, four faces joined by three
+/// zero-width joiners.
 const FAMILY: &str = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
 
 /// A CJK ideograph. One code point, and every terminal gives it two columns.
