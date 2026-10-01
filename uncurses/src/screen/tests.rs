@@ -2968,3 +2968,38 @@ fn the_walk_to_the_resting_cursor_closes_the_style_it_opened() {
         "the frame must close the red it opened: {out:?}"
     );
 }
+
+/// A frame that walks the cursor past an uncertain cluster leaves the column
+/// for the terminal to name. A later render with nothing to change must still
+/// recognize the cursor as resting and write nothing at all.
+#[test]
+fn a_render_after_the_walk_with_nothing_to_change_writes_nothing() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "AB", Style::default());
+    screen.set_cursor_position(Position::new(10, 0));
+    screen.render().unwrap();
+    assert!(
+        s(screen.writer()).contains(FAMILY),
+        "the first frame should walk past the cluster"
+    );
+
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert_eq!(
+        s(screen.writer()),
+        "",
+        "an idle render should write nothing"
+    );
+
+    // The rest is only good for the position that was asked for: moving the
+    // target still has to emit.
+    screen.set_cursor_position(Position::new(12, 0));
+    screen.render().unwrap();
+    assert!(
+        !s(screen.writer()).is_empty(),
+        "a new resting target should still emit a move"
+    );
+}

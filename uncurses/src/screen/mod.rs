@@ -139,6 +139,15 @@ pub struct Screen<W: Write> {
     /// declarative resting position, so the cursor is left wherever the cell
     /// diff ended.
     desired_cursor: Option<Position>,
+    /// The resting position the last frame walked the cursor to, when the
+    /// walk ended on a column only the terminal can name.
+    ///
+    /// Paired with [`Renderer::cursor_placed_on_row`] this says "the cursor
+    /// is already resting here", which the tracked position alone cannot,
+    /// because the walk deliberately forgets the column. The pairing needs no
+    /// invalidation: anything that moves the cursor writes a column back, and
+    /// the row check turns false the moment it does.
+    cursor_rested_at: Option<Position>,
 }
 
 impl<W: Write> Screen<W> {
@@ -171,6 +180,7 @@ impl<W: Write> Screen<W> {
             sync_updates: false,
             grapheme_clusters: false,
             desired_cursor: None,
+            cursor_rested_at: None,
         };
         let size = size.into();
         if size.width != 0 || size.height != 0 {
@@ -446,6 +456,14 @@ impl<W: Write> Screen<W> {
         match self.desired_cursor {
             Some(pos) => {
                 let pos = self.clamp_to_surface(pos);
+                // A walk past an uncertain cluster ends on a column only the
+                // terminal can name, so the tracked position reads as "not
+                // there" even though the cursor is exactly where it was asked
+                // to go. Take the recorded rest as the answer while the
+                // cursor still sits where that walk left it.
+                if self.cursor_rested_at == Some(pos) && self.renderer.cursor_placed_on_row(pos.y) {
+                    return false;
+                }
                 !self.renderer.cursor_known() || self.renderer.cursor_position() != pos
             }
             None => false,
@@ -734,6 +752,7 @@ impl<W: Write> Screen<W> {
             self.renderer
                 .move_to_resting(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
                 .unwrap();
+            self.cursor_rested_at = Some(pos);
         }
 
         if bracket_cursor {

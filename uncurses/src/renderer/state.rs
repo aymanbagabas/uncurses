@@ -454,6 +454,20 @@ impl Renderer {
         self.cur.known()
     }
 
+    /// Whether the cursor sits on row `y` at a column only the terminal can
+    /// name: the row is tracked and the column is not.
+    ///
+    /// This is the shape [`Renderer::move_to_resting`] leaves behind after
+    /// walking the cursor past a cluster of uncertain width. A caller that
+    /// remembers which column it asked for can pair that with this check to
+    /// tell "the terminal placed the cursor where I wanted" apart from "the
+    /// column is unknown because the cursor could be anywhere". Every move
+    /// writes a column back, so the answer turns false as soon as anything
+    /// else moves the cursor.
+    pub(crate) fn cursor_placed_on_row(&self, y: u16) -> bool {
+        self.cur.x.is_none() && self.cur.y == Some(y)
+    }
+
     /// First position where the tracked terminal contents disagree with
     /// `front`, or `None` when they match (or nothing has been rendered).
     ///
