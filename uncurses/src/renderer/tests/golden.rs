@@ -391,3 +391,54 @@ fn golden_a_blank_run_after_a_ligatable_cluster_is_skipped_by_a_relative_move() 
         "\x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[32X\x1b[32CZ\x1b[?7h\r".as_bytes(),
     );
 }
+
+/// A heart followed by an emoji variation selector sums to one column,
+/// and a terminal that honors the selector draws it in two. The sum can
+/// be short as well as long, so a cluster is uncertain whenever its
+/// shape leaves room for the terminal to disagree, not only when the
+/// sum came out wide.
+#[test]
+fn golden_a_variation_selector_makes_its_row_uncertain() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    renderer.set_width_mode(crate::text::WidthMode::Wc);
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    buf.set_cell((0, 0), &Cell::new("a", 1));
+    buf.set_cell((1, 0), &Cell::new("\u{2764}\u{FE0F}", 1));
+    buf.set_cell((2, 0), &Cell::new("Z", 1));
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // Column two is where the diff believes `Z` is; a terminal giving the
+    // heart two columns put it at three. The row is laid out again from
+    // the heart rather than addressed by column.
+    buf.set_cell((2, 0), &Cell::new("Y", 1));
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\x1b[Aa\x1b[K\x1b[?7l\u{2764}\u{FE0F}Y\x1b[?7h\r".as_bytes(),
+    );
+}
+
+/// A base with a combining mark after it is not uncertain. No terminal
+/// gives the mark a column of its own, so the sum is the base's width
+/// and both measurements agree. Decomposed text must keep the ordinary
+/// diff rather than repaint its row on every change.
+#[test]
+fn golden_a_combining_mark_keeps_the_diff() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    renderer.set_width_mode(crate::text::WidthMode::Wc);
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    buf.set_cell((0, 0), &Cell::new("e\u{0301}", 1));
+    buf.set_cell((1, 0), &Cell::new("Z", 1));
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    buf.set_cell((1, 0), &Cell::new("Y", 1));
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\x1b[A\x1b[CY".as_bytes(),
+    );
+}

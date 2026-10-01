@@ -75,17 +75,21 @@ next write lands on top of the wrong cell, and the careful diff falls apart.
 Measuring right is what keeps the grid honest.
 
 For one class of cluster the answer is genuinely the terminal's to give, and it
-can differ from the one the grid picked. Under `Wc` a joined emoji sequence
-counts each of its faces, and a terminal that ligates the sequence into a single
-glyph takes fewer columns than that. The disagreement is not confined to the
-cluster: once it is drawn, every column to its right on that row sits somewhere
-the grid cannot name.
+can differ from the one the grid picked. Under `Wc` a cluster is measured by
+adding up its parts, and the terminal need not land on the same number. A
+joined emoji sequence counts each of its faces, and a terminal that draws the
+whole sequence as one glyph takes fewer columns than that. A heart followed by
+a variation selector counts as one, and a terminal that draws it in emoji
+presentation takes two. The sum can fall short either way. The disagreement is
+not confined to the cluster: once it is drawn, every column to its right on
+that row sits somewhere the grid cannot name.
 
 So a [screen]({{< relref "screen.md" >}}) absorbs the disagreement inside the
 row that caused it. Columns left of the cluster are measured the way the
 terminal draws them and are unaffected; the rest of the row is brought back
 into agreement, whichever way the terminal counted. Rows that carry no such
-cluster pay nothing.
+cluster pay nothing, and neither does a letter carrying an accent, which every
+terminal draws in the width of the letter alone.
 
 Measure whole clusters and the question stops arising, because the grid then
 counts them the way the terminal does. For how the row is recovered, see

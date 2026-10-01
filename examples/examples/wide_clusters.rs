@@ -31,16 +31,27 @@ const FAMILY: &str = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f46
 /// A CJK ideograph. One code point, and every terminal gives it two columns.
 const IDEOGRAPH: &str = "\u{4e16}";
 
+/// A heart followed by an emoji variation selector. Summing its code
+/// points gives one column, and a terminal that honors the selector draws
+/// it in emoji presentation across two. The sum can fall short of what the
+/// terminal does as easily as it can overshoot.
+const HEART: &str = "\u{2764}\u{fe0f}";
+
 const COLS: u16 = 24;
 
 fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
 
-    for (label, text) in [("family emoji", FAMILY), ("CJK ideograph", IDEOGRAPH)] {
+    for (label, text) in [
+        ("family emoji", FAMILY),
+        ("CJK ideograph", IDEOGRAPH),
+        ("heart and variation selector", HEART),
+    ] {
         let width = WidthMode::Wc.grapheme_width(text, false);
         let mut screen = row_screen(false)?;
         let bytes = place(&mut screen, text, width)?;
-        writeln!(out, "{label} {text} claims {width} columns")?;
+        let plural = if width == 1 { "column" } else { "columns" };
+        writeln!(out, "{label} {text} claims {width} {plural}")?;
         writeln!(out, "  {}", printable(&bytes))?;
     }
 
@@ -70,10 +81,11 @@ fn main() -> io::Result<()> {
 
     writeln!(
         out,
-        "\nRows one and four are repainted from the emoji. The ideograph is a\n\
-         single code point, so no terminal can disagree about it, and row\n\
-         three was measured the way the terminal measures it. Both of those\n\
-         keep the ordinary diff."
+        "\nThe family emoji and the heart are both repainted from the cluster:\n\
+         one claims more columns than a terminal may give it, the other less.\n\
+         The ideograph is a single code point, so no terminal can disagree\n\
+         about it, and the agreed row was measured the way the terminal\n\
+         measures it. Both of those keep the ordinary diff."
     )?;
     out.flush()
 }

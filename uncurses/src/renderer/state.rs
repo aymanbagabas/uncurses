@@ -386,11 +386,26 @@ impl Renderer {
     ///
     /// [`WidthMode::Wc`] measures a cluster by summing its code points,
     /// which is what a terminal that advances once per code point does. A
-    /// terminal that instead ligates the cluster into one glyph advances
-    /// over that glyph alone, so a four-person family emoji takes two
-    /// columns where this says eight. The two only disagree when the
-    /// cluster has parts to sum: one code point measures the same either
-    /// way, so a CJK ideograph is never uncertain.
+    /// terminal that instead renders the cluster as one glyph advances
+    /// over that glyph alone, and the sum can land on either side of it: a
+    /// four-person family emoji takes two columns where this says eight,
+    /// while a heart followed by an emoji variation selector takes two
+    /// where this says one.
+    ///
+    /// A cluster of one code point measures the same either way, so a CJK
+    /// ideograph is never uncertain. Past that, a cluster is taken as
+    /// uncertain unless its shape says the sum must be right:
+    ///
+    /// * A code point after the first that claims columns of its own is
+    ///   what the sum adds up and a glyph collapses, which is the family
+    ///   emoji, a regional-indicator flag, and every other joined pair.
+    /// * A variation selector claims no columns and still changes the
+    ///   presentation the terminal picks, and with it the width.
+    ///
+    /// What is left is a base with combining marks, joiners, or tags
+    /// trailing it, none of which a terminal gives a column to, so the sum
+    /// is the base's own width and both agree on it. An accented Latin
+    /// letter is therefore certain, and does not cost its row a repaint.
     ///
     /// [`WidthMode::Grapheme`] measures the whole cluster, which is what a
     /// terminal in DEC mode 2027 does. Selecting it asserts that the
@@ -401,9 +416,15 @@ impl Renderer {
     /// [`crate::screen::Screen::set_grapheme_clusters`] sets only the
     /// measurement and leaves the terminal to whoever owns it.
     pub(super) fn width_is_uncertain(&self, cell: &Cell) -> bool {
-        self.width_mode == WidthMode::Wc
-            && cell.is_wide()
-            && cell.content().chars().nth(1).is_some()
+        if self.width_mode != WidthMode::Wc {
+            return false;
+        }
+        // East-Asian Ambiguous code points measure one column or two, never
+        // zero, so the policy cannot change the answer to this question.
+        cell.content().chars().skip(1).any(|c| {
+            // VS15 and VS16, which pick text or emoji presentation.
+            matches!(c, '\u{fe0e}' | '\u{fe0f}') || crate::text::char_width(c, false) != 0
+        })
     }
 
     /// Current cursor position as last tracked by the renderer.
