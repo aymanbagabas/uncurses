@@ -2849,3 +2849,55 @@ fn an_empty_primary_at_a_split_insert_boundary_repaints_the_suffix() {
         }
     }
 }
+
+const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+
+/// The resting cursor is walked into a row that carries a ligatable
+/// cluster, not addressed by column.
+///
+/// The planner may pay for a short forward move with hardware tabs or by
+/// re-emitting a cell, and both are counted in columns. Past the cluster
+/// the terminal counts from the glyph it drew, so a tab lands on its own
+/// stop and a re-emitted cell is painted into a column the row never
+/// meant for it, undoing the repaint on every frame.
+#[test]
+fn resting_cursor_walks_into_a_row_holding_a_ligatable_cluster() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "ABCDEFGHIJ", Style::default());
+    screen.set_cursor_position(Position::new(17, 0));
+    screen.render().unwrap();
+
+    // Column seventeen is reached by writing the row's own cells from the
+    // cluster, so the cursor lands wherever the terminal put the ninth
+    // letter rather than on the model's count of it.
+    let out = s(screen.writer());
+    assert!(
+        out.ends_with(&format!(
+            "\x1b[2A\x1b[?7l{FAMILY}ABCDEFGHI\x1b[?7h\x1b[?25h"
+        )),
+        "frame did not end with the walk: {out:?}"
+    );
+    assert!(!out.contains('\t'), "a tab crossed the uncertain row");
+
+    // The terminal placed the cursor and this cannot name the column.
+    assert_eq!(screen.tracked_cursor(), None);
+}
+
+/// A resting position left of the cluster is reached the ordinary way.
+/// Those columns are measured the way the terminal draws them, so there
+/// is nothing to walk around.
+#[test]
+fn resting_cursor_left_of_a_ligatable_cluster_keeps_the_ordinary_move() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), "ab", Style::default());
+    screen.set_str((2, 0), FAMILY, Style::default());
+    screen.set_cursor_position(Position::new(1, 0));
+    screen.render().unwrap();
+
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(1, 0)));
+}

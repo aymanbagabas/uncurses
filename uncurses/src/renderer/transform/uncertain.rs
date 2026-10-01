@@ -36,24 +36,22 @@ impl Renderer {
     /// A change confined to the columns left of the cluster is left to the
     /// ordinary diff. Those columns are measured the way the terminal draws
     /// them, so nothing about them is in doubt.
-    ///
-    /// [`Renderer::width_is_uncertain`] can only hold under
-    /// [`WidthMode::Wc`], so any other policy skips the scan rather than
-    /// walking the row to a foregone answer.
     pub(super) fn uncertain_bail(
         &self,
         new_line: &[Cell],
         old_line: Option<&[Cell]>,
     ) -> Option<usize> {
-        if self.width_mode != WidthMode::Wc {
-            return None;
-        }
-        let at = (0..new_line.len()).find(|&x| {
-            self.width_is_uncertain(&new_line[x])
-                || old_line
-                    .and_then(|l| l.get(x))
-                    .is_some_and(|c| self.width_is_uncertain(c))
-        })?;
+        // A cluster the new row no longer carries counts for the same
+        // reason, so the old row is scanned too, across the columns the
+        // new one still reaches.
+        let old_at = old_line
+            .map(|l| &l[..l.len().min(new_line.len())])
+            .and_then(|l| self.uncertain_from(l));
+        let at = self
+            .uncertain_from(new_line)
+            .into_iter()
+            .chain(old_at)
+            .min()?;
 
         // A row whose changes all fall left of the cluster has nothing to
         // repaint, and the rest of the row is left standing as it is.
@@ -67,6 +65,84 @@ impl Renderer {
         // the new one, and emission has to start on a column that owns the
         // cell it holds.
         Some(cluster_start(new_line, at))
+    }
+
+    /// The column of the first cluster on `line` the terminal may measure
+    /// differently than this does, if the row carries one.
+    ///
+    /// Every column from here to the row's right edge keeps an unknown
+    /// position for as long as that cluster stands, whichever frame drew
+    /// it.
+    ///
+    /// [`Renderer::width_is_uncertain`] can only hold under
+    /// [`WidthMode::Wc`], so any other policy skips the scan rather than
+    /// walking the row to a foregone answer.
+    pub(super) fn uncertain_from(&self, line: &[Cell]) -> Option<usize> {
+        if self.width_mode != WidthMode::Wc {
+            return None;
+        }
+        (0..line.len()).find(|&x| self.width_is_uncertain(&line[x]))
+    }
+
+    /// Move to row `y`, column `x`, to leave the cursor resting there
+    /// once the frame's cells are drawn.
+    ///
+    /// A row carrying a cluster the terminal may measure differently has
+    /// no column past that cluster this can name: the terminal counts
+    /// from where it drew the glyph, and this counts from what the
+    /// cluster's parts sum to. Naming one anyway misplaces the cursor,
+    /// and the planner is free to pay for a short forward move by
+    /// re-emitting the cells it passes over, which would paint those
+    /// glyphs into columns the row never meant them for.
+    ///
+    /// So the cursor walks there instead. It is placed on the cluster,
+    /// which is a column every terminal agrees on, and then the cells
+    /// between the cluster and `x` are written. Writing is the one move
+    /// that needs no column: each cell leaves the cursor wherever the
+    /// terminal itself decided to put the next one. The cells come from
+    /// the frame just drawn, so the row reads exactly as it did before.
+    ///
+    /// A target at or left of the cluster is reached the ordinary way.
+    /// Those columns are measured the way the terminal draws them.
+    pub(crate) fn move_to_resting(
+        &mut self,
+        out: &mut Vec<u8>,
+        buf: &RenderBuffer,
+        y: u16,
+        x: u16,
+    ) -> io::Result<()> {
+        let Some(from) = buf
+            .line(y)
+            .and_then(|l| self.uncertain_from(l))
+            .filter(|&from| from < x as usize)
+        else {
+            return self.move_to(out, buf, y, x);
+        };
+        let line = buf.line(y).expect("row scanned above");
+
+        self.move_to(out, buf, y, from as u16)?;
+
+        // A target inside a cluster is reached by stopping on the column
+        // that owns it, the one place in it the cursor can rest.
+        let stop = cluster_start(line, x as usize);
+        if stop > from {
+            // A cluster the terminal draws wider than its parts sum to can
+            // carry the walk across the right margin, and the wrap would
+            // spill onto a row nothing in the model accounts for.
+            ansi::mode::Mode::AUTO_WRAP.reset(out)?;
+            self.emit_range(out, buf, line, from, stop - 1, true)?;
+            ansi::mode::Mode::AUTO_WRAP.set(out)?;
+        }
+
+        // The walk ended where the terminal put the last cell, which is a
+        // column only the terminal knows. Dropping the tracked column has
+        // the next frame address this row absolutely, and the only column
+        // it addresses here is the cluster or one left of it, where the
+        // two still agree. [`Renderer::cursor_known`] reports false until
+        // then, which is what it already means: a position the renderer
+        // placed but cannot name.
+        self.cur.x = None;
+        Ok(())
     }
 
     /// Repaint `new_line[from..]` on row `y`, in place of diffing it.

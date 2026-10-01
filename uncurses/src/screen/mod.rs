@@ -401,6 +401,13 @@ impl<W: Write> Screen<W> {
     /// that position is unknown (initially, after a screen reset, or after
     /// [`invalidate_tracked_cursor`](Self::invalidate_tracked_cursor)). This
     /// is bookkeeping, not a live cursor-position query.
+    ///
+    /// A [resting position](Self::set_cursor_position) past a cluster the
+    /// terminal may measure differently also reads as unknown. The cursor is
+    /// where it was asked to go, and the terminal is the only one that can
+    /// say which column that is. See
+    /// [`set_grapheme_clusters`](Self::set_grapheme_clusters) for what makes
+    /// a cluster uncertain and how to settle it.
     pub fn tracked_cursor(&self) -> Option<Position> {
         self.renderer
             .cursor_known()
@@ -725,7 +732,7 @@ impl<W: Write> Screen<W> {
         if let Some(pos) = self.desired_cursor {
             let pos = self.clamp_to_surface(pos);
             self.renderer
-                .move_to(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
+                .move_to_resting(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
                 .unwrap();
         }
 

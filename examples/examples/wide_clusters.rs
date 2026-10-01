@@ -79,6 +79,20 @@ fn main() -> io::Result<()> {
     writeln!(out, "\nchanging only the cell after the family emoji")?;
     writeln!(out, "  {}", printable(&bytes))?;
 
+    // The cursor has to rest somewhere, and a column past the cluster is
+    // one this cannot name either. It walks there instead: the row's own
+    // cells are written from the cluster until the cursor arrives, which
+    // leaves the row reading exactly as it did and the cursor wherever the
+    // terminal itself put that column.
+    let mut screen = row_screen(false)?;
+    let _ = place(&mut screen, FAMILY, width)?;
+    screen.writer_mut().clear();
+    screen.set_cursor_position((2 + u16::from(width) + 1, 0));
+    screen.render()?;
+    let bytes = screen.into_writer();
+    writeln!(out, "\nresting the cursor past the family emoji")?;
+    writeln!(out, "  {}", printable(&bytes))?;
+
     writeln!(
         out,
         "\nThe family emoji and the heart are both repainted from the cluster:\n\

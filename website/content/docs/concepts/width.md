@@ -87,9 +87,10 @@ that row sits somewhere the grid cannot name.
 So a [screen]({{< relref "screen.md" >}}) absorbs the disagreement inside the
 row that caused it. Columns left of the cluster are measured the way the
 terminal draws them and are unaffected; the rest of the row is brought back
-into agreement, whichever way the terminal counted. Rows that carry no such
-cluster pay nothing, and neither does a letter carrying an accent, which every
-terminal draws in the width of the letter alone.
+into agreement, whichever way the terminal counted. A cursor resting past the
+cluster is placed the same way. Rows that carry no such cluster pay nothing,
+and neither does a letter carrying an accent, which every terminal draws in the
+width of the letter alone.
 
 Measure whole clusters and the question stops arising, because the grid then
 counts them the way the terminal does. For how the row is recovered, see
