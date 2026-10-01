@@ -86,8 +86,7 @@ impl Renderer {
     /// `sequential` asks the interval to advance only by writing and by
     /// relative moves, never by naming a column. A caller sets it when
     /// the terminal's cursor may sit somewhere other than where the
-    /// frame model believes, which is what
-    /// [`Transform::repaint_tail`](super::Transform::repaint_tail)
+    /// frame model believes, which is what [`Renderer::repaint_tail`]
     /// faces once a row carries a cluster the terminal may ligate.
     /// Under that doubt a named column, and equally a tab stop, lands
     /// where the *terminal* counts it rather than where the model does,
