@@ -412,6 +412,10 @@ where
     /// deadlines. `None` means block until an event or wake; `Some(Duration::ZERO)`
     /// means perform a non-blocking readiness pass.
     ///
+    /// A platform whose wait takes a whole number of milliseconds rounds a
+    /// fractional millisecond up, so such a wait can return up to a
+    /// millisecond after the deadline.
+    ///
     /// Returns:
     ///
     /// * `Ok(true)` when the queue has at least one event;
