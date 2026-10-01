@@ -62,15 +62,18 @@ fn main() -> io::Result<()> {
         writeln!(out, "  {}", printable(&bytes))?;
     }
 
-    // Measuring whole clusters means the terminal answered DEC mode 2027 and
-    // counts them the same way the grid does, so nothing is in doubt.
+    // `Screen::set_grapheme_clusters` only chooses how this program measures;
+    // it emits nothing and asks nothing. Setting it is a promise that the
+    // terminal is already in Unicode core (DEC mode 2027) and counts clusters
+    // the same way, which `Program::enable_grapheme_clusters` is what
+    // arranges. Given that promise, nothing is in doubt.
     let mut screen = row_screen(true)?;
     let bytes = place(
         &mut screen,
         FAMILY,
         WidthMode::Grapheme.grapheme_width(FAMILY, false),
     )?;
-    writeln!(out, "\nthe same family emoji, once the terminal has agreed")?;
+    writeln!(out, "\nthe same family emoji, measured as one cluster")?;
     writeln!(out, "  {}", printable(&bytes))?;
 
     // The cluster does not change here, and that changes nothing: a
@@ -105,8 +108,9 @@ fn main() -> io::Result<()> {
         "\nThe family emoji, the heart, and the keycap are all repainted from\n\
          the cluster: the first claims more columns than a terminal may give\n\
          it, the other two fewer. The ideograph is a single code point, so no\n\
-         terminal can disagree about it, and the agreed row was measured the\n\
-         way the terminal measures it. Both of those keep the ordinary diff."
+         terminal can disagree about it, and the cluster-measured row assumes\n\
+         the terminal measures the same way. Both of those keep the ordinary\n\
+         diff."
     )?;
     out.flush()
 }
