@@ -258,17 +258,13 @@ impl Renderer {
             return Ok(());
         }
         self.update_pen(out, Some(cell))?;
-        if cell.content().is_empty() {
-            self.put_glyph_bytes(out, b" ", 1, surface_width, surface_height)
-        } else {
-            self.put_glyph_bytes(
-                out,
-                cell.content().as_bytes(),
-                cell.width() as u16,
-                surface_width,
-                surface_height,
-            )
-        }
+        self.put_glyph_bytes(
+            out,
+            cell.draw_bytes(),
+            cell.width() as u16,
+            surface_width,
+            surface_height,
+        )
     }
     /// Emit cells in `new_line[start..=end]`, looking for runs of cells
     /// that already match the old line and skipping over them with a

@@ -189,7 +189,7 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
             let to = convert_style(&cell.style, profile);
             write_style_diff(w, &pen, &to)?;
             pen = to;
-            w.write_all(cell.content().as_bytes())?;
+            w.write_all(cell.draw_bytes())?;
         }
 
         // Return the row to the default style, closing any open SGR state and
@@ -237,6 +237,22 @@ mod tests {
             2,
             "one opener + reset: {out:?}"
         );
+    }
+
+    #[test]
+    fn a_cell_that_stores_nothing_is_blanked_across_its_whole_width() {
+        let mut buf = Buffer::new(5, 1);
+        buf.set_cell((0, 0).into(), &Cell::new("A", 1));
+        buf.set_cell((1, 0).into(), &Cell::new("", 3).style(Style::new().bold()));
+        buf.set_cell((4, 0).into(), &Cell::new("B", 1));
+
+        // The empty cell owns three columns, so it draws three blanks. Were
+        // its content written as it stands, the row would lose them and `B`
+        // would sit right beside `A`.
+        let out = buf.display().to_string();
+        assert!(out.contains("   "), "three blanks between: {out:?}");
+        assert!(out.starts_with('A'), "row starts at A: {out:?}");
+        assert!(out.ends_with(&format!("{}B", reset())), "B last: {out:?}");
     }
 
     #[test]

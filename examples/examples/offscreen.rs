@@ -79,6 +79,23 @@ fn main() -> io::Result<()> {
         "\nA family emoji reserves {primary} columns, so the text after it starts at column {}.",
         wide.str_width(family)
     )?;
+
+    // Width reserves the columns, not content. A cell that stores nothing
+    // and claims three of them is drawn as three blanks, which makes it a
+    // spacer carrying its own background.
+    let mut spacer = TextBuffer::new(16, 1);
+    spacer.set_str((0, 0), "A", Style::default());
+    spacer.set_cell(
+        Position::new(1, 0),
+        &Cell::new("", 3).style(Style::default().bg(Color::Blue)),
+    );
+    spacer.set_str((4, 0), "B", Style::default());
+    let mut gap = Vec::new();
+    spacer.encode(&mut gap)?;
+    write!(out, "An empty cell of width 3 is a three-column spacer: ")?;
+    out.write_all(&gap)?;
+    writeln!(out)?;
+
     out.flush()
 }
 

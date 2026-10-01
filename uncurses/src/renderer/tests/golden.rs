@@ -163,3 +163,19 @@ fn golden_relative_cursor_mode() {
         b"\r\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
     );
 }
+
+#[test]
+fn golden_a_cell_that_stores_nothing_is_blanked_across_its_whole_width() {
+    // The diff strides by the cell's width, so the blank standing in for an
+    // empty cell has to cover every column that stride passes over. A
+    // single space would put the cursor two columns left of the model and
+    // paint the rest of the row there.
+    let mut renderer = renderer();
+    let mut buf = RenderBuffer::new(8, 1);
+    buf.set_cell((0, 0), &Cell::new("", 3));
+    buf.set_cell((3, 0), &Cell::new("X", 1));
+    buf.set_cell((4, 0), &Cell::new("Y", 1));
+
+    let out = render_to_vec(&mut renderer, &mut buf);
+    assert_golden(out, b"\r   XY\r");
+}

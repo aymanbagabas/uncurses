@@ -435,3 +435,34 @@ fn no_fill_of_any_width_leaves_a_continuation_without_an_owner() {
         }
     }
 }
+
+#[test]
+fn a_cell_that_stores_nothing_still_reserves_the_columns_it_claims() {
+    // Width is what decides a cell's footprint, so a cell holding no
+    // content owns the columns it names just as a grapheme would. Were the
+    // continuations left off, the next write would land inside the claim
+    // and every column after it would read one place off.
+    let mut buf = Buffer::new(6, 1);
+    buf.set(Position::new(0, 0), &Cell::new("", 3));
+
+    for x in 1..3 {
+        assert!(
+            buf.cell(Position::new(x, 0)).unwrap().is_continuation(),
+            "column {x} is inside the claim but no cell reserved it"
+        );
+    }
+
+    // Writing into the claim breaks it, so the whole cell gives way to
+    // blanks. Had the columns never been reserved, this write would have
+    // landed inside a cell that still claimed them, and every column after
+    // it would read one place off.
+    buf.set(Position::new(1, 0), &Cell::new("B", 1));
+
+    assert_eq!(buf.cell(Position::new(1, 0)).unwrap().content(), "B");
+    for x in [0, 2] {
+        assert!(
+            buf.cell(Position::new(x, 0)).unwrap().is_blank(),
+            "column {x} kept part of a cell that is gone"
+        );
+    }
+}

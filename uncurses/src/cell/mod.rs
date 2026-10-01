@@ -208,8 +208,7 @@ impl Cell {
     ///
     /// # Returns
     ///
-    /// `true` when [`Cell::width`] is `2` or more and the content is not
-    /// empty.
+    /// `true` when [`Cell::width`] is `2` or more.
     ///
     /// # Panics
     ///
@@ -217,11 +216,16 @@ impl Cell {
     ///
     /// # Usage notes
     ///
+    /// Width alone decides the answer, because width alone decides how many
+    /// columns the cell takes. A cell that stores no content still owns the
+    /// columns its width names, and the blank drawn in its place covers all
+    /// of them.
+    ///
     /// In a well-formed surface, such a cell is followed immediately by
     /// `width - 1` continuation placeholders.
     #[inline]
     pub fn is_wide(&self) -> bool {
-        self.width > 1 && !self.content.is_empty()
+        self.width > 1
     }
 
     /// Test whether this is a continuation placeholder.
@@ -259,6 +263,26 @@ impl Cell {
     /// Continuation placeholders are blank, because their content is empty.
     pub fn is_blank(&self) -> bool {
         self.content.is_empty() || self.content == " "
+    }
+
+    /// The bytes that draw this cell.
+    ///
+    /// A cell storing no content still owns the columns its width names, so
+    /// it draws as a blank in every one of them. Writing the content alone
+    /// would close a gap the grid is holding open, and put everything after
+    /// it on the row a column short for each one skipped.
+    ///
+    /// Call this only on a cell that is not a continuation; a continuation
+    /// draws nothing at all, and its caller returns before reaching here.
+    pub(crate) fn draw_bytes(&self) -> &[u8] {
+        /// Enough spaces to stand in for any width a cell can claim.
+        const BLANKS: [u8; u8::MAX as usize] = [b' '; u8::MAX as usize];
+
+        if self.content.is_empty() {
+            &BLANKS[..self.width as usize]
+        } else {
+            self.content.as_bytes()
+        }
     }
 
     /// Return the cell's grapheme-cluster content.
@@ -386,12 +410,13 @@ mod tests {
     }
 
     #[test]
-    fn width_and_content_together_decide_the_structural_role() {
-        // A continuation is empty and owns no column. A cell that is empty
-        // but claims a column is malformed and is not a wide cell.
+    fn width_alone_decides_the_structural_role() {
+        // A continuation is empty and owns no column. A cell that stores no
+        // content but claims columns still owns them, and a blank is drawn
+        // across every one.
         assert!(Cell::CONTINUATION.is_continuation());
         assert!(!Cell::new("a", 0).is_continuation());
-        assert!(!Cell::new("", 2).is_wide());
+        assert!(Cell::new("", 2).is_wide());
         assert!(Cell::new("\u{1f469}", 2).is_wide());
     }
 
