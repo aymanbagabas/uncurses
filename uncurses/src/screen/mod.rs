@@ -553,14 +553,16 @@ impl<W: Write> Screen<W> {
     /// first cluster on a line, so the two must agree.
     ///
     /// Under the per-code-point model the renderer covers the one difference
-    /// it can predict: a cluster of several code points, which a terminal is
-    /// free to ligate into a single narrower glyph. It stops diffing that row
-    /// at the cluster and repaints the rest of it in one run, which asks
-    /// nothing about where the terminal put the glyph. That keeps the row
-    /// honest on a terminal that ligates while measurement is per code
-    /// point. Measuring whole clusters asserts that the terminal counts
-    /// them the same way, so every row takes the ordinary path, and it is
-    /// on you to have put the terminal in that mode.
+    /// it can predict: a cluster of several code points, which a terminal
+    /// draws as a single glyph of its own choosing. That glyph may be
+    /// narrower than the parts add up to, as with a ligated family emoji, or
+    /// wider, as with a heart that an emoji selector promotes to two columns.
+    /// Either way the renderer stops diffing that row at the cluster and
+    /// repaints the rest of it in one run, which asks nothing about where the
+    /// terminal put the glyph. That keeps the row honest on such a terminal
+    /// while measurement is per code point. Measuring whole clusters asserts
+    /// that the terminal counts them the same way, so every row takes the
+    /// ordinary path, and it is on you to have put the terminal in that mode.
     ///
     /// Changing the mode discards the tracked terminal contents, so the next
     /// [`render`](Self::render) is a full repaint: what is already on screen
