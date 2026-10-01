@@ -2681,3 +2681,83 @@ fn a_cell_claiming_no_column_renders_the_same_as_it_encodes() {
         "neither path draws a cell that claims no column: {rendered:?}"
     );
 }
+
+/// A run of identical primaries draws each one across all the columns it
+/// claims, the same as a lone primary does.
+///
+/// The run path re-emits one cell's bytes `count` times. It used to build
+/// those bytes itself, standing in a single space at width one for any
+/// cell holding no content, which is only right when the cell claims one
+/// column. Two cells claiming three each then painted two columns instead
+/// of six, and everything after them moved four columns left.
+#[test]
+fn a_run_of_empty_primaries_draws_every_column_each_one_claims() {
+    fn render(cells: &[(u16, Cell)]) -> String {
+        let mut screen = Screen::for_test(Vec::new(), (12, 1));
+        screen.set_optimizations(Optimizations::all());
+        for (x, cell) in cells {
+            screen.set_cell((*x, 0), cell);
+        }
+        screen.render().unwrap();
+        s(screen.writer())
+    }
+
+    let lone = render(&[
+        (0, Cell::new("", 3)),
+        (1, Cell::CONTINUATION),
+        (2, Cell::CONTINUATION),
+        (3, Cell::new("X", 1)),
+    ]);
+    assert!(
+        lone.contains("   X"),
+        "one cell claiming three columns draws three blanks: {lone:?}"
+    );
+
+    let run = render(&[
+        (0, Cell::new("", 3)),
+        (1, Cell::CONTINUATION),
+        (2, Cell::CONTINUATION),
+        (3, Cell::new("", 3)),
+        (4, Cell::CONTINUATION),
+        (5, Cell::CONTINUATION),
+        (6, Cell::new("X", 1)),
+    ]);
+    assert!(
+        run.contains("      X"),
+        "two of them draw six, so X keeps its column: {run:?}"
+    );
+}
+
+/// An inserted primary opens room for every column it claims.
+///
+/// The insert path writes the cells it shifts in. It used to pass their
+/// stored content straight through, which is nothing at all for a cell
+/// holding none, while still counting the columns that cell claims. The
+/// room then opened narrower than the renderer recorded, and the row
+/// drifted left of the model from that column on.
+#[test]
+fn an_inserted_empty_primary_opens_room_for_every_column_it_claims() {
+    let mut screen = Screen::for_test(Vec::new(), (20, 1));
+    // Without ICH the shift runs under insert mode, which writes each
+    // shifted cell through the same path ICH uses.
+    screen.set_optimizations(Optimizations::all() - Optimizations::ICH);
+    screen.set_cell((0, 0), &Cell::new("X", 1));
+    for (i, ch) in "ABCDEFGHIJ".chars().enumerate() {
+        screen.set_cell((i as u16 + 1, 0), &Cell::new(ch.to_string(), 1));
+    }
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.set_cell((1, 0), &Cell::new("", 3));
+    screen.set_cell((2, 0), &Cell::CONTINUATION);
+    screen.set_cell((3, 0), &Cell::CONTINUATION);
+    for (i, ch) in "ABCDEFGHIJ".chars().enumerate() {
+        screen.set_cell((i as u16 + 4, 0), &Cell::new(ch.to_string(), 1));
+    }
+    screen.render().unwrap();
+
+    let frame = s(screen.writer());
+    assert!(
+        frame.contains("\x1b[4h   A"),
+        "the inserted cell claims three columns, so it writes three: {frame:?}"
+    );
+}

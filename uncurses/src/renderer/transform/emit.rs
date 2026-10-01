@@ -231,13 +231,14 @@ impl Renderer {
                 // continuation cells, so cell0 is always a printable
                 // primary cell here.
                 self.update_pen(out, Some(cell0))?;
-                let (bytes, glyph_width) = if cell0.content().is_empty() {
-                    (b" ".as_slice(), 1u16)
-                } else {
-                    (cell0.content().as_bytes(), cell0.width() as u16)
-                };
                 for _ in 0..count {
-                    self.put_glyph_bytes(out, bytes, glyph_width, surface_width, surface_height)?;
+                    self.put_glyph_bytes(
+                        out,
+                        cell0.draw_bytes(),
+                        cell0.width() as u16,
+                        surface_width,
+                        surface_height,
+                    )?;
                 }
                 x = j;
             }
@@ -422,7 +423,7 @@ impl Renderer {
                     self.update_pen(out, Some(cell))?;
                     self.put_glyph_bytes(
                         out,
-                        cell.content().as_bytes(),
+                        cell.draw_bytes(),
                         cell.width() as u16,
                         surface_width,
                         surface_height,
