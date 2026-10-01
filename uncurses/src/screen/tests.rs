@@ -2658,28 +2658,34 @@ fn a_cell_claiming_no_column_renders_the_same_as_it_encodes() {
     use crate::buffer::{Buffer, SurfaceMut};
     use crate::text::Encode;
 
-    let mut buf = Buffer::new(3, 1);
-    buf.set_cell((0, 0).into(), &Cell::new("A", 1));
-    buf.set_cell((1, 0).into(), &Cell::new("\u{301}", 0));
-    buf.set_cell((2, 0).into(), &Cell::new("B", 1));
+    // A mark that is zero-width in its own right, and a letter that is not.
+    // The second is the sharper case: its content would draw a column if
+    // anything read the content to decide, so the two paths can only agree
+    // by reading the width.
+    for content in ["\u{301}", "a"] {
+        let mut buf = Buffer::new(3, 1);
+        buf.set_cell((0, 0).into(), &Cell::new("A", 1));
+        buf.set_cell((1, 0).into(), &Cell::new(content, 0));
+        buf.set_cell((2, 0).into(), &Cell::new("B", 1));
 
-    let mut screen = Screen::for_test(Vec::new(), (3, 1));
-    screen.set_cell((0, 0), &Cell::new("A", 1));
-    screen.set_cell((1, 0), &Cell::new("\u{301}", 0));
-    screen.set_cell((2, 0), &Cell::new("B", 1));
-    screen.render().unwrap();
+        let mut screen = Screen::for_test(Vec::new(), (3, 1));
+        screen.set_cell((0, 0), &Cell::new("A", 1));
+        screen.set_cell((1, 0), &Cell::new(content, 0));
+        screen.set_cell((2, 0), &Cell::new("B", 1));
+        screen.render().unwrap();
 
-    let encoded = buf.display().to_string();
-    let rendered = s(screen.writer());
-    assert_eq!(encoded, "A B");
-    assert!(
-        rendered.contains(&encoded),
-        "the rendered row must carry what the encoder wrote: {rendered:?}"
-    );
-    assert!(
-        !rendered.contains('\u{301}'),
-        "neither path draws a cell that claims no column: {rendered:?}"
-    );
+        let encoded = buf.display().to_string();
+        let rendered = s(screen.writer());
+        assert_eq!(encoded, "A B", "content {content:?}");
+        assert!(
+            rendered.contains(&encoded),
+            "the rendered row must carry what the encoder wrote: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(content),
+            "neither path draws a cell that claims no column: {rendered:?}"
+        );
+    }
 }
 
 /// A run of identical primaries draws each one across all the columns it
