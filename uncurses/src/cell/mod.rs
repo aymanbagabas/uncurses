@@ -171,9 +171,9 @@ impl Cell {
     /// # Parameters
     ///
     /// - `content`: grapheme content to store in the cell.
-    /// - `width`: number of terminal columns the content occupies. Use
-    ///   [`Cell::CONTINUATION`] for a placeholder rather than passing `0`
-    ///   with empty content.
+    /// - `width`: number of terminal columns the content occupies. Width `0`
+    ///   makes a continuation placeholder whatever the content, so use
+    ///   [`Cell::CONTINUATION`] when that is what you mean.
     ///
     /// # Returns
     ///
@@ -232,7 +232,7 @@ impl Cell {
     ///
     /// # Returns
     ///
-    /// `true` when [`Cell::width`] is `0` and the content is empty.
+    /// `true` when [`Cell::width`] is `0`.
     ///
     /// # Panics
     ///
@@ -240,10 +240,15 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// Continuations have width `0`, no content, and are considered blank.
+    /// Width alone decides, as it does for [`Cell::is_wide`]: a cell that
+    /// claims no column has none to draw in, so whatever it stores is never
+    /// reached. Width `0`, `1`, and `2` or more partition every cell into a
+    /// continuation, a narrow cell, and a wide one.
+    ///
+    /// Continuations are considered blank.
     #[inline]
     pub fn is_continuation(&self) -> bool {
-        self.width == 0 && self.content.is_empty()
+        self.width == 0
     }
 
     /// Test whether this cell renders as blank space.
@@ -411,13 +416,38 @@ mod tests {
 
     #[test]
     fn width_alone_decides_the_structural_role() {
-        // A continuation is empty and owns no column. A cell that stores no
-        // content but claims columns still owns them, and a blank is drawn
-        // across every one.
+        // Width `0`, `1`, and `2` or more partition every cell into a
+        // continuation, a narrow cell, and a wide one. Content never enters
+        // into it: a cell that claims no column has none to draw in, and one
+        // that stores nothing still owns every column it claims.
         assert!(Cell::CONTINUATION.is_continuation());
-        assert!(!Cell::new("a", 0).is_continuation());
+        assert!(Cell::new("a", 0).is_continuation());
         assert!(Cell::new("", 2).is_wide());
         assert!(Cell::new("\u{1f469}", 2).is_wide());
+    }
+
+    #[test]
+    fn a_cell_claiming_no_column_is_a_continuation_whatever_it_stores() {
+        // `grapheme_width` measures a lone combining mark as zero, and
+        // `Cell::new`'s own advice is to measure with it, so a cell holding
+        // content at width zero is one step from the documented path. It
+        // claims no column, so the grid treats it as the placeholder it
+        // structurally is and the surface declines to plant it loose.
+        use crate::buffer::{Buffer, Surface, SurfaceMut};
+        use crate::text::Encode;
+
+        let mut buf = Buffer::new(3, 1);
+        buf.set_cell((0, 0).into(), &Cell::new("A", 1));
+        buf.set_cell((1, 0).into(), &Cell::new("\u{301}", 0));
+        buf.set_cell((2, 0).into(), &Cell::new("B", 1));
+
+        assert!(Cell::new("\u{301}", 0).is_continuation());
+        assert_eq!(
+            buf.cell((1, 0).into()).unwrap().content(),
+            " ",
+            "a loose continuation is declined, leaving the blank"
+        );
+        assert_eq!(buf.display().to_string(), "A B");
     }
 
     #[test]

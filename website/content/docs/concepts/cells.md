@@ -33,8 +33,8 @@ CJK character like `世` wants two columns, not one. uncurses models that as a
 for each further column. A continuation has no content of its own and reports
 width zero, because its column belongs to the primary on its left.
 
-A primary is not limited to two columns. It owns as many as its grapheme
-measures, and holds one continuation for each column after the first.
+A primary owns as many columns as its grapheme measures, and holds one
+continuation for each column after the first.
 
 | row / col | 1 | 2 | 3 |
 | --- | --- | --- | --- |

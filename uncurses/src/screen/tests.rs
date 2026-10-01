@@ -2644,3 +2644,40 @@ fn a_cluster_wider_than_the_row_is_not_written() {
         );
     }
 }
+
+/// A cell claiming no column contributes nothing on either path out of the
+/// grid.
+///
+/// Encoding a surface and rendering one are two ways of turning the same
+/// grid into bytes, and they have to make the same thing of every cell. A
+/// cell holding content at width zero used to split them: the encoder wrote
+/// its bytes, the renderer passed the zero width to `put_glyph_bytes` and
+/// emitted nothing at all.
+#[test]
+fn a_cell_claiming_no_column_renders_the_same_as_it_encodes() {
+    use crate::buffer::{Buffer, SurfaceMut};
+    use crate::text::Encode;
+
+    let mut buf = Buffer::new(3, 1);
+    buf.set_cell((0, 0).into(), &Cell::new("A", 1));
+    buf.set_cell((1, 0).into(), &Cell::new("\u{301}", 0));
+    buf.set_cell((2, 0).into(), &Cell::new("B", 1));
+
+    let mut screen = Screen::for_test(Vec::new(), (3, 1));
+    screen.set_cell((0, 0), &Cell::new("A", 1));
+    screen.set_cell((1, 0), &Cell::new("\u{301}", 0));
+    screen.set_cell((2, 0), &Cell::new("B", 1));
+    screen.render().unwrap();
+
+    let encoded = buf.display().to_string();
+    let rendered = s(screen.writer());
+    assert_eq!(encoded, "A B");
+    assert!(
+        rendered.contains(&encoded),
+        "the rendered row must carry what the encoder wrote: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains('\u{301}'),
+        "neither path draws a cell that claims no column: {rendered:?}"
+    );
+}
