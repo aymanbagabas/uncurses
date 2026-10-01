@@ -88,17 +88,15 @@ impl Poller for Windows {
     }
 }
 
+/// Converts a wait to `WaitForMultipleObjects`' milliseconds, rounding a
+/// partial millisecond up for the reason given on the epoll backend's
+/// conversion: rounded down, the end of every timed wait is a run of
+/// zero-timeout waits until the deadline passes.
 fn duration_to_ms(timeout: Option<Duration>) -> u32 {
     match timeout {
         None => INFINITE,
-        Some(d) => {
-            let ms = d.as_millis();
-            if ms >= INFINITE as u128 {
-                INFINITE - 1
-            } else {
-                ms as u32
-            }
-        }
+        Some(d) => u32::try_from(d.as_nanos().div_ceil(1_000_000))
+            .map_or(INFINITE - 1, |ms| ms.min(INFINITE - 1)),
     }
 }
 
@@ -113,5 +111,11 @@ mod tests {
         assert_eq!(duration_to_ms(None), INFINITE);
         assert_eq!(duration_to_ms(Some(Duration::from_millis(0))), 0);
         assert_eq!(duration_to_ms(Some(Duration::from_millis(50))), 50);
+    }
+
+    #[test]
+    fn duration_to_ms_rounds_a_partial_millisecond_up() {
+        assert_eq!(duration_to_ms(Some(Duration::from_nanos(1))), 1);
+        assert_eq!(duration_to_ms(Some(Duration::from_nanos(8_333_333))), 9);
     }
 }

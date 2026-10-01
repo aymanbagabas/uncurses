@@ -90,11 +90,32 @@ impl Poller for Epoll {
     }
 }
 
+/// Converts a wait to `epoll_wait`'s milliseconds, rounding up.
+///
+/// [`EventSource::poll`](crate::event::EventSource::poll) waits again with
+/// whatever is left of its deadline until the deadline passes, so a
+/// remainder rounded down to `0` becomes a run of `epoll_wait(.., 0)` calls
+/// that return at once. Rounding up lets the last wait sleep past the
+/// deadline instead, by less than a millisecond.
 fn duration_to_ms(d: Duration) -> i32 {
-    let ms = d.as_millis();
-    if ms > i32::MAX as u128 {
-        i32::MAX
-    } else {
-        ms as i32
+    i32::try_from(d.as_nanos().div_ceil(1_000_000)).unwrap_or(i32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_to_ms_rounds_a_partial_millisecond_up() {
+        assert_eq!(duration_to_ms(Duration::ZERO), 0);
+        assert_eq!(duration_to_ms(Duration::from_nanos(1)), 1);
+        assert_eq!(duration_to_ms(Duration::from_micros(999)), 1);
+        assert_eq!(duration_to_ms(Duration::from_millis(50)), 50);
+        assert_eq!(duration_to_ms(Duration::from_nanos(8_333_333)), 9);
+    }
+
+    #[test]
+    fn duration_to_ms_caps_at_i32_max() {
+        assert_eq!(duration_to_ms(Duration::from_secs(u64::MAX / 2)), i32::MAX);
     }
 }
