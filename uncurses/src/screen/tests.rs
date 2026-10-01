@@ -2905,3 +2905,41 @@ fn resting_cursor_left_of_a_ligatable_cluster_keeps_the_ordinary_move() {
 
     assert_eq!(screen.tracked_cursor(), Some(Position::new(1, 0)));
 }
+
+/// The walk past a ligatable cluster leaves the column unknown and the row
+/// known. The frame after it has to earn the column back before it moves
+/// relative to it.
+///
+/// Dropping only the column is what the walk can honestly say: the
+/// terminal placed the cursor on a row the renderer chose. But a relative
+/// plan reads the unknown column as zero, and a bare `\n` keeps whatever
+/// column the cursor is really on, so the next row's first cell would land
+/// wherever the cluster pushed it.
+#[test]
+fn a_frame_after_the_walk_earns_the_column_back_before_moving() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "ABCDEFGHIJ", Style::default());
+    screen.set_cursor_position(Position::new(17, 0));
+    screen.render().unwrap();
+    assert_eq!(
+        screen.tracked_cursor(),
+        None,
+        "the walk left the column open"
+    );
+    screen.writer_mut().clear();
+
+    // A cell on the row below. Reaching it steps down one row, and the
+    // step has to start from a column this can name.
+    screen.clear_cursor_position();
+    screen.set_str((0, 1), "Z", Style::default());
+    screen.render().unwrap();
+
+    let out = s(screen.writer());
+    assert!(
+        out.contains("\r\nZ"),
+        "the step down must re-anchor the column first: {out:?}"
+    );
+}

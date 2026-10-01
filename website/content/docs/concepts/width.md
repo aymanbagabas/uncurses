@@ -80,9 +80,10 @@ adding up its parts, and the terminal need not land on the same number. A
 joined emoji sequence counts each of its faces, and a terminal that draws the
 whole sequence as one glyph takes fewer columns than that. A heart followed by
 a variation selector counts as one, and a terminal that draws it in emoji
-presentation takes two. The sum can fall short either way. The disagreement is
-not confined to the cluster: once it is drawn, every column to its right on
-that row sits somewhere the grid cannot name.
+presentation takes two. So the sum can overshoot what the terminal draws, and
+it can fall short. The disagreement is not confined to the cluster: once it is
+drawn, every column to its right on that row sits somewhere the grid cannot
+name.
 
 So a [screen]({{< relref "screen.md" >}}) absorbs the disagreement inside the
 row that caused it. Columns left of the cluster are measured the way the

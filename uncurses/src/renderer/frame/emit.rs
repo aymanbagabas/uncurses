@@ -214,20 +214,22 @@ impl Renderer {
         x: u16,
         pen: PenPolicy,
     ) -> io::Result<()> {
-        // Inline mode + cursor fully unknown on both axes: snap to
-        // column 0 with a bare `\r` so the relative move below has a
-        // deterministic starting column. The row stays unknown until
-        // the planner emits a vertical step. Fullscreen mode handles
-        // the same condition by emitting absolute CUP from the
+        // Inline mode with an unknown column: snap to column 0 with a
+        // bare `\r` so the relative move below has a deterministic
+        // starting column. Without it the planner would start from the
+        // `0` that `Cursor::pos` substitutes for the unknown and step
+        // relatively from a column the cursor is not on. Fullscreen mode
+        // handles the same condition by emitting absolute CUP from the
         // planner.
-        if !self.fullscreen && self.relative_cursor && self.cur.x.is_none() && self.cur.y.is_none()
-        {
-            out.push(b'\r');
-            // Re-home the column and assume the current physical row is the
-            // top of the surface, so the relative move below only ever steps
-            // downward — it can never CUU above a reflowed/handed-off cursor.
-            self.cur.x = Some(0);
-            self.cur.y = Some(0);
+        if !self.fullscreen && self.relative_cursor && self.cur.x.is_none() {
+            self.reanchor_to_row_start(out);
+            // With the row unknown as well, assume the current physical row
+            // is the top of the surface, so the relative move below only
+            // ever steps downward — it can never CUU above a
+            // reflowed/handed-off cursor.
+            if self.cur.y.is_none() {
+                self.cur.y = Some(0);
+            }
         }
 
         let target = Position { x, y };
