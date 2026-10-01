@@ -2639,9 +2639,9 @@ fn wc_mode_gives_a_joined_emoji_every_column_the_terminal_advances() {
 #[test]
 fn wc_mode_renders_a_joined_emoji_and_addresses_the_column_after_it() {
     // The grid credits the cluster with eight columns. The renderer has to
-    // agree. It draws the cluster once, and on the next frame it reaches the
-    // cell that follows without repainting the cluster, which it can only do
-    // if it tracks the same eight columns the grid handed it.
+    // agree, so it draws the cluster once and puts the cell that follows at
+    // the ninth column, which it can only do if it tracks the same eight
+    // columns the grid handed it.
     let mut screen = Screen::for_test(Vec::new(), (20, 1));
     let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
     screen.set_str((0, 0), &format!("{fam}X"), crate::style::Style::default());
@@ -2665,9 +2665,13 @@ fn wc_mode_renders_a_joined_emoji_and_addresses_the_column_after_it() {
         second.contains('Y'),
         "the changed cell must be redrawn: {second:?}"
     );
+    // The change sits past a cluster the terminal may ligate, so the column
+    // the diff names for it is not one the terminal agrees on. The row is
+    // laid out again from the cluster, the last column where the two still
+    // meet.
     assert!(
-        !second.contains(fam),
-        "the cluster did not change, so it must not be repainted: {second:?}"
+        second.contains(fam),
+        "the row must be repainted from the cluster: {second:?}"
     );
 }
 
