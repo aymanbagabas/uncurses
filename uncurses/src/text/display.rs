@@ -293,6 +293,18 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_column_holding_nothing_trims_like_one_holding_a_space() {
+        // Three cells that each put one space on the screen. `draw_bytes`
+        // gives `b" "` for all three, so the trim has to drop all three.
+        for tail in [Cell::BLANK, Cell::new(" ", 1), Cell::new("", 1)] {
+            let mut buf = Buffer::new(5, 1);
+            buf.set_cell((0, 0).into(), &Cell::new("h", 1));
+            buf.set_cell((1, 0).into(), &tail);
+            assert_eq!(buf.display().to_string(), "h", "tail {tail:?}");
+        }
+    }
+
+    #[test]
     fn interior_blanks_are_kept_only_trailing_trimmed() {
         let mut buf = Buffer::new(5, 1);
         buf.set_cell((0, 0).into(), &Cell::new("a", 1));

@@ -253,8 +253,8 @@ impl Cell {
     ///
     /// # Returns
     ///
-    /// `true` when the cell holds one space and claims one column, which is
-    /// the shape of [`Cell::BLANK`].
+    /// `true` when the cell claims one column and draws a space in it, which
+    /// is the shape of [`Cell::BLANK`].
     ///
     /// # Panics
     ///
@@ -269,8 +269,13 @@ impl Cell {
     /// continuation claims none, and a cell claiming several stands for a
     /// span rather than a single blank; each is something other than a blank
     /// column, and each reports `false`.
+    ///
+    /// A cell that claims its one column while storing nothing draws a space
+    /// there, the same as [`Cell::BLANK`], and answers the same way. The
+    /// question is what reaches the column, so two cells that put the same
+    /// thing in it give one answer.
     pub fn is_blank(&self) -> bool {
-        self.content == " " && self.width == 1
+        self.width == 1 && (self.content == " " || self.content.is_empty())
     }
 
     /// The bytes that draw this cell.
@@ -404,15 +409,21 @@ mod tests {
     /// exactly one. A caller scanning a row for the columns it can drop then
     /// had to re-check the width every time to tell them apart.
     #[test]
-    fn only_a_cell_holding_one_space_in_one_column_is_blank() {
+    fn only_a_cell_drawing_one_blank_column_is_blank() {
         assert!(Cell::BLANK.is_blank());
         assert!(Cell::new(" ", 1).is_blank());
+        // Storing nothing in one column still draws a space there, which is
+        // what `draw_bytes` puts on the screen.
+        let empty = Cell::new("", 1);
+        assert_eq!(empty.draw_bytes(), b" ");
+        assert!(empty.is_blank());
         // Style rides along; it says how the column is painted, not what it
         // holds.
         assert!(Cell::BLANK.style(Style::default().bold()).is_blank());
 
         // A span of blank columns is not one blank column.
         assert!(!Cell::new(" ", 2).is_blank());
+        assert!(!Cell::new("", 2).is_blank());
         // No column at all is not one blank column either.
         assert!(!Cell::CONTINUATION.is_blank());
         assert!(!Cell::new("x", 1).is_blank());
