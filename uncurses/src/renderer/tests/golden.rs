@@ -420,6 +420,33 @@ fn golden_a_variation_selector_makes_its_row_uncertain() {
     );
 }
 
+/// A digit followed by an enclosing keycap sums to one column, and a
+/// terminal that draws the keycap takes two. The selector that normally
+/// sits between them is optional, and a row carrying the shorter
+/// spelling is as uncertain as one carrying the longer.
+#[test]
+fn golden_a_keycap_without_a_selector_makes_its_row_uncertain() {
+    let mut renderer = renderer_with(Optimizations::none().with_ech(true));
+    renderer.set_width_mode(crate::text::WidthMode::Wc);
+    let mut buf = RenderBuffer::new(20, 2);
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    buf.set_cell((0, 0), &Cell::new("a", 1));
+    buf.set_cell((1, 0), &Cell::new("1\u{20E3}", 1));
+    buf.set_cell((2, 0), &Cell::new("Z", 1));
+    let _ = render_to_vec(&mut renderer, &mut buf);
+
+    // Column two is where the diff believes `Z` is; a terminal drawing
+    // the keycap put it at three. The row is laid out again from the
+    // keycap rather than addressed by column.
+    buf.set_cell((2, 0), &Cell::new("Y", 1));
+
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\x1b[Aa\x1b[K\x1b[?7l1\u{20E3}Y\x1b[?7h\r".as_bytes(),
+    );
+}
+
 /// A base with a combining mark after it is not uncertain. No terminal
 /// gives the mark a column of its own, so the sum is the base's width
 /// and both measurements agree. Decomposed text must keep the ordinary

@@ -401,6 +401,10 @@ impl Renderer {
     ///   emoji, a regional-indicator flag, and every other joined pair.
     /// * A variation selector claims no columns and still changes the
     ///   presentation the terminal picks, and with it the width.
+    /// * An enclosing keycap claims no columns and draws a box around the
+    ///   digit, hash, or asterisk in front of it, which a terminal gives
+    ///   two columns to. The selector that normally precedes it is
+    ///   optional, so the keycap has to be named on its own.
     ///
     /// What is left is a base with combining marks, joiners, or tags
     /// trailing it, none of which a terminal gives a column to, so the sum
@@ -422,8 +426,11 @@ impl Renderer {
         // East-Asian Ambiguous code points measure one column or two, never
         // zero, so the policy cannot change the answer to this question.
         cell.content().chars().skip(1).any(|c| {
-            // VS15 and VS16, which pick text or emoji presentation.
-            matches!(c, '\u{fe0e}' | '\u{fe0f}') || crate::text::char_width(c, false) != 0
+            // VS15 and VS16, which pick text or emoji presentation, and
+            // U+20E3, which encloses its base in a keycap with or without
+            // a selector in front of it.
+            matches!(c, '\u{fe0e}' | '\u{fe0f}' | '\u{20e3}')
+                || crate::text::char_width(c, false) != 0
         })
     }
 
