@@ -37,6 +37,12 @@ const IDEOGRAPH: &str = "\u{4e16}";
 /// terminal does as easily as it can overshoot.
 const HEART: &str = "\u{2764}\u{fe0f}";
 
+/// A digit followed by an enclosing keycap. The keycap claims no columns
+/// of its own, so the sum is the digit's one, while a terminal that draws
+/// the keycap takes two. The variation selector that usually sits between
+/// the two is optional, and this spells it without one.
+const KEYCAP: &str = "1\u{20e3}";
+
 const COLS: u16 = 24;
 
 fn main() -> io::Result<()> {
@@ -46,6 +52,7 @@ fn main() -> io::Result<()> {
         ("family emoji", FAMILY),
         ("CJK ideograph", IDEOGRAPH),
         ("heart and variation selector", HEART),
+        ("digit and enclosing keycap", KEYCAP),
     ] {
         let width = WidthMode::Wc.grapheme_width(text, false);
         let mut screen = row_screen(false)?;
@@ -95,11 +102,11 @@ fn main() -> io::Result<()> {
 
     writeln!(
         out,
-        "\nThe family emoji and the heart are both repainted from the cluster:\n\
-         one claims more columns than a terminal may give it, the other less.\n\
-         The ideograph is a single code point, so no terminal can disagree\n\
-         about it, and the agreed row was measured the way the terminal\n\
-         measures it. Both of those keep the ordinary diff."
+        "\nThe family emoji, the heart, and the keycap are all repainted from\n\
+         the cluster: the first claims more columns than a terminal may give\n\
+         it, the other two fewer. The ideograph is a single code point, so no\n\
+         terminal can disagree about it, and the agreed row was measured the\n\
+         way the terminal measures it. Both of those keep the ordinary diff."
     )?;
     out.flush()
 }
