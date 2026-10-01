@@ -45,18 +45,15 @@ open question, and the next section is about the two answers.
 How a cluster is measured is a policy, captured by
 [`WidthMode`](/api/uncurses/text/enum.WidthMode.html):
 
-- **`Wc`** is wcwidth-style: it adds up the widths of the code points inside
-  the cluster. Combining marks and joiners are zero-width, so they add nothing
-  and an accented letter still takes one cell. A joined emoji sequence adds up
-  to more, because each face in it counts. This matches how older or plainer
-  terminals behave, since they advance the cursor once per code point. It is
-  the default.
-- **`Grapheme`** measures the whole cluster, accounting for variation
-  selectors, regional-indicator flags, and zero-width-joiner emoji sequences.
-  The cluster boundaries follow the Unicode text-segmentation rules in
-  [UTS-29](https://unicode.org/reports/tr29/). Pair it with terminal
+- **`Wc`** measures a cluster by its parts, adding up what each one claims. It
+  is the default, and it matches a terminal that measures as it reads.
+- **`Grapheme`** measures the cluster as a whole. Pair it with terminal
   [Unicode Core](https://contour-terminal.org/vt-extensions/unicode-core/) mode,
-  which measures display width per grapheme cluster.
+  in which the terminal measures that way too.
+
+The choice follows the terminal, not the text.
+[`WidthMode`](/api/uncurses/text/enum.WidthMode.html) sets out what each mode
+makes of every kind of cluster.
 
 ## East Asian ambiguous width
 

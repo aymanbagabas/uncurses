@@ -29,20 +29,26 @@
 //!
 //! ## Cells, clipping, and wrapping
 //!
-//! Non-zero-width grapheme clusters are written as one-cell or two-cell
-//! [`Cell`](crate::cell::Cell) values. Two-cell clusters occupy a primary wide
-//! cell plus the continuation cell maintained by the buffer layer. Zero-width
-//! clusters are appended to the previous pending cluster before it is flushed.
+//! Each non-zero-width grapheme cluster becomes one
+//! [`Cell`](crate::cell::Cell) holding the whole cluster, with its measured
+//! width. A cluster wider than one column occupies a primary cell plus the
+//! `width - 1` continuation cells maintained by the buffer layer.
+//! Zero-width clusters are appended to the previous pending cluster before it
+//! is flushed.
 //!
 //! ```text
 //! input clusters      pending cell       surface cells
-//! ┌────┬──────┐       ┌────────────┐         ┌────┬────┬────┐
-//! │ e  │ ◌́    │ ───▶  │ "e\u{301}" │ ─────▶  │ é  │    │    │
-//! └────┴──────┘       └────────────┘         └────┴────┴────┘
+//! ┌────┬──────┐       ┌────────────┐         ┌────┬────┬────┬────┐
+//! │ e  │ ◌́    │ ───▶  │ "e\u{301}" │ ─────▶  │ é  │    │    │    │
+//! └────┴──────┘       └────────────┘         └────┴────┴────┴────┘
 //!
-//! ┌────┐              ┌─────────┐        ┌────┬────┬────┐
-//! │ 中 │ ─────────▶   │ width 2 │ ────▶  │ 中 │ ▶  │    │
-//! └────┘              └─────────┘        └────┴────┴────┘
+//! ┌────┐              ┌─────────┐        ┌────┬────┬────┬────┐
+//! │ 中 │ ─────────▶   │ width 2 │ ────▶  │ 中 │ ▶  │    │    │
+//! └────┘              └─────────┘        └────┴────┴────┴────┘
+//!
+//! ┌────┐              ┌─────────┐        ┌────┬────┬────┬────┐
+//! │ 🇺🇸 │ ─────────▶   │ width 4 │ ────▶  │ 🇺🇸 │ ▶  │ ▶  │ ▶  │
+//! └────┘              └─────────┘        └────┴────┴────┴────┘
 //! ```
 //!
 //! Painting is clipped to either the target bounds or the intersection of a
