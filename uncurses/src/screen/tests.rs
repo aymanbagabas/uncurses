@@ -2943,3 +2943,28 @@ fn a_frame_after_the_walk_earns_the_column_back_before_moving() {
         "the step down must re-anchor the column first: {out:?}"
     );
 }
+
+/// The walk past a ligatable cluster writes cells, and a cell carries
+/// style and links of its own. The frame epilogue has already returned
+/// the pen to default by then, so whatever the walk ends on would ride
+/// out with the frame and paint everything written after it.
+#[test]
+fn the_walk_to_the_resting_cursor_closes_the_style_it_opened() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "RED", Style::default().fg(Color::Red));
+    // Past the red run, so reaching it walks across the whole of it.
+    screen.set_cursor_position(Position::new(11, 0));
+    screen.render().unwrap();
+
+    let out = s(screen.writer());
+    let opened = out
+        .rfind("\u{1b}[31m")
+        .expect("the walk painted the red run");
+    assert!(
+        out[opened..].contains("\u{1b}[m"),
+        "the frame must close the red it opened: {out:?}"
+    );
+}

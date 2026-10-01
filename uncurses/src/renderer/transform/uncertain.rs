@@ -132,6 +132,12 @@ impl Renderer {
             ansi::mode::Mode::AUTO_WRAP.reset(out)?;
             self.emit_range(out, buf, line, from, stop - 1, true)?;
             ansi::mode::Mode::AUTO_WRAP.set(out)?;
+
+            // The frame epilogue already returned the pen to default, and
+            // these cells carry their own style and links past it. Close
+            // them here, or the style of whatever the walk happened to
+            // end on rides out with the frame and paints what follows.
+            self.reset_pen(out)?;
         }
 
         // The walk ended where the terminal put the last cell, which is a
