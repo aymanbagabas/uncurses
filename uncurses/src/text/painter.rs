@@ -47,9 +47,14 @@
 //! └────┘              └─────────┘        └────┴────┴────┴────┘
 //!
 //! ┌────┐              ┌─────────┐        ┌────┬────┬────┬────┐
-//! │ 🇺🇸 │ ─────────▶   │ width 4 │ ────▶  │ 🇺🇸 │ ▶  │ ▶  │ ▶  │
+//! │ 👍🏽 │ ─────────▶   │ width 4 │ ────▶  │ 👍🏽 │ ▶  │ ▶  │ ▶  │
 //! └────┘              └─────────┘        └────┴────┴────┴────┘
 //! ```
+//!
+//! The last row measures under [`WidthMode::Wc`], which sums the code points
+//! of a cluster: the thumbs-up and the skin tone own two columns each. The
+//! same cluster measures two under [`WidthMode::Grapheme`], and the painter
+//! lays out whatever width the mode reports.
 //!
 //! Painting is clipped to either the target bounds or the intersection of a
 //! supplied rectangle with those bounds. [`WrapMode`] applies only when a
@@ -1150,6 +1155,26 @@ mod tests {
         // text is hard-truncated with no tail.
         assert_eq!(row(&b, 0), "abc");
         assert_eq!(end, Position::new(3, 0));
+    }
+
+    /// The module diagram shows a cluster laid across four columns. Measure
+    /// the cluster it names so the picture stays answerable to the code.
+    #[test]
+    fn a_cluster_measuring_four_claims_four_columns() {
+        let mut b = buf(6, 1).with_width_mode(WidthMode::Wc);
+        // Thumbs-up plus a skin tone. `Wc` sums the code points, and each of
+        // the two owns two columns.
+        Painter::new(&mut b).set_str((0, 0), "\u{1f44d}\u{1f3fd}", Style::default());
+
+        assert_eq!(cell_at(&b, 0, 0).content(), "\u{1f44d}\u{1f3fd}");
+        assert_eq!(cell_at(&b, 0, 0).width(), 4);
+        for x in 1..4 {
+            assert!(
+                cell_at(&b, x, 0).is_continuation(),
+                "column {x} belongs to the cluster"
+            );
+        }
+        assert!(cell_at(&b, 4, 0).is_blank(), "the cluster stops at four");
     }
 
     #[test]
