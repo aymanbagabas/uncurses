@@ -244,18 +244,17 @@ impl Cell {
     /// claims no column has none to draw in, so whatever it stores is never
     /// reached. Width `0`, `1`, and `2` or more partition every cell into a
     /// continuation, a narrow cell, and a wide one.
-    ///
-    /// Continuations are considered blank.
     #[inline]
     pub fn is_continuation(&self) -> bool {
         self.width == 0
     }
 
-    /// Test whether this cell renders as blank space.
+    /// Test whether this cell is a single blank column.
     ///
     /// # Returns
     ///
-    /// `true` when the content is empty or the content is a single space.
+    /// `true` when the cell holds one space and claims one column, which is
+    /// the shape of [`Cell::BLANK`].
     ///
     /// # Panics
     ///
@@ -263,11 +262,15 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// Style is not considered. A styled space still counts as blank because
-    /// this method answers whether the cell has independent textual content.
-    /// Continuation placeholders are blank, because their content is empty.
+    /// Style is not considered. A styled space is still blank, because this
+    /// method answers what the cell occupies rather than how it is painted.
+    ///
+    /// Width is considered, so the answer stays about one column. A
+    /// continuation claims none, and a cell claiming several stands for a
+    /// span rather than a single blank; each is something other than a blank
+    /// column, and each reports `false`.
     pub fn is_blank(&self) -> bool {
-        self.content.is_empty() || self.content == " "
+        self.content == " " && self.width == 1
     }
 
     /// The bytes that draw this cell.
@@ -390,7 +393,29 @@ mod tests {
         let c = Cell::CONTINUATION;
         assert!(c.is_continuation());
         assert_eq!(c.width(), 0);
-        assert!(c.is_blank());
+        assert!(!c.is_blank());
+    }
+
+    /// `is_blank` answers for one blank column, so width decides as much as
+    /// content does.
+    ///
+    /// Reading it as "holds nothing to draw" put a continuation and a blank
+    /// in the same class, though one claims no column and the other claims
+    /// exactly one. A caller scanning a row for the columns it can drop then
+    /// had to re-check the width every time to tell them apart.
+    #[test]
+    fn only_a_cell_holding_one_space_in_one_column_is_blank() {
+        assert!(Cell::BLANK.is_blank());
+        assert!(Cell::new(" ", 1).is_blank());
+        // Style rides along; it says how the column is painted, not what it
+        // holds.
+        assert!(Cell::BLANK.style(Style::default().bold()).is_blank());
+
+        // A span of blank columns is not one blank column.
+        assert!(!Cell::new(" ", 2).is_blank());
+        // No column at all is not one blank column either.
+        assert!(!Cell::CONTINUATION.is_blank());
+        assert!(!Cell::new("x", 1).is_blank());
     }
 
     #[test]
