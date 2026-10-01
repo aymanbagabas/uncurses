@@ -106,8 +106,14 @@ mod tests {
 
     #[test]
     fn duration_to_ms_caps_at_infinite_minus_one() {
+        // `INFINITE` tells the wait to block forever, so a finite timeout
+        // stops one millisecond short of it however large it is.
         let huge = Duration::from_secs(u64::MAX / 2);
-        assert!(duration_to_ms(Some(huge)) < INFINITE);
+        assert_eq!(duration_to_ms(Some(huge)), INFINITE - 1);
+        let at_sentinel = Duration::from_millis(u64::from(INFINITE));
+        assert_eq!(duration_to_ms(Some(at_sentinel)), INFINITE - 1);
+        let below_sentinel = Duration::from_millis(u64::from(INFINITE - 1));
+        assert_eq!(duration_to_ms(Some(below_sentinel)), INFINITE - 1);
         assert_eq!(duration_to_ms(None), INFINITE);
         assert_eq!(duration_to_ms(Some(Duration::from_millis(0))), 0);
         assert_eq!(duration_to_ms(Some(Duration::from_millis(50))), 50);
