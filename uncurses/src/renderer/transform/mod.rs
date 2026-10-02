@@ -194,6 +194,45 @@ mod tests {
     }
 
     #[test]
+    fn overwrite_interval_keeps_the_old_row_in_sync() {
+        let combining = format!("e{}", "\u{301}".repeat(20));
+        for old_width in [8, 40] {
+            for x in [0, 4, 20, 38, 39] {
+                for (old_cell, new_cell, offset) in [
+                    (Cell::new("世", 2), Cell::new("Y", 1), 0),
+                    (Cell::new("世", 2), Cell::new("Y", 1), 1),
+                    (Cell::new("X", 1), Cell::new("世", 2), 0),
+                    (Cell::new("X", 1), Cell::new(&combining, 1), 0),
+                ] {
+                    let mut old = RenderBuffer::new(old_width, 1);
+                    let mut new = RenderBuffer::new(40, 1);
+                    for column in 0..40 {
+                        old.set_cell((column, 0), &Cell::new("a", 1));
+                        new.set_cell((column, 0), &Cell::new("a", 1));
+                    }
+                    old.set_cell((x, 0), &old_cell);
+                    new.set_cell((x, 0), &old_cell);
+                    new.set_cell((x + offset, 0), &new_cell);
+                    let mut renderer = Renderer::new();
+                    renderer.cur_buf = Some(old);
+                    let mut out = Vec::new();
+                    renderer.transform_line(&mut out, &new, 0, 0, 39).unwrap();
+                    assert_eq!(
+                        renderer.cur_buf.as_ref().unwrap().line(0).unwrap(),
+                        &new.line(0).unwrap()[..usize::from(old_width)],
+                        "old_width={old_width}, x={x}, offset={offset}, cell={new_cell:?}"
+                    );
+                    if old_width == 40 {
+                        out.clear();
+                        renderer.transform_line(&mut out, &new, 0, 0, 39).unwrap();
+                        assert!(out.is_empty());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_transform_no_changes() {
         let mut r = Renderer::new();
         r.cur_buf = Some(RenderBuffer::new(10, 1));

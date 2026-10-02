@@ -68,10 +68,9 @@ impl Renderer {
     /// lines, then dispatch to one of five branches based on what kind
     /// of change pattern the row exhibits.
     ///
-    /// Returns `Some(first_cell)` when output was emitted, where
-    /// `first_cell` is the leftmost column the screen was updated from
-    /// — the wrapper uses this to slice-copy `new_line[first_cell..]`
-    /// into `cur_buf` so it tracks what is now on screen.
+    /// Returns the first column of the suffix the wrapper must copy into
+    /// `cur_buf`. Returns `None` when the row is unchanged or this method
+    /// already copied the changed interval.
     fn transform_line_inner(
         &mut self,
         out: &mut Vec<u8>,
@@ -277,6 +276,14 @@ impl Renderer {
             if n_last >= first_cell {
                 self.move_to(out, new_buf, y, first_cell as u16)?;
                 self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, n_last)?;
+            }
+            // The backward scan already proved the suffix equal. Copy only
+            // this interval; a shorter old row uses the wrapper's fallback.
+            if let Some(cur) = cur_line
+                && let Some(changed) = cur.get_mut(copy_from..=n_last)
+            {
+                changed.clone_from_slice(&new_line[copy_from..=n_last]);
+                return Ok(None);
             }
             return Ok(Some(copy_from));
         }
