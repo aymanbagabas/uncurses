@@ -130,7 +130,11 @@ impl Renderer {
             // carry the walk across the right margin, and the wrap would
             // spill onto a row nothing in the model accounts for.
             ansi::mode::Mode::AUTO_WRAP.reset(out)?;
-            self.emit_range(out, buf, line, from, stop - 1, true)?;
+            if self.emit_range(out, buf, line, from, stop - 1, true)? {
+                // ECH clears the trailing blanks but leaves the cursor
+                // before them. Cross their length without naming a column.
+                ansi::cursor::write_cuf(out, stop as u16 - self.cur.pos().x)?;
+            }
             ansi::mode::Mode::AUTO_WRAP.set(out)?;
 
             // The frame epilogue already returned the pen to default, and

@@ -2856,6 +2856,32 @@ fn an_empty_primary_at_a_split_insert_boundary_repaints_the_suffix() {
 
 const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
 
+#[test]
+fn resting_cursor_advances_past_a_trailing_erase() {
+    for start in [0, 3] {
+        let mut screen = Screen::for_test(Vec::new(), (40, 2));
+        screen.set_optimizations(Optimizations::all());
+        screen.set_grapheme_clusters(false);
+        screen.set_str((start, 0), FAMILY, Style::default());
+        screen.set_cursor_position(Position::new(30, 0));
+        screen.render().unwrap();
+
+        let count = 30 - start - 8;
+        let out = s(screen.writer());
+        assert!(
+            out.ends_with(&format!(
+                "{FAMILY}\x1b[{count}X\x1b[{count}C\x1b[?7h\x1b[?25h"
+            )),
+            "the resting walk must advance past its trailing erase: {out:?}"
+        );
+        assert_eq!(screen.tracked_cursor(), None);
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty(), "the resting target was reached");
+    }
+}
+
 /// The resting cursor is walked into a row that carries a ligatable
 /// cluster, not addressed by column.
 ///

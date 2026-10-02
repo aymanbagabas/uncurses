@@ -21,7 +21,7 @@
 use std::io::{self, Write};
 
 use uncurses::cell::Cell;
-use uncurses::screen::Screen;
+use uncurses::screen::{Optimizations, Screen};
 use uncurses::text::WidthMode;
 
 /// A four-person family: seven code points, four faces joined by three
@@ -102,6 +102,20 @@ fn main() -> io::Result<()> {
     let bytes = screen.into_writer();
     writeln!(out, "\nresting the cursor past the family emoji")?;
     writeln!(out, "  {}", printable(&bytes))?;
+
+    let mut screen = row_screen(false)?;
+    screen.set_optimizations(Optimizations::all());
+    let _ = place(&mut screen, FAMILY, width)?;
+    screen.writer_mut().clear();
+    screen.set_cursor_position((COLS - 1, 0));
+    screen.render()?;
+    writeln!(out, "\nresting the cursor after a long blank run")?;
+    writeln!(out, "  {}", printable(screen.writer()))?;
+    assert!(printable(screen.writer()).contains("ESC [12XESC [12C"));
+    screen.writer_mut().clear();
+    screen.render()?;
+    assert!(screen.writer().is_empty());
+    writeln!(out, "  the next unchanged render writes no bytes")?;
 
     writeln!(
         out,
