@@ -353,14 +353,26 @@ impl Renderer {
             }
 
             let n = o_lc.min(n_lc);
+            let insert_at = (n + 1) as usize;
+            if o_lc < n_lc && super::emit::cluster_start(new_line, insert_at) < insert_at {
+                // Painting through this cluster would overwrite the suffix
+                // before insertion shifts it. Repaint instead; an optimized
+                // insert needs a shared cluster boundary for both operations.
+                self.move_to(out, new_buf, y, first_cell as u16)?;
+                self.put_range(
+                    out,
+                    new_buf,
+                    cur_slice,
+                    new_line,
+                    y,
+                    first_cell,
+                    n_last_nonblank.max(o_last_nonblank),
+                )?;
+                return Ok(Some(copy_from));
+            }
             if n >= first_cell as isize {
-                // The walk stops where the rows agree again, which can be a
-                // cell that owns a column past it. `emit_range` draws whole
-                // glyphs, so the run reaches further than `n` and the cursor
-                // rests past the cluster; the insert branch below then
-                // back-shifts over the continuation and draws the same glyph
-                // a second time. Ending on the cluster's own last column
-                // keeps the two in step.
+                // Emit the whole cluster at the range's end. The deletion
+                // branch below uses the same boundary for its cursor move.
                 let last = super::emit::cluster_end(new_line, n as usize);
                 self.move_to(out, new_buf, y, first_cell as u16)?;
                 self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, last)?;
