@@ -63,10 +63,10 @@
 //! measures the sum of its code points, so a four-person family emoji is
 //! eight columns and owns seven continuations.
 //!
-//! Continuations are considered blank by [`Cell::is_blank`] because they do
-//! not render independent content. They exist so row storage can preserve
-//! the one-`Cell`-per-column layout while still representing wide graphemes
-//! accurately.
+//! Continuations preserve the one-`Cell`-per-column layout for wide
+//! graphemes. [`Cell::is_blank`] identifies a cell that claims one column
+//! and draws a space, regardless of style. A continuation claims zero
+//! columns, so it returns `false`.
 
 use compact_str::CompactString;
 
