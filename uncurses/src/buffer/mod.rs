@@ -92,8 +92,8 @@ use crate::layout::{Position, Rect, overruns};
 /// deterministic cell grid. Writes outside the buffer bounds are ignored;
 /// reads outside the bounds return `None`.
 ///
-/// Wide cells are stored as a primary [`Cell`] followed
-/// by one continuation cell. Prefer [`Buffer::set`] or
+/// A wide primary [`Cell`] owns one continuation cell per additional column,
+/// for a total of `width - 1` continuations. Prefer [`Buffer::set`] or
 /// [`SurfaceMut::set_cell`] for writes so that continuation slots are kept
 /// consistent.
 #[derive(Debug, Clone)]
