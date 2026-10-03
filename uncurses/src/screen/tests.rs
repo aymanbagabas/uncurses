@@ -94,6 +94,52 @@ fn test_write_and_render() {
 }
 
 #[test]
+fn an_insert_boundary_inside_a_wide_cell_repaints_the_complete_row() {
+    for ich in [false, true] {
+        for prefix in ["", "X", "XYZ"] {
+            for inserted in ["世", "世界"] {
+                let mut screen = Screen::new(Vec::new(), (20, 1));
+                let mut opts = Optimizations::all();
+                opts.set(Optimizations::ICH, ich);
+                screen.set_optimizations(opts);
+                screen.set_str((0, 0), &format!("{prefix}ABCDEFGHIJ"), Style::default());
+                screen.render().unwrap();
+                screen.writer_mut().clear();
+
+                let row = format!("{prefix}{inserted}ABCDEFGHIJ");
+                screen.set_str((0, 0), &row, Style::default());
+                screen.render().unwrap();
+
+                assert_eq!(
+                    String::from_utf8_lossy(screen.writer()),
+                    format!("\x1b[?25l{row}\x1b[?25h"),
+                    "the overwrite must preserve the whole suffix, ICH={ich}"
+                );
+                screen.writer_mut().clear();
+                screen.render().unwrap();
+                assert!(screen.writer().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn an_insert_boundary_between_narrow_cells_keeps_insert_mode() {
+    let mut screen = Screen::new(Vec::new(), (20, 1));
+    screen.set_optimizations(Optimizations::all() - Optimizations::ICH);
+    screen.set_str((0, 0), "XABCDEFGHIJ", Style::default());
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
+    screen.set_str((0, 0), "X***ABCDEFGHIJ", Style::default());
+    screen.render().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(screen.writer()),
+        "\x1b[?25lX*\x1b[4h**A\x1b[4l\x1b[?25h"
+    );
+}
+
+#[test]
 fn default_width_mode_is_wc() {
     let screen = Screen::for_test(Vec::new(), (20, 1));
     assert_eq!(screen.width_mode(), WidthMode::Wc);
