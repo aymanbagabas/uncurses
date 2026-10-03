@@ -151,15 +151,16 @@ where
     origin_queries_pending: u16,
 }
 
-/// Defaults applied by [`Program::init_with`].
+/// Options for session setup, capability queries, and mode preferences.
 ///
-/// Most fields take effect at init unconditionally. The three `prefer_*`
-/// fields are the exception: they depend on capability detection, so they do
-/// nothing until the terminal reports the matching mode as available. A
-/// [`Program`] never probes on its own, so that report only arrives if you
-/// call
-/// [`query_capabilities`](Program::query_capabilities) and read the replies.
-/// Without it these two fields stay dormant and the modes are never enabled.
+/// [`Program::init_with`] applies `bracketed_paste`, `mouse`, and `legacy_keys`.
+/// It stores the other options for later use.
+///
+/// The `query_*` fields select optional requests for
+/// [`Program::query_capabilities`]. Call that method to send the queries.
+///
+/// The `prefer_*` fields control mode adoption when [`Program::observe_event`]
+/// receives a report that confirms support for the corresponding mode.
 #[derive(Debug, Clone)]
 pub struct ProgramOptions {
     /// Enable bracketed paste at init. Defaults to `true`.
@@ -209,6 +210,22 @@ pub struct ProgramOptions {
     /// [`Program::observe_event`] applies recognized replies independently of
     /// this option, including replies to [`Program::request_mode`].
     pub query_backspace_mode: bool,
+    /// Include the default foreground color in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`.
+    pub query_foreground_color: bool,
+    /// Include the default background color in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`.
+    pub query_background_color: bool,
+    /// Include the cursor color in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`.
+    pub query_cursor_color: bool,
+    /// Include these palette indices in [`Program::query_capabilities`].
+    ///
+    /// Defaults to an empty list. Queries follow the supplied order.
+    pub query_palette_colors: Vec<u8>,
     /// How to read the ambiguous legacy keys.
     ///
     /// Defaults to [`empty`](DecoderFlags::empty). LF reads as Ctrl+J;
@@ -279,6 +296,10 @@ impl Default for ProgramOptions {
             prefer_in_band_resize: true,
             prefer_synchronized_output: true,
             query_backspace_mode: false,
+            query_foreground_color: false,
+            query_background_color: false,
+            query_cursor_color: false,
+            query_palette_colors: Vec::new(),
             legacy_keys: DecoderFlags::empty(),
         }
     }
@@ -911,7 +932,8 @@ where
     /// default query set (Kitty keyboard, the DECRQM modes behind
     /// [`Capabilities`], XTVERSION, xterm modifyOtherKeys, and — when the
     /// environment did not already imply true color — XTGETTCAP `RGB`/`Tc`),
-    /// then `extra`, then a Primary DA request.
+    /// then the color queries selected in [`ProgramOptions`], then `extra`,
+    /// then a Primary DA request.
     ///
     /// `extra` is written verbatim, so it can carry any additional query
     /// escapes you want answered under the same Primary DA terminator. Pass
@@ -962,6 +984,7 @@ where
     ///
     /// [`Event::PrimaryDeviceAttributes`]: crate::event::Event::PrimaryDeviceAttributes
     pub fn query_capabilities(&mut self, extra: &[u8]) -> io::Result<()> {
+        use crate::ansi::color;
         use crate::ansi::ctrl::{REQUEST_PRIMARY_DA, REQUEST_XTVERSION};
         use crate::ansi::kitty::REQUEST_KITTY_KEYBOARD;
         use crate::ansi::mode::Mode;
@@ -1013,6 +1036,19 @@ where
             }
         }
 
+        if self.options.query_foreground_color {
+            self.screen.write_all(color::REQUEST_FOREGROUND_COLOR)?;
+        }
+        if self.options.query_background_color {
+            self.screen.write_all(color::REQUEST_BACKGROUND_COLOR)?;
+        }
+        if self.options.query_cursor_color {
+            self.screen.write_all(color::REQUEST_CURSOR_COLOR)?;
+        }
+        for &index in &self.options.query_palette_colors {
+            color::write_request_palette_color(&mut self.screen, index)?;
+        }
+
         self.screen.write_all(extra)?;
         self.screen.write_all(REQUEST_PRIMARY_DA)?;
         self.screen.flush()
@@ -1040,10 +1076,13 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the always-on defaults from
-    /// `options`. This never probes the terminal; the `prefer_*` defaults
-    /// stay dormant until you call
-    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Begin a session: enter raw mode and apply the initialization settings
+    /// from `options`. Store query choices and mode preferences for later use.
+    ///
+    /// The `query_*` options take effect when you call
+    /// [`query_capabilities`](Self::query_capabilities).
+    /// The `prefer_*` options apply when reported capabilities confirm mode support.
+    ///
     /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
@@ -1201,10 +1240,13 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the always-on defaults from
-    /// `options`. This never probes the terminal; the `prefer_*` defaults
-    /// stay dormant until you call
-    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Begin a session: enter raw mode and apply the initialization settings
+    /// from `options`. Store query choices and mode preferences for later use.
+    ///
+    /// The `query_*` options take effect when you call
+    /// [`query_capabilities`](Self::query_capabilities).
+    /// The `prefer_*` options apply when reported capabilities confirm mode support.
+    ///
     /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
