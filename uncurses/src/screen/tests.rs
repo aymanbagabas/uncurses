@@ -702,6 +702,22 @@ fn resize_does_not_crash_and_renders_blank() {
     }
 }
 
+#[test]
+fn equal_wide_cell_after_screen_shrink_is_normalized() {
+    for (text, width) in [("中", 2), ("👩‍👩‍👧‍👦", 8)] {
+        let cell = Cell::new(text, width);
+        let mut screen = Screen::new(Vec::new(), (u16::from(width), 1));
+        screen.set_cell((0, 0), &cell);
+        screen.render().unwrap();
+        screen.resize((u16::from(width) - 1, 1));
+        screen.set_cell((0, 0), &cell);
+        for x in 0..screen.width() {
+            assert_eq!(screen.cell(Position::new(x, 0)), Some(&Cell::BLANK));
+        }
+        screen.render().unwrap();
+    }
+}
+
 // --- insert_above ---
 
 #[test]
