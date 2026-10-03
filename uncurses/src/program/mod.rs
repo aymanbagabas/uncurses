@@ -383,8 +383,18 @@ where
         Ok(ready)
     }
 
-    /// Take the next queued event without doing I/O, tracking capabilities as
-    /// it passes through. See [`EventSource::try_read`].
+    /// Take the next queued event without reading more input.
+    /// Returns `Ok(None)` when the queue is empty. See [`EventSource::try_read`].
+    ///
+    /// Calls [`observe_event`](Self::observe_event) for events from the source.
+    /// Observation can enable preferred terminal modes and flush output.
+    /// Events returned through [`unread_event`](Self::unread_event) are already
+    /// observed.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from [`observe_event`](Self::observe_event), including
+    /// output errors. The event has already been removed from the queue.
     pub fn try_read_event(&mut self) -> io::Result<Option<Event>> {
         if let Some(event) = self.unread.pop_front() {
             return Ok(Some(event));
