@@ -1072,13 +1072,12 @@ mod fast_path {
         );
     }
 
-    /// Every byte the fast path can see is printable ASCII.
+    /// The fast path emits text only for printable ASCII.
     ///
-    /// The shortcut answers "one column" for any byte below 0x80, which would
-    /// be wrong for the C0 controls and DEL - they are zero columns, not one.
-    /// It is correct because it never sees them: they are taken by the
-    /// control branch above it. This pins that ordering, which is the only
-    /// thing keeping the shortcut honest.
+    /// Its `0x20..0x7f` range excludes C0 controls and DEL, even though the
+    /// shortcut runs before control handling. This test checks every
+    /// seven-bit byte: printable ASCII has width one, controls stay controls,
+    /// and ESC opens an escape sequence.
     #[test]
     fn controls_never_reach_the_ascii_shortcut() {
         for b in 0u8..=0x7f {
