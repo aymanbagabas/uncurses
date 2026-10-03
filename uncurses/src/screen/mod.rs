@@ -139,6 +139,15 @@ pub struct Screen<W: Write> {
     /// declarative resting position, so the cursor is left wherever the cell
     /// diff ended.
     desired_cursor: Option<Position>,
+    /// The resting position the last frame walked the cursor to, when the
+    /// walk ended on a column only the terminal can name.
+    ///
+    /// Paired with [`Renderer::cursor_placed_on_row`] this says "the cursor
+    /// is already resting here", which the tracked position alone cannot,
+    /// because the walk deliberately forgets the column. An immediate move
+    /// clears this record: another walk can leave the same row known while
+    /// it places the cursor at a different logical position.
+    cursor_rested_at: Option<Position>,
 }
 
 impl<W: Write> Screen<W> {
@@ -171,6 +180,7 @@ impl<W: Write> Screen<W> {
             sync_updates: false,
             grapheme_clusters: false,
             desired_cursor: None,
+            cursor_rested_at: None,
         };
         let size = size.into();
         if size.width != 0 || size.height != 0 {
@@ -329,6 +339,15 @@ impl<W: Write> Screen<W> {
     /// request to wrap and is honored as one, even when the renderer is
     /// already tracking the cursor there with its wrap pending.
     ///
+    /// Past a cluster whose terminal width is uncertain, the move re-emits
+    /// cells from the last rendered row until it reaches the logical target.
+    /// It leaves staged edits for `render`. A target inside that cluster
+    /// rests on its primary cell. The tracked column becomes unknown because
+    /// the terminal decides how far each cluster advances.
+    ///
+    /// After a resize, screen switch, or invalidation, the move uses control
+    /// sequences until `render` establishes the displayed cells again.
+    ///
     /// This is imperative: the move is emitted and flushed now, independent of
     /// [`render`](Self::render). It does **not** affect the declarative resting
     /// position staged with [`set_cursor_position`](Self::set_cursor_position);
@@ -401,6 +420,13 @@ impl<W: Write> Screen<W> {
     /// that position is unknown (initially, after a screen reset, or after
     /// [`invalidate_tracked_cursor`](Self::invalidate_tracked_cursor)). This
     /// is bookkeeping, not a live cursor-position query.
+    ///
+    /// A cursor move past a cluster the
+    /// terminal may measure differently also reads as unknown. The cursor is
+    /// where it was asked to go, and the terminal is the only one that can
+    /// say which column that is. See
+    /// [`set_grapheme_clusters`](Self::set_grapheme_clusters) for what makes
+    /// a cluster uncertain and how to settle it.
     pub fn tracked_cursor(&self) -> Option<Position> {
         self.renderer
             .cursor_known()
@@ -439,6 +465,14 @@ impl<W: Write> Screen<W> {
         match self.desired_cursor {
             Some(pos) => {
                 let pos = self.clamp_to_surface(pos);
+                // A walk past an uncertain cluster ends on a column only the
+                // terminal can name, so the tracked position reads as "not
+                // there" even though the cursor is exactly where it was asked
+                // to go. Take the recorded rest as the answer while the
+                // cursor still sits where that walk left it.
+                if self.cursor_rested_at == Some(pos) && self.renderer.cursor_placed_on_row(pos.y) {
+                    return false;
+                }
                 !self.renderer.cursor_known() || self.renderer.cursor_position() != pos
             }
             None => false,
@@ -527,6 +561,18 @@ impl<W: Write> Screen<W> {
     /// Measuring differently from the terminal misplaces every cell after the
     /// first cluster on a line, so the two must agree.
     ///
+    /// Under the per-code-point model the renderer covers the one difference
+    /// it can predict: a cluster of several code points, which a terminal
+    /// draws as a single glyph of its own choosing. That glyph may be
+    /// narrower than the parts add up to, as with a ligated family emoji, or
+    /// wider, as with a heart that an emoji selector promotes to two columns.
+    /// Either way the renderer stops diffing that row at the cluster and
+    /// repaints the rest of it in one run, which asks nothing about where the
+    /// terminal put the glyph. That keeps the row honest on such a terminal
+    /// while measurement is per code point. Measuring whole clusters asserts
+    /// that the terminal counts them the same way, so every row takes the
+    /// ordinary path, and it is on you to have put the terminal in that mode.
+    ///
     /// Changing the mode discards the tracked terminal contents, so the next
     /// [`render`](Self::render) is a full repaint: what is already on screen
     /// was measured the other way. Setting the current value is a no-op.
@@ -542,6 +588,7 @@ impl<W: Write> Screen<W> {
             return;
         }
         self.grapheme_clusters = enabled;
+        self.renderer.set_width_mode(self.width_mode());
         // Whatever is on screen was measured under the old model, so the
         // tracked terminal contents no longer describe it. Diffing against
         // that record would leave the two disagreeing about which column
@@ -714,8 +761,9 @@ impl<W: Write> Screen<W> {
         if let Some(pos) = self.desired_cursor {
             let pos = self.clamp_to_surface(pos);
             self.renderer
-                .move_to(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
+                .move_to_resting(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
                 .unwrap();
+            self.cursor_rested_at = Some(pos);
         }
 
         if bracket_cursor {
@@ -731,6 +779,7 @@ impl<W: Write> Screen<W> {
     /// Stage a cursor move without flushing. See
     /// [`move_cursor_to`](Self::move_cursor_to).
     pub(crate) fn stage_move_cursor_to(&mut self, target: Position) {
+        self.cursor_rested_at = None;
         let size = self.size();
         self.renderer
             .move_to_between_frames(&mut self.out_buf, size, target.y, target.x)

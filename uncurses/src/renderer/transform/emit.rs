@@ -82,6 +82,17 @@ impl Renderer {
     /// first cell dispatches to ECH (when the cell is erasable), REP
     /// (single ASCII byte), or a plain per-cell emission depending on
     /// which option is cheapest.
+    ///
+    /// `sequential` asks the interval to advance only by writing and by
+    /// relative moves, never by naming a column. A caller sets it when
+    /// the terminal's cursor may sit somewhere other than where the
+    /// frame model believes, which is what [`Renderer::repaint_tail`]
+    /// faces once a row carries a cluster the terminal may ligate.
+    /// Under that doubt a named column, and equally a tab stop, lands
+    /// where the *terminal* counts it rather than where the model does,
+    /// so the ECH run picks a forward move by its own length instead.
+    /// Writing is already relative, and so is the REP run, which emits
+    /// one glyph and repeats it.
     pub(super) fn emit_range(
         &mut self,
         out: &mut Vec<u8>,
@@ -89,6 +100,7 @@ impl Renderer {
         line: &[Cell],
         first: usize,
         last: usize,
+        sequential: bool,
     ) -> io::Result<bool> {
         // The cursor is already parked at `first`, and a continuation emits
         // nothing and moves nothing, so a run starting on one would put the
@@ -156,12 +168,15 @@ impl Renderer {
             }
 
             let ech_b = ansi::cost::ech_cost(count);
-            let cup_b =
-                ansi::cost::cup_cost(self.cur.pos().y, self.cur.pos().x.saturating_add(count));
+            let move_b = if sequential {
+                ansi::cost::cuf_cost(count)
+            } else {
+                ansi::cost::cup_cost(self.cur.pos().y, self.cur.pos().x.saturating_add(count))
+            };
             let rep_b = ansi::cost::rep_cost(count);
 
             if has_ech
-                && (count as usize) > ech_b + cup_b
+                && (count as usize) > ech_b + move_b
                 && can_clear_with(cell0, self.opts.contains(Optimizations::BCE))
             {
                 self.update_pen(out, Some(cell0))?;
@@ -169,12 +184,17 @@ impl Renderer {
                 if j > last {
                     return Ok(true);
                 }
-                self.move_to(
-                    out,
-                    new_buf,
-                    self.cur.pos().y,
-                    self.cur.pos().x.saturating_add(count),
-                )?;
+                if sequential {
+                    ansi::cursor::write_cuf(out, count)?;
+                    self.cur.x = Some(self.cur.pos().x.saturating_add(count));
+                } else {
+                    self.move_to(
+                        out,
+                        new_buf,
+                        self.cur.pos().y,
+                        self.cur.pos().x.saturating_add(count),
+                    )?;
+                }
                 x = j;
             } else if has_rep
                 && (count as usize) > rep_b
@@ -350,7 +370,7 @@ impl Renderer {
                             // it.
                             let stop =
                                 cluster_end(new_line, prev_end).min(resume.saturating_sub(1));
-                            self.emit_range(out, new_buf, new_line, seg_start, stop)?;
+                            self.emit_range(out, new_buf, new_line, seg_start, stop, false)?;
                         }
                         self.move_to(out, new_buf, y, resume as u16)?;
                         seg_start = resume;
@@ -366,7 +386,7 @@ impl Renderer {
             // emit cell 0 when `seg_start == 0`.
             let tail_end = j as isize - same as isize - 1;
             let tail_eoi = if tail_end >= seg_start as isize {
-                self.emit_range(out, new_buf, new_line, seg_start, tail_end as usize)?
+                self.emit_range(out, new_buf, new_line, seg_start, tail_end as usize, false)?
             } else {
                 false
             };
@@ -377,7 +397,7 @@ impl Renderer {
             // (ECH may have ended the interval the same way).
             Ok(if same != 0 { true } else { tail_eoi })
         } else {
-            self.emit_range(out, new_buf, new_line, start, end)
+            self.emit_range(out, new_buf, new_line, start, end, false)
         }
     }
     /// Insert `count` slots from the front of `line` at the current
