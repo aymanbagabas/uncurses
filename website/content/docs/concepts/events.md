@@ -68,8 +68,8 @@ fn main() -> std::io::Result<()> {
 
 `read_event()` blocks until the next event. `poll_event(timeout)` waits up to a
 timeout and reports whether something is ready, so you can interleave events
-with timers or other work. `try_read_event()` pops an already-decoded event
-without doing any I/O.
+with timers or other work. `try_read_event()` takes an already-decoded event
+without reading more input.
 
 `read_event()` and `try_read_event()` auto-observe what they return. That means
 ordinary reads update capability state, window size, terminal name, and

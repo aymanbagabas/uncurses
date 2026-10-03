@@ -14,6 +14,11 @@ through the pure renderer it contains with `program.screen_mut()`.
 capability replies update as events pass through. `try_read_event()` returns
 `io::Result<Option<Event>>`, so timeout loops usually write
 `while let Some(ev) = program.try_read_event()? { ... }`.
+
+`Ok(None)` means the queue is empty. The method reads no additional input,
+but observation can enable preferred terminal modes and flush output.
+It returns observation errors to the caller. On error, the event has already
+left the queue.
 {{< /callout >}}
 
 With the `async` feature, [`Program::event_stream`](/api/uncurses/program/struct.Program.html#method.event_stream)
