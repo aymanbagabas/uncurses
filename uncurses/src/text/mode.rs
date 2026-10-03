@@ -2,7 +2,7 @@
 //!
 //! Strings are always segmented into extended grapheme clusters by
 //! [`grapheme_cells`]. [`WidthMode`] changes only how each cluster's cell width
-//! is computed: by the first code point (`Wc`) or by cluster-aware Unicode
+//! is computed: by summing its code points (`Wc`) or by cluster-aware Unicode
 //! presentation rules (`Grapheme`). [`WrapMode`] controls what happens when a
 //! cluster would run past the right edge of a clip rectangle.
 
@@ -19,13 +19,20 @@ use super::width::{char_width, grapheme_width};
 /// [`grapheme_width`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WidthMode {
-    /// Measure each cluster by the width of its first code point.
+    /// Measure each cluster by summing the widths of its code points.
     ///
-    /// This is wcwidth-style and intentionally cluster-blind: variation
-    /// selectors, zero-width joiners, and emoji presentation overrides in the
-    /// rest of the cluster do not change the result. Use this when matching
-    /// older or simpler terminal width behavior is more important than
-    /// cluster-aware emoji presentation.
+    /// This models a terminal that has no grapheme segmentation and advances
+    /// the cursor once per code point, which is what POSIX `wcswidth`
+    /// describes: the sum of `wcwidth` over the string. Combining marks,
+    /// joiners, and variation selectors are themselves zero-width, so they
+    /// add nothing and a cluster like `e` + combining acute still measures
+    /// one cell. A code point that owns cells does add, which is why a
+    /// regional-indicator pair measures two.
+    ///
+    /// A long joined sequence measures the sum of its parts, so a
+    /// four-person family emoji is eight columns and a skin-toned thumbs-up
+    /// is four. Use this when matching older or simpler terminal width
+    /// behavior is more important than cluster-aware emoji presentation.
     #[default]
     Wc,
     /// Measure the whole grapheme cluster.
@@ -41,27 +48,32 @@ pub enum WidthMode {
 impl WidthMode {
     /// Measure one extended grapheme cluster under this mode.
     ///
-    /// In [`WidthMode::Wc`] mode, the width is the [`char_width`] of `g`'s
-    /// first code point, or `0` for an empty string. In
+    /// In [`WidthMode::Wc`] mode, the width is the sum of [`char_width`] over
+    /// every code point in `g`; an empty string is `0`. In
     /// [`WidthMode::Grapheme`] mode, the width is [`grapheme_width`] for the
     /// whole cluster.
     ///
     /// # Parameters
     ///
     /// * `g` — an extended grapheme cluster. Passing a longer string is
-    ///   accepted but only the first code point is considered in `Wc` mode.
+    ///   accepted, and in `Wc` mode every code point in it counts toward the
+    ///   sum.
     /// * `eaw_wide` — East-Asian Ambiguous policy; see [`char_width`].
     ///
     /// # Returns
     ///
-    /// The cluster width in terminal cells, normally `0`, `1`, or `2`.
+    /// The cluster width in terminal cells. [`WidthMode::Grapheme`] returns
+    /// `0`, `1`, or `2`; [`WidthMode::Wc`] sums code points and can return
+    /// more, saturating at [`u8::MAX`].
     ///
     /// # Errors and panics
     ///
     /// This method does not fail or intentionally panic.
     pub fn grapheme_width(self, g: &str, eaw_wide: bool) -> u8 {
         match self {
-            Self::Wc => g.chars().next().map_or(0, |c| char_width(c, eaw_wide)),
+            Self::Wc => g.chars().fold(0u8, |total, c| {
+                total.saturating_add(char_width(c, eaw_wide))
+            }),
             Self::Grapheme => grapheme_width(g, eaw_wide),
         }
     }
@@ -120,11 +132,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wc_mode_uses_first_codepoint_width() {
-        // 'e' + combining acute: first char 'e' → 1.
+    fn wc_mode_sums_codepoint_widths() {
+        // 'e' + combining acute: 1 + 0. A zero-width tail adds nothing, so
+        // the common accented-letter case still measures one cell.
         assert_eq!(WidthMode::Wc.grapheme_width("e\u{0301}", false), 1);
-        // Lone combining mark cluster: first char width 0.
+        // Lone combining mark cluster: nothing to add up.
         assert_eq!(WidthMode::Wc.grapheme_width("\u{0301}", false), 0);
+        // Empty string.
+        assert_eq!(WidthMode::Wc.grapheme_width("", false), 0);
+    }
+
+    #[test]
+    fn wc_mode_counts_codepoints_past_the_first() {
+        // A regional-indicator pair is two code points of one cell each, and
+        // a terminal without grapheme segmentation advances two columns for
+        // it. Measuring only the first code point would report one and leave
+        // every later column on the row off by one.
+        assert_eq!(WidthMode::Wc.grapheme_width("\u{1f1fa}\u{1f1f8}", false), 2);
+        // A lone regional indicator is genuinely one column.
+        assert_eq!(WidthMode::Wc.grapheme_width("\u{1f1ef}", false), 1);
+        // A zero-width code point followed by a printable one: the cluster
+        // occupies the printable one's cell, not zero.
+        assert_eq!(WidthMode::Wc.grapheme_width("\u{200d}a", false), 1);
+    }
+
+    #[test]
+    fn wc_mode_reports_the_full_sum_for_joined_sequences() {
+        // A terminal measuring per code point advances two columns for each
+        // emoji in the sequence and none for the joiners.
+        assert_eq!(WidthMode::Wc.grapheme_width("\u{1f44d}\u{1f3fd}", false), 4);
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+        assert_eq!(WidthMode::Wc.grapheme_width(family, false), 8);
     }
 
     #[test]
@@ -134,8 +172,9 @@ mod tests {
             WidthMode::Grapheme.grapheme_width("\u{270b}\u{fe0e}", false),
             1
         );
-        // Wc ignores the cluster and just measures '✋' alone (width 2
-        // under the default emoji-presentation tables).
+        // Wc reads no presentation meaning in VS15; it is a zero-width code
+        // point, so the sum is '✋' alone (width 2 under the default
+        // emoji-presentation tables).
         assert_eq!(WidthMode::Wc.grapheme_width("\u{270b}\u{fe0e}", false), 2);
     }
 

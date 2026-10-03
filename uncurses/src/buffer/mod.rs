@@ -28,7 +28,7 @@
 //! use uncurses::layout::Position;
 //!
 //! let mut buf = Buffer::new(4, 2);
-//! buf.set_cell(Position::new(0, 0), &Cell::narrow("x"));
+//! buf.set_cell(Position::new(0, 0), &Cell::new("x", 1));
 //! assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "x");
 //! ```
 //!
@@ -78,7 +78,7 @@ pub use view::View;
 pub use window::Window;
 
 use crate::cell::Cell;
-use crate::layout::{Position, Rect};
+use crate::layout::{Position, Rect, overruns};
 
 /// Off-screen storage for a rectangular grid of terminal cells.
 ///
@@ -92,8 +92,8 @@ use crate::layout::{Position, Rect};
 /// deterministic cell grid. Writes outside the buffer bounds are ignored;
 /// reads outside the bounds return `None`.
 ///
-/// Wide cells are stored as a primary [`Cell`] followed
-/// by one continuation cell. Prefer [`Buffer::set`] or
+/// A wide primary [`Cell`] owns one continuation cell per additional column,
+/// for a total of `width - 1` continuations. Prefer [`Buffer::set`] or
 /// [`SurfaceMut::set_cell`] for writes so that continuation slots are kept
 /// consistent.
 #[derive(Debug, Clone)]
@@ -375,26 +375,29 @@ impl Buffer {
 
         // If the new cell is wide, blank cells it will cover
         if cell.is_wide() {
-            for i in x + 1..x + cell_width {
-                if i < width {
-                    // If we'd overwrite a wide cell's primary, blank its continuations
-                    if line[i].is_wide() {
-                        let w = line[i].width() as usize;
-                        let end = (i + w).min(width);
-                        let blank = Cell::BLANK.style(line[i].style.clone());
-                        line[i + 1..end].fill(blank);
-                    }
-                    // Continuations inherit the wide primary's style so the
-                    // cell's bg/attributes are coherent across both columns.
-                    line[i] = Cell::continuation().style(cell.style.clone());
-                }
-            }
-
-            // Truncate at end of line: if wide cell doesn't fit, replace with
-            // a blank that keeps the wide cell's bg/attributes.
+            // Truncate at end of line: if the wide cell doesn't fit, replace
+            // it with a blank that keeps the wide cell's bg/attributes.
+            //
+            // This has to be settled before any continuation is written. A
+            // cell can claim more columns than the row has left, and laying
+            // the continuations down first would leave the row holding the
+            // tail of a cell whose primary this branch then replaces.
             if x + cell_width > width {
                 line[x] = Cell::BLANK.style(cell.style.clone());
                 return;
+            }
+
+            for i in x + 1..x + cell_width {
+                // If we'd overwrite a wide cell's primary, blank its continuations
+                if line[i].is_wide() {
+                    let w = line[i].width() as usize;
+                    let end = (i + w).min(width);
+                    let blank = Cell::BLANK.style(line[i].style.clone());
+                    line[i + 1..end].fill(blank);
+                }
+                // Continuations inherit the wide primary's style so the
+                // cell's bg/attributes are coherent across both columns.
+                line[i] = Cell::CONTINUATION.style(cell.style.clone());
             }
         }
 
@@ -476,12 +479,15 @@ impl SurfaceMut for Buffer {
     /// Fill the clipped intersection of `rect` with `cell`. For
     /// width-1 fills this collapses the trait default's per-cell
     /// `set_cell` loop into one `slice::fill` per row, with explicit
-    /// wide-cell edge-straddle cleanup at the left and right boundaries
-    /// so any wide cell crossing the fill region leaves no orphan
-    /// primary or continuation behind. Wide fills (`cell.width() > 1`)
+    /// wide-cell cleanup around the fill so any cell overlapping the
+    /// region leaves no orphan primary or continuation behind. A cell
+    /// wide enough can hold the whole region, in which case the cleanup
+    /// reaches past both edges of the fill. Wide fills (`cell.width() > 1`)
     /// stay on the stepped `set_cell` path so primary/continuation
     /// pairing and the trailing-partial-slot blank are placed by the
-    /// same wide-cell handling that `set` already implements.
+    /// same wide-cell handling that `set` already implements. Partial slots
+    /// retain the fill style. Cleanup outside the rectangle retains the
+    /// old primary's style.
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         if clipped.is_empty() {
@@ -490,17 +496,18 @@ impl SurfaceMut for Buffer {
 
         let step = (cell.width() as u16).max(1);
         if step > 1 {
+            let blank = Cell::BLANK.style(cell.style.clone());
             // Stepped wide-cell fill: identical to the trait default.
             // Inlined here so the SurfaceMut::fill_rect dispatch goes
             // through this impl in both arms.
             for y in clipped.top()..clipped.bottom() {
                 let mut x = clipped.left();
-                while x + step <= clipped.right() {
+                while !overruns(x, step, clipped.right()) {
                     self.set(Position::new(x, y), cell);
                     x += step;
                 }
                 while x < clipped.right() {
-                    self.set(Position::new(x, y), &Cell::BLANK);
+                    self.set(Position::new(x, y), &blank);
                     x += 1;
                 }
             }
@@ -528,9 +535,18 @@ impl SurfaceMut for Buffer {
                 }
                 if !line[p].is_continuation() {
                     let pw = line[p].width() as usize;
+                    let blank = Cell::BLANK.style(line[p].style.clone());
                     let end = (p + pw).min(lo);
-                    for slot in &mut line[p..end] {
-                        *slot = Cell::BLANK;
+                    line[p..end].fill(blank.clone());
+                    // The same cell can also reach past `hi`, which is what
+                    // happens when the fill lands wholly inside it. Those
+                    // columns just lost the primary that owned them, so
+                    // they cannot stay continuations. The right-edge pass
+                    // below will not reach them: it walks back only as far
+                    // as `lo`, and this primary sits before that.
+                    if p + pw > hi {
+                        let tail = (p + pw).min(row_width);
+                        line[hi..tail].fill(blank);
                     }
                 }
             }
@@ -548,9 +564,8 @@ impl SurfaceMut for Buffer {
                 if !line[p].is_continuation() && p + (line[p].width() as usize) > hi {
                     let pw = line[p].width() as usize;
                     let end = (p + pw).min(row_width);
-                    for slot in &mut line[hi..end] {
-                        *slot = Cell::BLANK;
-                    }
+                    let blank = Cell::BLANK.style(line[p].style.clone());
+                    line[hi..end].fill(blank);
                 }
             }
 

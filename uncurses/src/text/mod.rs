@@ -12,7 +12,7 @@
 //! width API therefore separates **segmentation** from **measurement**:
 //!
 //! * [`grapheme_cells`] always walks a string as extended grapheme clusters.
-//! * [`WidthMode::Wc`] measures each cluster by its first code point.
+//! * [`WidthMode::Wc`] measures each cluster by summing its code points.
 //! * [`WidthMode::Grapheme`] measures the whole cluster with
 //!   [`grapheme_width`], including variation selectors, regional indicators,
 //!   zero-width joiners, and pictographic presentation.

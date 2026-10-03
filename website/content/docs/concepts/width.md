@@ -9,10 +9,16 @@ Guess wrong by one, and everything after it shifts and the row smears.
 
 ## Not every character is one cell
 
-Terminal text comes in three cell widths. Most characters are *narrow* and take
-one cell. A few are *wide* and take two cells, like CJK characters. Some take
+A single character takes one of three widths. Most are *narrow* and take one
+cell. A few are *wide* and take two cells, like CJK characters. Some take
 *zero*: a combining accent stacks onto the glyph before it rather than claiming
 a column of its own.
+
+A cluster is a separate question. Several characters can join into one cluster,
+and how many cells that cluster takes depends on how it is measured. Under one
+policy the answer is never more than two; under the other it is the sum of the
+parts, which can be more. [Two ways to measure](#two-ways-to-measure) covers
+the difference.
 
 | row / col | 1 | 2 | 3 | 4 |
 | --- | --- | --- | --- | --- |
@@ -26,25 +32,28 @@ cell).
 
 That last one is the catch. An `é` might be a single code point, or it might be
 an `e` followed by a separate combining accent. Either way, a human sees one
-character, and it fills one cell. uncurses measures the way a human counts: by
-*extended grapheme cluster*, so a cluster built from several code points still
-lands in the right number of cells. Counting bytes or code points would overcount
-and shove the rest of the row sideways.
+character, and it fills one cell. uncurses splits text the way a human reads
+it, into *extended grapheme clusters*, so a cluster built from several code
+points is one unit however many pieces it is made of. Splitting on bytes or
+code points would break that unit apart and shove the rest of the row sideways.
+
+Splitting is settled. How many columns one of those clusters takes is the
+open question, and the next section is about the two answers.
 
 ## Two ways to measure
 
 How a cluster is measured is a policy, captured by
 [`WidthMode`](/api/uncurses/text/enum.WidthMode.html):
 
-- **`Wc`** is wcwidth-style: it measures each cluster by its first code point
-  and ignores the rest. It is simple, and it matches how older or plainer
-  terminals behave. This is the default.
-- **`Grapheme`** measures the whole cluster, accounting for variation
-  selectors, regional-indicator flags, and zero-width-joiner emoji sequences.
-  The cluster boundaries follow the Unicode text-segmentation rules in
-  [UTS-29](https://unicode.org/reports/tr29/). Pair it with terminal
+- **`Wc`** measures a cluster by its parts, adding up what each one claims. It
+  is the default, and it matches a terminal that measures as it reads.
+- **`Grapheme`** measures the cluster as a whole. Pair it with terminal
   [Unicode Core](https://contour-terminal.org/vt-extensions/unicode-core/) mode,
-  which measures display width per grapheme cluster.
+  in which the terminal measures that way too.
+
+The choice follows the terminal, not the text.
+[`WidthMode`](/api/uncurses/text/enum.WidthMode.html) sets out what each mode
+makes of every kind of cluster.
 
 ## East Asian ambiguous width
 

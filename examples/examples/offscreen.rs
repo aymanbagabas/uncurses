@@ -58,6 +58,44 @@ fn main() -> io::Result<()> {
         }
         writeln!(out, "{}", line.trim_end())?;
     }
+
+    // A cell is not limited to one or two columns. Under the default
+    // `WidthMode::Wc` a joined emoji sequence measures the sum of its code
+    // points, because a terminal that does not group graphemes draws each
+    // face in turn. The grid credits the primary with every column it takes
+    // and fills the rest with continuations, so whatever follows lands where
+    // the terminal actually leaves the cursor.
+    let mut wide = TextBuffer::new(16, 1);
+    let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    wide.set_str((0, 0), family, Style::default());
+    wide.set_str(
+        (wide.str_width(family), 0),
+        "<- ends here",
+        Style::default(),
+    );
+    let primary = wide.cell(Position::new(0, 0)).map_or(0, Cell::width);
+    writeln!(
+        out,
+        "\nA family emoji reserves {primary} columns, so the text after it starts at column {}.",
+        wide.str_width(family)
+    )?;
+
+    // Width reserves the columns, not content. A cell that stores nothing
+    // and claims three of them is drawn as three blanks, which makes it a
+    // spacer carrying its own background.
+    let mut spacer = TextBuffer::new(16, 1);
+    spacer.set_str((0, 0), "A", Style::default());
+    spacer.set_cell(
+        Position::new(1, 0),
+        &Cell::new("", 3).style(Style::default().bg(Color::Blue)),
+    );
+    spacer.set_str((4, 0), "B", Style::default());
+    let mut gap = Vec::new();
+    spacer.encode(&mut gap)?;
+    write!(out, "An empty cell of width 3 is a three-column spacer: ")?;
+    out.write_all(&gap)?;
+    writeln!(out)?;
+
     out.flush()
 }
 
@@ -67,7 +105,7 @@ fn draw_card(buf: &mut TextBuffer) {
 
     // Rounded border.
     let border = Style::default().fg(Color::BrightBlack);
-    let edge = |s: &str| Cell::narrow(s).style(border.clone());
+    let edge = |s: &str| Cell::new(s, 1).style(border.clone());
     buf.fill_rect(Rect::new(1, 0, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(1, h - 1, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(0, 1, 1, h - 2), &edge("│"));
@@ -104,7 +142,7 @@ fn draw_card(buf: &mut TextBuffer) {
     for i in 0..bar.width {
         let left = gradient_color(u32::from(i) * 2, cols);
         let right = gradient_color(u32::from(i) * 2 + 1, cols);
-        let cell = Cell::narrow("▌").style(Style::default().fg(left).bg(right));
+        let cell = Cell::new("▌", 1).style(Style::default().fg(left).bg(right));
         buf.set_cell((bar.x + i, bar.y).into(), &cell);
     }
     buf.set_str(

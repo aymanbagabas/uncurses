@@ -25,7 +25,7 @@
 
 use crate::buffer::SurfaceMut;
 use crate::cell::Cell;
-use crate::layout::{Position, Rect};
+use crate::layout::{Position, Rect, overruns};
 use crate::style::Style;
 
 use super::{WidthMode, WrapMode, grapheme_cells};
@@ -45,7 +45,7 @@ use super::{WidthMode, WrapMode, grapheme_cells};
 pub trait TextSurface: SurfaceMut {
     /// Return the width-measurement mode used when shaping strings.
     ///
-    /// [`WidthMode::Wc`] uses the first code point of each grapheme cluster;
+    /// [`WidthMode::Wc`] sums the code points of each grapheme cluster;
     /// [`WidthMode::Grapheme`] measures the whole cluster. The selected mode is
     /// used by the `set_str` family and [`str_width`](Self::str_width).
     ///
@@ -497,8 +497,9 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
         if truncated || w == 0 {
             continue;
         }
-        let w = w as u16;
-        if x + w > clip.right() {
+        let cw = w;
+        let w = u16::from(w);
+        if overruns(x, w, clip.right()) {
             match wrap {
                 WrapMode::Truncate => {
                     if let Some(t) = &tail {
@@ -514,18 +515,14 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
                     if y >= clip.bottom() {
                         return Position::new(x, y);
                     }
-                    if x + w > clip.right() {
+                    if overruns(x, w, clip.right()) {
                         return Position::new(x, y);
                     }
                 }
             }
         }
         if clip.contains(Position::new(x, y)) {
-            let cell = if w == 2 {
-                Cell::wide(cluster)
-            } else {
-                Cell::narrow(cluster)
-            };
+            let cell = Cell::new(cluster, cw);
             target.set_cell(Position::new(x, y), &cell.style(style.clone()));
         }
         x += w;
@@ -556,4 +553,32 @@ fn stamp_literal_tail<S: SurfaceMut + ?Sized>(
         tail.style,
         None,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::TextBuffer;
+    use crate::style::Style;
+
+    /// `right()` is exclusive and saturates at `u16::MAX`, so a row that ends
+    /// at the top of the address space can leave `x` equal to it. Adding the
+    /// next cluster's width there overflowed and panicked.
+    #[test]
+    fn a_row_ending_at_the_last_addressable_column_truncates_instead_of_panicking() {
+        let mut buf = TextBuffer::new(u16::MAX, 1);
+        let s: String = "a".repeat(usize::from(u16::MAX) + 8);
+        buf.set_str((0, 0), &s, Style::default());
+
+        // A cluster that claims many columns has a wider window in which to
+        // overflow, so check it lands on the same truncating path.
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+        let mut wide = TextBuffer::new(u16::MAX, 1);
+        wide.set_str(
+            (0, 0),
+            &"a".repeat(usize::from(u16::MAX) - 2),
+            Style::default(),
+        );
+        wide.set_str((u16::MAX - 2, 0), family, Style::default());
+    }
 }

@@ -25,7 +25,7 @@ fn test_post_scroll_splitter_chain_emits_correct_horizontal_back() {
     let mut rb = RenderBuffer::new(120, 50);
 
     let splitter_col: u16 = 55;
-    let dim_splitter = Cell::narrow("│").style(Style::default().faint());
+    let dim_splitter = Cell::new("│", 1).style(Style::default().faint());
 
     // Frame 1: priming render so cur_buf is initialised. Just put a
     // splitter on row 0 so render() has at least one change.
@@ -57,7 +57,7 @@ fn test_post_scroll_splitter_chain_emits_correct_horizontal_back() {
     // Row 46: right-panel preview `    }` after the splitter.
     let row46_tail: &[(u16, &str)] = &[(56, " "), (57, " "), (58, " "), (59, " "), (60, "}")];
     for &(x, ch) in row46_tail {
-        rb.set_cell((x, 46), &Cell::narrow(ch));
+        rb.set_cell((x, 46), &Cell::new(ch, 1));
     }
     // Force the transform to visit every column on those rows.
     rb.touch_full_line(46);
@@ -114,7 +114,7 @@ fn test_render_empty() {
 fn test_render_with_changes() {
     let mut r = Renderer::new();
     let mut rb = RenderBuffer::new(10, 5);
-    rb.set_cell((0, 0), &Cell::narrow("X"));
+    rb.set_cell((0, 0), &Cell::new("X", 1));
     let mut out = Vec::new();
     r.render(&mut out, &mut rb).unwrap();
     assert!(!out.is_empty());
@@ -126,7 +126,7 @@ fn test_render_with_changes() {
 fn test_render_drains_internal_buffer() {
     let mut r = Renderer::new();
     let mut rb = RenderBuffer::new(10, 5);
-    rb.set_cell((0, 0), &Cell::narrow("A"));
+    rb.set_cell((0, 0), &Cell::new("A", 1));
     let mut out = Vec::new();
     r.render(&mut out, &mut rb).unwrap();
     assert!(!out.is_empty());
@@ -141,7 +141,7 @@ fn test_long_to_short_line_clears_trailing_chars() {
     let mut r = Renderer::new();
     let mut rb = RenderBuffer::new(40, 2);
     for (i, ch) in "icu_segmenter = \"2\"".chars().enumerate() {
-        rb.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
+        rb.set_cell((i as u16, 0), &Cell::new(ch.to_string(), 1));
     }
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
@@ -174,7 +174,7 @@ fn test_blank_row_after_content_clears_to_eol() {
     let mut rb = RenderBuffer::new(20, 2);
     let s = "libc = \"0.2\"";
     for (i, ch) in s.chars().enumerate() {
-        rb.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
+        rb.set_cell((i as u16, 0), &Cell::new(ch.to_string(), 1));
     }
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
@@ -217,9 +217,9 @@ fn test_wide_cell_at_last_column_skips_lr_dance() {
     // Fill row 2 with single-width cells in columns 0..8, then a
     // width-2 cell at column 8 (occupying 8 and 9).
     for x in 0..8u16 {
-        rb.set_cell((x, 2), &Cell::narrow("a"));
+        rb.set_cell((x, 2), &Cell::new("a", 1));
     }
-    rb.set_cell((8, 2), &Cell::wide("漢"));
+    rb.set_cell((8, 2), &Cell::new("漢", 2));
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
     let out = String::from_utf8_lossy(&sink).to_string();
@@ -244,7 +244,7 @@ fn test_lower_right_corner_disables_autowrap() {
     r.set_fullscreen(true);
     let mut rb = RenderBuffer::new(10, 3);
     for x in 0..10u16 {
-        rb.set_cell((x, 2), &Cell::narrow("Z"));
+        rb.set_cell((x, 2), &Cell::new("Z", 1));
     }
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
@@ -328,7 +328,7 @@ fn test_overwrite_advance_uses_cell_content() {
     r.cur.y = Some(0);
     let mut rb = RenderBuffer::new(20, 5);
     for (i, ch) in ['a', 'b', 'c', 'd', 'e', 'f'].iter().enumerate() {
-        rb.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
+        rb.set_cell((i as u16, 0), &Cell::new(ch.to_string(), 1));
     }
     let mut sink = Vec::new();
     r.move_cursor(&mut sink, &rb, 0, 6).unwrap();
@@ -341,7 +341,7 @@ fn test_overwrite_advance_uses_cell_content() {
     sink.clear();
     r.cur.set_pos(Position { y: 0, x: 0 });
     for i in 0..10u16 {
-        rb.set_cell((i, 0), &Cell::narrow("x"));
+        rb.set_cell((i, 0), &Cell::new("x", 1));
     }
     r.move_cursor(&mut sink, &rb, 0, 10).unwrap();
     assert!(sink.starts_with(b"\x1b["));
@@ -352,7 +352,7 @@ fn test_overwrite_advance_uses_cell_content() {
     sink.clear();
     r.cur.set_pos(Position { y: 0, x: 0 });
     for i in 0..3u16 {
-        rb.set_cell((i, 0), &Cell::narrow("y"));
+        rb.set_cell((i, 0), &Cell::new("y", 1));
     }
     r.move_cursor(&mut sink, &rb, 0, 3).unwrap();
     assert_eq!(sink, b"yyy");
@@ -372,7 +372,7 @@ fn test_inline_shrink_partial_clear() {
     let mut rb = RenderBuffer::new(10, 5);
     for y in 0..5u16 {
         for x in 0..10u16 {
-            rb.set_cell((x, y), &Cell::narrow("A"));
+            rb.set_cell((x, y), &Cell::new("A", 1));
         }
     }
     let mut sink = Vec::new();
@@ -383,7 +383,7 @@ fn test_inline_shrink_partial_clear() {
     let mut rb2 = RenderBuffer::new(10, 3);
     for y in 0..3u16 {
         for x in 0..10u16 {
-            rb2.set_cell((x, y), &Cell::narrow("A"));
+            rb2.set_cell((x, y), &Cell::new("A", 1));
         }
     }
     r.render(&mut sink, &mut rb2).unwrap();
@@ -416,7 +416,7 @@ fn test_inline_shrink_with_force_clear_moves_cursor_to_new_top() {
     let mut rb = RenderBuffer::new(20, 11);
     for y in 0..11u16 {
         for x in 0..20u16 {
-            rb.set_cell((x, y), &Cell::narrow("X"));
+            rb.set_cell((x, y), &Cell::new("X", 1));
         }
     }
     let mut sink = Vec::new();
@@ -425,7 +425,7 @@ fn test_inline_shrink_with_force_clear_moves_cursor_to_new_top() {
 
     r.request_clear();
     let mut rb2 = RenderBuffer::new(20, 3);
-    rb2.set_cell((2, 1), &Cell::narrow("B"));
+    rb2.set_cell((2, 1), &Cell::new("B", 1));
     r.render(&mut sink, &mut rb2).unwrap();
     let out = String::from_utf8_lossy(&sink).to_string();
     // Cursor was at (0, 10) after frame 1's bottom-left snap; the
@@ -445,7 +445,7 @@ fn test_inline_resize_moves_cursor_to_bottom_left() {
     r.set_fullscreen(false);
     // Frame 1: 10x5 with content.
     let mut rb = RenderBuffer::new(10, 5);
-    rb.set_cell((0, 0), &Cell::narrow("A"));
+    rb.set_cell((0, 0), &Cell::new("A", 1));
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
     sink.clear();
@@ -454,7 +454,7 @@ fn test_inline_resize_moves_cursor_to_bottom_left() {
     // transform pass the cursor would naturally sit somewhere near
     // row 0; the bottom-left snap must reposition it.
     let mut rb2 = RenderBuffer::new(10, 7);
-    rb2.set_cell((0, 0), &Cell::narrow("B"));
+    rb2.set_cell((0, 0), &Cell::new("B", 1));
     r.render(&mut sink, &mut rb2).unwrap();
     assert_eq!(r.cur.pos(), Position { y: 6, x: 0 });
 }
@@ -465,13 +465,13 @@ fn test_fullscreen_resize_does_not_force_bottom_left() {
     let mut r = Renderer::new();
     r.set_fullscreen(true);
     let mut rb = RenderBuffer::new(10, 5);
-    rb.set_cell((3, 2), &Cell::narrow("X"));
+    rb.set_cell((3, 2), &Cell::new("X", 1));
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
     sink.clear();
 
     let mut rb2 = RenderBuffer::new(10, 7);
-    rb2.set_cell((3, 2), &Cell::narrow("X"));
+    rb2.set_cell((3, 2), &Cell::new("X", 1));
     r.render(&mut sink, &mut rb2).unwrap();
     // Fullscreen path must not force the cursor to the bottom-left.
     assert_ne!(r.cur.pos(), Position { y: 6, x: 0 });
@@ -488,7 +488,7 @@ fn test_resize_preserves_cur_buf_for_unchanged_rows() {
     // Frame 1: 10x5, row 0 = "HELLO".
     let mut rb = RenderBuffer::new(10, 5);
     for (i, ch) in "HELLO".chars().enumerate() {
-        rb.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
+        rb.set_cell((i as u16, 0), &Cell::new(ch.to_string(), 1));
     }
     let mut sink = Vec::new();
     r.render(&mut sink, &mut rb).unwrap();
@@ -497,7 +497,7 @@ fn test_resize_preserves_cur_buf_for_unchanged_rows() {
     // Frame 2: grow to 10x7, row 0 still "HELLO", new rows blank.
     let mut rb2 = RenderBuffer::new(10, 7);
     for (i, ch) in "HELLO".chars().enumerate() {
-        rb2.set_cell((i as u16, 0), &Cell::narrow(ch.to_string()));
+        rb2.set_cell((i as u16, 0), &Cell::new(ch.to_string(), 1));
     }
     r.render(&mut sink, &mut rb2).unwrap();
     let out = String::from_utf8_lossy(&sink).to_string();
@@ -562,7 +562,7 @@ fn test_inline_resize_sequence_round_trip() {
         for y in 0..height {
             let ch = ((base + y as u8) as char).to_string();
             for x in 0..width {
-                rb.set_cell((x, y), &Cell::narrow(&ch));
+                rb.set_cell((x, y), &Cell::new(&ch, 1));
             }
         }
     }
@@ -594,7 +594,7 @@ fn test_inline_resize_sequence_round_trip() {
     let mut rb2 = RenderBuffer::new(20, 3);
     for (k, ch) in ['X', 'Y', 'Z'].iter().enumerate() {
         for x in 0..20u16 {
-            rb2.set_cell((x, k as u16), &Cell::narrow(ch.to_string()));
+            rb2.set_cell((x, k as u16), &Cell::new(ch.to_string(), 1));
         }
     }
     r.render(&mut sink, &mut rb2).unwrap();
@@ -729,7 +729,7 @@ fn test_clear_bottom_syncs_cur_buf_so_next_frame_repaints() {
     let mut r = Renderer::new();
     r.set_fullscreen(false);
 
-    let scrim = Cell::narrow(" ").style(Style::default().bg(Color::Blue));
+    let scrim = Cell::new(" ", 1).style(Style::default().bg(Color::Blue));
 
     // Frame 1: scrim across all 8 rows.
     let mut rb1 = RenderBuffer::new(10, 8);
@@ -790,7 +790,7 @@ fn test_clear_bottom_skips_ed_when_cur_buf_already_blank() {
     // First frame: cur_buf is freshly initialised (all blank). New
     // frame has content rows 0-2 and trailing blanks rows 3-7.
     let mut rb = RenderBuffer::new(10, 8);
-    let glyph = Cell::narrow("x");
+    let glyph = Cell::new("x", 1);
     for y in 0..3 {
         for x in 0..10 {
             rb.set_cell((x, y), &glyph);

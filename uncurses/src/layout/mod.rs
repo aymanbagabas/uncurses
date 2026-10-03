@@ -49,3 +49,32 @@ mod size;
 pub use position::Position;
 pub use rect::Rect;
 pub use size::Size;
+
+/// Whether a run `w` columns wide, placed at column `x`, reaches past the
+/// exclusive right edge `right`.
+///
+/// A cell can claim up to 255 columns, and [`Rect::right`] saturates, so a
+/// row near the end of the address space can put `x` close enough to
+/// `u16::MAX` that `x + w` does not fit in a `u16`. A run that cannot be
+/// addressed runs past any edge, so an overflow answers yes.
+///
+/// Saturating the sum instead would answer no at the last addressable
+/// column, because `u16::MAX > u16::MAX` is false, and let a write land
+/// outside the edge it was checked against.
+pub(crate) fn overruns(x: u16, w: u16, right: u16) -> bool {
+    x.checked_add(w).is_none_or(|end| end > right)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overruns_reports_an_overflowing_placement_as_past_the_edge() {
+        assert!(!overruns(0, 2, 10));
+        assert!(!overruns(8, 2, 10));
+        assert!(overruns(9, 2, 10));
+        assert!(overruns(u16::MAX, 1, u16::MAX));
+        assert!(overruns(u16::MAX - 1, 255, u16::MAX));
+    }
+}

@@ -231,13 +231,14 @@ impl Renderer {
                 // continuation cells, so cell0 is always a printable
                 // primary cell here.
                 self.update_pen(out, Some(cell0))?;
-                let (bytes, glyph_width) = if cell0.content().is_empty() {
-                    (b" ".as_slice(), 1u16)
-                } else {
-                    (cell0.content().as_bytes(), cell0.width() as u16)
-                };
                 for _ in 0..count {
-                    self.put_glyph_bytes(out, bytes, glyph_width, surface_width, surface_height)?;
+                    self.put_glyph_bytes(
+                        out,
+                        cell0.draw_bytes(),
+                        cell0.width() as u16,
+                        surface_width,
+                        surface_height,
+                    )?;
                 }
                 x = j;
             }
@@ -258,17 +259,13 @@ impl Renderer {
             return Ok(());
         }
         self.update_pen(out, Some(cell))?;
-        if cell.content().is_empty() {
-            self.put_glyph_bytes(out, b" ", 1, surface_width, surface_height)
-        } else {
-            self.put_glyph_bytes(
-                out,
-                cell.content().as_bytes(),
-                cell.width() as u16,
-                surface_width,
-                surface_height,
-            )
-        }
+        self.put_glyph_bytes(
+            out,
+            cell.draw_bytes(),
+            cell.width() as u16,
+            surface_width,
+            surface_height,
+        )
     }
     /// Emit cells in `new_line[start..=end]`, looking for runs of cells
     /// that already match the old line and skipping over them with a
@@ -426,7 +423,7 @@ impl Renderer {
                     self.update_pen(out, Some(cell))?;
                     self.put_glyph_bytes(
                         out,
-                        cell.content().as_bytes(),
+                        cell.draw_bytes(),
                         cell.width() as u16,
                         surface_width,
                         surface_height,
@@ -459,9 +456,9 @@ mod cluster_bounds {
         (0..6)
             .map(|i| {
                 if i % 2 == 0 {
-                    Cell::wide("\u{4e16}")
+                    Cell::new("\u{4e16}", 2)
                 } else {
-                    Cell::continuation()
+                    Cell::CONTINUATION
                 }
             })
             .collect()
@@ -473,7 +470,7 @@ mod cluster_bounds {
     /// that narrow cell with a two-column cluster.
     #[test]
     fn a_narrow_cell_does_not_own_a_following_continuation() {
-        let line = vec![Cell::narrow("a"), Cell::continuation()];
+        let line = vec![Cell::new("a", 1), Cell::CONTINUATION];
         assert_eq!(cluster_start(&line, 1), 1);
         assert_eq!(cluster_end(&line, 0), 0);
     }
@@ -484,9 +481,9 @@ mod cluster_bounds {
     #[test]
     fn a_cluster_closes_on_the_columns_its_owner_accounts_for() {
         let chained = vec![
-            Cell::wide("\u{4e16}"),
-            Cell::continuation(),
-            Cell::continuation(),
+            Cell::new("\u{4e16}", 2),
+            Cell::CONTINUATION,
+            Cell::CONTINUATION,
         ];
         assert_eq!(
             cluster_end(&chained, 0),
@@ -543,12 +540,12 @@ mod cluster_bounds {
     /// `Buffer::resize` can both leave such a row behind.
     #[test]
     fn an_unowned_continuation_stands_on_its_own() {
-        let line = vec![Cell::continuation(); 3];
+        let line = vec![Cell::CONTINUATION; 3];
         assert_eq!(cluster_start(&line, 2), 2);
         assert_eq!(cluster_start(&line, 0), 0);
 
         // One with an owner still closes back to it.
-        let owned = vec![Cell::wide("\u{4e16}"), Cell::continuation()];
+        let owned = vec![Cell::new("\u{4e16}", 2), Cell::CONTINUATION];
         assert_eq!(cluster_start(&owned, 1), 0);
     }
 }

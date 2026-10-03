@@ -748,7 +748,7 @@ fn put(screen: &mut Screen<Stdout>, x: u16, y: u16, glyph: &str, style: Style) {
     } else {
         style
     };
-    screen.set_cell(pos, &Cell::narrow(glyph).style(style));
+    screen.set_cell(pos, &Cell::new(glyph, 1).style(style));
 }
 
 /// A rainbow color wheel over a u8 so hue animations are one add away.

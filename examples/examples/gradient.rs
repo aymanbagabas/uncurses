@@ -162,7 +162,7 @@ fn draw_gradient(screen: &mut Screen<Stdout>, w: u16, h: u16) {
         for x in 0..w {
             let left = color_at(x * 2, y, w, h);
             let right = color_at(x * 2 + 1, y, w, h);
-            let cell = Cell::narrow("▌").style(Style::default().fg(left).bg(right));
+            let cell = Cell::new("▌", 1).style(Style::default().fg(left).bg(right));
             screen.set_cell((x, y), &cell);
         }
     }

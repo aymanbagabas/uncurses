@@ -6,12 +6,14 @@
 //! takes when it owns a grid of cells and repaints it each frame.
 //!
 //! Two rules keep a wide cluster intact. A continuation belongs to the cell
-//! on its left and is placed by that cell's own write, so the painter writes
-//! leads only. And a selection is closed over whole clusters, because a
-//! terminal draws a glyph or does not, and cannot draw half of one.
+//! that owns its column, which can be several columns to its left, and is
+//! placed by that cell's own write, so the painter writes leads only. And a
+//! selection is closed over whole clusters, because a terminal draws a glyph
+//! or does not, and cannot draw half of one.
 //!
-//! The content mixes CJK, a joined family, a flag, and ASCII, so a drag
-//! crosses clusters of one column and of two.
+//! The content mixes CJK, a joined family, a flag, and ASCII. Under the
+//! default per-code-point measurement the family claims six columns, so a
+//! drag crosses clusters of one, two, and six columns.
 //!
 //! Run with `cargo run --example text_selection`. Drag with the left button
 //! to select; press `q`, `esc`, or `Ctrl-C` to quit.
@@ -63,27 +65,34 @@ impl Row {
                 // follows, so it joins that cell rather than claiming one of
                 // its own. Giving it a column of its own would put the rest
                 // of the row one column to the right of where it belongs.
-                0 => match cells.last_mut() {
-                    Some(last) => {
+                //
+                // It joins the primary, which is the cell that owns the
+                // column. A wide cluster leaves its continuations at the end
+                // of the row, and a continuation holds no content to join.
+                0 => match cells.iter().rposition(|c| !c.is_continuation()) {
+                    Some(i) => {
+                        let last = &mut cells[i];
                         let mut joined = last.content().to_string();
                         joined.push_str(cluster);
-                        *last = if last.is_wide() {
-                            Cell::wide(joined)
-                        } else {
-                            Cell::narrow(joined)
-                        };
+                        let w = last.width();
+                        *last = Cell::new(joined, w);
                     }
                     // Opening the row, it has nothing to share a column
                     // with, so it takes one of its own. A terminal draws a
                     // mark with no base on its own too, and dropping it
                     // would lose text the row is meant to hold.
-                    None => cells.push(Cell::narrow(cluster)),
+                    None => cells.push(Cell::new(cluster, 1)),
                 },
-                1 => cells.push(Cell::narrow(cluster)),
+                1 => cells.push(Cell::new(cluster, 1)),
+                // The primary is credited with every column the cluster
+                // measures, and the rest of the run holds its continuations.
+                // Crediting it with two while pushing `w - 1` continuations
+                // would leave the row claiming more columns than the cell
+                // accounts for.
                 w => {
-                    cells.push(Cell::wide(cluster));
+                    cells.push(Cell::new(cluster, w));
                     for _ in 1..w {
-                        cells.push(Cell::continuation());
+                        cells.push(Cell::CONTINUATION);
                     }
                 }
             }

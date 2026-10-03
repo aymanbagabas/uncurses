@@ -1,7 +1,7 @@
 //! Buffer insert/delete operations.
 
 use crate::cell::Cell;
-use crate::layout::Position;
+use crate::layout::{Position, overruns};
 
 use super::{Buffer, fill_line_into};
 
@@ -26,7 +26,7 @@ fn fill_range(buf: &mut Buffer, y: u16, lo: u16, hi: u16, fill: &Cell) {
     }
     let step = fill.width().max(1) as u16;
     let mut x = lo;
-    while x + step <= hi {
+    while !overruns(x, step, hi) {
         buf.set((x, y), fill);
         x += step;
     }
@@ -305,11 +305,27 @@ mod tests {
     use crate::buffer::Surface;
 
     #[test]
+    fn a_wide_fill_at_the_last_addressable_column_does_not_overflow() {
+        // A cell can claim 255 columns, so one column short of the end of
+        // the address space the column plus that width no longer fits a
+        // `u16`. The freed slot is narrower than the fill either way, so
+        // it takes a blank.
+        let mut buf = Buffer::new(u16::MAX, 1);
+        let wide = Cell::new("\u{1f468}\u{200d}\u{1f469}", 255);
+
+        buf.insert_cells((u16::MAX - 1, 0), 1, u16::MAX, &wide);
+        assert!(!buf.cell(Position::new(u16::MAX - 1, 0)).unwrap().is_wide());
+
+        buf.delete_cells((u16::MAX - 1, 0), 1, u16::MAX, &wide);
+        assert!(!buf.cell(Position::new(u16::MAX - 1, 0)).unwrap().is_wide());
+    }
+
+    #[test]
     fn test_insert_lines() {
         let mut buf = Buffer::new(5, 5);
-        buf.set((0, 0), &Cell::narrow("A"));
-        buf.set((0, 1), &Cell::narrow("B"));
-        buf.set((0, 2), &Cell::narrow("C"));
+        buf.set((0, 0), &Cell::new("A", 1));
+        buf.set((0, 1), &Cell::new("B", 1));
+        buf.set((0, 2), &Cell::new("C", 1));
 
         buf.insert_lines(1, 2, 5, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
@@ -322,10 +338,10 @@ mod tests {
     #[test]
     fn test_delete_lines() {
         let mut buf = Buffer::new(5, 5);
-        buf.set((0, 0), &Cell::narrow("A"));
-        buf.set((0, 1), &Cell::narrow("B"));
-        buf.set((0, 2), &Cell::narrow("C"));
-        buf.set((0, 3), &Cell::narrow("D"));
+        buf.set((0, 0), &Cell::new("A", 1));
+        buf.set((0, 1), &Cell::new("B", 1));
+        buf.set((0, 2), &Cell::new("C", 1));
+        buf.set((0, 3), &Cell::new("D", 1));
 
         buf.delete_lines(1, 2, 5, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
@@ -336,9 +352,9 @@ mod tests {
     #[test]
     fn test_insert_cells() {
         let mut buf = Buffer::new(10, 1);
-        buf.set((0, 0), &Cell::narrow("A"));
-        buf.set((1, 0), &Cell::narrow("B"));
-        buf.set((2, 0), &Cell::narrow("C"));
+        buf.set((0, 0), &Cell::new("A", 1));
+        buf.set((1, 0), &Cell::new("B", 1));
+        buf.set((2, 0), &Cell::new("C", 1));
 
         buf.insert_cells((1, 0), 2, 10, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
@@ -351,10 +367,10 @@ mod tests {
     #[test]
     fn test_delete_cells() {
         let mut buf = Buffer::new(10, 1);
-        buf.set((0, 0), &Cell::narrow("A"));
-        buf.set((1, 0), &Cell::narrow("B"));
-        buf.set((2, 0), &Cell::narrow("C"));
-        buf.set((3, 0), &Cell::narrow("D"));
+        buf.set((0, 0), &Cell::new("A", 1));
+        buf.set((1, 0), &Cell::new("B", 1));
+        buf.set((2, 0), &Cell::new("C", 1));
+        buf.set((3, 0), &Cell::new("D", 1));
 
         buf.delete_cells((1, 0), 2, 10, &Cell::BLANK);
         assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "A");
@@ -368,9 +384,9 @@ mod tests {
         // continuation marker behind once its primary is pushed past the
         // right edge.
         let mut buf = Buffer::new(6, 1);
-        buf.set((0, 0), &Cell::narrow("A"));
+        buf.set((0, 0), &Cell::new("A", 1));
         // Wide cell at columns 4-5 (primary at 4, continuation at 5).
-        buf.set((4, 0), &Cell::wide("漢"));
+        buf.set((4, 0), &Cell::new("漢", 2));
         assert!(buf.cell(Position::new(5, 0)).unwrap().is_continuation());
 
         // Insert 1 cell at col 1: primary at 4 shifts to 5, continuation
@@ -390,9 +406,9 @@ mod tests {
         // its dangling primary cleaned up when the fill writes a blank
         // over its continuation half.
         let mut buf = Buffer::new(6, 1);
-        buf.set((0, 0), &Cell::narrow("A"));
+        buf.set((0, 0), &Cell::new("A", 1));
         // Wide cell at columns 4-5 (primary at 4, continuation at 5).
-        buf.set((4, 0), &Cell::wide("漢"));
+        buf.set((4, 0), &Cell::new("漢", 2));
         assert!(buf.cell(Position::new(5, 0)).unwrap().is_continuation());
 
         // Delete 1 cell at col 0 (the "A"). Cells shift left so the wide
@@ -413,7 +429,7 @@ mod tests {
         // When the fill cell is itself wide, each primary must own its
         // continuation slot — no orphan primaries from stepping by 1.
         let mut buf = Buffer::new(5, 1);
-        let wide = Cell::wide("漢");
+        let wide = Cell::new("漢", 2);
 
         // Fill via insert_cells with n covering the whole row.
         buf.insert_cells((0, 0), 5, 5, &wide);

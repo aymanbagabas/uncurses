@@ -1,9 +1,8 @@
 //! Terminal cell values and grapheme segmentation.
 //!
 //! This module defines [`Cell`], the value stored by buffers and surfaces.
-//! A cell combines grapheme content, visual style, and a structural role
-//! that describes whether it is a narrow cell, a wide-cell primary, or the
-//! continuation column for a wide primary.
+//! A cell combines grapheme content, visual style, and the number of
+//! terminal columns the content occupies.
 //!
 //! ## Cell value type
 //!
@@ -13,43 +12,43 @@
 //!   content of their own.
 //! - `style`: colors, attributes, underline data, and link metadata applied
 //!   to the cell.
-//! - [`Kind`]: the structural role that determines the cell's column
-//!   footprint.
+//! - `width`: the cell's column footprint, returned by [`Cell::width`].
 //!
-//! The cell's display width is derived from its [`Kind`]: narrow cells
-//! occupy one column, wide primaries occupy two columns, and continuation
-//! placeholders report width `0` because their column is owned by the wide
-//! primary to the left.
+//! Width also encodes the cell's structural role. A width of `1` or more
+//! marks a primary cell that owns that many columns. A width of `0` marks a
+//! continuation placeholder, whose column is owned by the primary to its
+//! left.
 //!
 //! ## Construction
 //!
-//! Construct cells with [`Cell::narrow`] for one-column graphemes and
-//! [`Cell::wide`] for two-column graphemes. Both constructors use the
-//! default [`Style`]. Use [`Cell::style()`] to attach a
-//! style after construction.
+//! Construct every cell with [`Cell::new`], passing the content and the
+//! number of columns it occupies. Measure that width with
+//! [`WidthMode::grapheme_width`](crate::text::WidthMode::grapheme_width)
+//! rather than assuming it. The constructor uses the default [`Style`]; use
+//! [`Cell::style()`] to attach a style afterwards.
 //!
-//! [`Cell::continuation`] creates the internal placeholder used for the
-//! second column of a wide grapheme. Most callers should not write
-//! continuations directly; writing a wide cell through
+//! [`Cell::CONTINUATION`] is the placeholder that stands in the columns
+//! after a multi-column grapheme. Most callers never write one; writing a
+//! multi-column cell through
 //! [`Buffer::set`](crate::buffer::Buffer::set) or
 //! [`SurfaceMut::set_cell`](crate::buffer::SurfaceMut::set_cell) creates the
-//! placeholder automatically.
+//! placeholders automatically.
 //!
 //! ```rust,ignore
 //! use uncurses::cell::Cell;
 //!
-//! let a = Cell::narrow("a");
+//! let a = Cell::new("a", 1);
 //! assert_eq!(a.width(), 1);
 //!
-//! let wide = Cell::wide("中");
+//! let wide = Cell::new("中", 2);
 //! assert_eq!(wide.width(), 2);
 //! ```
 //!
-//! ## Wide cells
+//! ## Multi-column cells
 //!
-//! A two-column grapheme occupies two adjacent grid columns. The left column
-//! stores the wide primary and the right column stores a continuation
-//! placeholder:
+//! A grapheme wider than one column occupies that many adjacent grid
+//! columns. The leftmost column stores the primary and every column after it
+//! stores a continuation placeholder:
 //!
 //! ```text
 //! col:    0       1       2
@@ -59,65 +58,48 @@
 //!         width=2 width=0 width=1
 //! ```
 //!
-//! Continuations are considered blank by [`Cell::is_blank`] because they do
-//! not render independent content. They exist so row storage can preserve
-//! the one-`Cell`-per-column layout while still representing wide graphemes
-//! accurately.
+//! Most graphemes are one or two columns wide. A cell may be wider: under
+//! [`WidthMode::Wc`](crate::text::WidthMode::Wc) a joined emoji sequence
+//! measures the sum of its code points, so a four-person family emoji is
+//! eight columns and owns seven continuations.
+//!
+//! Continuations preserve the one-`Cell`-per-column layout for wide
+//! graphemes. [`Cell::is_blank`] identifies a cell that claims one column
+//! and draws a space, regardless of style. A continuation claims zero
+//! columns, so it returns `false`.
 
 use compact_str::CompactString;
 
 use crate::style::Style;
 
-/// Structural role of a cell within a terminal grid.
-///
-/// `Kind` encodes the width relationship between adjacent cells. A wide
-/// grapheme is stored as a [`Kind::Wide`] primary followed immediately by a
-/// [`Kind::Continuation`] placeholder in the column to the right. Width is
-/// derived from the kind by [`Cell::width`].
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Kind {
-    /// A cell that occupies exactly one terminal column.
-    Narrow,
-    /// The primary cell of a two-column grapheme.
-    ///
-    /// The following column should contain [`Kind::Continuation`] when the
-    /// cell is stored in a surface.
-    Wide,
-    /// The right-column placeholder for a [`Kind::Wide`] primary.
-    ///
-    /// A continuation carries no content of its own and reports width `0`.
-    Continuation,
-}
-
 /// A single terminal-grid cell.
 ///
 /// `Cell` is the value stored in buffers and surfaces. It contains the
-/// grapheme content for a column, the style applied to that content, and a
-/// [`Kind`] that determines whether the cell is a one-column value, a
-/// two-column wide primary, or a continuation placeholder.
+/// grapheme content for a column, the style applied to that content, and the
+/// number of columns the content occupies.
 ///
-/// Use [`Cell::narrow`] and [`Cell::wide`] for normal construction. Use
-/// [`Cell::BLANK`] for an empty styled-as-default space. Continuations are
-/// normally produced by the surface write path rather than by application
-/// code.
+/// Use [`Cell::new`] for construction and [`Cell::BLANK`] for an empty
+/// styled-as-default space. Continuations are normally produced by the
+/// surface write path rather than by application code.
 #[derive(Debug, Clone)]
 pub struct Cell {
-    /// The grapheme cluster content. Empty string for a wide-cell
-    /// continuation placeholder.
+    /// The grapheme cluster content. Empty string for a continuation
+    /// placeholder.
     content: CompactString,
     /// Visual style: colors, attributes, underline, and any attached
     /// hyperlink. The link inside `style` is reference-counted so a
     /// run of identically-linked cells shares a single allocation
     /// without per-cell deep clones.
     pub style: Style,
-    /// Structural kind: narrow, wide primary, or wide continuation.
-    kind: Kind,
+    /// Column footprint. `0` marks a continuation placeholder; `1` or more
+    /// marks a primary owning that many columns.
+    width: u8,
 }
 
 impl PartialEq for Cell {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind && self.style == other.style && self.content == other.content
+        self.width == other.width && self.style == other.style && self.content == other.content
     }
 }
 
@@ -130,10 +112,10 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// A blank narrow cell with default style.
+    /// A blank one-column cell with default style.
     ///
-    /// The blank cell stores a single space (`" "`), uses
-    /// [`Style::EMPTY`], and has [`Kind::Narrow`].
+    /// The blank cell stores a single space (`" "`), uses [`Style::EMPTY`],
+    /// and has width `1`.
     ///
     /// # Returns
     ///
@@ -151,19 +133,51 @@ impl Cell {
     pub const BLANK: Cell = Cell {
         content: CompactString::const_new(" "),
         style: Style::EMPTY,
-        kind: Kind::Narrow,
+        width: 1,
     };
 
-    /// Create a single-column cell with the given grapheme-cluster
-    /// `content` and default style.
+    /// A continuation placeholder with default style.
+    ///
+    /// The placeholder stores no content, uses [`Style::EMPTY`], and has
+    /// width `0`. [`Cell::is_continuation`] reports `true` for it.
+    ///
+    /// # Returns
+    ///
+    /// This is a constant value, so use it directly wherever a continuation
+    /// is needed.
+    ///
+    /// # Panics
+    ///
+    /// Never panics.
+    ///
+    /// # Usage notes
+    ///
+    /// A wide cell is followed by [`width`](Cell::width) `- 1` of these, one
+    /// for every column the cell owns beyond its first. The surface write
+    /// path lays them down; application code needs them only when it builds
+    /// a row by hand.
+    ///
+    /// Under background color erase a continuation carries the style of the
+    /// cell that owns it, so clone the constant and give it that style
+    /// rather than leaving it default.
+    pub const CONTINUATION: Cell = Cell {
+        content: CompactString::const_new(""),
+        style: Style::EMPTY,
+        width: 0,
+    };
+
+    /// Create a cell holding `content` across `width` terminal columns.
     ///
     /// # Parameters
     ///
     /// - `content`: grapheme content to store in the cell.
+    /// - `width`: number of terminal columns the content occupies. Width `0`
+    ///   makes a continuation placeholder whatever the content, so use
+    ///   [`Cell::CONTINUATION`] when that is what you mean.
     ///
     /// # Returns
     ///
-    /// A [`Kind::Narrow`] cell with width `1` and default style.
+    /// A cell with the given content and width, and the default style.
     ///
     /// # Panics
     ///
@@ -171,26 +185,30 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// This constructor does not validate display width. Call it only for
-    /// content that should occupy one terminal column; use [`Cell::wide`] for
-    /// two-column graphemes.
-    pub fn narrow(content: impl Into<CompactString>) -> Self {
+    /// This constructor does not validate that `width` matches the display
+    /// width of `content`; the caller chooses the measurement policy. Use
+    /// [`WidthMode::grapheme_width`](crate::text::WidthMode::grapheme_width)
+    /// to measure, so the stored width matches what the terminal advances.
+    ///
+    /// When a cell wider than one column is written through the
+    /// buffer/surface write path, the `width - 1` slots to its right are
+    /// filled with continuation placeholders automatically. If there is no
+    /// room for them at the row's right edge,
+    /// [`Buffer::set`](crate::buffer::Buffer::set) stores a blank instead of
+    /// part of a grapheme.
+    pub fn new(content: impl Into<CompactString>, width: u8) -> Self {
         Cell {
             content: content.into(),
             style: Style::default(),
-            kind: Kind::Narrow,
+            width,
         }
     }
 
-    /// Create the primary cell of a two-column grapheme.
-    ///
-    /// # Parameters
-    ///
-    /// - `content`: grapheme content to store in the wide primary.
+    /// Test whether this cell occupies more than one column.
     ///
     /// # Returns
     ///
-    /// A [`Kind::Wide`] cell with width `2` and default style.
+    /// `true` when [`Cell::width`] is `2` or more.
     ///
     /// # Panics
     ///
@@ -198,110 +216,23 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// When a wide cell is written through the buffer/surface write path, the
-    /// slot at `column + 1` is filled with a [`Kind::Continuation`]
-    /// placeholder automatically. If there is no room for that placeholder
-    /// at the row's right edge, [`Buffer::set`](crate::buffer::Buffer::set)
-    /// stores a blank instead of half a wide grapheme.
-    pub fn wide(content: impl Into<CompactString>) -> Self {
-        Cell {
-            content: content.into(),
-            style: Style::default(),
-            kind: Kind::Wide,
-        }
-    }
-
-    /// Create a wide-character continuation placeholder.
+    /// Width alone decides the answer, because width alone decides how many
+    /// columns the cell takes. A cell that stores no content still owns the
+    /// columns its width names, and the blank drawn in its place covers all
+    /// of them.
     ///
-    /// Continuation cells carry no content; they occupy the right
-    /// half of a [`Cell::wide`] primary at the column to their left.
-    ///
-    /// # Returns
-    ///
-    /// A [`Kind::Continuation`] cell with empty content, default style, and
-    /// width `0`.
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// A continuation passed to a surface write is ignored, because the
-    /// wide cell that owns the column places it as part of its own write.
-    ///
-    /// Most callers should not construct continuations directly. Prefer
-    /// writing a [`Cell::wide`] through a surface so the primary and
-    /// continuation remain adjacent.
-    pub fn continuation() -> Self {
-        Cell {
-            content: CompactString::default(),
-            style: Style::default(),
-            kind: Kind::Continuation,
-        }
-    }
-
-    /// Return the cell's structural role.
-    ///
-    /// # Returns
-    ///
-    /// [`Kind::Narrow`], [`Kind::Wide`], or [`Kind::Continuation`].
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// Use this when matching all roles explicitly. Predicate helpers such
-    /// as [`Cell::is_wide`] are clearer for single-role checks.
-    #[inline]
-    pub fn kind(&self) -> Kind {
-        self.kind
-    }
-
-    /// Test whether this is a single-column cell.
-    ///
-    /// # Returns
-    ///
-    /// `true` when [`Cell::kind`] is [`Kind::Narrow`].
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// Blank cells are narrow; continuation cells are not.
-    #[inline]
-    pub fn is_narrow(&self) -> bool {
-        matches!(self.kind, Kind::Narrow)
-    }
-
-    /// Test whether this is the primary of a two-column grapheme.
-    ///
-    /// # Returns
-    ///
-    /// `true` when [`Cell::kind`] is [`Kind::Wide`].
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// In a well-formed surface, a wide cell is followed immediately by a
-    /// continuation placeholder.
+    /// In a well-formed surface, such a cell is followed immediately by
+    /// `width - 1` continuation placeholders.
     #[inline]
     pub fn is_wide(&self) -> bool {
-        matches!(self.kind, Kind::Wide)
+        self.width > 1
     }
 
-    /// Test whether this is a wide-character continuation placeholder.
+    /// Test whether this is a continuation placeholder.
     ///
     /// # Returns
     ///
-    /// `true` when [`Cell::kind`] is [`Kind::Continuation`].
+    /// `true` when [`Cell::width`] is `0`.
     ///
     /// # Panics
     ///
@@ -309,18 +240,21 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// Continuations have width `0`, no content, and are considered blank.
+    /// Width alone decides, as it does for [`Cell::is_wide`]: a cell that
+    /// claims no column has none to draw in, so whatever it stores is never
+    /// reached. Width `0`, `1`, and `2` or more partition every cell into a
+    /// continuation, a narrow cell, and a wide one.
     #[inline]
     pub fn is_continuation(&self) -> bool {
-        matches!(self.kind, Kind::Continuation)
+        self.width == 0
     }
 
-    /// Test whether this cell renders as blank space.
+    /// Test whether this cell is a single blank column.
     ///
     /// # Returns
     ///
-    /// `true` when the content is empty, the content is a single space, or
-    /// the cell is a continuation placeholder.
+    /// `true` when the cell claims one column and draws a space in it, which
+    /// is the shape of [`Cell::BLANK`].
     ///
     /// # Panics
     ///
@@ -328,10 +262,40 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// Style is not considered. A styled space still counts as blank because
-    /// this method answers whether the cell has independent textual content.
+    /// Style is not considered. A styled space is still blank, because this
+    /// method answers what the cell occupies rather than how it is painted.
+    ///
+    /// Width is considered, so the answer stays about one column. A
+    /// continuation claims none, and a cell claiming several stands for a
+    /// span rather than a single blank; each is something other than a blank
+    /// column, and each reports `false`.
+    ///
+    /// A cell that claims its one column while storing nothing draws a space
+    /// there, the same as [`Cell::BLANK`], and answers the same way. The
+    /// question is what reaches the column, so two cells that put the same
+    /// thing in it give one answer.
     pub fn is_blank(&self) -> bool {
-        self.content.is_empty() || self.content == " " || self.is_continuation()
+        self.width == 1 && (self.content == " " || self.content.is_empty())
+    }
+
+    /// The bytes that draw this cell.
+    ///
+    /// A cell storing no content still owns the columns its width names, so
+    /// it draws as a blank in every one of them. Writing the content alone
+    /// would close a gap the grid is holding open, and put everything after
+    /// it on the row a column short for each one skipped.
+    ///
+    /// Call this only on a cell that is not a continuation; a continuation
+    /// draws nothing at all, and its caller returns before reaching here.
+    pub(crate) fn draw_bytes(&self) -> &[u8] {
+        /// Enough spaces to stand in for any width a cell can claim.
+        const BLANKS: [u8; u8::MAX as usize] = [b' '; u8::MAX as usize];
+
+        if self.content.is_empty() {
+            &BLANKS[..self.width as usize]
+        } else {
+            self.content.as_bytes()
+        }
     }
 
     /// Return the cell's grapheme-cluster content.
@@ -348,7 +312,7 @@ impl Cell {
     /// # Usage notes
     ///
     /// This returns the stored content exactly; it does not derive or append
-    /// the neighboring continuation for wide cells.
+    /// the neighboring continuations for multi-column cells.
     #[inline]
     pub fn content(&self) -> &str {
         self.content.as_str()
@@ -356,13 +320,11 @@ impl Cell {
 
     /// Column footprint of this cell on the grid.
     ///
-    /// - `Narrow` → 1
-    /// - `Wide`   → 2
-    /// - `Continuation` → 0 (the second slot of a wide primary)
-    ///
     /// # Returns
     ///
-    /// The number of terminal columns owned by this cell's role.
+    /// The number of terminal columns owned by this cell: `0` for a
+    /// continuation placeholder, otherwise the width passed to
+    /// [`Cell::new`].
     ///
     /// # Panics
     ///
@@ -375,11 +337,7 @@ impl Cell {
     /// continuation placeholder.
     #[inline]
     pub fn width(&self) -> u8 {
-        match self.kind {
-            Kind::Narrow => 1,
-            Kind::Wide => 2,
-            Kind::Continuation => 0,
-        }
+        self.width
     }
 
     /// Return this cell with a replacement style.
@@ -398,7 +356,7 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// This builder-style method preserves content and [`Kind`]. Styling a
+    /// This builder-style method preserves content and width. Styling a
     /// continuation is possible, but continuations do not render independent
     /// content.
     pub fn style(mut self, style: impl Into<Style>) -> Self {
@@ -414,7 +372,6 @@ mod tests {
     #[test]
     fn test_blank_cell() {
         let c = Cell::BLANK;
-        assert!(c.is_narrow());
         assert_eq!(c.width(), 1);
         assert!(c.is_blank());
         assert!(c.style.is_empty());
@@ -422,15 +379,15 @@ mod tests {
 
     #[test]
     fn test_narrow_cell() {
-        let c = Cell::narrow("A");
+        let c = Cell::new("A", 1);
         assert_eq!(c.content(), "A");
-        assert!(c.is_narrow());
+        assert!(!c.is_wide());
         assert_eq!(c.width(), 1);
     }
 
     #[test]
     fn test_wide_cell() {
-        let c = Cell::wide("中");
+        let c = Cell::new("中", 2);
         assert_eq!(c.content(), "中");
         assert!(c.is_wide());
         assert_eq!(c.width(), 2);
@@ -438,14 +395,100 @@ mod tests {
 
     #[test]
     fn test_continuation_cell() {
-        let c = Cell::continuation();
+        let c = Cell::CONTINUATION;
         assert!(c.is_continuation());
         assert_eq!(c.width(), 0);
+        assert!(!c.is_blank());
+    }
+
+    /// `is_blank` answers for one blank column, so width decides as much as
+    /// content does.
+    ///
+    /// Reading it as "holds nothing to draw" put a continuation and a blank
+    /// in the same class, though one claims no column and the other claims
+    /// exactly one. A caller scanning a row for the columns it can drop then
+    /// had to re-check the width every time to tell them apart.
+    #[test]
+    fn only_a_cell_drawing_one_blank_column_is_blank() {
+        assert!(Cell::BLANK.is_blank());
+        assert!(Cell::new(" ", 1).is_blank());
+        // Storing nothing in one column still draws a space there, which is
+        // what `draw_bytes` puts on the screen.
+        let empty = Cell::new("", 1);
+        assert_eq!(empty.draw_bytes(), b" ");
+        assert!(empty.is_blank());
+        // Style rides along; it says how the column is painted, not what it
+        // holds.
+        assert!(Cell::BLANK.style(Style::default().bold()).is_blank());
+
+        // A span of blank columns is not one blank column.
+        assert!(!Cell::new(" ", 2).is_blank());
+        assert!(!Cell::new("", 2).is_blank());
+        // No column at all is not one blank column either.
+        assert!(!Cell::CONTINUATION.is_blank());
+        assert!(!Cell::new("x", 1).is_blank());
+    }
+
+    #[test]
+    fn the_continuation_constant_matches_one_built_by_hand() {
+        // Rows built before the constant existed pass `Cell::new("", 0)`,
+        // and `PartialEq` weighs content, width, and style. A constant that
+        // differed in any of the three would compare unequal and make the
+        // renderer redraw a column that did not change.
+        assert_eq!(Cell::CONTINUATION, Cell::new("", 0));
+    }
+
+    #[test]
+    fn a_cell_may_own_more_than_two_columns() {
+        // Under `WidthMode::Wc` a joined emoji sequence measures the sum of
+        // its code points, so the grid must be able to credit one cell with
+        // more columns than a CJK ideograph takes.
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+        let c = Cell::new(family, 8);
+        assert_eq!(c.width(), 8);
+        assert!(c.is_wide());
+        assert!(!c.is_continuation());
+    }
+
+    #[test]
+    fn width_alone_decides_the_structural_role() {
+        // Width `0`, `1`, and `2` or more partition every cell into a
+        // continuation, a narrow cell, and a wide one. Content never enters
+        // into it: a cell that claims no column has none to draw in, and one
+        // that stores nothing still owns every column it claims.
+        assert!(Cell::CONTINUATION.is_continuation());
+        assert!(Cell::new("a", 0).is_continuation());
+        assert!(Cell::new("", 2).is_wide());
+        assert!(Cell::new("\u{1f469}", 2).is_wide());
+    }
+
+    #[test]
+    fn a_cell_claiming_no_column_is_a_continuation_whatever_it_stores() {
+        // `grapheme_width` measures a lone combining mark as zero, and
+        // `Cell::new`'s own advice is to measure with it, so a cell holding
+        // content at width zero is one step from the documented path. It
+        // claims no column, so the grid treats it as the placeholder it
+        // structurally is and the surface declines to plant it loose.
+        use crate::buffer::{Buffer, Surface, SurfaceMut};
+        use crate::text::Encode;
+
+        let mut buf = Buffer::new(3, 1);
+        buf.set_cell((0, 0).into(), &Cell::new("A", 1));
+        buf.set_cell((1, 0).into(), &Cell::new("\u{301}", 0));
+        buf.set_cell((2, 0).into(), &Cell::new("B", 1));
+
+        assert!(Cell::new("\u{301}", 0).is_continuation());
+        assert_eq!(
+            buf.cell((1, 0).into()).unwrap().content(),
+            " ",
+            "a loose continuation is declined, leaving the blank"
+        );
+        assert_eq!(buf.display().to_string(), "A B");
     }
 
     #[test]
     fn test_cell_with_style() {
-        let c = Cell::narrow("x").style(Style::default().bold());
+        let c = Cell::new("x", 1).style(Style::default().bold());
         assert!(c.style.attrs.contains(crate::style::AttrFlags::BOLD));
     }
 }
