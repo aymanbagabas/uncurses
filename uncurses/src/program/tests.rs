@@ -164,7 +164,7 @@ fn backspace_mode_query_is_optional_and_preserves_options() {
 
 #[cfg(all(unix, not(target_os = "l4re")))]
 #[test]
-fn backspace_mode_query_option_does_not_query_during_init() {
+fn query_options_do_not_query_during_init() {
     use crate::terminal::{EnvList, Terminal};
     use crate::testutil::{drain, open_pty_pair};
 
@@ -176,16 +176,82 @@ fn backspace_mode_query_option_does_not_query_during_init() {
     program
         .init_with(ProgramOptions {
             query_backspace_mode: true,
+            query_foreground_color: true,
+            query_background_color: true,
+            query_cursor_color: true,
+            query_palette_colors: vec![0, 15, 255],
             legacy_keys: DecoderFlags::CTRL_BACKSPACE,
             ..ProgramOptions::default()
         })
         .unwrap();
     assert!(program.options.query_backspace_mode);
+    assert!(program.options.query_foreground_color);
+    assert!(program.options.query_background_color);
+    assert!(program.options.query_cursor_color);
+    assert_eq!(program.options.query_palette_colors, [0, 15, 255]);
     assert_eq!(program.options.legacy_keys, DecoderFlags::CTRL_BACKSPACE);
     assert!(!program.backspace_mode());
     let output = drain(&master);
-    assert!(!String::from_utf8_lossy(&output).contains("\x1b[?67"));
+    let output = String::from_utf8_lossy(&output);
+    for query in ["\x1b[?67", "\x1b]10;?", "\x1b]11;?", "\x1b]12;?", "\x1b]4;"] {
+        assert!(!output.contains(query));
+    }
     program.finish().unwrap();
+}
+
+#[test]
+fn color_queries_are_optional_and_preserve_options() {
+    use crate::terminal::{EnvList, Terminal};
+
+    let defaults = ProgramOptions::default();
+    assert!(!defaults.query_foreground_color);
+    assert!(!defaults.query_background_color);
+    assert!(!defaults.query_cursor_color);
+    assert!(defaults.query_palette_colors.is_empty());
+
+    for apple in [false, true] {
+        for mask in 0..8 {
+            for indices in [vec![], vec![255, 0, 15, 15]] {
+                let buf = RefCell::new(Vec::new());
+                let input = null_input();
+                let terminal = Terminal::from_parts(
+                    &input,
+                    TestOut(&buf),
+                    EnvList::from_pairs([(
+                        "TERM_PROGRAM",
+                        if apple { "Apple_Terminal" } else { "xterm" },
+                    )]),
+                );
+                let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+                program.options.query_foreground_color = mask & 1 != 0;
+                program.options.query_background_color = mask & 2 != 0;
+                program.options.query_cursor_color = mask & 4 != 0;
+                program.options.query_palette_colors = indices.clone();
+                program.query_capabilities(b"extra").unwrap();
+                let output = written(&buf);
+                let mut expected = String::new();
+                for (enabled, query) in [
+                    (mask & 1 != 0, "\x1b]10;?\x07"),
+                    (mask & 2 != 0, "\x1b]11;?\x07"),
+                    (mask & 4 != 0, "\x1b]12;?\x07"),
+                ] {
+                    assert_eq!(output.matches(query).count(), usize::from(enabled));
+                    if enabled {
+                        expected.push_str(query);
+                    }
+                }
+                for index in &indices {
+                    expected.push_str(&format!("\x1b]4;{index};?\x07"));
+                }
+                assert_eq!(output.matches("\x1b]4;").count(), indices.len());
+                assert!(output.ends_with(&format!("{expected}extra\x1b[c")));
+                assert_eq!(program.options.query_foreground_color, mask & 1 != 0);
+                assert_eq!(program.options.query_background_color, mask & 2 != 0);
+                assert_eq!(program.options.query_cursor_color, mask & 4 != 0);
+                assert_eq!(program.options.query_palette_colors, indices);
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
