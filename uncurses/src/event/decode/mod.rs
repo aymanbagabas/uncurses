@@ -456,8 +456,8 @@ impl Decoder {
 
         match buf[0] {
             0x1b => self.parse_escape(buf),
-            0x01..=0x08 | 0x0b..=0x0c | 0x0e..=0x1a => {
-                // Ctrl+A through Ctrl+Z (excluding Tab/LF/CR/Esc which have dedicated keys).
+            0x01..=0x08 | 0x0a..=0x0c | 0x0e..=0x1a => {
+                // Ctrl+A through Ctrl+Z, except Tab and CR.
                 let c = (buf[0] - 1 + b'a') as char;
                 ParseResult::Event(
                     Event::KeyPress(Key::new(KeyCode::Char(c), KeyModifiers::CTRL).normalized()),
@@ -479,10 +479,6 @@ impl Decoder {
                     )
                 }
             }
-            0x0a => ParseResult::Event(
-                Event::KeyPress(Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized()),
-                1,
-            ),
             0x0d => {
                 if self.flags.contains(DecoderFlags::CTRL_M) {
                     ParseResult::Event(
@@ -2183,6 +2179,29 @@ mod tests {
     }
 
     #[test]
+    fn legacy_lf_and_cr_are_distinct() {
+        let mut p = Decoder::default();
+        let input = b"\n\r";
+        let (consumed, event) = p.parse_one(input);
+        assert_eq!(consumed, 1);
+        assert_eq!(
+            event,
+            Some(Event::KeyPress(
+                Key::new(KeyCode::Char('j'), KeyModifiers::CTRL).normalized()
+            ))
+        );
+        assert_eq!(
+            p.parse_one(&input[consumed..]),
+            (
+                1,
+                Some(Event::KeyPress(
+                    Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized()
+                ))
+            )
+        );
+    }
+
+    #[test]
     fn decoder_flag_ctrl_i_swaps_tab() {
         let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(press(p.parse(b"\t")).code, KeyCode::Tab);
@@ -2322,11 +2341,20 @@ mod tests {
     }
 
     #[test]
-    fn esc_lf_is_alt_enter() {
-        let mut p = Decoder::new(DecoderFlags::empty());
-        let k = press(p.parse(b"\x1b\n"));
-        assert_eq!(k.code, KeyCode::Enter);
-        assert_eq!(k.modifiers, KeyModifiers::ALT);
+    fn legacy_esc_lf_is_alt_ctrl_j() {
+        for split in [false, true] {
+            let mut p = Decoder::default();
+            let events = if split {
+                assert!(p.parse(b"\x1b").is_empty());
+                p.parse(b"\n")
+            } else {
+                p.parse(b"\x1b\n")
+            };
+            assert_eq!(
+                press(events),
+                Key::new(KeyCode::Char('j'), KeyModifiers::ALT | KeyModifiers::CTRL).normalized()
+            );
+        }
     }
 
     #[test]

@@ -10,6 +10,9 @@
 //! (with modifiers, repeat, release), mouse move / clicks / wheel,
 //! bracketed paste, focus changes, and window resizes.
 //!
+//! Uses legacy keyboard input. Press Enter, then Ctrl-J to compare
+//! `Enter` with `Ctrl+Char('j')`. Alt+Ctrl-J reports `Ctrl+Alt+Char('j')`.
+//!
 //! Press `q` or Ctrl-C to exit. On Unix, Ctrl-Z suspends the process and
 //! it resumes cleanly with `fg`.
 
@@ -136,7 +139,7 @@ impl App {
         program.screen_mut().resize((cols, 2));
         Ok(Self {
             program,
-            last: String::from("(waiting for input)"),
+            last: String::from("(press Enter, then Ctrl-J to compare legacy keys)"),
         })
     }
 

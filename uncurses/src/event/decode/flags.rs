@@ -34,6 +34,10 @@ bitflags! {
     ///
     /// Set the corresponding flag to swap each mapping to its alternative
     /// reading.
+    ///
+    /// The decoder always reports `0x0a` (LF) as `Ctrl+j`. In raw mode,
+    /// terminals normally send LF for Ctrl+J and CR for Enter. An `ESC`
+    /// prefix adds Alt, so `ESC LF` reports `Ctrl+Alt+j`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct DecoderFlags: u8 {
         /// Report `0x00` as `Ctrl+@` instead of `Ctrl+Space`.
