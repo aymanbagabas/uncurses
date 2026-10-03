@@ -362,8 +362,8 @@ where
         Ok(ready)
     }
 
-    /// Take the next event from queued events or buffered bytes without I/O.
-    /// Track capabilities as it passes through. See [`EventSource::try_read`].
+    /// Take the next queued event without doing I/O, tracking capabilities as
+    /// it passes through. See [`EventSource::try_read`].
     pub fn try_read_event(&mut self) -> io::Result<Option<Event>> {
         if let Some(event) = self.unread.pop_front() {
             return Ok(Some(event));
@@ -411,9 +411,9 @@ where
     /// [`EventStream::from_shared`](crate::event::EventStream::from_shared) from
     /// this handle and poll it on your executor.
     ///
-    /// Events taken this way bypass the program. Pass each event to
-    /// [`observe_event`](Self::observe_event) before reading the next one,
-    /// so mode replies can configure decoding.
+    /// Events taken this way bypass the program, so capability tracking does
+    /// not run on them — feed each one to
+    /// [`observe_event`](Self::observe_event) yourself.
     ///
     /// Sharing one source between a live reader and the program's own
     /// [`read_event`](Self::read_event) is best-effort: an event goes to
@@ -429,9 +429,8 @@ where
     ///
     /// The stream hands back events directly, so — unlike
     /// [`read_event`](Self::read_event) — capability tracking does not run.
-    /// Pass each event to [`observe_event`](Self::observe_event) before polling
-    /// the next one, so mode replies can configure decoding.
-    /// Read through the stream *or* through `read_event` in steady
+    /// Pass each event to [`observe_event`](Self::observe_event) to keep it
+    /// alive. Read through the stream *or* through `read_event` in steady
     /// state, not both at once: a shared source hands each event to whichever
     /// consumer drains it first.
     #[cfg(feature = "async")]

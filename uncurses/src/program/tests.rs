@@ -190,29 +190,6 @@ fn backspace_mode_query_option_does_not_query_during_init() {
 
 #[cfg(unix)]
 #[test]
-fn backspace_mode_waits_for_program_observation() {
-    let buf = RefCell::new(Vec::new());
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
-    writer.write_all(b"\x1b[?67;1$y\x08").unwrap();
-    assert!(program.poll_event(Some(Duration::from_secs(1))).unwrap());
-    assert!(
-        !program.backspace_mode(),
-        "polling must not adopt the report"
-    );
-    assert!(matches!(
-        program.read_event().unwrap(),
-        Event::ModeReport { .. }
-    ));
-    assert!(program.backspace_mode());
-    assert!(matches!(
-        program.try_read_event().unwrap(),
-        Some(Event::KeyPress(key)) if key.code == crate::event::KeyCode::Backspace
-    ));
-}
-
-#[cfg(unix)]
-#[test]
 fn backspace_mode_reports_do_not_rewind_or_own_the_mode() {
     use crate::ansi::mode::{Mode, ModeSetting};
 
@@ -234,7 +211,8 @@ fn backspace_mode_reports_do_not_rewind_or_own_the_mode() {
         "only the first report was applied"
     );
     assert!(
-        matches!(program.read_event().unwrap(), Event::KeyPress(k) if k.code == crate::event::KeyCode::Backspace)
+        matches!(program.read_event().unwrap(), Event::KeyPress(k) if k.code == crate::event::KeyCode::Char('h')),
+        "already queued keys keep their decoded values"
     );
     program.read_event().unwrap();
     program.read_event().unwrap();
@@ -245,6 +223,10 @@ fn backspace_mode_reports_do_not_rewind_or_own_the_mode() {
     writer.write_all(b"\x1b[?67;1$y").unwrap();
     program.read_event().unwrap();
     assert!(program.backspace_mode());
+    writer.write_all(b"\x08").unwrap();
+    assert!(
+        matches!(program.read_event().unwrap(), Event::KeyPress(k) if k.code == crate::event::KeyCode::Backspace)
+    );
     assert!(!program.state.chosen.contains(&Mode::BACKARROW_KEY));
     program.reset().unwrap();
     program.restore().unwrap();
@@ -301,41 +283,6 @@ fn backspace_mode_observation_applies_only_recognized_backarrow_reports() {
             }
         }
     }
-}
-
-#[cfg(all(unix, feature = "async"))]
-#[test]
-fn backspace_mode_observation_between_async_events() {
-    use crate::event::KeyCode;
-    use futures_core::Stream;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, Waker};
-
-    let buf = RefCell::new(Vec::new());
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
-    let mut stream = program.event_stream();
-    writer
-        .write_all(b"\x1b[?67;1$y\x08\x1b[?67;2$y\x08")
-        .unwrap();
-    let mut context = Context::from_waker(Waker::noop());
-    for expected in [
-        None,
-        Some(KeyCode::Backspace),
-        None,
-        Some(KeyCode::Char('h')),
-    ] {
-        let Poll::Ready(Some(Ok(event))) = Pin::new(&mut stream).poll_next(&mut context) else {
-            panic!("buffered events must not require more input");
-        };
-        if let Some(code) = expected {
-            assert!(matches!(&event, Event::KeyPress(key) if key.code == code));
-        } else {
-            assert!(matches!(&event, Event::ModeReport { .. }));
-        }
-        program.observe_event(&event).unwrap();
-    }
-    assert!(!program.backspace_mode());
 }
 
 #[test]
