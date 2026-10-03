@@ -29,21 +29,32 @@
 //!
 //! ## Cells, clipping, and wrapping
 //!
-//! Non-zero-width grapheme clusters are written as one-cell or two-cell
-//! [`Cell`](crate::cell::Cell) values. Two-cell clusters occupy a primary wide
-//! cell plus the continuation cell maintained by the buffer layer. Zero-width
-//! clusters are appended to the previous pending cluster before it is flushed.
+//! Each non-zero-width grapheme cluster becomes one
+//! [`Cell`](crate::cell::Cell) holding the whole cluster, with its measured
+//! width. A cluster wider than one column occupies a primary cell plus the
+//! `width - 1` continuation cells maintained by the buffer layer.
+//! Zero-width clusters are appended to the previous pending cluster before it
+//! is flushed.
 //!
 //! ```text
 //! input clusters      pending cell       surface cells
-//! ┌────┬──────┐       ┌────────────┐         ┌────┬────┬────┐
-//! │ e  │ ◌́    │ ───▶  │ "e\u{301}" │ ─────▶  │ é  │    │    │
-//! └────┴──────┘       └────────────┘         └────┴────┴────┘
+//! ┌────┬──────┐       ┌────────────┐         ┌────┬────┬────┬────┐
+//! │ e  │ ◌́    │ ───▶  │ "e\u{301}" │ ─────▶  │ é  │    │    │    │
+//! └────┴──────┘       └────────────┘         └────┴────┴────┴────┘
 //!
-//! ┌────┐              ┌─────────┐        ┌────┬────┬────┐
-//! │ 中 │ ─────────▶   │ width 2 │ ────▶  │ 中 │ ▶  │    │
-//! └────┘              └─────────┘        └────┴────┴────┘
+//! ┌────┐              ┌─────────┐        ┌────┬────┬────┬────┐
+//! │ 中 │ ─────────▶   │ width 2 │ ────▶  │ 中 │ ▶  │    │    │
+//! └────┘              └─────────┘        └────┴────┴────┴────┘
+//!
+//! ┌────┐              ┌─────────┐        ┌────┬────┬────┬────┐
+//! │ 👍🏽 │ ─────────▶   │ width 4 │ ────▶  │ 👍🏽 │ ▶  │ ▶  │ ▶  │
+//! └────┘              └─────────┘        └────┴────┴────┴────┘
 //! ```
+//!
+//! The last row measures under [`WidthMode::Wc`], which sums the code points
+//! of a cluster: the thumbs-up and the skin tone own two columns each. The
+//! same cluster measures two under [`WidthMode::Grapheme`], and the painter
+//! lays out whatever width the mode reports.
 //!
 //! Painting is clipped to either the target bounds or the intersection of a
 //! supplied rectangle with those bounds. [`WrapMode`] applies only when a
@@ -54,7 +65,7 @@ use crate::ansi::params::Params;
 use crate::ansi::text::{Token, string_width, tokenize};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
-use crate::layout::{Position, Rect};
+use crate::layout::{Position, Rect, overruns};
 use crate::style::{Style, read_style};
 
 use super::{TextSurface, WidthMode, WrapMode};
@@ -194,11 +205,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 && let Some((px, py, content, w)) = pending.take()
                 && clip.contains(Position::new(px, py))
             {
-                let cell = if w == 2 {
-                    Cell::wide(&content)
-                } else {
-                    Cell::narrow(&content)
-                };
+                let cell = Cell::new(&content, w);
                 self.target
                     .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
             }
@@ -222,7 +229,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     }
                     let g = unsafe { std::str::from_utf8_unchecked(text) };
                     let cw = width as u8;
-                    if x + cw as u16 > clip.right() {
+                    if overruns(x, u16::from(cw), clip.right()) {
                         match wrap {
                             WrapMode::Truncate => {
                                 if let Some(tail) = tail {
@@ -238,7 +245,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                                 if y >= clip.bottom() {
                                     return Position::new(x, y);
                                 }
-                                if x + cw as u16 > clip.right() {
+                                if overruns(x, u16::from(cw), clip.right()) {
                                     return Position::new(x, y);
                                 }
                             }
@@ -278,11 +285,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         if let Some((px, py, content, w)) = pending.take()
             && clip.contains(Position::new(px, py))
         {
-            let cell = if w == 2 {
-                Cell::wide(&content)
-            } else {
-                Cell::narrow(&content)
-            };
+            let cell = Cell::new(&content, w);
             self.target
                 .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
         }
@@ -1152,6 +1155,26 @@ mod tests {
         // text is hard-truncated with no tail.
         assert_eq!(row(&b, 0), "abc");
         assert_eq!(end, Position::new(3, 0));
+    }
+
+    /// The module diagram shows a cluster laid across four columns. Measure
+    /// the cluster it names so the picture stays answerable to the code.
+    #[test]
+    fn a_cluster_measuring_four_claims_four_columns() {
+        let mut b = buf(6, 1).with_width_mode(WidthMode::Wc);
+        // Thumbs-up plus a skin tone. `Wc` sums the code points, and each of
+        // the two owns two columns.
+        Painter::new(&mut b).set_str((0, 0), "\u{1f44d}\u{1f3fd}", Style::default());
+
+        assert_eq!(cell_at(&b, 0, 0).content(), "\u{1f44d}\u{1f3fd}");
+        assert_eq!(cell_at(&b, 0, 0).width(), 4);
+        for x in 1..4 {
+            assert!(
+                cell_at(&b, x, 0).is_continuation(),
+                "column {x} belongs to the cluster"
+            );
+        }
+        assert!(cell_at(&b, 4, 0).is_blank(), "the cluster stops at four");
     }
 
     #[test]

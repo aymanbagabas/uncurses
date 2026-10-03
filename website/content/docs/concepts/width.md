@@ -9,10 +9,16 @@ Guess wrong by one, and everything after it shifts and the row smears.
 
 ## Not every character is one cell
 
-Terminal text comes in three cell widths. Most characters are *narrow* and take
-one cell. A few are *wide* and take two cells, like CJK characters. Some take
+A single character takes one of three widths. Most are *narrow* and take one
+cell. A few are *wide* and take two cells, like CJK characters. Some take
 *zero*: a combining accent stacks onto the glyph before it rather than claiming
 a column of its own.
+
+A cluster is a separate question. Several characters can join into one cluster,
+and how many cells that cluster takes depends on how it is measured. Under one
+policy the answer is never more than two; under the other it is the sum of the
+parts, which can be more. [Two ways to measure](#two-ways-to-measure) covers
+the difference.
 
 | row / col | 1 | 2 | 3 | 4 |
 | --- | --- | --- | --- | --- |
@@ -26,25 +32,28 @@ cell).
 
 That last one is the catch. An `é` might be a single code point, or it might be
 an `e` followed by a separate combining accent. Either way, a human sees one
-character, and it fills one cell. uncurses measures the way a human counts: by
-*extended grapheme cluster*, so a cluster built from several code points still
-lands in the right number of cells. Counting bytes or code points would overcount
-and shove the rest of the row sideways.
+character, and it fills one cell. uncurses splits text the way a human reads
+it, into *extended grapheme clusters*, so a cluster built from several code
+points is one unit however many pieces it is made of. Splitting on bytes or
+code points would break that unit apart and shove the rest of the row sideways.
+
+Splitting is settled. How many columns one of those clusters takes is the
+open question, and the next section is about the two answers.
 
 ## Two ways to measure
 
 How a cluster is measured is a policy, captured by
 [`WidthMode`](/api/uncurses/text/enum.WidthMode.html):
 
-- **`Wc`** is wcwidth-style: it measures each cluster by its first code point
-  and ignores the rest. It is simple, and it matches how older or plainer
-  terminals behave. This is the default.
-- **`Grapheme`** measures the whole cluster, accounting for variation
-  selectors, regional-indicator flags, and zero-width-joiner emoji sequences.
-  The cluster boundaries follow the Unicode text-segmentation rules in
-  [UTS-29](https://unicode.org/reports/tr29/). Pair it with terminal
+- **`Wc`** measures a cluster by its parts, adding up what each one claims. It
+  is the default, and it matches a terminal that measures as it reads.
+- **`Grapheme`** measures the cluster as a whole. Pair it with terminal
   [Unicode Core](https://contour-terminal.org/vt-extensions/unicode-core/) mode,
-  which measures display width per grapheme cluster.
+  in which the terminal measures that way too.
+
+The choice follows the terminal, not the text.
+[`WidthMode`](/api/uncurses/text/enum.WidthMode.html) sets out what each mode
+makes of every kind of cluster.
 
 ## East Asian ambiguous width
 
@@ -64,6 +73,30 @@ declaration completely. If a string claims one cell but the terminal paints two,
 everything after it is off by a column: the cursor lands in the wrong place, the
 next write lands on top of the wrong cell, and the careful diff falls apart.
 Measuring right is what keeps the grid honest.
+
+For one class of cluster the answer is genuinely the terminal's to give, and it
+can differ from the one the grid picked. Under `Wc` a cluster is measured by
+adding up its parts, and the terminal need not land on the same number. A
+joined emoji sequence counts each of its faces, and a terminal that draws the
+whole sequence as one glyph takes fewer columns than that. A heart followed by
+a variation selector counts as one, and a terminal that draws it in emoji
+presentation takes two. So the sum can overshoot what the terminal draws, and
+it can fall short. The disagreement is not confined to the cluster: once it is
+drawn, every column to its right on that row sits somewhere the grid cannot
+name.
+
+So a [screen]({{< relref "screen.md" >}}) absorbs the disagreement inside the
+row that caused it. Columns left of the cluster are measured the way the
+terminal draws them and are unaffected; the rest of the row is brought back
+into agreement, whichever way the terminal counted. A cursor resting past the
+cluster is placed the same way. Rows that carry no such cluster pay nothing,
+and neither does a letter carrying an accent, which every terminal draws in the
+width of the letter alone.
+
+Measure whole clusters and the question stops arising, because the grid then
+counts them the way the terminal does. For how the row is recovered, see
+[`Screen::set_grapheme_clusters`](/api/uncurses/screen/struct.Screen.html#method.set_grapheme_clusters)
+and the `wide_clusters` example.
 
 ## Where width lives
 

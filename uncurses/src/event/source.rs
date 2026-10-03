@@ -310,17 +310,8 @@ where
 
     /// Choose how the ambiguous legacy keys are read.
     ///
-    /// A terminal using its legacy encoding sends one control byte for a key
-    /// and for a Ctrl combination that collides with it, and which of the two
-    /// a reader meant is not in the bytes. [`DecoderFlags`] picks the reading
-    /// for each collision: `0x09` is `tab` or `ctrl+i`, `0x0d` is `enter` or
-    /// `ctrl+m`, `0x00` is `ctrl+space` or `ctrl+@`, a lone `0x1b` is `escape`
-    /// or `ctrl+[`, `0x7f` is `backspace` or `delete`, and `CSI 1 ~` and
-    /// `CSI 4 ~` are `home` and `end` or the VT220 `find` and `select`.
-    ///
-    /// The default reads each as the named key, which is what a terminal
-    /// means by them today. An application that wants the Ctrl reading says
-    /// so here.
+    /// LF reads as Ctrl+J by default. Set [`DecoderFlags::LF_IS_ENTER`] to
+    /// read it as Enter instead. See [`DecoderFlags`] for all mappings.
     ///
     /// This is a consuming builder intended to be chained after
     /// [`EventSource::new`]. It never panics.
@@ -411,6 +402,10 @@ where
     /// handles resize notifications, and resolves any expired ESC or paste
     /// deadlines. `None` means block until an event or wake; `Some(Duration::ZERO)`
     /// means perform a non-blocking readiness pass.
+    ///
+    /// A platform whose wait takes a whole number of milliseconds rounds a
+    /// fractional millisecond up, so such a wait can return up to a
+    /// millisecond after the deadline.
     ///
     /// Returns:
     ///

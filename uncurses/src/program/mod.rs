@@ -205,11 +205,9 @@ pub struct ProgramOptions {
     pub prefer_synchronized_output: bool,
     /// How to read the ambiguous legacy keys.
     ///
-    /// A terminal using its legacy encoding sends one control byte for a key
-    /// and for a Ctrl combination that collides with it, and which of the two
-    /// a reader meant is not in the bytes. See [`DecoderFlags`] for the
-    /// collisions and what each flag chooses. Defaults to
-    /// [`empty`](DecoderFlags::empty), which reads each as the named key.
+    /// Defaults to [`empty`](DecoderFlags::empty). LF reads as Ctrl+J;
+    /// [`DecoderFlags::LF_IS_ENTER`] selects Enter instead. See [`DecoderFlags`]
+    /// for all mappings.
     pub legacy_keys: DecoderFlags,
 }
 

@@ -94,6 +94,52 @@ fn test_write_and_render() {
 }
 
 #[test]
+fn an_insert_boundary_inside_a_wide_cell_repaints_the_complete_row() {
+    for ich in [false, true] {
+        for prefix in ["", "X", "XYZ"] {
+            for inserted in ["世", "世界"] {
+                let mut screen = Screen::new(Vec::new(), (20, 1));
+                let mut opts = Optimizations::all();
+                opts.set(Optimizations::ICH, ich);
+                screen.set_optimizations(opts);
+                screen.set_str((0, 0), &format!("{prefix}ABCDEFGHIJ"), Style::default());
+                screen.render().unwrap();
+                screen.writer_mut().clear();
+
+                let row = format!("{prefix}{inserted}ABCDEFGHIJ");
+                screen.set_str((0, 0), &row, Style::default());
+                screen.render().unwrap();
+
+                assert_eq!(
+                    String::from_utf8_lossy(screen.writer()),
+                    format!("\x1b[?25l{row}\x1b[?25h"),
+                    "the overwrite must preserve the whole suffix, ICH={ich}"
+                );
+                screen.writer_mut().clear();
+                screen.render().unwrap();
+                assert!(screen.writer().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn an_insert_boundary_between_narrow_cells_keeps_insert_mode() {
+    let mut screen = Screen::new(Vec::new(), (20, 1));
+    screen.set_optimizations(Optimizations::all() - Optimizations::ICH);
+    screen.set_str((0, 0), "XABCDEFGHIJ", Style::default());
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
+    screen.set_str((0, 0), "X***ABCDEFGHIJ", Style::default());
+    screen.render().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(screen.writer()),
+        "\x1b[?25lX*\x1b[4h**A\x1b[4l\x1b[?25h"
+    );
+}
+
+#[test]
 fn default_width_mode_is_wc() {
     let screen = Screen::for_test(Vec::new(), (20, 1));
     assert_eq!(screen.width_mode(), WidthMode::Wc);
@@ -130,7 +176,8 @@ fn str_width_follows_mode_and_eaw_and_counts_escapes_literally() {
 #[test]
 fn grapheme_width_and_cells_use_screen_policy() {
     let mut screen = Screen::for_test(Vec::new(), (20, 1));
-    // Wc mode is cluster-blind: the VS15 tail is ignored, base '✋' is 2.
+    // Wc mode reads no presentation meaning in the VS15 tail; it is
+    // zero-width, so the sum is base '✋' alone at 2.
     assert_eq!(screen.grapheme_width("\u{270b}\u{fe0e}"), 2);
     screen.set_grapheme_clusters(true);
     // Grapheme mode honours VS15 → text presentation, one column.
@@ -297,7 +344,7 @@ fn s(bytes: &[u8]) -> String {
 }
 
 fn fill(screen: &mut Screen<&mut Vec<u8>>, x: u16, y: u16, content: &str) {
-    screen.set_cell((x, y), &Cell::narrow(content));
+    screen.set_cell((x, y), &Cell::new(content, 1));
 }
 
 fn draw_wrapped(screen: &mut Screen<&mut Vec<u8>>, src: &str) {
@@ -374,7 +421,7 @@ fn truecolor_profile_emits_38_2_rgb() {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::TrueColor);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -394,7 +441,7 @@ fn ansi256_profile_emits_38_5_index() {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ansi256);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -411,7 +458,7 @@ fn ansi_profile_emits_basic_sgr_3x_or_9x() {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ansi);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -433,7 +480,7 @@ fn ascii_profile_emits_no_color_sgr() {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ascii);
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -967,7 +1014,7 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::narrow(char::from(b'A' + y as u8).to_string()),
+                    &Cell::new(char::from(b'A' + y as u8).to_string(), 1),
                 );
             }
         }
@@ -977,12 +1024,12 @@ fn scroll_optimization_falls_back_to_lf_without_su_sd() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::narrow(char::from(b'A' + 1 + y as u8).to_string()),
+                    &Cell::new(char::from(b'A' + 1 + y as u8).to_string(), 1),
                 );
             }
         }
         for x in 0..10u16 {
-            screen.set_cell((x, 4u16), &Cell::narrow("F"));
+            screen.set_cell((x, 4u16), &Cell::new("F", 1));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1008,7 +1055,7 @@ fn wide_characters_round_trip_to_output() {
         let mut screen = Screen::for_test(&mut buf, (10, 1));
         let wide = ["🌟", "中", "文", "字"];
         for (i, ch) in wide.iter().enumerate() {
-            screen.set_cell((i as u16 * 2, 0u16), &Cell::wide(*ch));
+            screen.set_cell((i as u16 * 2, 0u16), &Cell::new(*ch, 2));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1024,7 +1071,7 @@ fn zero_width_combining_mark_reaches_output() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (5, 1));
-        screen.set_cell((0u16, 0u16), &Cell::narrow("a\u{0301}"));
+        screen.set_cell((0u16, 0u16), &Cell::new("a\u{0301}", 1));
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -1038,19 +1085,19 @@ fn styled_text_emits_specific_sgr_payloads() {
         let mut screen = Screen::for_test(&mut buf, (4, 1));
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("X").style(Style::default().bold()),
+            &Cell::new("X", 1).style(Style::default().bold()),
         );
         screen.set_cell(
             (1u16, 0u16),
-            &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
         );
         screen.set_cell(
             (2u16, 0u16),
-            &Cell::narrow("X").style(Style::default().bg(Color::rgb(0, 255, 0))),
+            &Cell::new("X", 1).style(Style::default().bg(Color::rgb(0, 255, 0))),
         );
         screen.set_cell(
             (3u16, 0u16),
-            &Cell::narrow("X").style(Style::default().bold().fg(Color::rgb(0, 0, 255))),
+            &Cell::new("X", 1).style(Style::default().bold().fg(Color::rgb(0, 0, 255))),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1071,7 +1118,7 @@ fn hyperlinks_emit_osc8_with_url() {
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
-                &Cell::narrow(ch.to_string()).style(style.clone()),
+                &Cell::new(ch.to_string(), 1).style(style.clone()),
             );
         }
         screen.render().unwrap();
@@ -1095,7 +1142,7 @@ fn hyperlinks_suppressed_under_disabled_profile() {
         for (i, ch) in "link".chars().enumerate() {
             screen.set_cell(
                 (i as u16, 0u16),
-                &Cell::narrow(ch.to_string()).style(style.clone()),
+                &Cell::new(ch.to_string(), 1).style(style.clone()),
             );
         }
         screen.render().unwrap();
@@ -1137,7 +1184,7 @@ fn scroll_optimization_default_keeps_bottom_row_glyph() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::narrow(char::from(b'A' + y as u8).to_string()),
+                    &Cell::new(char::from(b'A' + y as u8).to_string(), 1),
                 );
             }
         }
@@ -1147,12 +1194,12 @@ fn scroll_optimization_default_keeps_bottom_row_glyph() {
             for x in 0..10u16 {
                 screen.set_cell(
                     (x, y),
-                    &Cell::narrow(char::from(b'A' + 1 + y as u8).to_string()),
+                    &Cell::new(char::from(b'A' + 1 + y as u8).to_string(), 1),
                 );
             }
         }
         for x in 0..10u16 {
-            screen.set_cell((x, 4u16), &Cell::narrow("F"));
+            screen.set_cell((x, 4u16), &Cell::new("F", 1));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1173,7 +1220,7 @@ fn large_buffer_renders_bottom_right_glyph() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1000, 1000));
-        screen.set_cell((999u16, 999u16), &Cell::narrow("X"));
+        screen.set_cell((999u16, 999u16), &Cell::new("X", 1));
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -1196,7 +1243,7 @@ fn underline_styles_emit_extended_sgr_params() {
         ];
         for (i, u) in styles.iter().enumerate() {
             let st = Style::default().underline_style(*u);
-            screen.set_cell((i as u16, 0u16), &Cell::narrow("U").style(st));
+            screen.set_cell((i as u16, 0u16), &Cell::new("U", 1).style(st));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1222,7 +1269,7 @@ fn text_attribute_variants_emit_matching_sgr_params() {
             Style::default().bold(),
         ];
         for (i, st) in styles.iter().enumerate() {
-            screen.set_cell((i as u16, 0u16), &Cell::narrow("A").style(st.clone()));
+            screen.set_cell((i as u16, 0u16), &Cell::new("A", 1).style(st.clone()));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1260,7 +1307,7 @@ fn color_downsampling_emits_profile_specific_sgr() {
         let mut buf: Vec<u8> = Vec::new();
         {
             let mut screen = Screen::for_test(&mut buf, (3, 1)).with_color_profile(profile);
-            let cell = Cell::narrow("C").style(Style::default().fg(Color::rgb(123, 234, 45)));
+            let cell = Cell::new("C", 1).style(Style::default().fg(Color::rgb(123, 234, 45)));
             screen.set_cell((0u16, 0u16), &cell);
             screen.render().unwrap();
             screen.flush().unwrap();
@@ -1286,7 +1333,7 @@ fn phantom_cursor_wraps_glyph_in_autowrap_disable() {
         let mut screen = Screen::for_test(&mut buf, (5, 3));
         screen.set_alt_screen(true);
         for y in 0..3u16 {
-            screen.set_cell((4u16, y), &Cell::narrow("X"));
+            screen.set_cell((4u16, y), &Cell::new("X", 1));
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1313,7 +1360,7 @@ fn line_clearing_uses_el_when_row_shrinks() {
         screen.flush().unwrap();
         for x in 0..10u16 {
             let c = if x == 0 {
-                Cell::narrow("X")
+                Cell::new("X", 1)
             } else {
                 Cell::BLANK
             };
@@ -1466,7 +1513,7 @@ fn renderer_redraws_when_style_changes() {
 
         screen.set_cell(
             (0u16, 0u16),
-            &Cell::narrow("A").style(Style::default().bold()),
+            &Cell::new("A", 1).style(Style::default().bold()),
         );
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1481,7 +1528,7 @@ fn basic_color_fg_emits_sgr_31() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1, 1));
-        let cell = Cell::narrow("X").style(Style::default().fg(Color::Red));
+        let cell = Cell::new("X", 1).style(Style::default().fg(Color::Red));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1598,10 +1645,10 @@ fn inline_erase_until_end_of_line_clears_trailing_cells() {
 
         for x in 0..10u16 {
             let cell = match x {
-                0 => Cell::narrow("A"),
-                1 => Cell::narrow("B"),
-                2 => Cell::narrow("C"),
-                3 => Cell::narrow("E"),
+                0 => Cell::new("A", 1),
+                1 => Cell::new("B", 1),
+                2 => Cell::new("C", 1),
+                3 => Cell::new("E", 1),
                 _ => Cell::BLANK,
             };
             screen.set_cell((x, 1u16), &cell);
@@ -1729,7 +1776,7 @@ fn truecolor_termcap_upgrade_repaints_unchanged_cells() {
     let mut screen = Screen::for_test(Vec::new(), (1, 1)).with_color_profile(Profile::Ansi256);
     screen.set_cell(
         (0u16, 0u16),
-        &Cell::narrow("X").style(Style::default().fg(Color::rgb(255, 0, 0))),
+        &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
     );
     screen.render().unwrap();
 
@@ -1853,7 +1900,7 @@ fn two_pane_second_frame(scroll_optimize: bool, sync_output: bool) -> String {
         for y in 0..H {
             if y < TREE_ROWS {
                 for (i, ch) in format!("tree-{y:02}").chars().enumerate() {
-                    screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+                    screen.set_cell((i as u16, y), &Cell::new(ch.to_string(), 1));
                 }
             }
             let n = y as usize + offset;
@@ -1864,7 +1911,7 @@ fn two_pane_second_frame(scroll_optimize: bool, sync_output: bool) -> String {
                 .take((W - SIDEBAR) as usize)
                 .collect();
             for (i, ch) in body.chars().enumerate() {
-                screen.set_cell((SIDEBAR + i as u16, y), &Cell::narrow(ch.to_string()));
+                screen.set_cell((SIDEBAR + i as u16, y), &Cell::new(ch.to_string(), 1));
             }
         }
     }
@@ -1930,7 +1977,7 @@ fn plain_scroll_frame(sync_output: bool, shift: i32) -> String {
                 .take(W as usize)
                 .collect();
             for (i, ch) in body.chars().enumerate() {
-                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+                screen.set_cell((i as u16, y), &Cell::new(ch.to_string(), 1));
             }
         }
     }
@@ -2059,9 +2106,9 @@ fn thumb_second_frame(sync_output: bool) -> String {
     fn paint(screen: &mut Screen<Vec<u8>>, offset: usize) {
         for y in 0..H {
             let track = if y == THUMB_ROW {
-                Cell::narrow("\u{2588}").style(Style::default().bg(Color::Red))
+                Cell::new("\u{2588}", 1).style(Style::default().bg(Color::Red))
             } else {
-                Cell::narrow(" ")
+                Cell::new(" ", 1)
             };
             screen.set_cell((0, y), &track);
             let n = y as usize + offset;
@@ -2072,7 +2119,7 @@ fn thumb_second_frame(sync_output: bool) -> String {
                 .take((W - 1) as usize)
                 .collect();
             for (i, ch) in body.chars().enumerate() {
-                screen.set_cell((1 + i as u16, y), &Cell::narrow(ch.to_string()));
+                screen.set_cell((1 + i as u16, y), &Cell::new(ch.to_string(), 1));
             }
         }
     }
@@ -2155,7 +2202,7 @@ fn turning_sync_output_off_between_frames_stops_scrolling() {
                 .take(W as usize)
                 .collect();
             for (i, ch) in body.chars().enumerate() {
-                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+                screen.set_cell((i as u16, y), &Cell::new(ch.to_string(), 1));
             }
         }
     };
@@ -2208,7 +2255,7 @@ fn scroll_detection_stays_off_inline() {
                 .take(W as usize)
                 .collect();
             for (i, ch) in body.chars().enumerate() {
-                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+                screen.set_cell((i as u16, y), &Cell::new(ch.to_string(), 1));
             }
         }
     };
@@ -2256,7 +2303,7 @@ fn scroll_detection_is_off_until_synchronized_output_is_enabled() {
                 .take(W as usize)
                 .collect();
             for (i, ch) in body.chars().enumerate() {
-                screen.set_cell((i as u16, y), &Cell::narrow(ch.to_string()));
+                screen.set_cell((i as u16, y), &Cell::new(ch.to_string(), 1));
             }
         }
     };
@@ -2325,7 +2372,7 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
     );
 }
 
-/// An imperative cursor move happens between frames, where the desired grid
+/// An ordinary imperative move happens between frames, where the desired grid
 /// is not what the terminal shows. The move planner may pay for a short
 /// forward hop by re-emitting the cells it passes over, so planning it over
 /// that grid paints cells the terminal does not have — and it never records
@@ -2335,7 +2382,7 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
 /// Three ways the desired grid diverges, each reached by a forward hop short
 /// enough for the overwrite candidate to beat CUF.
 #[test]
-fn move_cursor_to_never_emits_cell_content() {
+fn move_cursor_to_keeps_ordinary_moves_free_of_cell_content() {
     // (name, how the grid is made to diverge, where to move)
     #[allow(clippy::type_complexity)]
     let cases: [(&str, fn(&mut Screen<Vec<u8>>), (u16, u16)); 3] = [
@@ -2537,4 +2584,613 @@ fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
     screen.set_str((0, 3), "grown", st.clone());
     screen.render().unwrap();
     assert_eq!(screen.diverge(), None, "after a resize");
+}
+
+#[test]
+fn wc_mode_gives_a_flag_the_two_columns_the_terminal_advances() {
+    // A regional-indicator pair is two code points of width one. A terminal
+    // without grapheme segmentation advances two columns for it, so the
+    // cluster must own two cells or every later column on the row is off
+    // by one.
+    let mut screen = Screen::for_test(Vec::new(), (20, 1));
+    screen.set_str(
+        (0, 0),
+        "\u{1f1fa}\u{1f1f8}X",
+        crate::style::Style::default(),
+    );
+    let cell = |x| {
+        screen
+            .front_buf
+            .cell(crate::layout::Position::new(x, 0))
+            .unwrap()
+    };
+    assert_eq!(cell(0).width(), 2);
+    assert_eq!(cell(1).width(), 0, "flag must claim a continuation cell");
+    assert_eq!(cell(2).content(), "X");
+}
+
+#[test]
+fn wc_mode_gives_a_joined_emoji_every_column_the_terminal_advances() {
+    // A terminal without grapheme segmentation draws each emoji in a ZWJ
+    // sequence separately, advancing two columns per emoji and none for the
+    // joiners. The grid has to credit the cluster with all eight columns or
+    // everything after it sits in the wrong place.
+    let mut screen = Screen::for_test(Vec::new(), (20, 1));
+    let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    let text = format!("{fam}X");
+    screen.set_str((0, 0), &text, crate::style::Style::default());
+    let cell = |x| {
+        screen
+            .front_buf
+            .cell(crate::layout::Position::new(x, 0))
+            .unwrap()
+    };
+    assert_eq!(cell(0).width(), 8);
+    assert_eq!(cell(0).content(), fam);
+    for x in 1..8 {
+        assert!(
+            cell(x).is_continuation(),
+            "column {x} must be a continuation"
+        );
+    }
+    assert_eq!(cell(8).content(), "X");
+}
+
+#[test]
+fn wc_mode_renders_a_joined_emoji_and_addresses_the_column_after_it() {
+    // The grid credits the cluster with eight columns. The renderer has to
+    // agree, so it draws the cluster once and puts the cell that follows at
+    // the ninth column, which it can only do if it tracks the same eight
+    // columns the grid handed it.
+    let mut screen = Screen::for_test(Vec::new(), (20, 1));
+    let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    screen.set_str((0, 0), &format!("{fam}X"), crate::style::Style::default());
+    screen.render().unwrap();
+    let first = String::from_utf8_lossy(screen.writer()).into_owned();
+    assert_eq!(
+        first.matches(fam).count(),
+        1,
+        "the cluster must be drawn exactly once: {first:?}"
+    );
+    assert!(
+        first.contains('X'),
+        "the cell after it must be drawn: {first:?}"
+    );
+
+    screen.writer_mut().clear();
+    screen.set_str((8, 0), "Y", crate::style::Style::default());
+    screen.render().unwrap();
+    let second = String::from_utf8_lossy(screen.writer()).into_owned();
+    assert!(
+        second.contains('Y'),
+        "the changed cell must be redrawn: {second:?}"
+    );
+    // The change sits past a cluster the terminal may ligate, so the column
+    // the diff names for it is not one the terminal agrees on. The row is
+    // laid out again from the cluster, the last column where the two still
+    // meet.
+    assert!(
+        second.contains(fam),
+        "the row must be repainted from the cluster: {second:?}"
+    );
+}
+
+#[test]
+fn a_cluster_wider_than_the_row_is_not_written() {
+    // Eight columns do not fit in five. Writing part of the cluster would
+    // leave the row claiming columns the terminal never advanced past.
+    let mut screen = Screen::for_test(Vec::new(), (5, 1));
+    let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
+    screen.set_str((0, 0), fam, crate::style::Style::default());
+    for x in 0..5u16 {
+        let c = screen
+            .front_buf
+            .cell(crate::layout::Position::new(x, 0))
+            .unwrap();
+        assert!(
+            c.is_blank(),
+            "column {x} should stay blank, got {:?}",
+            c.content()
+        );
+    }
+}
+
+/// A cell claiming no column contributes nothing on either path out of the
+/// grid.
+///
+/// Encoding a surface and rendering one are two ways of turning the same
+/// grid into bytes, and they have to make the same thing of every cell. A
+/// cell holding content at width zero used to split them: the encoder wrote
+/// its bytes, the renderer passed the zero width to `put_glyph_bytes` and
+/// emitted nothing at all.
+#[test]
+fn a_cell_claiming_no_column_renders_the_same_as_it_encodes() {
+    use crate::buffer::{Buffer, SurfaceMut};
+    use crate::text::Encode;
+
+    // A mark that is zero-width in its own right, and a letter that is not.
+    // The second is the sharper case: its content would draw a column if
+    // anything read the content to decide, so the two paths can only agree
+    // by reading the width.
+    for content in ["\u{301}", "a"] {
+        let mut buf = Buffer::new(3, 1);
+        buf.set_cell((0, 0).into(), &Cell::new("A", 1));
+        buf.set_cell((1, 0).into(), &Cell::new(content, 0));
+        buf.set_cell((2, 0).into(), &Cell::new("B", 1));
+
+        let mut screen = Screen::for_test(Vec::new(), (3, 1));
+        screen.set_cell((0, 0), &Cell::new("A", 1));
+        screen.set_cell((1, 0), &Cell::new(content, 0));
+        screen.set_cell((2, 0), &Cell::new("B", 1));
+        screen.render().unwrap();
+
+        let encoded = buf.display().to_string();
+        let rendered = s(screen.writer());
+        assert_eq!(encoded, "A B", "content {content:?}");
+        assert!(
+            rendered.contains(&encoded),
+            "the rendered row must carry what the encoder wrote: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains(content),
+            "neither path draws a cell that claims no column: {rendered:?}"
+        );
+    }
+}
+
+/// A run of identical primaries draws each one across all the columns it
+/// claims, the same as a lone primary does.
+///
+/// The run path re-emits one cell's bytes `count` times. It used to build
+/// those bytes itself, standing in a single space at width one for any
+/// cell holding no content, which is only right when the cell claims one
+/// column. Two cells claiming three each then painted two columns instead
+/// of six, and everything after them moved four columns left.
+#[test]
+fn a_run_of_empty_primaries_draws_every_column_each_one_claims() {
+    fn render(cells: &[(u16, Cell)]) -> String {
+        let mut screen = Screen::for_test(Vec::new(), (12, 1));
+        screen.set_optimizations(Optimizations::all());
+        for (x, cell) in cells {
+            screen.set_cell((*x, 0), cell);
+        }
+        screen.render().unwrap();
+        s(screen.writer())
+    }
+
+    let lone = render(&[
+        (0, Cell::new("", 3)),
+        (1, Cell::CONTINUATION),
+        (2, Cell::CONTINUATION),
+        (3, Cell::new("X", 1)),
+    ]);
+    assert!(
+        lone.contains("   X"),
+        "one cell claiming three columns draws three blanks: {lone:?}"
+    );
+
+    let run = render(&[
+        (0, Cell::new("", 3)),
+        (1, Cell::CONTINUATION),
+        (2, Cell::CONTINUATION),
+        (3, Cell::new("", 3)),
+        (4, Cell::CONTINUATION),
+        (5, Cell::CONTINUATION),
+        (6, Cell::new("X", 1)),
+    ]);
+    assert!(
+        run.contains("      X"),
+        "two of them draw six, so X keeps its column: {run:?}"
+    );
+}
+
+/// An inserted primary opens room for every column it claims.
+///
+/// The insert path writes the cells it shifts in. It used to pass their
+/// stored content straight through, which is nothing at all for a cell
+/// holding none, while still counting the columns that cell claims. The
+/// room then opened narrower than the renderer recorded, and the row
+/// drifted left of the model from that column on.
+#[test]
+fn an_inserted_empty_primary_opens_room_for_every_column_it_claims() {
+    let mut screen = Screen::for_test(Vec::new(), (20, 1));
+    // Without ICH the shift runs under insert mode, which writes each
+    // shifted cell through the same path ICH uses.
+    screen.set_optimizations(Optimizations::all() - Optimizations::ICH);
+    screen.set_cell((0, 0), &Cell::new("X", 1));
+    for (i, ch) in "ABCDEFGHIJ".chars().enumerate() {
+        screen.set_cell((i as u16 + 1, 0), &Cell::new(ch.to_string(), 1));
+    }
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    // The narrow prefix puts the insert boundary before the wide primary.
+    screen.set_cell((1, 0), &Cell::new("*", 1));
+    screen.set_cell((2, 0), &Cell::new("", 3));
+    screen.set_cell((3, 0), &Cell::CONTINUATION);
+    screen.set_cell((4, 0), &Cell::CONTINUATION);
+    for (i, ch) in "ABCDEFGHIJ".chars().enumerate() {
+        screen.set_cell((i as u16 + 5, 0), &Cell::new(ch.to_string(), 1));
+    }
+    screen.render().unwrap();
+
+    let frame = s(screen.writer());
+    assert_eq!(
+        frame, "\x1b[?25lX*\x1b[4h   A\x1b[4l\x1b[?25h",
+        "the inserted cell claims three columns, so it writes three: {frame:?}"
+    );
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn an_empty_primary_at_a_split_insert_boundary_repaints_the_suffix() {
+    for ich in [false, true] {
+        for width in [2, 3, 8] {
+            let mut screen = Screen::for_test(Vec::new(), (20, 1));
+            let mut opts = Optimizations::all();
+            opts.set(Optimizations::ICH, ich);
+            screen.set_optimizations(opts);
+            screen.set_str((0, 0), "XABCDEFGHIJ", Style::EMPTY);
+            screen.render().unwrap();
+            screen.writer_mut().clear();
+
+            screen.set_cell((1, 0), &Cell::new("", width));
+            screen.set_str((u16::from(width) + 1, 0), "ABCDEFGHIJ", Style::EMPTY);
+            screen.render().unwrap();
+
+            assert_eq!(
+                s(screen.writer()),
+                format!(
+                    "\x1b[?25lX{}ABCDEFGHIJ\x1b[?25h",
+                    " ".repeat(width as usize)
+                ),
+                "the repaint must preserve the claimed columns and suffix, width={width}, ICH={ich}"
+            );
+            screen.writer_mut().clear();
+            screen.render().unwrap();
+            assert!(screen.writer().is_empty());
+        }
+    }
+}
+
+const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+
+fn rendered_family_rows(fullscreen: bool) -> Screen<Vec<u8>> {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_fullscreen(fullscreen);
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    for (y, text) in [(0, "ABCDEFGHIJ"), (1, "abcdefghij")] {
+        screen.set_str((0, y), FAMILY, Style::EMPTY);
+        screen.set_str((8, y), text, Style::EMPTY);
+    }
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen
+}
+
+#[test]
+fn imperative_cursor_walks_the_rendered_row_after_normalizing_its_target() {
+    for fullscreen in [false, true] {
+        let mut screen = rendered_family_rows(fullscreen);
+        for (target, letter) in [((9, 0), "A"), ((49, 0), "a"), ((9, 99), "a")] {
+            screen.move_cursor_to(target).unwrap();
+            let out = s(screen.writer());
+            assert!(
+                out.ends_with(&format!("\x1b[?7l{FAMILY}{letter}\x1b[?7h")),
+                "fullscreen={fullscreen}, target={target:?}: {out:?}"
+            );
+            assert!(!out.contains('\t'), "a tab crossed the uncertain row");
+            assert_eq!(screen.tracked_cursor(), None);
+            assert_eq!(screen.diverge(), None);
+            screen.writer_mut().clear();
+        }
+        screen.move_cursor_to((0, 0)).unwrap();
+        screen.writer_mut().clear();
+        screen.move_cursor_by(9, 0).unwrap();
+        assert!(s(screen.writer()).contains(&format!("{FAMILY}A")));
+        assert_eq!(screen.tracked_cursor(), None);
+    }
+}
+
+#[test]
+fn imperative_cursor_respects_uncertain_cluster_boundaries() {
+    for (cluster, width) in [(FAMILY, 8), ("\u{2764}\u{fe0f}", 1), ("1\u{20e3}", 1)] {
+        let mut screen = Screen::for_test(Vec::new(), (40, 1));
+        screen.set_str((0, 0), "ab", Style::EMPTY);
+        screen.set_cell((2, 0), &Cell::new(cluster, width));
+        screen.set_str((2 + u16::from(width), 0), "A", Style::EMPTY);
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+
+        screen.move_cursor_to((1, 0)).unwrap();
+        assert!(printable_payload(screen.writer()).is_empty());
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(1, 0)));
+        screen.writer_mut().clear();
+
+        screen.move_cursor_to((3 + u16::from(width), 0)).unwrap();
+        assert!(s(screen.writer()).contains(&format!("{cluster}A")));
+        assert_eq!(screen.tracked_cursor(), None);
+        screen.writer_mut().clear();
+
+        if width > 1 {
+            screen.move_cursor_to((3, 0)).unwrap();
+            assert!(!s(screen.writer()).contains(cluster));
+            assert_eq!(screen.tracked_cursor(), None);
+        }
+    }
+}
+
+#[test]
+fn imperative_cursor_walk_uses_rendered_cells_instead_of_staged_edits() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_str((0, 0), "NEW CONTENT", Style::EMPTY);
+    screen.move_cursor_to((9, 0)).unwrap();
+
+    let out = s(screen.writer());
+    assert!(out.contains(&format!("{FAMILY}A")), "{out:?}");
+    assert!(!out.contains("NEW"), "the move emitted an unrendered edit");
+    assert!(screen.diverge().is_some());
+
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(s(screen.writer()).contains("NEW CONTENT"));
+    assert_eq!(screen.diverge(), None);
+}
+
+#[test]
+fn imperative_cursor_does_not_walk_a_staged_or_invalidated_row() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_str((0, 0), "old", Style::EMPTY);
+    screen.render().unwrap();
+    screen.set_str((0, 0), FAMILY, Style::EMPTY);
+    screen.writer_mut().clear();
+    screen.move_cursor_to((9, 0)).unwrap();
+    assert!(printable_payload(screen.writer()).is_empty());
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(9, 0)));
+
+    for invalidate in [
+        |s: &mut Screen<Vec<u8>>| s.resize((20, 1)),
+        |s: &mut Screen<Vec<u8>>| s.resize((40, 2)),
+        |s: &mut Screen<Vec<u8>>| s.set_fullscreen(true),
+        |s: &mut Screen<Vec<u8>>| s.set_grapheme_clusters(true),
+    ] {
+        let mut screen = rendered_family_rows(false);
+        invalidate(&mut screen);
+        screen.move_cursor_to((9, 0)).unwrap();
+        assert!(
+            printable_payload(screen.writer()).is_empty(),
+            "the move re-emitted invalidated contents: {:?}",
+            s(screen.writer())
+        );
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(9, 0)));
+    }
+}
+
+#[test]
+fn imperative_cursor_walk_does_not_suppress_the_sticky_resting_position() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_cursor_position((9, 0));
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
+    screen.move_cursor_to((10, 0)).unwrap();
+    assert!(s(screen.writer()).contains(&format!("{FAMILY}AB")));
+    assert_eq!(screen.tracked_cursor(), None);
+    screen.writer_mut().clear();
+
+    screen.render().unwrap();
+    assert!(
+        s(screen.writer()).contains(&format!("{FAMILY}A\x1b[?7h")),
+        "the render must restore the staged position: {:?}",
+        s(screen.writer())
+    );
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn imperative_cursor_walk_advances_past_a_trailing_erase() {
+    let mut screen = rendered_family_rows(false);
+    screen.move_cursor_to((30, 0)).unwrap();
+    let out = s(screen.writer());
+    assert!(
+        out.ends_with(&format!("{FAMILY}ABCDEFGHIJ\x1b[12X\x1b[12C\x1b[?7h")),
+        "{out:?}"
+    );
+    assert_eq!(screen.tracked_cursor(), None);
+}
+
+#[test]
+fn imperative_cursor_walk_closes_styles_and_links() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_str(
+        (8, 0),
+        "RED",
+        Style::EMPTY.fg(Color::Red).link("https://example.com", ""),
+    );
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.move_cursor_to((11, 0)).unwrap();
+    let out = s(screen.writer());
+    assert!(out.contains("RED"), "{out:?}");
+    assert!(out.contains("\x1b[31m"), "{out:?}");
+    assert!(out.contains("\x1b[m"), "{out:?}");
+    assert!(out.contains("\x1b]8;;\x1b\\"), "{out:?}");
+}
+
+#[test]
+fn resting_cursor_advances_past_a_trailing_erase() {
+    for start in [0, 3] {
+        let mut screen = Screen::for_test(Vec::new(), (40, 2));
+        screen.set_optimizations(Optimizations::all());
+        screen.set_grapheme_clusters(false);
+        screen.set_str((start, 0), FAMILY, Style::default());
+        screen.set_cursor_position(Position::new(30, 0));
+        screen.render().unwrap();
+
+        let count = 30 - start - 8;
+        let out = s(screen.writer());
+        assert!(
+            out.ends_with(&format!(
+                "{FAMILY}\x1b[{count}X\x1b[{count}C\x1b[?7h\x1b[?25h"
+            )),
+            "the resting walk must advance past its trailing erase: {out:?}"
+        );
+        assert_eq!(screen.tracked_cursor(), None);
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty(), "the resting target was reached");
+    }
+}
+
+/// The resting cursor is walked into a row that carries a ligatable
+/// cluster, not addressed by column.
+///
+/// The planner may pay for a short forward move with hardware tabs or by
+/// re-emitting a cell, and both are counted in columns. Past the cluster
+/// the terminal counts from the glyph it drew, so a tab lands on its own
+/// stop and a re-emitted cell is painted into a column the row never
+/// meant for it, undoing the repaint on every frame.
+#[test]
+fn resting_cursor_walks_into_a_row_holding_a_ligatable_cluster() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "ABCDEFGHIJ", Style::default());
+    screen.set_cursor_position(Position::new(17, 0));
+    screen.render().unwrap();
+
+    // Column seventeen is reached by writing the row's own cells from the
+    // cluster, so the cursor lands wherever the terminal put the ninth
+    // letter rather than on the model's count of it.
+    let out = s(screen.writer());
+    assert!(
+        out.ends_with(&format!(
+            "\x1b[2A\x1b[?7l{FAMILY}ABCDEFGHI\x1b[?7h\x1b[?25h"
+        )),
+        "frame did not end with the walk: {out:?}"
+    );
+    assert!(!out.contains('\t'), "a tab crossed the uncertain row");
+
+    // The terminal placed the cursor and this cannot name the column.
+    assert_eq!(screen.tracked_cursor(), None);
+}
+
+/// A resting position left of the cluster is reached the ordinary way.
+/// Those columns are measured the way the terminal draws them, so there
+/// is nothing to walk around.
+#[test]
+fn resting_cursor_left_of_a_ligatable_cluster_keeps_the_ordinary_move() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), "ab", Style::default());
+    screen.set_str((2, 0), FAMILY, Style::default());
+    screen.set_cursor_position(Position::new(1, 0));
+    screen.render().unwrap();
+
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(1, 0)));
+}
+
+/// The walk past a ligatable cluster leaves the column unknown and the row
+/// known. The frame after it has to earn the column back before it moves
+/// relative to it.
+///
+/// Dropping only the column is what the walk can honestly say: the
+/// terminal placed the cursor on a row the renderer chose. But a relative
+/// plan reads the unknown column as zero, and a bare `\n` keeps whatever
+/// column the cursor is really on, so the next row's first cell would land
+/// wherever the cluster pushed it.
+#[test]
+fn a_frame_after_the_walk_earns_the_column_back_before_moving() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "ABCDEFGHIJ", Style::default());
+    screen.set_cursor_position(Position::new(17, 0));
+    screen.render().unwrap();
+    assert_eq!(
+        screen.tracked_cursor(),
+        None,
+        "the walk left the column open"
+    );
+    screen.writer_mut().clear();
+
+    // A cell on the row below. Reaching it steps down one row, and the
+    // step has to start from a column this can name.
+    screen.clear_cursor_position();
+    screen.set_str((0, 1), "Z", Style::default());
+    screen.render().unwrap();
+
+    let out = s(screen.writer());
+    assert!(
+        out.contains("\r\nZ"),
+        "the step down must re-anchor the column first: {out:?}"
+    );
+}
+
+/// The walk past a ligatable cluster writes cells, and a cell carries
+/// style and links of its own. The frame epilogue has already returned
+/// the pen to default by then, so whatever the walk ends on would ride
+/// out with the frame and paint everything written after it.
+#[test]
+fn the_walk_to_the_resting_cursor_closes_the_style_it_opened() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "RED", Style::default().fg(Color::Red));
+    // Past the red run, so reaching it walks across the whole of it.
+    screen.set_cursor_position(Position::new(11, 0));
+    screen.render().unwrap();
+
+    let out = s(screen.writer());
+    let opened = out
+        .rfind("\u{1b}[31m")
+        .expect("the walk painted the red run");
+    assert!(
+        out[opened..].contains("\u{1b}[m"),
+        "the frame must close the red it opened: {out:?}"
+    );
+}
+
+/// A frame that walks the cursor past an uncertain cluster leaves the column
+/// for the terminal to name. A later render with nothing to change must still
+/// recognize the cursor as resting and write nothing at all.
+#[test]
+fn a_render_after_the_walk_with_nothing_to_change_writes_nothing() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "AB", Style::default());
+    screen.set_cursor_position(Position::new(10, 0));
+    screen.render().unwrap();
+    assert!(
+        s(screen.writer()).contains(FAMILY),
+        "the first frame should walk past the cluster"
+    );
+
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert_eq!(
+        s(screen.writer()),
+        "",
+        "an idle render should write nothing"
+    );
+
+    // The rest is only good for the position that was asked for: moving the
+    // target still has to emit.
+    screen.set_cursor_position(Position::new(12, 0));
+    screen.render().unwrap();
+    assert!(
+        !s(screen.writer()).is_empty(),
+        "a new resting target should still emit a move"
+    );
 }
