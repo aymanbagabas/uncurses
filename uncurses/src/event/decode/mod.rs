@@ -82,6 +82,7 @@ pub struct Decoder {
     buf: Vec<u8>,
     /// Decoder behavior flags (disambiguation toggles for legacy keys).
     pub(super) flags: DecoderFlags,
+    backspace_mode: bool,
     /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
     pub(super) in_paste: bool,
     /// When `true`, raw mouse coordinates after `CSI M` are decoded as UTF-8
@@ -121,6 +122,7 @@ impl Decoder {
             #[cfg(test)]
             buf: Vec::with_capacity(256),
             flags,
+            backspace_mode: false,
             in_paste: false,
             utf8_mouse: false,
             expired: false,
@@ -179,6 +181,16 @@ impl Decoder {
     /// The reading currently chosen for the ambiguous legacy keys.
     pub fn flags(&self) -> DecoderFlags {
         self.flags
+    }
+
+    /// Return the current Backarrow mode. Reset (`false`) is the default.
+    pub fn backspace_mode(&self) -> bool {
+        self.backspace_mode
+    }
+
+    /// Select the Backarrow mode used for future legacy key decoding.
+    pub fn set_backspace_mode(&mut self, enabled: bool) {
+        self.backspace_mode = enabled;
     }
 
     /// Enable or disable UTF-8 mouse decoding (xterm mode 1005).
@@ -463,6 +475,16 @@ impl Decoder {
                 };
                 Key::new(code, KeyModifiers::CTRL)
             }
+            0x08 if !self.flags.contains(DecoderFlags::CTRL_H)
+                && (self.backspace_mode || self.flags.contains(DecoderFlags::CTRL_BACKSPACE)) =>
+            {
+                let modifiers = if self.backspace_mode {
+                    KeyModifiers::empty()
+                } else {
+                    KeyModifiers::CTRL
+                };
+                Key::new(KeyCode::Backspace, modifiers)
+            }
             0x09 if !self.flags.contains(DecoderFlags::CTRL_I) => {
                 Key::new(KeyCode::Tab, KeyModifiers::empty())
             }
@@ -478,12 +500,17 @@ impl Decoder {
             b @ 0x1c..=0x1f => Key::new(KeyCode::Char((b + 0x40) as char), KeyModifiers::CTRL),
             0x20 => Key::new(KeyCode::Space, KeyModifiers::empty()),
             0x7f => {
-                let code = if self.flags.contains(DecoderFlags::BACKSPACE_IS_DELETE) {
-                    KeyCode::Delete
+                let (code, modifiers) = if self.flags.contains(DecoderFlags::DEL_IS_DELETE) {
+                    (KeyCode::Delete, KeyModifiers::empty())
                 } else {
-                    KeyCode::Backspace
+                    let modifiers = if self.backspace_mode {
+                        KeyModifiers::CTRL
+                    } else {
+                        KeyModifiers::empty()
+                    };
+                    (KeyCode::Backspace, modifiers)
                 };
-                Key::new(code, KeyModifiers::empty())
+                Key::new(code, modifiers)
             }
             // 8-bit C1 control codes that introduce a string/control sequence
             // (equivalent to their `ESC X` 7-bit forms).
@@ -512,6 +539,160 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backspace_mode_report_does_not_change_decoder_state() {
+        let mut decoder = Decoder::default();
+        let input = b"\x1b[?67;1$y\x08";
+        let (consumed, report) = decoder.parse_one(input);
+        assert!(matches!(report, Some(Event::ModeReport { .. })));
+        let (_, event) = decoder.parse_one(&input[consumed..]);
+        assert_eq!(
+            event,
+            Some(Event::KeyPress(Key::new(
+                KeyCode::Char('h'),
+                KeyModifiers::CTRL
+            )))
+        );
+    }
+
+    #[test]
+    fn legacy_backspace_matrix() {
+        let h = &Key::new(KeyCode::Char('h'), KeyModifiers::CTRL);
+        let bs = &Key::new(KeyCode::Backspace, KeyModifiers::empty());
+        let ctrl_bs = &Key::new(KeyCode::Backspace, KeyModifiers::CTRL);
+        let del = &Key::new(KeyCode::Delete, KeyModifiers::empty());
+        let h_flag = DecoderFlags::CTRL_H;
+        let c_flag = DecoderFlags::CTRL_BACKSPACE;
+        let d_flag = DecoderFlags::DEL_IS_DELETE;
+        let cases = [
+            (DecoderFlags::empty(), [h, bs, bs, ctrl_bs]),
+            (d_flag, [h, del, bs, del]),
+            (c_flag, [ctrl_bs, bs, bs, ctrl_bs]),
+            (c_flag | d_flag, [ctrl_bs, del, bs, del]),
+            (h_flag, [h, bs, h, ctrl_bs]),
+            (h_flag | d_flag, [h, del, h, del]),
+            (h_flag | c_flag, [h, bs, h, ctrl_bs]),
+            (h_flag | c_flag | d_flag, [h, del, h, del]),
+        ];
+        let mut checked = 0;
+        for (flags, expected) in cases {
+            for (enabled, offset) in [(false, 0), (true, 2)] {
+                for (i, byte) in [0x08, 0x7f].into_iter().enumerate() {
+                    for alt in [false, true] {
+                        let mut decoder = Decoder::new(flags);
+                        decoder.set_backspace_mode(enabled);
+                        let bytes = [0x1b, byte];
+                        let input = if alt { &bytes[..] } else { &bytes[1..] };
+                        let mut key = expected[offset + i].clone();
+                        if alt {
+                            key.modifiers |= KeyModifiers::ALT;
+                        }
+                        assert_eq!(
+                            decoder.parse_one(input),
+                            (input.len(), Some(Event::KeyPress(key.normalized()))),
+                            "mode={enabled}, flags={flags:?}, input={input:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 64);
+    }
+
+    #[test]
+    fn backspace_mode_reports_and_split_input() {
+        use crate::ansi::mode::{Mode, ModeSetting};
+
+        for initial in [false, true] {
+            for setting in [
+                ModeSetting::NotRecognized,
+                ModeSetting::Set,
+                ModeSetting::Reset,
+                ModeSetting::PermanentlySet,
+                ModeSetting::PermanentlyReset,
+            ] {
+                for introducer in [b"\x1b[".as_slice(), b"\x9b"] {
+                    let mut input = introducer.to_vec();
+                    input.extend_from_slice(format!("?67;{}$y\x08", setting.value()).as_bytes());
+                    for split in 0..=input.len() {
+                        let mut decoder = Decoder::default();
+                        decoder.set_backspace_mode(initial);
+                        let mut events = decoder.parse(&input[..split]);
+                        events.extend(decoder.parse(&input[split..]));
+                        let key = if initial {
+                            Key::new(KeyCode::Backspace, KeyModifiers::empty())
+                        } else {
+                            Key::new(KeyCode::Char('h'), KeyModifiers::CTRL)
+                        };
+                        assert_eq!(
+                            events,
+                            [
+                                Event::ModeReport {
+                                    mode: Mode::BACKARROW_KEY,
+                                    setting
+                                },
+                                Event::KeyPress(key)
+                            ]
+                        );
+                        assert_eq!(decoder.backspace_mode(), initial);
+                    }
+                }
+            }
+        }
+        let mut decoder = Decoder::default();
+        decoder.parse(b"\x1b[67;1$y\x1b[?66;1$y");
+        assert!(!decoder.backspace_mode());
+    }
+
+    #[test]
+    fn backspace_mode_preserves_explicit_keys_and_paste() {
+        let flags =
+            DecoderFlags::CTRL_H | DecoderFlags::CTRL_BACKSPACE | DecoderFlags::DEL_IS_DELETE;
+        for enabled in [false, true] {
+            let mut decoder = Decoder::new(flags);
+            decoder.set_backspace_mode(enabled);
+            for (input, code, mods) in [
+                (
+                    b"\x1b[3~".as_slice(),
+                    KeyCode::Delete,
+                    KeyModifiers::empty(),
+                ),
+                (b"\x1b[3;5~", KeyCode::Delete, KeyModifiers::CTRL),
+                (b"\x1b[57349u", KeyCode::Delete, KeyModifiers::empty()),
+                (b"\x1b[127;5u", KeyCode::Backspace, KeyModifiers::CTRL),
+                (b"\x1b[104;5u", KeyCode::Char('h'), KeyModifiers::CTRL),
+                (b"\x1b[27;5;8~", KeyCode::Backspace, KeyModifiers::CTRL),
+                (b"\x1b[27;5;127~", KeyCode::Backspace, KeyModifiers::CTRL),
+                (b"\x07", KeyCode::Char('g'), KeyModifiers::CTRL),
+                (b"\x09", KeyCode::Tab, KeyModifiers::empty()),
+                (b"\x0a", KeyCode::Char('j'), KeyModifiers::CTRL),
+                (b"\x0d", KeyCode::Enter, KeyModifiers::empty()),
+            ] {
+                assert_eq!(
+                    decoder.parse_one(input),
+                    (
+                        input.len(),
+                        Some(Event::KeyPress(Key::new(code, mods).normalized()))
+                    )
+                );
+            }
+            let input = b"\x1b[200~\x08\x7f\x1b[?67;1$y\x1b[?67;2$y\x1b[201~";
+            let mut rest = input.as_slice();
+            let mut pasted = Vec::new();
+            while !rest.is_empty() {
+                let (consumed, event) = decoder.parse_one(rest);
+                assert!(consumed > 0);
+                if let Some(Event::PasteChunk(bytes)) = event {
+                    pasted.extend(bytes);
+                }
+                rest = &rest[consumed..];
+            }
+            assert_eq!(pasted, b"\x08\x7f\x1b[?67;1$y\x1b[?67;2$y");
+            assert_eq!(decoder.backspace_mode(), enabled);
+        }
+    }
     use crate::ansi::cursor::CursorStyle;
     use crate::color::Color;
     use crate::event::ClipboardSelection;
@@ -2216,7 +2397,7 @@ mod tests {
         let mut p = Decoder::new(DecoderFlags::empty());
         assert_eq!(press(p.parse(b"\x7f")).code, KeyCode::Backspace);
 
-        let mut p = Decoder::new(DecoderFlags::BACKSPACE_IS_DELETE);
+        let mut p = Decoder::new(DecoderFlags::DEL_IS_DELETE);
         assert_eq!(press(p.parse(b"\x7f")).code, KeyCode::Delete);
     }
 
@@ -2415,7 +2596,7 @@ mod tests {
 
     #[test]
     fn esc_del_follows_the_flag_that_renames_the_bare_byte() {
-        // `BACKSPACE_IS_DELETE` renames a bare `0x7f`, and the prefixed form
+        // `DEL_IS_DELETE` renames a bare `0x7f`, and the prefixed form
         // is the same key with Alt because it is asked for rather than
         // named again.
         let mut p = Decoder::new(DecoderFlags::empty());
@@ -2423,7 +2604,7 @@ mod tests {
         assert_eq!(k.code, KeyCode::Backspace);
         assert_eq!(k.modifiers, KeyModifiers::ALT);
 
-        let mut p = Decoder::new(DecoderFlags::BACKSPACE_IS_DELETE);
+        let mut p = Decoder::new(DecoderFlags::DEL_IS_DELETE);
         let k = press(p.parse(b"\x1b\x7f"));
         assert_eq!(k.code, KeyCode::Delete);
         assert_eq!(k.modifiers, KeyModifiers::ALT);

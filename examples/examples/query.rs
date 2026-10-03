@@ -5,6 +5,7 @@
 //! [`Event`] values back through an `EventSource`. The Primary Device
 //! Attributes reply is conventionally sent last, so it marks the end of
 //! the answers.
+//! Apply Backarrow-mode replies to configure the source's legacy key decoding.
 //!
 //! Run with `cargo run --example query`. A terminal that does not support
 //! a given query simply never answers it, so the program gives up after a
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 use uncurses::ansi::color::REQUEST_BACKGROUND_COLOR;
 use uncurses::ansi::ctrl::REQUEST_PRIMARY_DA;
 use uncurses::ansi::cursor::write_request_cursor_position;
+use uncurses::ansi::mode::Mode;
 use uncurses::ansi::winop::REQUEST_CELL_PIXEL_SIZE;
 use uncurses::event::{Event, EventSource};
 use uncurses::terminal::Terminal;
@@ -31,6 +33,7 @@ fn main() -> io::Result<()> {
     // batch, so seeing it means every earlier answer has already arrived.
     out.write_all(REQUEST_BACKGROUND_COLOR)?;
     write_request_cursor_position(&mut out)?;
+    Mode::BACKARROW_KEY.request(&mut out)?;
     out.write_all(REQUEST_CELL_PIXEL_SIZE)?;
     out.write_all(REQUEST_PRIMARY_DA)?;
     out.flush()?;
@@ -50,6 +53,15 @@ fn main() -> io::Result<()> {
                 }
                 Event::CellPixelSize { width, height } => {
                     lines.push(format!("cell size: {width}x{height} pixels"))
+                }
+                Event::ModeReport { mode, setting } if mode == Mode::BACKARROW_KEY => {
+                    if setting.is_recognized() {
+                        events.set_backspace_mode(setting.is_set());
+                    }
+                    lines.push(format!(
+                        "backspace mode: {} (report: {setting:?})",
+                        events.backspace_mode()
+                    ));
                 }
                 Event::PrimaryDeviceAttributes(attrs) => {
                     lines.push(format!("device attributes: {attrs:?}"));
