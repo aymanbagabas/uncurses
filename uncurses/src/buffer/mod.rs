@@ -485,7 +485,9 @@ impl SurfaceMut for Buffer {
     /// reaches past both edges of the fill. Wide fills (`cell.width() > 1`)
     /// stay on the stepped `set_cell` path so primary/continuation
     /// pairing and the trailing-partial-slot blank are placed by the
-    /// same wide-cell handling that `set` already implements.
+    /// same wide-cell handling that `set` already implements. Partial slots
+    /// retain the fill style. Cleanup outside the rectangle retains the
+    /// old primary's style.
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         if clipped.is_empty() {
@@ -494,6 +496,7 @@ impl SurfaceMut for Buffer {
 
         let step = (cell.width() as u16).max(1);
         if step > 1 {
+            let blank = Cell::BLANK.style(cell.style.clone());
             // Stepped wide-cell fill: identical to the trait default.
             // Inlined here so the SurfaceMut::fill_rect dispatch goes
             // through this impl in both arms.
@@ -504,7 +507,7 @@ impl SurfaceMut for Buffer {
                     x += step;
                 }
                 while x < clipped.right() {
-                    self.set(Position::new(x, y), &Cell::BLANK);
+                    self.set(Position::new(x, y), &blank);
                     x += 1;
                 }
             }
@@ -532,10 +535,9 @@ impl SurfaceMut for Buffer {
                 }
                 if !line[p].is_continuation() {
                     let pw = line[p].width() as usize;
+                    let blank = Cell::BLANK.style(line[p].style.clone());
                     let end = (p + pw).min(lo);
-                    for slot in &mut line[p..end] {
-                        *slot = Cell::BLANK;
-                    }
+                    line[p..end].fill(blank.clone());
                     // The same cell can also reach past `hi`, which is what
                     // happens when the fill lands wholly inside it. Those
                     // columns just lost the primary that owned them, so
@@ -544,9 +546,7 @@ impl SurfaceMut for Buffer {
                     // as `lo`, and this primary sits before that.
                     if p + pw > hi {
                         let tail = (p + pw).min(row_width);
-                        for slot in &mut line[hi..tail] {
-                            *slot = Cell::BLANK;
-                        }
+                        line[hi..tail].fill(blank);
                     }
                 }
             }
@@ -564,9 +564,8 @@ impl SurfaceMut for Buffer {
                 if !line[p].is_continuation() && p + (line[p].width() as usize) > hi {
                     let pw = line[p].width() as usize;
                     let end = (p + pw).min(row_width);
-                    for slot in &mut line[hi..end] {
-                        *slot = Cell::BLANK;
-                    }
+                    let blank = Cell::BLANK.style(line[p].style.clone());
+                    line[hi..end].fill(blank);
                 }
             }
 

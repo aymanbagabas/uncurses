@@ -80,6 +80,118 @@ fn test_broken_wide_cell_keeps_bg() {
     assert_eq!(edge.style.bg, Some(Color::Red));
 }
 
+fn check_partial_fill_style(use_view: bool) {
+    use crate::color::Color;
+    use crate::style::AttrFlags;
+
+    let style = Style {
+        attrs: AttrFlags::BOLD,
+        ..Style::EMPTY
+            .fg(Color::White)
+            .bg(Color::Red)
+            .link("https://example.com/fill", "")
+    };
+    for width in [2, 3, 8] {
+        for columns in [1, 5, 10] {
+            let mut buf = Buffer::new(16, 3);
+            let rect = Rect::new(2, 1, columns, 1);
+            let fill = Cell::new("W", width).style(style.clone());
+            if use_view {
+                View::new(&mut buf, rect).fill_rect(Rect::new(0, 0, 16, 3), &fill);
+            } else {
+                buf.fill_rect(rect, &fill);
+            }
+            let full_columns = columns - columns % u16::from(width);
+            for y in 0..3 {
+                for x in 0..16 {
+                    let pos = Position::new(x, y);
+                    let expected = if rect.contains(pos) {
+                        let offset = x - rect.left();
+                        if offset >= full_columns {
+                            Cell::BLANK.style(style.clone())
+                        } else if offset.is_multiple_of(u16::from(width)) {
+                            fill.clone()
+                        } else {
+                            Cell::CONTINUATION.style(style.clone())
+                        }
+                    } else {
+                        Cell::BLANK
+                    };
+                    assert_eq!(
+                        buf.cell(pos).unwrap(),
+                        &expected,
+                        "view={use_view}, width={width}, columns={columns}, pos={pos:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fill_rect_preserves_fill_style_in_partial_slots() {
+    check_partial_fill_style(false);
+}
+
+#[test]
+fn default_fill_rect_preserves_fill_style_in_partial_slots() {
+    check_partial_fill_style(true);
+}
+
+fn check_fill_boundary_style(rect: Rect) {
+    use crate::color::Color;
+    use crate::style::AttrFlags;
+
+    let old_style = Style {
+        attrs: AttrFlags::BOLD,
+        ..Style::EMPTY
+            .fg(Color::Yellow)
+            .bg(Color::Blue)
+            .link("https://example.com/old", "")
+    };
+    let fill = Cell::new("x", 1).style(
+        Style::EMPTY
+            .fg(Color::White)
+            .bg(Color::Red)
+            .link("https://example.com/fill", ""),
+    );
+    let mut buf = Buffer::new(12, 3);
+    buf.set((2, 1), &Cell::new("W", 8).style(old_style.clone()));
+    buf.fill_rect(rect, &fill);
+    for y in 0..3 {
+        for x in 0..12 {
+            let pos = Position::new(x, y);
+            let expected = if rect.contains(pos) {
+                fill.clone()
+            } else if y == 1 && (2..10).contains(&x) {
+                Cell::BLANK.style(old_style.clone())
+            } else {
+                Cell::BLANK
+            };
+            assert_eq!(
+                buf.cell(pos).unwrap(),
+                &expected,
+                "rect={rect:?}, pos={pos:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fill_rect_preserves_old_style_at_left_edge() {
+    check_fill_boundary_style(Rect::new(3, 1, 7, 1));
+}
+
+#[test]
+fn fill_rect_preserves_old_style_at_right_edge() {
+    check_fill_boundary_style(Rect::new(2, 1, 7, 1));
+}
+
+#[test]
+fn fill_rect_preserves_old_style_outside_both_edges() {
+    check_fill_boundary_style(Rect::new(4, 1, 2, 1));
+}
+
 #[test]
 fn test_overwrite_continuation_with_continuation_keeps_primary() {
     // When a render buffer mirrors a model buffer cell-by-cell, the

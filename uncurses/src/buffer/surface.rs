@@ -359,8 +359,8 @@ pub trait SurfaceMut: Surface {
     ///
     /// Stepped by `cell.width()` so a wide cell lays down a clean primary
     /// and its continuations; whatever region is left at the right edge,
-    /// narrower than one more cell, falls back to blanks. Implementations
-    /// may override for a bulk-blit fast path.
+    /// narrower than one more cell, falls back to blanks with `cell`'s style.
+    /// Implementations may override for a bulk-blit fast path.
     ///
     /// # Panics
     ///
@@ -376,6 +376,7 @@ pub trait SurfaceMut: Surface {
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         let step = (cell.width() as u16).max(1);
+        let blank = Cell::BLANK.style(cell.style.clone());
         for y in clipped.top()..clipped.bottom() {
             let mut x = clipped.left();
             while !overruns(x, step, clipped.right()) {
@@ -383,7 +384,7 @@ pub trait SurfaceMut: Surface {
                 x += step;
             }
             while x < clipped.right() {
-                self.set_cell(Position::new(x, y), &Cell::BLANK);
+                self.set_cell(Position::new(x, y), &blank);
                 x += 1;
             }
         }
