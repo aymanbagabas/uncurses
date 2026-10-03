@@ -174,13 +174,23 @@ impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Token<'a>> {
-        if self.pos >= self.bytes.len() {
-            return None;
+        let b = *self.bytes.get(self.pos)?;
+
+        // Printable ASCII followed by ASCII or end-of-input is a whole
+        // cluster. Consume it before scanning or validating a text run.
+        if (0x20..0x7f).contains(&b) && self.bytes.get(self.pos + 1).is_none_or(u8::is_ascii) {
+            let start = self.pos;
+            self.pos += 1;
+            if !self.run.is_empty() {
+                self.run = &self.run[1..];
+            }
+            return Some(Token::Text {
+                text: &self.bytes[start..self.pos],
+                width: 1,
+            });
         }
 
-        let b = self.bytes[self.pos];
-
-        // 7-bit escape (ESC) and 8-bit C1 introducers open a sequence.
+        // Keep escape introducers ahead of the run check for dense sequences.
         if b == 0x1b || is_c1_introducer(b) {
             let start = self.pos;
             let end = scan_sequence(self.bytes, start);
@@ -188,78 +198,53 @@ impl<'a> Iterator for Tokenizer<'a> {
             return Some(Token::Escape(&self.bytes[start..end]));
         }
 
-        // C0 controls (incl. DEL) and non-introducer C1 bytes are emitted as
-        // single control bytes.
-        if b < 0x20 || b == 0x7f || (0x80..=0x9f).contains(&b) {
-            self.pos += 1;
-            return Some(Token::Control(b));
-        }
-
-        // Plain text — walk forward one grapheme at a time, stopping at any
-        // byte that would start an escape or control token. Stepping per
-        // codepoint when scanning guarantees we never confuse a UTF-8
-        // continuation byte (which can be in 0x80..=0xBF) with a C1 control.
-        //
-        // The scan runs once per *run* of plain text, not once per grapheme
-        // in it. Doing it per grapheme is O(run) work O(run) times, which
-        // made tokenizing a single long line quadratic in its length - a
-        // 32 KB line took 852 ms, and nothing about the tokens it produced
-        // changed, so only a timing test could see it.
-        if self.pos >= self.scan_end {
-            let mut end = self.pos;
-            while end < self.bytes.len() {
-                let bb = self.bytes[end];
-                if bb == 0x1b || bb < 0x20 || bb == 0x7f || (0x80..=0x9f).contains(&bb) {
-                    break;
-                }
-                match utf8_char_at(self.bytes, end) {
-                    Some(n) => end += n,
-                    None => break,
-                }
-            }
-            #[cfg(test)]
-            {
-                self.scanned += end.max(self.pos + 1) - self.pos;
-            }
-            self.scan_end = end;
-            // Valid by construction: the scan stopped at the first byte that
-            // does not begin a well-formed character, so this cannot fail.
-            self.validate(end);
-        }
+        // A cached run contains only validated plain text. Check remaining
+        // control bytes and find a new run only after that run ends.
         if self.run.is_empty() {
-            // Nothing plain starts here, or what does is not valid UTF-8.
-            // Either way the byte is emitted verbatim to keep forward
-            // progress, exactly as an invalid leading byte always was.
-            self.pos += 1;
-            return Some(Token::Control(b));
-        }
-        // Printable ASCII, answered without asking Unicode anything.
-        //
-        // A cluster can only continue past an ASCII byte with a combining
-        // mark, a ZWJ, a variation selector or a regional indicator, and in
-        // UTF-8 every one of those starts at 0x80 or above. So an ASCII byte
-        // followed by another ASCII byte (or by the end of the text) *is* a
-        // whole grapheme cluster, one column wide, and the general path below
-        // - grapheme segmentation plus a width table lookup, per character -
-        // can only arrive at the same answer far more slowly. `\r\n` is the
-        // one multi-byte ASCII cluster and it cannot appear here: both bytes
-        // are controls, taken by the branch above.
-        //
-        // True in either width mode. `Wc` sums the cluster's code points and
-        // `Grapheme` measures the whole cluster; for a lone printable ASCII
-        // character those are the same one column. The mode
-        // is deliberately not tested here - it was, once, and since `Wc` is
-        // the default the fast path then applied to nothing that mattered.
-        if b < 0x80 {
-            let next = self.bytes.get(self.pos + 1).copied();
-            if next.is_none_or(|n| n < 0x80) {
-                let start = self.pos;
+            // C0 controls (incl. DEL) and non-introducer C1 bytes are emitted as
+            // single control bytes.
+            if b < 0x20 || b == 0x7f || (0x80..=0x9f).contains(&b) {
                 self.pos += 1;
-                self.run = &self.run[1..];
-                return Some(Token::Text {
-                    text: &self.bytes[start..self.pos],
-                    width: 1,
-                });
+                return Some(Token::Control(b));
+            }
+
+            // Plain text — walk forward one grapheme at a time, stopping at any
+            // byte that would start an escape or control token. Stepping per
+            // codepoint when scanning guarantees we never confuse a UTF-8
+            // continuation byte (which can be in 0x80..=0xBF) with a C1 control.
+            //
+            // The scan runs once per *run* of plain text, not once per grapheme
+            // in it. Doing it per grapheme is O(run) work O(run) times, which
+            // made tokenizing a single long line quadratic in its length - a
+            // 32 KB line took 852 ms, and nothing about the tokens it produced
+            // changed, so only a timing test could see it.
+            if self.pos >= self.scan_end {
+                let mut end = self.pos;
+                while end < self.bytes.len() {
+                    let bb = self.bytes[end];
+                    if bb == 0x1b || bb < 0x20 || bb == 0x7f || (0x80..=0x9f).contains(&bb) {
+                        break;
+                    }
+                    match utf8_char_at(self.bytes, end) {
+                        Some(n) => end += n,
+                        None => break,
+                    }
+                }
+                #[cfg(test)]
+                {
+                    self.scanned += end.max(self.pos + 1) - self.pos;
+                }
+                self.scan_end = end;
+                // Valid by construction: the scan stopped at the first byte that
+                // does not begin a well-formed character, so this cannot fail.
+                self.validate(end);
+            }
+            if self.run.is_empty() {
+                // Nothing plain starts here, or what does is not valid UTF-8.
+                // Either way the byte is emitted verbatim to keep forward
+                // progress, exactly as an invalid leading byte always was.
+                self.pos += 1;
+                return Some(Token::Control(b));
             }
         }
         let g = graphemes(self.run).next()?;
@@ -974,6 +959,35 @@ mod fast_path {
     use super::util::*;
     use super::*;
 
+    #[test]
+    fn cached_runs_stop_before_controls_escapes_and_invalid_bytes() {
+        let before = "ab中e\u{301}".as_bytes();
+        let after = "xy界".as_bytes();
+        for boundary in [
+            &b"\n"[..],
+            b"\x7f",
+            b"\x9c",
+            b"\xff",
+            b"\x1b[31m",
+            b"\x9b31m",
+            b"\x1b]0;title\x07",
+            b"\x1bPpayload\x1b\\",
+        ] {
+            let input = [before, boundary, after].concat();
+            for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+                for eaw_wide in [false, true] {
+                    let expected: Vec<_> = [before, boundary, after]
+                        .into_iter()
+                        .flat_map(|part| tokenize(part, mode, eaw_wide))
+                        .collect();
+                    let mut iter = tokenize(&input, mode, eaw_wide);
+                    assert_eq!(iter.by_ref().collect::<Vec<_>>(), expected);
+                    assert_eq!(iter.next(), None);
+                }
+            }
+        }
+    }
+
     fn text_tokens_eaw(s: &str, mode: WidthMode, eaw_wide: bool) -> Vec<(String, u16)> {
         tokenize(s.as_bytes(), mode, eaw_wide)
             .filter_map(|t| match t {
@@ -1331,8 +1345,8 @@ mod scaling {
             let line: String = std::iter::repeat_n('x', n).collect();
             assert_eq!(
                 scan_cost(line.as_bytes()),
-                (n, n),
-                "the run is found once, and validated once, in one pass each"
+                (0, 0),
+                "printable ASCII needs neither a run scan nor UTF-8 validation"
             );
         }
     }
