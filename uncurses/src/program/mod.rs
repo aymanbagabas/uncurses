@@ -209,6 +209,22 @@ pub struct ProgramOptions {
     /// [`Program::observe_event`] applies recognized replies independently of
     /// this option, including replies to [`Program::request_mode`].
     pub query_backspace_mode: bool,
+    /// Include the default foreground color in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`.
+    pub query_foreground_color: bool,
+    /// Include the default background color in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`.
+    pub query_background_color: bool,
+    /// Include the cursor color in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`.
+    pub query_cursor_color: bool,
+    /// Include these palette indices in [`Program::query_capabilities`].
+    ///
+    /// Defaults to an empty list. Queries follow the supplied order.
+    pub query_palette_colors: Vec<u8>,
     /// How to read the ambiguous legacy keys.
     ///
     /// Defaults to [`empty`](DecoderFlags::empty). LF reads as Ctrl+J;
@@ -279,6 +295,10 @@ impl Default for ProgramOptions {
             prefer_in_band_resize: true,
             prefer_synchronized_output: true,
             query_backspace_mode: false,
+            query_foreground_color: false,
+            query_background_color: false,
+            query_cursor_color: false,
+            query_palette_colors: Vec::new(),
             legacy_keys: DecoderFlags::empty(),
         }
     }
@@ -911,7 +931,8 @@ where
     /// default query set (Kitty keyboard, the DECRQM modes behind
     /// [`Capabilities`], XTVERSION, xterm modifyOtherKeys, and — when the
     /// environment did not already imply true color — XTGETTCAP `RGB`/`Tc`),
-    /// then `extra`, then a Primary DA request.
+    /// then the color queries selected in [`ProgramOptions`], then `extra`,
+    /// then a Primary DA request.
     ///
     /// `extra` is written verbatim, so it can carry any additional query
     /// escapes you want answered under the same Primary DA terminator. Pass
@@ -962,6 +983,7 @@ where
     ///
     /// [`Event::PrimaryDeviceAttributes`]: crate::event::Event::PrimaryDeviceAttributes
     pub fn query_capabilities(&mut self, extra: &[u8]) -> io::Result<()> {
+        use crate::ansi::color;
         use crate::ansi::ctrl::{REQUEST_PRIMARY_DA, REQUEST_XTVERSION};
         use crate::ansi::kitty::REQUEST_KITTY_KEYBOARD;
         use crate::ansi::mode::Mode;
@@ -1011,6 +1033,19 @@ where
             {
                 self.screen.set_color_profile(Profile::TrueColor);
             }
+        }
+
+        if self.options.query_foreground_color {
+            self.screen.write_all(color::REQUEST_FOREGROUND_COLOR)?;
+        }
+        if self.options.query_background_color {
+            self.screen.write_all(color::REQUEST_BACKGROUND_COLOR)?;
+        }
+        if self.options.query_cursor_color {
+            self.screen.write_all(color::REQUEST_CURSOR_COLOR)?;
+        }
+        for &index in &self.options.query_palette_colors {
+            color::write_request_palette_color(&mut self.screen, index)?;
         }
 
         self.screen.write_all(extra)?;
