@@ -233,7 +233,9 @@ impl RenderBuffer {
     /// # Behavior
     ///
     /// Delegates wide-cell accounting to [`Buffer::set`]. If the new
-    /// value equals the existing cell, no touched span is recorded. When
+    /// value equals the existing cell and fits the row, no touched span is
+    /// recorded. An equal cell clipped by resize still passes through
+    /// [`Buffer::set`] for normalization. When
     /// a wide cell is overwritten by a narrower cell, the touched span
     /// covers the whole cluster being broken, both the column written and
     /// the primary to its left that the write blanks. A write that lands on
@@ -258,7 +260,9 @@ impl RenderBuffer {
         }
 
         let existing = self.buffer.cell(pos);
-        let changed = existing.is_none_or(|e| e != cell);
+        // Resize can preserve an equal primary whose columns no longer fit.
+        let changed =
+            existing.is_none_or(|e| e != cell) || u16::from(cell.width()) > self.width() - pos.x;
 
         if changed {
             let new_width = cell.width().max(1) as u16;
@@ -717,6 +721,65 @@ mod tests {
         // Set same as blank — should not touch
         rb.set_cell((0, 0), &Cell::BLANK);
         assert!(!rb.has_changes());
+    }
+
+    #[test]
+    fn equal_wide_cell_after_shrink_is_normalized() {
+        use crate::{color::Color, style::Style};
+
+        for (text, width) in [("中", 2), ("👩‍👩‍👧‍👦", 8)] {
+            for x in [0, 3] {
+                for remaining in 1..u16::from(width) {
+                    for style in [Style::default(), Style::EMPTY.bg(Color::Red).bold()] {
+                        let cell = Cell::new(text, width).style(style);
+                        let mut rb = RenderBuffer::new(x + u16::from(width) + 1, 1);
+                        rb.set_cell((x, 0), &cell);
+                        rb.resize(x + remaining, 1);
+                        rb.clear_touched();
+
+                        let before = rb.line(0).unwrap().to_vec();
+                        assert_eq!(before[x as usize], cell);
+                        let mut expected = rb.buffer.clone();
+                        expected.set((x, 0), &cell);
+
+                        rb.set_cell((x, 0), &cell);
+
+                        assert_eq!(rb.line(0), expected.line(0));
+                        let blank = Cell::BLANK.style(cell.style.clone());
+                        for col in x..rb.width() {
+                            assert_eq!(rb.buffer.cell(Position::new(col, 0)), Some(&blank));
+                        }
+                        let span = rb.touched(0).expect("normalization must record damage");
+                        assert_eq!((span.first, span.last), (x, x + remaining - 1));
+                        assert_span_covers_changes(
+                            span,
+                            &before,
+                            rb.line(0).unwrap(),
+                            "an equal wide cell after shrink",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn equal_wide_cell_that_still_fits_after_shrink_is_untouched() {
+        for width in [1, 2, 8] {
+            for x in [0, 3] {
+                let cell = Cell::new("W", width);
+                let mut rb = RenderBuffer::new(x + u16::from(width) + 1, 1);
+                rb.set_cell((x, 0), &cell);
+                rb.resize(x + u16::from(width), 1);
+                rb.clear_touched();
+                let before = rb.line(0).unwrap().to_vec();
+
+                rb.set_cell((x, 0), &cell);
+
+                assert_eq!(rb.line(0).unwrap(), before);
+                assert!(!rb.has_changes());
+            }
+        }
     }
 
     #[test]
