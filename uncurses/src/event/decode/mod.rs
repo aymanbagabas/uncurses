@@ -456,6 +456,10 @@ impl Decoder {
 
         match buf[0] {
             0x1b => self.parse_escape(buf),
+            0x0a if self.flags.contains(DecoderFlags::LF_IS_ENTER) => ParseResult::Event(
+                Event::KeyPress(Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized()),
+                1,
+            ),
             0x01..=0x08 | 0x0a..=0x0c | 0x0e..=0x1a => {
                 // Ctrl+A through Ctrl+Z, except Tab and CR.
                 let c = (buf[0] - 1 + b'a') as char;
@@ -2198,6 +2202,42 @@ mod tests {
                     Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized()
                 ))
             )
+        );
+    }
+
+    #[test]
+    fn decoder_flag_lf_is_enter() {
+        let mut p = Decoder::new(DecoderFlags::LF_IS_ENTER);
+        for (bytes, code, modifiers) in [
+            (b"\n".as_slice(), KeyCode::Enter, KeyModifiers::empty()),
+            (b"\x1b\n", KeyCode::Enter, KeyModifiers::ALT),
+            (b"\r", KeyCode::Enter, KeyModifiers::empty()),
+            (b"\x1b[106;5u", KeyCode::Char('j'), KeyModifiers::CTRL),
+        ] {
+            assert_eq!(
+                p.parse_one(bytes),
+                (
+                    bytes.len(),
+                    Some(Event::KeyPress(Key::new(code, modifiers).normalized()))
+                ),
+                "for {bytes:?}"
+            );
+        }
+
+        p.set_flags(DecoderFlags::LF_IS_ENTER | DecoderFlags::CTRL_M);
+        assert_eq!(
+            press(p.parse(b"\n")),
+            Key::new(KeyCode::Enter, KeyModifiers::empty()).normalized()
+        );
+        assert_eq!(
+            press(p.parse(b"\r")),
+            Key::new(KeyCode::Char('m'), KeyModifiers::CTRL).normalized()
+        );
+
+        p.set_flags(DecoderFlags::empty());
+        assert_eq!(
+            press(p.parse(b"\n")),
+            Key::new(KeyCode::Char('j'), KeyModifiers::CTRL).normalized()
         );
     }
 

@@ -27,6 +27,7 @@ bitflags! {
     ///
     /// * `0x00` → `Ctrl+Space`
     /// * `0x09` → `Tab`
+    /// * `0x0a` → `Ctrl+j`
     /// * `0x0d` → `Enter`
     /// * `0x7f` → `Backspace`
     /// * `CSI 1 ~` → `Home`
@@ -35,9 +36,8 @@ bitflags! {
     /// Set the corresponding flag to swap each mapping to its alternative
     /// reading.
     ///
-    /// The decoder always reports `0x0a` (LF) as `Ctrl+j`. In raw mode,
-    /// terminals normally send LF for Ctrl+J and CR for Enter. An `ESC`
-    /// prefix adds Alt, so `ESC LF` reports `Ctrl+Alt+j`.
+    /// In raw mode, terminals normally send LF for Ctrl+J and CR for Enter.
+    /// An `ESC` prefix adds Alt to the selected interpretation.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub struct DecoderFlags: u8 {
         /// Report `0x00` as `Ctrl+@` instead of `Ctrl+Space`.
@@ -60,5 +60,11 @@ bitflags! {
         const FIND_KEY            = 1 << 5;
         /// Report `CSI 4 ~` as the VT220 `Select` key instead of `End`.
         const SELECT_KEY          = 1 << 6;
+        /// Report `0x0a` (LF) as `Enter` instead of `Ctrl+j`.
+        ///
+        /// An `ESC` prefix reports `Alt+Enter`. This is useful for input
+        /// with CR-to-LF conversion enabled. CR keeps its own interpretation,
+        /// selected by [`CTRL_M`](Self::CTRL_M).
+        const LF_IS_ENTER         = 1 << 7;
     }
 }

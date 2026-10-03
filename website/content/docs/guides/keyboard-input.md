@@ -104,30 +104,6 @@ if let Event::KeyPress(k) = ev {
 }
 ```
 
-## Enter and Ctrl+J in legacy mode
-
-In raw mode, terminals normally send `0x0d` (CR) for Enter and `0x0a` (LF)
-for Ctrl+J. The decoder reports CR as `KeyCode::Enter` by default. It reports
-LF as `KeyCode::Char('j')` with `KeyModifiers::CTRL`. An Escape prefix adds
-Alt: `ESC CR` is Alt+Enter, and `ESC LF` is Ctrl+Alt+J.
-
-Use `k.matches("enter")` and `k.matches("ctrl+j")` for separate actions, such
-as submission and a new line. To give both keys the same action, use
-`k.matches_any(["enter", "ctrl+j"])`.
-
-Enter and Ctrl+M share the same legacy byte, CR.
-[`DecoderFlags::CTRL_M`](https://docs.rs/uncurses/latest/uncurses/event/struct.DecoderFlags.html)
-selects its Ctrl+M interpretation. Ctrl+J has its own byte and works with
-the default options, independently of Kitty support.
-
-`Program` uses raw mode. If you manage the terminal yourself, use
-`Terminal::make_raw()` to disable CR-to-LF conversion. With that conversion
-enabled, Enter can reach the decoder as LF and produce Ctrl+J.
-
-Run `cargo run --example keylog`. Press Enter and Ctrl+J. The example
-uses legacy keyboard input and displays `Enter` and `Ctrl+Char('j')`
-separately. Bracketed paste preserves newlines as paste data.
-
 ## Presses, repeats, and releases
 
 By default a terminal reports each key once, as a press, and that is all most
