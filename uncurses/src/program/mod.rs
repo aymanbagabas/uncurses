@@ -230,7 +230,8 @@ pub struct ProgramOptions {
     ///
     /// Defaults to [`empty`](DecoderFlags::empty). LF reads as Ctrl+J;
     /// [`DecoderFlags::LF_IS_ENTER`] selects Enter instead. See [`DecoderFlags`]
-    /// for all mappings.
+    /// for all mappings. Use [`Program::set_decoder_flags`] to change the
+    /// active flags after initialization.
     pub legacy_keys: DecoderFlags,
 }
 
@@ -372,6 +373,23 @@ where
     }
 
     // --- Event delegates -------------------------------------------------
+
+    /// Return the event source's current legacy decoder flags.
+    ///
+    /// See [`DecoderFlags`] for the available key mappings.
+    pub fn decoder_flags(&self) -> DecoderFlags {
+        self.source.lock().unwrap().decoder_flags()
+    }
+
+    /// Set the legacy decoder flags for subsequent input decoding.
+    ///
+    /// Already-decoded events keep their values, including events returned
+    /// through [`unread_event`](Self::unread_event). This updates the shared
+    /// [`EventSource`] and leaves [`ProgramOptions::legacy_keys`] unchanged.
+    /// Terminal modes remain unchanged.
+    pub fn set_decoder_flags(&mut self, flags: DecoderFlags) {
+        self.source.lock().unwrap().set_decoder_flags(flags);
+    }
 
     /// Drive the input source for up to `timeout`, returning whether any
     /// event became available. See [`EventSource::poll`].
@@ -1098,10 +1116,7 @@ where
         self.options = options;
         // The decoder is the only thing that can act on this, and it is
         // behind the source, so the option is carried there as it is taken.
-        self.source
-            .lock()
-            .unwrap()
-            .set_decoder_flags(self.options.legacy_keys);
+        self.set_decoder_flags(self.options.legacy_keys);
         self.terminal.make_raw()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
@@ -1262,10 +1277,7 @@ where
         self.options = options;
         // The decoder is the only thing that can act on this, and it is
         // behind the source, so the option is carried there as it is taken.
-        self.source
-            .lock()
-            .unwrap()
-            .set_decoder_flags(self.options.legacy_keys);
+        self.set_decoder_flags(self.options.legacy_keys);
         self.terminal.make_raw()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;

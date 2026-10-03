@@ -93,6 +93,63 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
 }
 
 #[test]
+fn decoder_flags_delegate_without_changing_options_or_terminal_modes() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.options.legacy_keys = DecoderFlags::CTRL_M;
+    program
+        .event_source()
+        .lock()
+        .unwrap()
+        .set_decoder_flags(DecoderFlags::CTRL_M);
+    assert_eq!(program.decoder_flags(), DecoderFlags::CTRL_M);
+
+    for flags in [
+        DecoderFlags::CTRL_I | DecoderFlags::LF_IS_ENTER,
+        DecoderFlags::empty(),
+        DecoderFlags::all(),
+    ] {
+        program.set_decoder_flags(flags);
+        assert_eq!(program.decoder_flags(), flags);
+        assert_eq!(program.source.lock().unwrap().decoder_flags(), flags);
+        assert_eq!(program.options.legacy_keys, DecoderFlags::CTRL_M);
+        assert!(program.state.chosen.is_empty());
+        assert!(!program.backspace_mode());
+        program.screen.flush().unwrap();
+        assert!(buf.borrow().is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_decoder_flags_apply_only_to_future_decoding() {
+    use crate::event::KeyCode;
+
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    writer.write_all(b"\t\t").unwrap();
+    assert!(program.poll_event(Some(Duration::from_secs(1))).unwrap());
+    let tab = program.read_event().unwrap();
+    assert!(matches!(&tab, Event::KeyPress(key) if key.code == KeyCode::Tab));
+    program.unread_event(tab.clone());
+
+    program.set_decoder_flags(DecoderFlags::CTRL_I);
+    assert_eq!(program.try_read_event().unwrap(), Some(tab.clone()));
+    assert_eq!(program.try_read_event().unwrap(), Some(tab.clone()));
+    assert_eq!(program.try_read_event().unwrap(), None);
+
+    writer.write_all(b"\t").unwrap();
+    assert!(matches!(program.read_event().unwrap(), Event::KeyPress(key) if key.matches("ctrl+i")));
+
+    program.set_decoder_flags(DecoderFlags::empty());
+    writer.write_all(b"\t").unwrap();
+    assert_eq!(program.read_event().unwrap(), tab);
+    assert!(program.options.legacy_keys.is_empty());
+    assert!(buf.borrow().is_empty());
+}
+
+#[test]
 fn backspace_mode_setter_and_lifecycle() {
     use crate::ansi::mode::Mode;
 

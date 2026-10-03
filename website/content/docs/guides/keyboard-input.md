@@ -104,6 +104,29 @@ if let Event::KeyPress(k) = ev {
 }
 ```
 
+## Change legacy key decoding at runtime
+
+`ProgramOptions::legacy_keys` selects the initial decoder flags.
+Use `Program::decoder_flags()` to read the active flags and
+`Program::set_decoder_flags()` to change them during a session.
+
+```rust
+use uncurses::event::DecoderFlags;
+
+let mut flags = program.decoder_flags();
+flags.insert(DecoderFlags::LF_IS_ENTER);
+program.set_decoder_flags(flags);
+```
+
+This makes subsequent legacy LF bytes read as Enter instead of Ctrl+J.
+The shared event source uses the new flags for subsequent decoding.
+Already-decoded events keep their values, including events returned through
+`unread_event()`. The setter leaves terminal modes and
+`ProgramOptions::legacy_keys` unchanged.
+
+Run `cargo run --example legacy_keys` and press F2 to switch the LF mapping.
+Press Ctrl+J after each switch to see the decoded key.
+
 ## Presses, repeats, and releases
 
 By default a terminal reports each key once, as a press, and that is all most
