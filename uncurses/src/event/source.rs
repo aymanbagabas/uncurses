@@ -336,6 +336,27 @@ where
         self.parser.flags()
     }
 
+    /// Return the decoder's current Backarrow mode (DECBKM).
+    ///
+    /// Defaults to reset (`false`). Recognized mode reports update this value
+    /// before the decoder reads the next event, including on an async stream.
+    pub fn backspace_mode(&self) -> bool {
+        self.parser.backspace_mode()
+    }
+
+    /// Select Backarrow mode for future legacy input without terminal I/O.
+    ///
+    /// Set (`true`) selects BS (`0x08`) for Backspace; reset (`false`) selects
+    /// DEL (`0x7f`). [`DecoderFlags`] choose the ambiguous interpretations.
+    /// Later recognized mode reports can replace this value. Already queued
+    /// events keep their decoded values.
+    ///
+    /// Use [`Program::set_backspace_mode`](crate::program::Program::set_backspace_mode)
+    /// to change both the terminal and decoder.
+    pub fn set_backspace_mode(&mut self, enabled: bool) {
+        self.parser.set_backspace_mode(enabled);
+    }
+
     /// Set the idle timeout for an open bracketed paste.
     ///
     /// If no further input arrives before `timeout`, the source flushes any

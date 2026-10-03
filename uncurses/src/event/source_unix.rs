@@ -557,6 +557,50 @@ mod tests {
     }
 
     #[test]
+    fn backspace_mode_reports_update_before_queued_keys() {
+        use crate::event::KeyModifiers;
+
+        let (rx, tx) = make_pipe();
+        let mut source = EventSource::new(rx).unwrap();
+        assert!(!source.backspace_mode());
+        write_bytes(&tx, b"\x1b[?67;");
+        source.poll(Some(Duration::ZERO)).unwrap();
+        assert!(source.try_read().is_none());
+        write_bytes(&tx, b"1$y\x08\x1b\x7f\x1b[?67;2$y\x08");
+        assert!(source.poll(Some(Duration::from_secs(1))).unwrap());
+        let report = source.read().unwrap();
+        assert!(matches!(report, Event::ModeReport { .. }));
+        assert!(!source.backspace_mode(), "both reports already decoded");
+        for (code, modifiers) in [
+            (KeyCode::Backspace, KeyModifiers::empty()),
+            (KeyCode::Backspace, KeyModifiers::CTRL | KeyModifiers::ALT),
+        ] {
+            let Event::KeyPress(key) = source.read().unwrap() else {
+                panic!("expected a key");
+            };
+            assert_eq!((key.code, key.modifiers), (code, modifiers));
+        }
+        assert!(matches!(source.read().unwrap(), Event::ModeReport { .. }));
+        assert!(
+            matches!(source.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('h'))
+        );
+        source.unread(report);
+        assert!(matches!(source.read().unwrap(), Event::ModeReport { .. }));
+        assert!(
+            !source.backspace_mode(),
+            "unread must not replay mode changes"
+        );
+
+        source.set_backspace_mode(true);
+        assert!(source.backspace_mode());
+        write_byte(&tx, 0x08);
+        assert!(source.poll(Some(Duration::from_secs(1))).unwrap());
+        assert!(
+            matches!(source.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Backspace)
+        );
+    }
+
+    #[test]
     fn esc_deadline_does_not_fire_during_paste() {
         // Pre-fix latent bug: while in paste, a partial ESC at the
         // head of the pending buffer must not synthesise Key(Esc).

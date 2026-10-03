@@ -203,6 +203,12 @@ pub struct ProgramOptions {
     ///
     /// [`Screen::set_synchronized_output`]: crate::screen::Screen::set_synchronized_output
     pub prefer_synchronized_output: bool,
+    /// Include Backarrow mode (DECBKM) in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`. Initialization sends no queries. Recognized
+    /// replies always update legacy key decoding, including replies to
+    /// [`Program::request_mode`], independently of this option.
+    pub query_backspace_mode: bool,
     /// How to read the ambiguous legacy keys.
     ///
     /// Defaults to [`empty`](DecoderFlags::empty). LF reads as Ctrl+J;
@@ -272,6 +278,7 @@ impl Default for ProgramOptions {
             prefer_grapheme_clusters: true,
             prefer_in_band_resize: true,
             prefer_synchronized_output: true,
+            query_backspace_mode: false,
             legacy_keys: DecoderFlags::empty(),
         }
     }
@@ -975,6 +982,9 @@ where
                 Mode::MOUSE_SGR_PIXEL,
             ] {
                 mode.request(&mut self.screen)?;
+            }
+            if self.options.query_backspace_mode {
+                Mode::BACKARROW_KEY.request(&mut self.screen)?;
             }
             self.screen.write_all(REQUEST_XTVERSION)?;
             self.screen

@@ -345,6 +345,29 @@ mod tests {
     }
 
     #[test]
+    fn backspace_mode_report_updates_async_decoding() {
+        let (rx, tx) = make_pipe();
+        let mut stream = EventSource::new(rx).unwrap().into_stream();
+        write_bytes(&tx, b"\x1b[?67;1$y\x08\x1b[?67;2$y\x08");
+        assert!(matches!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::ModeReport { .. }
+        ));
+        assert!(matches!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::KeyPress(k) if k.code == KeyCode::Backspace
+        ));
+        assert!(matches!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::ModeReport { .. }
+        ));
+        assert!(matches!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::KeyPress(k) if k.code == KeyCode::Char('h')
+        ));
+    }
+
+    #[test]
     fn waits_then_reads_late_input() {
         let (rx, tx) = make_pipe();
         let mut stream = EventSource::new(rx).unwrap().into_stream();

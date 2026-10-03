@@ -93,6 +93,160 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
 }
 
 #[test]
+fn backspace_mode_setter_and_lifecycle() {
+    use crate::ansi::mode::Mode;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    assert!(!program.backspace_mode());
+    assert!(!program.options.query_backspace_mode);
+    for enabled in [true, false] {
+        buf.borrow_mut().clear();
+        program.set_backspace_mode(enabled).unwrap();
+        assert_eq!(program.backspace_mode(), enabled);
+        assert_eq!(
+            written(&buf),
+            if enabled { "\x1b[?67h" } else { "\x1b[?67l" }
+        );
+        assert_eq!(program.state.backspace_mode, enabled);
+        assert!(program.state.chosen.contains(&Mode::BACKARROW_KEY));
+        assert!(!program.options.query_backspace_mode);
+        assert!(program.options.legacy_keys.is_empty());
+
+        buf.borrow_mut().clear();
+        program.reset().unwrap();
+        program.screen.flush().unwrap();
+        assert!(written(&buf).contains("\x1b[?67l"));
+        assert!(!program.backspace_mode());
+        assert_eq!(program.state.backspace_mode, enabled);
+
+        buf.borrow_mut().clear();
+        program.restore().unwrap();
+        program.screen.flush().unwrap();
+        assert!(written(&buf).contains(if enabled { "\x1b[?67h" } else { "\x1b[?67l" }));
+        assert_eq!(program.backspace_mode(), enabled);
+    }
+}
+
+#[test]
+fn backspace_mode_query_is_optional_and_preserves_options() {
+    use crate::terminal::{EnvList, Terminal};
+
+    for apple in [false, true] {
+        for query in [false, true] {
+            let buf = RefCell::new(Vec::new());
+            let input = null_input();
+            let terminal = Terminal::from_parts(
+                &input,
+                TestOut(&buf),
+                EnvList::from_pairs([(
+                    "TERM_PROGRAM",
+                    if apple { "Apple_Terminal" } else { "xterm" },
+                )]),
+            );
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            program.options.query_backspace_mode = query;
+            program.options.legacy_keys = DecoderFlags::CTRL_BACKSPACE;
+            program.query_capabilities(b"extra").unwrap();
+            let output = written(&buf);
+            assert_eq!(
+                output.matches("\x1b[?67$p").count(),
+                usize::from(query && !apple)
+            );
+            assert!(output.ends_with("extra\x1b[c"));
+            assert!(!output.contains("\x1b[?67h"));
+            assert!(!output.contains("\x1b[?67l"));
+            assert_eq!(program.options.query_backspace_mode, query);
+            assert_eq!(program.options.legacy_keys, DecoderFlags::CTRL_BACKSPACE);
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn backspace_mode_query_option_does_not_query_during_init() {
+    use crate::terminal::{EnvList, Terminal};
+    use crate::testutil::{drain, open_pty_pair};
+
+    let Some((master, slave)) = open_pty_pair() else {
+        return;
+    };
+    let terminal = Terminal::new(&slave, &slave, EnvList::new());
+    let mut program = Program::new(terminal).unwrap();
+    program
+        .init_with(ProgramOptions {
+            query_backspace_mode: true,
+            legacy_keys: DecoderFlags::CTRL_BACKSPACE,
+            ..ProgramOptions::default()
+        })
+        .unwrap();
+    assert!(program.options.query_backspace_mode);
+    assert_eq!(program.options.legacy_keys, DecoderFlags::CTRL_BACKSPACE);
+    assert!(!program.backspace_mode());
+    let output = drain(&master);
+    assert!(!String::from_utf8_lossy(&output).contains("\x1b[?67"));
+    program.finish().unwrap();
+}
+
+#[test]
+fn backspace_mode_reports_do_not_rewind_or_own_the_mode() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    writer
+        .write_all(b"\x1b[?67;1$y\x08\x1b[?67;2$y\x08")
+        .unwrap();
+    assert!(program.poll_event(Some(Duration::from_secs(1))).unwrap());
+    assert!(!program.backspace_mode());
+    let report = program.read_event().unwrap();
+    assert_eq!(
+        program.capabilities().mode(Mode::BACKARROW_KEY),
+        Some(ModeSetting::Set)
+    );
+    assert!(
+        !program.backspace_mode(),
+        "observing an old report must not rewind"
+    );
+    assert!(
+        matches!(program.read_event().unwrap(), Event::KeyPress(k) if k.code == crate::event::KeyCode::Backspace)
+    );
+    program.read_event().unwrap();
+    program.read_event().unwrap();
+    program.unread_event(report);
+    program.read_event().unwrap();
+    assert!(!program.backspace_mode());
+
+    writer.write_all(b"\x1b[?67;1$y").unwrap();
+    program.read_event().unwrap();
+    assert!(program.backspace_mode());
+    assert!(!program.state.chosen.contains(&Mode::BACKARROW_KEY));
+    program.reset().unwrap();
+    program.restore().unwrap();
+    program.screen.flush().unwrap();
+    assert!(!written(&buf).contains("\x1b[?67"));
+    assert!(
+        program.backspace_mode(),
+        "discovery alone must not reset the mode"
+    );
+
+    program.set_backspace_mode(false).unwrap();
+    writer.write_all(b"\x1b[?67;1$y").unwrap();
+    program.read_event().unwrap();
+    assert!(
+        program.backspace_mode(),
+        "later reports still update decoding"
+    );
+    assert!(
+        !program.state.backspace_mode,
+        "the explicit selection remains"
+    );
+    program.restore().unwrap();
+    assert!(!program.backspace_mode());
+}
+
+#[test]
 fn reset_and_restore_round_trip_grapheme_clusters() {
     let buf = RefCell::new(Vec::new());
     {
@@ -1250,11 +1404,12 @@ mod teardown_failure {
     struct Breakable<'a> {
         tty: &'a File,
         broken: &'a Cell<bool>,
+        fail_on_flush: bool,
     }
 
     impl io::Write for Breakable<'_> {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            if self.broken.get() {
+            if self.broken.get() && !self.fail_on_flush {
                 return Err(io::Error::from(io::ErrorKind::BrokenPipe));
             }
             (&*self.tty).write(buf)
@@ -1275,6 +1430,33 @@ mod teardown_failure {
     }
 
     #[test]
+    fn backspace_mode_write_failure_preserves_selection() {
+        let Some((_master, tty)) = open_pty_pair() else {
+            return;
+        };
+        for fail_on_flush in [false, true] {
+            let broken = Cell::new(true);
+            let output = Breakable {
+                tty: &tty,
+                broken: &broken,
+                fail_on_flush,
+            };
+            let terminal = Terminal::new(&tty, output, EnvList::new());
+            let mut program = Program::new(terminal).unwrap();
+            let error = program.set_backspace_mode(true).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+            assert!(!program.backspace_mode());
+            assert!(!program.state.backspace_mode);
+            assert!(
+                !program
+                    .state
+                    .chosen
+                    .contains(&crate::ansi::mode::Mode::BACKARROW_KEY)
+            );
+        }
+    }
+
+    #[test]
     fn finish_restores_the_terminal_even_when_teardown_fails() {
         let (Some((_ma, input)), Some((_mb, out))) = (open_pty_pair(), open_pty_pair()) else {
             return;
@@ -1288,6 +1470,7 @@ mod teardown_failure {
         let output = Breakable {
             tty: &out,
             broken: &broken,
+            fail_on_flush: false,
         };
         let terminal = Terminal::new(&input, output, EnvList::from_pairs([("TERM", "xterm")]));
         let mut program = Program::new(terminal).expect("program over two ptys");

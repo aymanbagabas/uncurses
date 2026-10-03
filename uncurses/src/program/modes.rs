@@ -459,6 +459,43 @@ impl<I: Input, O: Write> Program<I, O> {
         self.screen.flush()
     }
 
+    /// Return the decoder's current Backarrow mode (DECBKM).
+    ///
+    /// Reset (`false`) is the default assumption. Recognized reports update
+    /// the value before subsequent input is decoded.
+    pub fn backspace_mode(&self) -> bool {
+        self.source.lock().unwrap().backspace_mode()
+    }
+
+    /// Set Backarrow mode (DECBKM), flush, and update legacy key decoding.
+    ///
+    /// Set (`true`) selects BS (`0x08`) for ordinary Backspace; reset (`false`)
+    /// selects DEL (`0x7f`). [`DecoderFlags`](crate::event::DecoderFlags)
+    /// choose the ambiguous interpretations. Terminals can ignore the request.
+    ///
+    /// Teardown resets an application-selected mode. Resume reapplies this
+    /// selection. Received reports update decoding without changing that
+    /// lifecycle selection. The caller's options remain unchanged.
+    pub fn set_backspace_mode(&mut self, enabled: bool) -> io::Result<()> {
+        self.write_backspace_mode(enabled)?;
+        self.state.backspace_mode = enabled;
+        self.state.chosen.insert(mode::Mode::BACKARROW_KEY);
+        Ok(())
+    }
+
+    fn write_backspace_mode(&mut self, enabled: bool) -> io::Result<()> {
+        // Keep async decoding in step with the terminal mode change.
+        let mut source = self.source.lock().unwrap();
+        if enabled {
+            mode::Mode::BACKARROW_KEY.set(&mut self.screen)?;
+        } else {
+            mode::Mode::BACKARROW_KEY.reset(&mut self.screen)?;
+        }
+        self.screen.flush()?;
+        source.set_backspace_mode(enabled);
+        Ok(())
+    }
+
     /// Set the per-screen-buffer Kitty keyboard enhancements and flush.
     /// `Some(flags)` enables the selected progressive-enhancement bits;
     /// `None` disables every enhancement.
@@ -584,9 +621,9 @@ impl<I: Input, O: Write> Program<I, O> {
     /// (cursor style, mouse, paste, focus, colors, title, …) followed by the
     /// render-coupled modes (cursor visibility, alternate screen, Kitty
     /// keyboard, Unicode core) — returning the terminal to a clean baseline
-    /// before handing control back to the shell. Pure write — does not mutate
-    /// the tracked state, so a later [`restore`](Self::restore) re-applies the
-    /// same modes verbatim. The caller flushes.
+    /// before handing control back to the shell. Preserves the selected
+    /// state, so [`restore`](Self::restore) re-applies the same modes.
+    /// Backarrow changes also update the decoder. The caller flushes.
     pub(super) fn reset(&mut self) -> io::Result<()> {
         // --- Non-render modes ---
         if self.state.cursor_style != cursor::CursorStyle::Default {
@@ -609,6 +646,9 @@ impl<I: Input, O: Write> Program<I, O> {
         }
         if self.state.in_band_resize {
             mode::Mode::IN_BAND_RESIZE.reset(&mut self.screen)?;
+        }
+        if self.state.chosen.contains(&mode::Mode::BACKARROW_KEY) {
+            self.write_backspace_mode(false)?;
         }
         if self.state.modify_other_keys != crate::event::ModifyOtherKeysMode::Disabled {
             self.screen.write_all(xterm::RESET_MODIFY_OTHER_KEYS)?;
@@ -687,8 +727,8 @@ impl<I: Input, O: Write> Program<I, O> {
     /// modes (Kitty keyboard, alternate screen, Unicode core, cursor
     /// visibility) first, then the non-render modes — for any scenario where
     /// the terminal was temporarily handed back to the shell. Pairs with
-    /// [`reset`](Self::reset). Pure write — does not mutate the tracked state.
-    /// The caller flushes.
+    /// [`reset`](Self::reset). Preserves the selected state and updates the
+    /// decoder's Backarrow mode. The caller flushes.
     pub(super) fn restore(&mut self) -> io::Result<()> {
         // --- Render-coupled modes ---
         // Re-apply the desired kitty keyboard flags on the main screen
@@ -733,6 +773,9 @@ impl<I: Input, O: Write> Program<I, O> {
         }
         if self.state.in_band_resize {
             mode::Mode::IN_BAND_RESIZE.set(&mut self.screen)?;
+        }
+        if self.state.chosen.contains(&mode::Mode::BACKARROW_KEY) {
+            self.write_backspace_mode(self.state.backspace_mode)?;
         }
         match self.state.modify_other_keys {
             crate::event::ModifyOtherKeysMode::Mode1 => {
