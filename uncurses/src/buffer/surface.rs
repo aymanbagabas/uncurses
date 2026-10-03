@@ -193,9 +193,8 @@ pub trait Surface: Bounded {
     ///   grapheme (a leading continuation with no primary in view, or
     ///   a trailing primary with no room for its continuation), the
     ///   default substitutes a blank rather than emitting an orphan
-    ///   half. The same blank substitution applies when a wide primary
-    ///   would land at the right edge of `target` with no room for its
-    ///   continuation.
+    ///   half. The same blank substitution applies when either horizontal
+    ///   edge of `target` splits a wide cell.
     ///
     /// Implementations may override for a faster path (e.g. bulk line
     /// copies), but must preserve the wide-cell invariants above.
@@ -238,10 +237,10 @@ pub trait Surface: Bounded {
                 let w = (cell.width() as u16).max(1);
 
                 // Wide primary that won't fit — either source's right
-                // edge sliced through its continuation, or target's
-                // right edge cuts it off. Emit a blank instead.
+                // edge sliced through its continuation, or either edge
+                // of the target cuts it off. Emit a blank instead.
                 let fits_in_src = dx + w <= b.width;
-                let fits_in_dst = dst.x.saturating_add(w) <= t_right;
+                let fits_in_dst = dst.x >= tb.x && dst.x.saturating_add(w) <= t_right;
                 if w > 1 && (!fits_in_src || !fits_in_dst) {
                     target.set_cell(dst, &Cell::BLANK);
                     dx += 1;
@@ -833,6 +832,51 @@ mod tests {
         let landed = dst.cell(Position::new(1, 0)).unwrap();
         assert_eq!(landed.content(), " ");
         assert_eq!(landed.width(), 1);
+    }
+
+    #[test]
+    fn draw_clears_a_wide_cell_clipped_by_the_target_left_edge() {
+        use crate::buffer::View;
+
+        for (text, width) in [("中", 2), ("👩‍👩", 4), ("👩‍👩‍👧‍👦", 8)] {
+            let cell = Cell::new(text, width);
+            let width = u16::from(width);
+            for origin in [Position::ORIGIN, Position::new(2, 1)] {
+                let mut source = Buffer::new(origin.x + width + 1, origin.y + 1);
+                source.set(origin, &cell);
+                source.set((origin.x + width, origin.y), &Cell::new("M", 1));
+                let source = View::new(&mut source, Rect::new(origin.x, origin.y, width + 1, 1));
+
+                for at in [Position::ORIGIN, Position::new(3, 2)] {
+                    for clipped in 0..=width {
+                        let mut target = Buffer::new(at.x + width + 2, at.y + 2);
+                        target.fill(&Cell::new("Z", 1));
+                        let mut expected = target.clone();
+                        for x in at.x + clipped..at.x + width {
+                            expected.set((x, at.y), &Cell::BLANK);
+                        }
+                        if clipped == 0 {
+                            expected.set(at, &cell);
+                        }
+                        expected.set((at.x + width, at.y), &Cell::new("M", 1));
+
+                        let mut view = View::new(
+                            &mut target,
+                            Rect::new(at.x + clipped, at.y, width + 1 - clipped, 1),
+                        );
+                        source.draw(&mut view, at);
+
+                        for y in 0..target.height() {
+                            assert_eq!(
+                                target.line(y),
+                                expected.line(y),
+                                "width {width}, clipped {clipped}, origin {origin:?}, at {at:?}, row {y}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // The remaining tests exercise the SurfaceMut default implementations
