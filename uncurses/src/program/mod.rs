@@ -151,15 +151,16 @@ where
     origin_queries_pending: u16,
 }
 
-/// Defaults applied by [`Program::init_with`].
+/// Options for session setup, capability queries, and mode preferences.
 ///
-/// Most fields take effect at init unconditionally. The three `prefer_*`
-/// fields are the exception: they depend on capability detection, so they do
-/// nothing until the terminal reports the matching mode as available. A
-/// [`Program`] never probes on its own, so that report only arrives if you
-/// call
-/// [`query_capabilities`](Program::query_capabilities) and read the replies.
-/// Without it these two fields stay dormant and the modes are never enabled.
+/// [`Program::init_with`] applies `bracketed_paste`, `mouse`, and `legacy_keys`.
+/// It stores the other options for later use.
+///
+/// The `query_*` fields select optional requests for
+/// [`Program::query_capabilities`]. Call that method to send the queries.
+///
+/// The `prefer_*` fields control mode adoption when [`Program::observe_event`]
+/// receives a report that confirms support for the corresponding mode.
 #[derive(Debug, Clone)]
 pub struct ProgramOptions {
     /// Enable bracketed paste at init. Defaults to `true`.
@@ -1075,10 +1076,13 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the always-on defaults from
-    /// `options`. This never probes the terminal; the `prefer_*` defaults
-    /// stay dormant until you call
-    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Begin a session: enter raw mode and apply the initialization settings
+    /// from `options`. Store query choices and mode preferences for later use.
+    ///
+    /// The `query_*` options take effect when you call
+    /// [`query_capabilities`](Self::query_capabilities).
+    /// The `prefer_*` options apply when reported capabilities confirm mode support.
+    ///
     /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
@@ -1236,10 +1240,13 @@ where
         self.init_with(ProgramOptions::default())
     }
 
-    /// Begin a session: enter raw mode and apply the always-on defaults from
-    /// `options`. This never probes the terminal; the `prefer_*` defaults
-    /// stay dormant until you call
-    /// [`query_capabilities`](Self::query_capabilities) and read the replies.
+    /// Begin a session: enter raw mode and apply the initialization settings
+    /// from `options`. Store query choices and mode preferences for later use.
+    ///
+    /// The `query_*` options take effect when you call
+    /// [`query_capabilities`](Self::query_capabilities).
+    /// The `prefer_*` options apply when reported capabilities confirm mode support.
+    ///
     /// Call once after [`Self::new`], before rendering.
     pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
         self.options = options;
