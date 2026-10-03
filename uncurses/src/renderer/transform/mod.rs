@@ -17,6 +17,108 @@ mod tests {
     use crate::style::{AttrFlags, Style, UnderlineStyle};
 
     #[test]
+    fn uncertainty_fast_path_preserves_cluster_classification() {
+        let mut renderer = Renderer::new();
+        for mode in [crate::text::WidthMode::Wc, crate::text::WidthMode::Grapheme] {
+            renderer.set_width_mode(mode);
+            for (text, uncertain) in [
+                ("", false),
+                (" ", false),
+                ("a", false),
+                ("é", false),
+                ("世", false),
+                ("👍", false),
+                ("e\u{301}", false),
+                ("ab", true),
+                ("aé", true),
+                ("éa", true),
+                ("éé", true),
+                ("❤️", true),
+                ("1\u{20e3}", true),
+                ("👨‍👩‍👧‍👦", true),
+            ] {
+                assert_eq!(
+                    renderer.width_is_uncertain(&Cell::new(text, 1)),
+                    mode == crate::text::WidthMode::Wc && uncertain,
+                    "{text:?} under {mode:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn uncertainty_uses_the_earliest_cluster_on_either_row() {
+        let renderer = Renderer::new();
+        for (old_at, new_at, expected) in [
+            (Some(2), Some(12), 2),
+            (Some(12), Some(2), 2),
+            (None, Some(0), 0),
+            (Some(0), None, 0),
+        ] {
+            let mut old = RenderBuffer::new(40, 1);
+            let mut new = RenderBuffer::new(40, 1);
+            let family = Cell::new("👨‍👩‍👧‍👦", 8);
+            if let Some(x) = old_at {
+                old.set_cell((x, 0), &family);
+            }
+            if let Some(x) = new_at {
+                new.set_cell((x, 0), &family);
+            }
+            let first_diff = new
+                .line(0)
+                .unwrap()
+                .iter()
+                .zip(old.line(0).unwrap())
+                .position(|(new, old)| new != old)
+                .unwrap();
+            assert_eq!(
+                renderer.uncertain_bail(new.line(0).unwrap(), old.line(0), first_diff),
+                Some(expected),
+                "old={old_at:?}, new={new_at:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn uncertainty_with_a_known_difference_matches_full_row_scans() {
+        let mut renderer = Renderer::new();
+        for mode in [crate::text::WidthMode::Wc, crate::text::WidthMode::Grapheme] {
+            renderer.set_width_mode(mode);
+            for old_at in [None, Some(0), Some(4), Some(12)] {
+                for new_at in [None, Some(0), Some(4), Some(12)] {
+                    for changed_at in [0, 2, 8, 20] {
+                        let mut old = RenderBuffer::new(24, 1);
+                        let mut new = old.clone();
+                        let family = Cell::new("👨‍👩‍👧‍👦", 8);
+                        if let Some(x) = old_at {
+                            old.set_cell((x, 0), &family);
+                        }
+                        if let Some(x) = new_at {
+                            new.set_cell((x, 0), &family);
+                        }
+                        new.set_cell((changed_at, 0), &Cell::new("X", 1));
+                        let old = old.line(0).unwrap();
+                        let new = new.line(0).unwrap();
+                        let first_diff = new.iter().zip(old).position(|(n, o)| n != o).unwrap();
+                        let expected = renderer
+                            .uncertain_from(new)
+                            .into_iter()
+                            .chain(renderer.uncertain_from(old))
+                            .min()
+                            .filter(|&at| new[at..] != old[at..])
+                            .map(|at| super::emit::cluster_start(new, at));
+                        assert_eq!(
+                            renderer.uncertain_bail(new, Some(old), first_diff),
+                            expected,
+                            "{mode:?}: old={old_at:?}, new={new_at:?}, change={changed_at}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn can_clear_with_accepts_bold_italic_blink() {
         let style = Style {
             attrs: AttrFlags::BOLD | AttrFlags::ITALIC | AttrFlags::SLOW_BLINK,
@@ -89,6 +191,45 @@ mod tests {
 
         let output = String::from_utf8_lossy(&sink);
         assert!(output.contains('X'));
+    }
+
+    #[test]
+    fn overwrite_interval_keeps_the_old_row_in_sync() {
+        let combining = format!("e{}", "\u{301}".repeat(20));
+        for old_width in [8, 40] {
+            for x in [0, 4, 20, 38, 39] {
+                for (old_cell, new_cell, offset) in [
+                    (Cell::new("世", 2), Cell::new("Y", 1), 0),
+                    (Cell::new("世", 2), Cell::new("Y", 1), 1),
+                    (Cell::new("X", 1), Cell::new("世", 2), 0),
+                    (Cell::new("X", 1), Cell::new(&combining, 1), 0),
+                ] {
+                    let mut old = RenderBuffer::new(old_width, 1);
+                    let mut new = RenderBuffer::new(40, 1);
+                    for column in 0..40 {
+                        old.set_cell((column, 0), &Cell::new("a", 1));
+                        new.set_cell((column, 0), &Cell::new("a", 1));
+                    }
+                    old.set_cell((x, 0), &old_cell);
+                    new.set_cell((x, 0), &old_cell);
+                    new.set_cell((x + offset, 0), &new_cell);
+                    let mut renderer = Renderer::new();
+                    renderer.cur_buf = Some(old);
+                    let mut out = Vec::new();
+                    renderer.transform_line(&mut out, &new, 0, 0, 39).unwrap();
+                    assert_eq!(
+                        renderer.cur_buf.as_ref().unwrap().line(0).unwrap(),
+                        &new.line(0).unwrap()[..usize::from(old_width)],
+                        "old_width={old_width}, x={x}, offset={offset}, cell={new_cell:?}"
+                    );
+                    if old_width == 40 {
+                        out.clear();
+                        renderer.transform_line(&mut out, &new, 0, 0, 39).unwrap();
+                        assert!(out.is_empty());
+                    }
+                }
+            }
+        }
     }
 
     #[test]

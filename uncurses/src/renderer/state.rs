@@ -419,13 +419,20 @@ impl Renderer {
     /// and the measurement together, while
     /// [`crate::screen::Screen::set_grapheme_clusters`] sets only the
     /// measurement and leaves the terminal to whoever owns it.
+    #[inline]
     pub(super) fn width_is_uncertain(&self, cell: &Cell) -> bool {
-        if self.width_mode != WidthMode::Wc {
+        let content = cell.content();
+        if self.width_mode != WidthMode::Wc || content.len() <= 1 {
+            return false;
+        }
+        // In valid UTF-8, a multibyte scalar's leading byte gives its
+        // byte count. A single scalar cannot have an uncertain tail.
+        if content.as_bytes()[0].leading_ones() as usize == content.len() {
             return false;
         }
         // East-Asian Ambiguous code points measure one column or two, never
         // zero, so the policy cannot change the answer to this question.
-        cell.content().chars().skip(1).any(|c| {
+        content.chars().skip(1).any(|c| {
             // VS15 and VS16, which pick text or emoji presentation, and
             // U+20E3, which encloses its base in a keycap with or without
             // a selector in front of it.

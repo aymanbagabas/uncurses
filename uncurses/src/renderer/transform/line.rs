@@ -68,10 +68,9 @@ impl Renderer {
     /// lines, then dispatch to one of five branches based on what kind
     /// of change pattern the row exhibits.
     ///
-    /// Returns `Some(first_cell)` when output was emitted, where
-    /// `first_cell` is the leftmost column the screen was updated from
-    /// — the wrapper uses this to slice-copy `new_line[first_cell..]`
-    /// into `cur_buf` so it tracks what is now on screen.
+    /// Returns the first column of the suffix the wrapper must copy into
+    /// `cur_buf`. Returns `None` when the row is unchanged or this method
+    /// already copied the changed interval.
     fn transform_line_inner(
         &mut self,
         out: &mut Vec<u8>,
@@ -90,6 +89,21 @@ impl Renderer {
             return Ok(None);
         }
 
+        // Scroll operations can change the old buffer outside the touched
+        // span, so compare the full row before reusing its equal prefix.
+        let mut first_diff = 0;
+        while first_diff < width {
+            let new_cell = &new_line[first_diff];
+            let old_cell = cur_line.as_deref().and_then(|line| line.get(first_diff));
+            if old_cell.is_none_or(|old| old != new_cell) {
+                break;
+            }
+            first_diff += 1;
+        }
+        if first_diff == width {
+            return Ok(None);
+        }
+
         // === Step 0: give up on the diff at a cluster of uncertain width ===
         //
         // Every step below plans from how many columns it believes each cell
@@ -101,18 +115,11 @@ impl Renderer {
         // an erase of its own. That erase reaches the columns a ligated
         // cluster was drawn into, and no later step would redraw what it
         // wiped.
-        if let Some(bail) = self.uncertain_bail(new_line, cur_line.as_deref()) {
+        if let Some(bail) = self.uncertain_bail(new_line, cur_line.as_deref(), first_diff) {
             let cur_slice = cur_line.as_deref();
             // Columns left of the cluster are measured the way the terminal
             // draws them, so an ordinary comparison still holds there.
-            let mut first = 0usize;
-            while first < bail
-                && cur_slice
-                    .and_then(|c| c.get(first))
-                    .is_some_and(|o| o == &new_line[first])
-            {
-                first += 1;
-            }
+            let first = first_diff.min(bail);
             let first = super::emit::cluster_start(new_line, first);
             if first < bail {
                 self.move_to(out, new_buf, y, first as u16)?;
@@ -125,8 +132,8 @@ impl Renderer {
         // === Step 1: find firstCell ===
         // When the new row begins with cells that the terminal can
         // reproduce by erasing (default-style blanks), we may be able
-        // to use EL-1 to wipe a leading run. Otherwise just scan
-        // linearly for the first differing cell.
+        // to use EL-1 to wipe a leading run. Otherwise reuse the first
+        // differing column found above.
         let leading_blank: &Cell = &new_line[0];
         let mut first_cell;
         // `copy_from` is the leftmost column where the post-emission
@@ -149,17 +156,8 @@ impl Renderer {
             }
 
             if n_first == o_first {
-                // Same number of leading blanks on each side: scan
-                // forward from there for the first real diff.
-                first_cell = n_first;
-                while first_cell < width {
-                    let new_c = &new_line[first_cell];
-                    let old_c = cur_line.as_deref().and_then(|c| c.get(first_cell));
-                    if old_c.is_none_or(|o| o != new_c) {
-                        break;
-                    }
-                    first_cell += 1;
-                }
+                // Equal leading blanks leave the first difference unchanged.
+                first_cell = first_diff;
                 copy_from = first_cell;
             } else if o_first > n_first {
                 // Old had more leading blanks; nothing to clear.
@@ -211,15 +209,7 @@ impl Renderer {
                 }
             }
         } else {
-            first_cell = 0;
-            while first_cell < width {
-                let new_c = &new_line[first_cell];
-                let old_c = cur_line.as_deref().and_then(|c| c.get(first_cell));
-                if old_c.is_none_or(|o| o != new_c) {
-                    break;
-                }
-                first_cell += 1;
-            }
+            first_cell = first_diff;
             copy_from = first_cell;
         }
 
@@ -286,6 +276,14 @@ impl Renderer {
             if n_last >= first_cell {
                 self.move_to(out, new_buf, y, first_cell as u16)?;
                 self.put_range(out, new_buf, cur_slice, new_line, y, first_cell, n_last)?;
+            }
+            // The backward scan already proved the suffix equal. Copy only
+            // this interval; a shorter old row uses the wrapper's fallback.
+            if let Some(cur) = cur_line
+                && let Some(changed) = cur.get_mut(copy_from..=n_last)
+            {
+                changed.clone_from_slice(&new_line[copy_from..=n_last]);
+                return Ok(None);
             }
             return Ok(Some(copy_from));
         }

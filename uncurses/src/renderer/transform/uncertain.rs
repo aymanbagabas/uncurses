@@ -26,8 +26,8 @@ impl Renderer {
     /// The column to repaint a row from, when it holds a cluster the
     /// terminal may measure differently than this does.
     ///
-    /// Both rows are scanned, and from the left edge rather than from the
-    /// first difference. A cluster decided where the terminal put every
+    /// Both rows count, including their equal prefix. A cluster decided
+    /// where the terminal put every
     /// column to its right at the moment it was drawn, so those columns
     /// keep an unknown position for as long as it stands there, whether or
     /// not this frame is what changed them. A cluster the new row no longer
@@ -36,30 +36,34 @@ impl Renderer {
     /// A change confined to the columns left of the cluster is left to the
     /// ordinary diff. Those columns are measured the way the terminal draws
     /// them, so nothing about them is in doubt.
+    ///
+    /// `first_diff` names the first differing column. The caller compares
+    /// the full rows and skips identical rows before this check.
     pub(super) fn uncertain_bail(
         &self,
         new_line: &[Cell],
         old_line: Option<&[Cell]>,
+        first_diff: usize,
     ) -> Option<usize> {
-        // A cluster the new row no longer carries counts for the same
-        // reason, so the old row is scanned too, across the columns the
-        // new one still reaches.
+        let new_at = self.uncertain_from(new_line);
+        // The equal prefix has the same uncertainty on both rows. Only an
+        // earlier cluster in the old row's changed tail can move the boundary.
+        let old_end = new_at.unwrap_or(new_line.len());
         let old_at = old_line
-            .map(|l| &l[..l.len().min(new_line.len())])
-            .and_then(|l| self.uncertain_from(l));
-        let at = self
-            .uncertain_from(new_line)
-            .into_iter()
-            .chain(old_at)
-            .min()?;
+            .and_then(|l| l.get(first_diff..l.len().min(old_end)))
+            .and_then(|l| self.uncertain_from(l))
+            .map(|at| first_diff + at);
+        let at = old_at.or(new_at)?;
 
         // A row whose changes all fall left of the cluster has nothing to
         // repaint, and the rest of the row is left standing as it is.
-        (at..new_line.len()).find(|&x| {
-            old_line
-                .and_then(|l| l.get(x))
-                .is_none_or(|o| o != &new_line[x])
-        })?;
+        if at > first_diff {
+            (at..new_line.len()).find(|&x| {
+                old_line
+                    .and_then(|l| l.get(x))
+                    .is_none_or(|o| o != &new_line[x])
+            })?;
+        }
 
         // A column the old row held a cluster at can be a continuation on
         // the new one, and emission has to start on a column that owns the
@@ -129,8 +133,7 @@ impl Renderer {
     ) -> io::Result<bool> {
         let Some(from) = buf
             .line(y)
-            .and_then(|l| self.uncertain_from(l))
-            .filter(|&from| from < x as usize)
+            .and_then(|l| self.uncertain_from(&l[..l.len().min(x as usize)]))
         else {
             return Ok(false);
         };
