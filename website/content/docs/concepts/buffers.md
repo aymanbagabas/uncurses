@@ -37,13 +37,13 @@ That separation makes the useful tricks possible: diffing one frame against the
 last, snapshotting a frame in a test, or serializing it to bytes for a
 transcript.
 
-## Wide cells still take two columns
+## Wide cells span columns
 
-The grid follows the same rules as a single cell. A wide grapheme occupies two
-columns in its row: the primary in one column and a continuation in the next.
-Writing it lays down both at once, so the row stays honest about which columns
-are occupied. Why that matters, and how uncurses decides what is wide, is the
-[Width]({{< relref "width.md" >}}) page.
+A wide grapheme occupies several columns in its row. The first column holds
+the primary cell, and each additional column holds a continuation.
+The buffer writes the primary and its continuations together.
+The [Width]({{< relref "width.md" >}}) page explains how uncurses measures
+graphemes and why their widths matter.
 
 ## Working with a buffer
 
@@ -56,8 +56,8 @@ use uncurses::layout::Position;
 
 fn main() {
     let mut frame = Buffer::new(20, 5);   // 20 columns, 5 rows of blank cells
-    frame.set_cell(Position::new(0, 0), &Cell::narrow("H"));
-    frame.set_cell(Position::new(1, 0), &Cell::narrow("i"));
+    frame.set_cell(Position::new(0, 0), &Cell::new("H", 1));
+    frame.set_cell(Position::new(1, 0), &Cell::new("i", 1));
     assert_eq!(frame.width(), 20);
     assert_eq!(frame.height(), 5);
 }

@@ -148,7 +148,7 @@ fn paint_scrim(screen: &mut Screen<Stdout>) {
     // wins because we overwrite each cell.
     let scrim = Style::default().bg(Color::Rgb(0x55, 0x55, 0x55));
     let bounds = Rect::new(0, 0, screen.width(), screen.height());
-    screen.fill_rect(bounds, &Cell::narrow(" ").style(scrim));
+    screen.fill_rect(bounds, &Cell::new(" ", 1).style(scrim));
 }
 
 fn modal_rect(screen: &Screen<Stdout>) -> Option<Rect> {
@@ -170,7 +170,7 @@ fn paint_modal(screen: &mut Screen<Stdout>, rect: Rect) {
     let body = Style::default().fg(Color::BrightWhite).bg(Color::Blue);
     let hint = Style::default().fg(Color::BrightYellow).bg(Color::Blue);
 
-    screen.fill_rect(rect, &Cell::narrow(" ").style(body.clone()));
+    screen.fill_rect(rect, &Cell::new(" ", 1).style(body.clone()));
 
     let right = rect.x + rect.width - 1;
     let bottom = rect.y + rect.height - 1;

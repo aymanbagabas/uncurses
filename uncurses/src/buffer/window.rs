@@ -93,8 +93,8 @@ mod tests {
     fn write_then_present_offsets_by_position() {
         let mut src = Window::new(3, 2);
         src.set_position((5, 1));
-        src.set_cell(Position::new(0, 0), &Cell::narrow("A"));
-        src.set_cell(Position::new(2, 1), &Cell::narrow("B"));
+        src.set_cell(Position::new(0, 0), &Cell::new("A", 1));
+        src.set_cell(Position::new(2, 1), &Cell::new("B", 1));
 
         let mut dst = Buffer::new(10, 4);
         src.present(&mut dst);
@@ -109,7 +109,7 @@ mod tests {
     fn present_clips_to_target_bounds() {
         let mut src = Window::new(4, 4);
         src.set_position((8, 2));
-        src.fill(&Cell::narrow("X"));
+        src.fill(&Cell::new("X", 1));
         // Target is 10x3 — only the top-left 2x1 of src lands.
         let mut dst = Buffer::new(10, 3);
         src.present(&mut dst);
