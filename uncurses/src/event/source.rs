@@ -196,8 +196,8 @@ impl Waker {
 /// wakeups and resize notifications.
 ///
 /// Construct it with [`EventSource::new`]. Use [`EventSource::poll`] to perform
-/// I/O and wait for queued events, [`EventSource::try_read`] to pop an already
-/// queued event, or [`EventSource::read`] to block until one event is available.
+/// I/O and wait for events, [`EventSource::try_read`] to decode buffered input
+/// without I/O, or [`EventSource::read`] to block until one event is available.
 /// The type is generic over the platform [`Input`] handle.
 pub struct EventSource<I>
 where
@@ -338,8 +338,8 @@ where
 
     /// Return the decoder's current Backarrow mode (DECBKM).
     ///
-    /// Defaults to reset (`false`). Recognized mode reports update this value
-    /// before the decoder reads the next event, including on an async stream.
+    /// Defaults to reset (`false`). Use [`Self::set_backspace_mode`] to apply
+    /// a recognized mode report before reading the next event.
     pub fn backspace_mode(&self) -> bool {
         self.parser.backspace_mode()
     }
@@ -348,7 +348,7 @@ where
     ///
     /// Set (`true`) selects BS (`0x08`) for Backspace; reset (`false`) selects
     /// DEL (`0x7f`). [`DecoderFlags`] choose the ambiguous interpretations.
-    /// Later recognized mode reports can replace this value. Already queued
+    /// Mode reports are returned to the caller for handling. Already queued
     /// events keep their decoded values.
     ///
     /// Use [`Program::set_backspace_mode`](crate::program::Program::set_backspace_mode)
@@ -458,12 +458,18 @@ where
         }
     }
 
-    /// Return the next queued event without performing I/O.
+    /// Return the next event from queued events or buffered bytes without I/O.
     ///
-    /// This only pops the internal queue. Call [`EventSource::poll`] first when
-    /// the queue may be empty but input could be ready. Returns `None` when no
-    /// event is currently queued.
+    /// A mode report ends a decoding batch. Handle it before calling this
+    /// method again to configure decoding of subsequent bytes.
+    /// Call [`Self::poll`] when this returns `None` and more input may be ready.
     pub fn try_read(&mut self) -> Option<Event> {
+        if self.queue.is_empty() {
+            self.expire_elapsed();
+            if self.queue.is_empty() {
+                self.drain_parser(false);
+            }
+        }
         self.queue.pop_front()
     }
 
@@ -477,6 +483,10 @@ where
         // Resolve an already-overdue deadline before reading, so a late
         // continuation byte cannot merge with a sequence that has expired.
         self.expire_elapsed();
+        if !self.queue.is_empty() {
+            return Ok(());
+        }
+        self.drain_parser(false);
         if !self.queue.is_empty() {
             return Ok(());
         }
@@ -537,16 +547,20 @@ where
         self.queue.push_back(ev);
     }
 
-    /// Drive the parser as far as it will go against the bytes
-    /// currently in `pending`, pushing extracted events onto the
-    /// queue and arming the appropriate timeout deadline.
+    fn has_pending_report(&self) -> bool {
+        self.queue
+            .iter()
+            .any(|ev| matches!(ev, Event::ModeReport { .. }))
+    }
+
+    /// Decode pending bytes up to an incomplete sequence or a mode report.
     ///
-    /// While the decoder is in bracketed paste, the paste-idle
-    /// deadline governs (and is reset on every drain, since drain is
-    /// only called after fresh input arrived). Otherwise the ESC
-    /// disambiguation deadline arms when a partial sequence sits at
-    /// the head of `pending`.
-    pub(super) fn drain_parser(&mut self) {
+    /// Leave bytes after a report for the caller's next read, so it can apply
+    /// decoder settings first. Only fresh input renews an active paste deadline.
+    pub(super) fn drain_parser(&mut self, fresh_input: bool) {
+        if self.has_pending_report() {
+            return;
+        }
         loop {
             let (n, ev) = self.parser.parse_one(self.pending.slice());
             if n == 0 && ev.is_none() {
@@ -556,15 +570,21 @@ where
                 self.pending.consume(n);
             }
             if let Some(ev) = ev {
+                let report = matches!(ev, Event::ModeReport { .. });
                 self.emit(ev);
+                if report {
+                    self.esc_deadline = None;
+                    self.paste_deadline = None;
+                    return;
+                }
             }
         }
 
         if self.parser.in_paste() {
-            // In paste: only the paste-idle timer applies. Reset on
-            // every drain (input has just arrived).
             self.esc_deadline = None;
-            self.paste_deadline = self.paste_idle_timeout.map(|t| Instant::now() + t);
+            if fresh_input || self.paste_deadline.is_none() {
+                self.paste_deadline = self.paste_idle_timeout.map(|t| Instant::now() + t);
+            }
             return;
         }
 
@@ -597,15 +617,18 @@ where
         // `\x1b\x1b` to `Alt+Esc`). Anything the decoder still can't
         // consume falls back to the single-byte fallback below.
         self.parser.set_expired(true);
-        self.drain_parser();
+        self.drain_parser(false);
         while let Some(b0) = self.pending.first() {
+            if self.has_pending_report() {
+                break;
+            }
             let ev = self
                 .parser
                 .expire_leading(b0)
                 .unwrap_or_else(|| Event::Unknown(vec![b0]));
             self.pending.consume(1);
             self.emit(ev);
-            self.drain_parser();
+            self.drain_parser(false);
         }
         self.parser.set_expired(false);
     }

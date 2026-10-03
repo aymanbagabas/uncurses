@@ -193,15 +193,6 @@ impl Decoder {
         self.backspace_mode = enabled;
     }
 
-    fn observe_backspace_mode(&mut self, event: &Event) {
-        if let Event::ModeReport { mode, setting } = *event
-            && mode == crate::ansi::mode::Mode::BACKARROW_KEY
-            && setting.is_recognized()
-        {
-            self.set_backspace_mode(setting.is_set());
-        }
-    }
-
     /// Enable or disable UTF-8 mouse decoding (xterm mode 1005).
     ///
     /// When enabled, X10-style `CSI M` mouse reports read their three values as
@@ -247,7 +238,6 @@ impl Decoder {
 
         match self.try_parse(data) {
             ParseResult::Event(event, consumed) => {
-                self.observe_backspace_mode(&event);
                 if matches!(event, Event::PasteStart) {
                     self.in_paste = true;
                 }
@@ -421,7 +411,6 @@ impl Decoder {
 
             match self.try_parse(&self.buf) {
                 ParseResult::Event(event, consumed) => {
-                    self.observe_backspace_mode(&event);
                     let is_paste_start = matches!(event, Event::PasteStart);
                     // Flatten `Event::Multi` into individual events so callers
                     // that match by enum variant don't miss anything.
@@ -510,16 +499,18 @@ impl Decoder {
             // Ctrl+\, Ctrl+], Ctrl+^, Ctrl+_
             b @ 0x1c..=0x1f => Key::new(KeyCode::Char((b + 0x40) as char), KeyModifiers::CTRL),
             0x20 => Key::new(KeyCode::Space, KeyModifiers::empty()),
-            0x7f if self.flags.contains(DecoderFlags::DEL_IS_DELETE) => {
-                Key::new(KeyCode::Delete, KeyModifiers::empty())
-            }
             0x7f => {
-                let modifiers = if self.backspace_mode {
-                    KeyModifiers::CTRL
+                let (code, modifiers) = if self.flags.contains(DecoderFlags::DEL_IS_DELETE) {
+                    (KeyCode::Delete, KeyModifiers::empty())
                 } else {
-                    KeyModifiers::empty()
+                    let modifiers = if self.backspace_mode {
+                        KeyModifiers::CTRL
+                    } else {
+                        KeyModifiers::empty()
+                    };
+                    (KeyCode::Backspace, modifiers)
                 };
-                Key::new(KeyCode::Backspace, modifiers)
+                Key::new(code, modifiers)
             }
             // 8-bit C1 control codes that introduce a string/control sequence
             // (equivalent to their `ESC X` 7-bit forms).
@@ -550,7 +541,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backspace_mode_report_precedes_following_key() {
+    fn backspace_mode_report_does_not_change_decoder_state() {
         let mut decoder = Decoder::default();
         let input = b"\x1b[?67;1$y\x08";
         let (consumed, report) = decoder.parse_one(input);
@@ -559,8 +550,8 @@ mod tests {
         assert_eq!(
             event,
             Some(Event::KeyPress(Key::new(
-                KeyCode::Backspace,
-                KeyModifiers::empty()
+                KeyCode::Char('h'),
+                KeyModifiers::CTRL
             )))
         );
     }
@@ -630,12 +621,7 @@ mod tests {
                         decoder.set_backspace_mode(initial);
                         let mut events = decoder.parse(&input[..split]);
                         events.extend(decoder.parse(&input[split..]));
-                        let enabled = if setting.is_recognized() {
-                            setting.is_set()
-                        } else {
-                            initial
-                        };
-                        let key = if enabled {
+                        let key = if initial {
                             Key::new(KeyCode::Backspace, KeyModifiers::empty())
                         } else {
                             Key::new(KeyCode::Char('h'), KeyModifiers::CTRL)
@@ -650,7 +636,7 @@ mod tests {
                                 Event::KeyPress(key)
                             ]
                         );
-                        assert_eq!(decoder.backspace_mode(), enabled);
+                        assert_eq!(decoder.backspace_mode(), initial);
                     }
                 }
             }

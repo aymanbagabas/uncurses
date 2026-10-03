@@ -188,6 +188,30 @@ fn backspace_mode_query_option_does_not_query_during_init() {
     program.finish().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn backspace_mode_waits_for_program_observation() {
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    writer.write_all(b"\x1b[?67;1$y\x08").unwrap();
+    assert!(program.poll_event(Some(Duration::from_secs(1))).unwrap());
+    assert!(
+        !program.backspace_mode(),
+        "polling must not adopt the report"
+    );
+    assert!(matches!(
+        program.read_event().unwrap(),
+        Event::ModeReport { .. }
+    ));
+    assert!(program.backspace_mode());
+    assert!(matches!(
+        program.try_read_event().unwrap(),
+        Some(Event::KeyPress(key)) if key.code == crate::event::KeyCode::Backspace
+    ));
+}
+
+#[cfg(unix)]
 #[test]
 fn backspace_mode_reports_do_not_rewind_or_own_the_mode() {
     use crate::ansi::mode::{Mode, ModeSetting};
@@ -206,8 +230,8 @@ fn backspace_mode_reports_do_not_rewind_or_own_the_mode() {
         Some(ModeSetting::Set)
     );
     assert!(
-        !program.backspace_mode(),
-        "observing an old report must not rewind"
+        program.backspace_mode(),
+        "only the first report was applied"
     );
     assert!(
         matches!(program.read_event().unwrap(), Event::KeyPress(k) if k.code == crate::event::KeyCode::Backspace)
@@ -243,6 +267,74 @@ fn backspace_mode_reports_do_not_rewind_or_own_the_mode() {
         "the explicit selection remains"
     );
     program.restore().unwrap();
+    assert!(!program.backspace_mode());
+}
+
+#[test]
+fn backspace_mode_observation_applies_only_recognized_backarrow_reports() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    for initial in [false, true] {
+        for mode in [Mode::BACKARROW_KEY, Mode::Ansi(67), Mode::Dec(66)] {
+            for setting in [
+                ModeSetting::NotRecognized,
+                ModeSetting::Set,
+                ModeSetting::Reset,
+                ModeSetting::PermanentlySet,
+                ModeSetting::PermanentlyReset,
+            ] {
+                let buf = RefCell::new(Vec::new());
+                let mut program = Program::for_test(&buf, (20, 1));
+                program.source.lock().unwrap().set_backspace_mode(initial);
+                program
+                    .observe_event(&Event::ModeReport { mode, setting })
+                    .unwrap();
+                let expected = if mode == Mode::BACKARROW_KEY && setting.is_recognized() {
+                    setting.is_set()
+                } else {
+                    initial
+                };
+                assert_eq!(program.backspace_mode(), expected);
+                assert_eq!(program.capabilities().mode(mode), Some(setting));
+                assert!(!program.state.chosen.contains(&Mode::BACKARROW_KEY));
+                assert!(buf.borrow().is_empty());
+            }
+        }
+    }
+}
+
+#[cfg(all(unix, feature = "async"))]
+#[test]
+fn backspace_mode_observation_between_async_events() {
+    use crate::event::KeyCode;
+    use futures_core::Stream;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    let mut stream = program.event_stream();
+    writer
+        .write_all(b"\x1b[?67;1$y\x08\x1b[?67;2$y\x08")
+        .unwrap();
+    let mut context = Context::from_waker(Waker::noop());
+    for expected in [
+        None,
+        Some(KeyCode::Backspace),
+        None,
+        Some(KeyCode::Char('h')),
+    ] {
+        let Poll::Ready(Some(Ok(event))) = Pin::new(&mut stream).poll_next(&mut context) else {
+            panic!("buffered events must not require more input");
+        };
+        if let Some(code) = expected {
+            assert!(matches!(&event, Event::KeyPress(key) if key.code == code));
+        } else {
+            assert!(matches!(&event, Event::ModeReport { .. }));
+        }
+        program.observe_event(&event).unwrap();
+    }
     assert!(!program.backspace_mode());
 }
 

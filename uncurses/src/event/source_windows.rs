@@ -225,7 +225,7 @@ where
             }
         }
         self.pending.append(bytes);
-        self.drain_parser();
+        self.drain_parser(true);
     }
 
     fn serialize_record(&mut self, record: &INPUT_RECORD, buf: &mut Vec<u8>) {
@@ -418,10 +418,31 @@ fn mouse_button_change(prev: u32, current: u32) -> (Option<u8>, bool) {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use crate::event::{Event, KeyCode};
     use windows_sys::Win32::System::Console::{
         COORD, FOCUS_EVENT_RECORD, KEY_EVENT_RECORD, KEY_EVENT_RECORD_0, MOUSE_EVENT_RECORD,
         WINDOW_BUFFER_SIZE_RECORD,
     };
+
+    #[test]
+    fn mode_reports_pause_serialized_input_for_caller_updates() {
+        let (input, _writer) = std::io::pipe().unwrap();
+        let mut source = EventSource::new(input).unwrap();
+        source.feed_bytes(b"\x1b[?67;1$y\x08\x1b[?67;2$y\x08");
+        assert!(!source.backspace_mode());
+        assert!(matches!(source.try_read(), Some(Event::ModeReport { .. })));
+        source.set_backspace_mode(true);
+        assert!(
+            matches!(source.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Backspace)
+        );
+        assert!(matches!(source.try_read(), Some(Event::ModeReport { .. })));
+        assert!(source.backspace_mode());
+        source.set_backspace_mode(false);
+        assert!(
+            matches!(source.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Char('h'))
+        );
+        assert!(source.pending.is_empty());
+    }
 
     #[test]
     fn surrogate_decoding_roundtrip() {

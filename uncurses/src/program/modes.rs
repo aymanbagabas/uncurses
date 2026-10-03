@@ -461,8 +461,8 @@ impl<I: Input, O: Write> Program<I, O> {
 
     /// Return the decoder's current Backarrow mode (DECBKM).
     ///
-    /// Reset (`false`) is the default assumption. Recognized reports update
-    /// the value before subsequent input is decoded.
+    /// Reset (`false`) is the default assumption. [`Self::observe_event`]
+    /// applies recognized reports before subsequent input is decoded.
     pub fn backspace_mode(&self) -> bool {
         self.source.lock().unwrap().backspace_mode()
     }

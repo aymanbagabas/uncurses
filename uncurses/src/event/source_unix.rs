@@ -195,7 +195,7 @@ where
             let s = self.pending.slice();
             crate::trace::tee_input(&s[s.len() - n..]);
         }
-        self.drain_parser();
+        self.drain_parser(true);
         Ok(())
     }
 
@@ -557,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn backspace_mode_reports_update_before_queued_keys() {
+    fn backspace_mode_reports_allow_caller_updates_before_keys() {
         use crate::event::KeyModifiers;
 
         let (rx, tx) = make_pipe();
@@ -570,7 +570,8 @@ mod tests {
         assert!(source.poll(Some(Duration::from_secs(1))).unwrap());
         let report = source.read().unwrap();
         assert!(matches!(report, Event::ModeReport { .. }));
-        assert!(!source.backspace_mode(), "both reports already decoded");
+        assert!(!source.backspace_mode(), "the caller applies reports");
+        source.set_backspace_mode(true);
         for (code, modifiers) in [
             (KeyCode::Backspace, KeyModifiers::empty()),
             (KeyCode::Backspace, KeyModifiers::CTRL | KeyModifiers::ALT),
@@ -581,6 +582,8 @@ mod tests {
             assert_eq!((key.code, key.modifiers), (code, modifiers));
         }
         assert!(matches!(source.read().unwrap(), Event::ModeReport { .. }));
+        assert!(source.backspace_mode());
+        source.set_backspace_mode(false);
         assert!(
             matches!(source.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('h'))
         );
@@ -598,6 +601,91 @@ mod tests {
         assert!(
             matches!(source.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Backspace)
         );
+    }
+
+    #[test]
+    fn mode_report_boundary_resumes_buffered_input_without_io() {
+        for read_method in 0..3 {
+            let (rx, tx) = make_pipe();
+            let mut source = EventSource::new(rx).unwrap();
+            write_bytes(&tx, b"\x1b[?1000;1$y\x08");
+            assert!(source.poll(Some(Duration::from_secs(1))).unwrap());
+            assert!(source.poll(Some(Duration::ZERO)).unwrap());
+            assert_eq!(source.pending.slice(), b"\x08");
+            assert!(matches!(source.try_read(), Some(Event::ModeReport { .. })));
+            source.set_backspace_mode(true);
+            // EOF must not hide bytes that are already buffered.
+            drop(tx);
+            let event = match read_method {
+                0 => source.try_read().unwrap(),
+                1 => source.read().unwrap(),
+                _ => {
+                    assert!(source.poll(Some(Duration::ZERO)).unwrap());
+                    source.try_read().unwrap()
+                }
+            };
+            assert!(matches!(event, Event::KeyPress(k) if k.code == KeyCode::Backspace));
+        }
+    }
+
+    #[test]
+    fn mode_report_boundary_preserves_escape_deadlines() {
+        let (rx, _tx) = make_pipe();
+        let mut source = EventSource::new(rx).unwrap();
+        source.pending.append(b"\x1b[?67;1$y\x1b[3~\x1b");
+        source.drain_parser(true);
+        assert!(source.esc_deadline.is_none());
+        source.expire_partial();
+        assert_eq!(source.pending.slice(), b"\x1b[3~\x1b");
+        assert!(matches!(source.try_read(), Some(Event::ModeReport { .. })));
+        source.set_backspace_mode(true);
+        assert!(matches!(source.try_read(), Some(Event::KeyPress(k)) if k.code == KeyCode::Delete));
+        assert!(source.esc_deadline.is_some());
+        source.esc_deadline = Some(Instant::now());
+        assert!(matches!(source.try_read(), Some(Event::KeyPress(k)) if k.code == KeyCode::Escape));
+        assert!(source.pending.is_empty());
+    }
+
+    #[test]
+    fn expired_escape_cannot_decode_past_a_mode_report() {
+        let (rx, _tx) = make_pipe();
+        let mut source = EventSource::new(rx).unwrap();
+        source.pending.append(b"\x1b\x1b[?67;1$y\x08");
+        source.expire_partial();
+        assert_eq!(source.pending.slice(), b"\x08");
+        assert!(matches!(source.try_read(), Some(Event::KeyPress(k)) if k.code == KeyCode::Escape));
+        assert!(matches!(source.try_read(), Some(Event::ModeReport { .. })));
+        source.set_backspace_mode(true);
+        assert!(
+            matches!(source.try_read(), Some(Event::KeyPress(k)) if k.code == KeyCode::Backspace)
+        );
+    }
+
+    #[test]
+    fn buffered_reads_do_not_renew_paste_deadlines() {
+        let (rx, _tx) = make_pipe();
+        let mut source = EventSource::new(rx)
+            .unwrap()
+            .with_paste_idle_timeout(Some(Duration::from_secs(5)));
+        source.pending.append(b"\x1b[?67;1$y\x1b[200~body\x1b");
+        source.drain_parser(true);
+        assert!(matches!(source.try_read(), Some(Event::ModeReport { .. })));
+        assert!(matches!(source.try_read(), Some(Event::PasteStart)));
+        let deadline = source.paste_deadline;
+        assert!(deadline.is_some());
+        assert!(matches!(source.try_read(), Some(Event::PasteChunk(bytes)) if bytes == b"body"));
+        assert!(source.try_read().is_none());
+        assert!(!source.poll(Some(Duration::ZERO)).unwrap());
+        assert_eq!(source.paste_deadline, deadline);
+
+        let earlier = Instant::now() + Duration::from_secs(1);
+        source.paste_deadline = Some(earlier);
+        source.pending.append(b"[");
+        source.drain_parser(true);
+        assert!(source.paste_deadline.is_some_and(|d| d > earlier));
+        source.paste_deadline = Some(Instant::now());
+        assert!(matches!(source.try_read(), Some(Event::PasteChunk(bytes)) if bytes == b"\x1b["));
+        assert!(matches!(source.try_read(), Some(Event::PasteEnd)));
     }
 
     #[test]

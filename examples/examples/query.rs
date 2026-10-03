@@ -5,7 +5,7 @@
 //! [`Event`] values back through an `EventSource`. The Primary Device
 //! Attributes reply is conventionally sent last, so it marks the end of
 //! the answers.
-//! A Backarrow-mode reply also updates the source's legacy Backspace decoding.
+//! Apply Backarrow-mode replies to configure the source's legacy key decoding.
 //!
 //! Run with `cargo run --example query`. A terminal that does not support
 //! a given query simply never answers it, so the program gives up after a
@@ -55,6 +55,9 @@ fn main() -> io::Result<()> {
                     lines.push(format!("cell size: {width}x{height} pixels"))
                 }
                 Event::ModeReport { mode, setting } if mode == Mode::BACKARROW_KEY => {
+                    if setting.is_recognized() {
+                        events.set_backspace_mode(setting.is_set());
+                    }
                     lines.push(format!(
                         "backspace mode: {} (report: {setting:?})",
                         events.backspace_mode()

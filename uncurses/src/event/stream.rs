@@ -71,9 +71,9 @@ struct Wait {
 ///
 /// Build one with [`EventSource::into_stream`] (sole owner) or
 /// [`EventStream::from_shared`] (sharing a source kept elsewhere). A helper
-/// thread blocks in [`EventSource::poll`], which reads and decodes input
-/// into the source's queue, then wakes the polling task; the task drains
-/// queued events (and may itself decode via a non-blocking poll). The stream
+/// thread waits for readiness and wakes the polling task. The task reads
+/// and decodes input through a non-blocking poll. Handle a mode report
+/// before polling the stream again to configure subsequent decoding. The stream
 /// yields `Some(Ok(event))` per decoded event and, once, `Some(Err(_))` on a
 /// read error or end-of-input, then fuses to `None`. Dropping it ends the
 /// helper thread; the shared source is left intact for any other holder.
@@ -195,7 +195,7 @@ impl<I: Input> futures_core::Stream for EventStream<I> {
         // wait and stay pending rather than block here.
         match this.source.try_lock() {
             Ok(mut src) => {
-                if let Some(ev) = src.try_read() {
+                if let Some(ev) = src.queue.pop_front() {
                     return Poll::Ready(Some(Ok(ev)));
                 }
                 // Only drive I/O when no waiter is in flight. A dispatched
@@ -345,14 +345,17 @@ mod tests {
     }
 
     #[test]
-    fn backspace_mode_report_updates_async_decoding() {
+    fn backspace_mode_report_allows_async_caller_to_update_decoding() {
         let (rx, tx) = make_pipe();
-        let mut stream = EventSource::new(rx).unwrap().into_stream();
+        let source = Arc::new(Mutex::new(EventSource::new(rx).unwrap()));
+        let mut stream = EventStream::from_shared(Arc::clone(&source));
         write_bytes(&tx, b"\x1b[?67;1$y\x08\x1b[?67;2$y\x08");
         assert!(matches!(
             next_blocking(&mut stream).unwrap().unwrap(),
             Event::ModeReport { .. }
         ));
+        assert!(!source.lock().unwrap().backspace_mode());
+        source.lock().unwrap().set_backspace_mode(true);
         assert!(matches!(
             next_blocking(&mut stream).unwrap().unwrap(),
             Event::KeyPress(k) if k.code == KeyCode::Backspace
@@ -361,6 +364,8 @@ mod tests {
             next_blocking(&mut stream).unwrap().unwrap(),
             Event::ModeReport { .. }
         ));
+        assert!(source.lock().unwrap().backspace_mode());
+        source.lock().unwrap().set_backspace_mode(false);
         assert!(matches!(
             next_blocking(&mut stream).unwrap().unwrap(),
             Event::KeyPress(k) if k.code == KeyCode::Char('h')

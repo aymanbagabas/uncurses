@@ -205,9 +205,9 @@ pub struct ProgramOptions {
     pub prefer_synchronized_output: bool,
     /// Include Backarrow mode (DECBKM) in [`Program::query_capabilities`].
     ///
-    /// Defaults to `false`. Initialization sends no queries. Recognized
-    /// replies always update legacy key decoding, including replies to
-    /// [`Program::request_mode`], independently of this option.
+    /// Defaults to `false`. Initialization sends no queries.
+    /// [`Program::observe_event`] applies recognized replies independently of
+    /// this option, including replies to [`Program::request_mode`].
     pub query_backspace_mode: bool,
     /// How to read the ambiguous legacy keys.
     ///
@@ -362,8 +362,8 @@ where
         Ok(ready)
     }
 
-    /// Take the next queued event without doing I/O, tracking capabilities as
-    /// it passes through. See [`EventSource::try_read`].
+    /// Take the next event from queued events or buffered bytes without I/O.
+    /// Track capabilities as it passes through. See [`EventSource::try_read`].
     pub fn try_read_event(&mut self) -> io::Result<Option<Event>> {
         if let Some(event) = self.unread.pop_front() {
             return Ok(Some(event));
@@ -411,9 +411,9 @@ where
     /// [`EventStream::from_shared`](crate::event::EventStream::from_shared) from
     /// this handle and poll it on your executor.
     ///
-    /// Events taken this way bypass the program, so capability tracking does
-    /// not run on them — feed each one to
-    /// [`observe_event`](Self::observe_event) yourself.
+    /// Events taken this way bypass the program. Pass each event to
+    /// [`observe_event`](Self::observe_event) before reading the next one,
+    /// so mode replies can configure decoding.
     ///
     /// Sharing one source between a live reader and the program's own
     /// [`read_event`](Self::read_event) is best-effort: an event goes to
@@ -429,8 +429,9 @@ where
     ///
     /// The stream hands back events directly, so — unlike
     /// [`read_event`](Self::read_event) — capability tracking does not run.
-    /// Pass each event to [`observe_event`](Self::observe_event) to keep it
-    /// alive. Read through the stream *or* through `read_event` in steady
+    /// Pass each event to [`observe_event`](Self::observe_event) before polling
+    /// the next one, so mode replies can configure decoding.
+    /// Read through the stream *or* through `read_event` in steady
     /// state, not both at once: a shared source hands each event to whichever
     /// consumer drains it first.
     #[cfg(feature = "async")]
@@ -648,6 +649,12 @@ where
                 // no is information an app may want, and is not the same as
                 // the terminal staying silent.
                 self.caps.modes.insert(mode, setting);
+                if mode == Mode::BACKARROW_KEY && setting.is_recognized() {
+                    self.source
+                        .lock()
+                        .unwrap()
+                        .set_backspace_mode(setting.is_set());
+                }
                 // Adopt a preferred mode only while the application has taken
                 // no position on it. Calling enable_* or disable_* records the
                 // position, and adopting records it too, so a mode is adopted
