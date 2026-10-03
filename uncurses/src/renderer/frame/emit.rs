@@ -54,24 +54,16 @@ impl Renderer {
         self.move_to_with_pen(out, Some(buf), y, x, PenPolicy::ResetBeforeScroll)
     }
 
-    /// Like [`Renderer::move_to`], but plans over no cell contents, and
-    /// measures the move against `size` rather than the last rendered frame.
+    /// Move between frames, measured against the current managed `size`.
     ///
-    /// For a caller moving the cursor *between* frames rather than during a
-    /// diff. Two things separate that caller from the diff loop.
+    /// Ordinary moves use control sequences rather than the planner's
+    /// overwrite candidate. The desired grid can contain unrendered edits,
+    /// so it must not supply cells for a move between frames.
     ///
-    /// The planner can pay for a short forward move by re-emitting the cells
-    /// it passes over, which is only sound when those cells are what the
-    /// terminal currently shows. Inside the diff loop they are: a move there
-    /// targets a column the transform has proven equal between the tracked
-    /// and the new line. Between frames nothing establishes that — the
-    /// desired grid can hold an edit that has not been rendered, or a whole
-    /// frame belonging to the other screen buffer — and the planner does not
-    /// record the cells it re-emits in the tracked buffer, so the divergence
-    /// it creates is never diffed away. Withholding the row makes that
-    /// unrepresentable rather than guarded, and costs nothing: a resting
-    /// cursor is essentially never reached by a forward move short enough for
-    /// the overwrite candidate to win.
+    /// Past an uncertain cluster, the move instead walks the last rendered
+    /// row. Those cells describe what the terminal already shows. A pending
+    /// clear invalidates that snapshot, as after a resize or screen switch,
+    /// and restricts the move to control sequences until the next render.
     ///
     /// `size` is the surface the wrap and the clamp are measured against. The
     /// renderer's own size is whatever it last rendered, which is what a move
@@ -178,6 +170,19 @@ impl Renderer {
             }
         }
 
+        if buf.is_none() && !self.force_clear {
+            // Use the displayed snapshot, never the desired or staging grid.
+            // Restore it even if the walk reports an output error.
+            let current = self.cur_buf.take();
+            let walked = current.as_ref().map_or(Ok(false), |current| {
+                self.walk_to_uncertain(out, current, y, x)
+            });
+            self.cur_buf = current;
+            if walked? {
+                return Ok(());
+            }
+        }
+
         if self.cur.x == Some(x) && self.cur.y == Some(y) {
             return Ok(());
         }
@@ -214,20 +219,22 @@ impl Renderer {
         x: u16,
         pen: PenPolicy,
     ) -> io::Result<()> {
-        // Inline mode + cursor fully unknown on both axes: snap to
-        // column 0 with a bare `\r` so the relative move below has a
-        // deterministic starting column. The row stays unknown until
-        // the planner emits a vertical step. Fullscreen mode handles
-        // the same condition by emitting absolute CUP from the
+        // Inline mode with an unknown column: snap to column 0 with a
+        // bare `\r` so the relative move below has a deterministic
+        // starting column. Without it the planner would start from the
+        // `0` that `Cursor::pos` substitutes for the unknown and step
+        // relatively from a column the cursor is not on. Fullscreen mode
+        // handles the same condition by emitting absolute CUP from the
         // planner.
-        if !self.fullscreen && self.relative_cursor && self.cur.x.is_none() && self.cur.y.is_none()
-        {
-            out.push(b'\r');
-            // Re-home the column and assume the current physical row is the
-            // top of the surface, so the relative move below only ever steps
-            // downward — it can never CUU above a reflowed/handed-off cursor.
-            self.cur.x = Some(0);
-            self.cur.y = Some(0);
+        if !self.fullscreen && self.relative_cursor && self.cur.x.is_none() {
+            self.reanchor_to_row_start(out);
+            // With the row unknown as well, assume the current physical row
+            // is the top of the surface, so the relative move below only
+            // ever steps downward — it can never CUU above a
+            // reflowed/handed-off cursor.
+            if self.cur.y.is_none() {
+                self.cur.y = Some(0);
+            }
         }
 
         let target = Position { x, y };
@@ -243,6 +250,20 @@ impl Renderer {
     pub(crate) fn invalidate_cursor(&mut self) {
         self.cur.x = None;
         self.cur.y = None;
+    }
+
+    /// Park the cursor on the left edge of the row it is already on.
+    ///
+    /// A carriage return is the one horizontal move whose outcome does not
+    /// depend on the current column, which is what makes it the way back to
+    /// a known column after the terminal advanced by an amount the renderer
+    /// did not predict. The row it lands on is the row it started on, so
+    /// this recovers the column only, and the caller owns keeping the row
+    /// trustworthy.
+    pub(crate) fn reanchor_to_row_start(&mut self, out: &mut Vec<u8>) {
+        out.push(b'\r');
+        self.cur.x = Some(0);
+        self.cur.at_phantom = false;
     }
 
     /// Write a single grapheme to the output buffer, handling the

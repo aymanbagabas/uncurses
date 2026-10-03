@@ -103,6 +103,13 @@ stays separate: `program.show_cursor()` and `program.hide_cursor()` decide
 whether the caret is drawn, while `set_cursor_position` only decides where it
 rests.
 
+Use `screen.move_cursor_to((caret_col, 0))?` for an immediate move and flush.
+This leaves the staged resting position unchanged. Past a cluster whose width
+is uncertain, the move follows the last rendered cells, not pending edits.
+The terminal places the cursor, so `tracked_cursor()` then returns `None`.
+After a resize or screen switch, render the content before you place the caret
+relative to that content.
+
 ## Committing to scrollback
 
 Sometimes you want a line to leave the live region and become permanent history,

@@ -6,6 +6,7 @@ pub(super) mod clear;
 pub(super) mod emit;
 pub(super) mod line;
 pub(super) mod predicates;
+pub(super) mod uncertain;
 
 #[cfg(test)]
 mod tests {

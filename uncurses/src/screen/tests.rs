@@ -2372,7 +2372,7 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
     );
 }
 
-/// An imperative cursor move happens between frames, where the desired grid
+/// An ordinary imperative move happens between frames, where the desired grid
 /// is not what the terminal shows. The move planner may pay for a short
 /// forward hop by re-emitting the cells it passes over, so planning it over
 /// that grid paints cells the terminal does not have — and it never records
@@ -2382,7 +2382,7 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
 /// Three ways the desired grid diverges, each reached by a forward hop short
 /// enough for the overwrite candidate to beat CUF.
 #[test]
-fn move_cursor_to_never_emits_cell_content() {
+fn move_cursor_to_keeps_ordinary_moves_free_of_cell_content() {
     // (name, how the grid is made to diverge, where to move)
     #[allow(clippy::type_complexity)]
     let cases: [(&str, fn(&mut Screen<Vec<u8>>), (u16, u16)); 3] = [
@@ -2639,9 +2639,9 @@ fn wc_mode_gives_a_joined_emoji_every_column_the_terminal_advances() {
 #[test]
 fn wc_mode_renders_a_joined_emoji_and_addresses_the_column_after_it() {
     // The grid credits the cluster with eight columns. The renderer has to
-    // agree. It draws the cluster once, and on the next frame it reaches the
-    // cell that follows without repainting the cluster, which it can only do
-    // if it tracks the same eight columns the grid handed it.
+    // agree, so it draws the cluster once and puts the cell that follows at
+    // the ninth column, which it can only do if it tracks the same eight
+    // columns the grid handed it.
     let mut screen = Screen::for_test(Vec::new(), (20, 1));
     let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
     screen.set_str((0, 0), &format!("{fam}X"), crate::style::Style::default());
@@ -2665,9 +2665,13 @@ fn wc_mode_renders_a_joined_emoji_and_addresses_the_column_after_it() {
         second.contains('Y'),
         "the changed cell must be redrawn: {second:?}"
     );
+    // The change sits past a cluster the terminal may ligate, so the column
+    // the diff names for it is not one the terminal agrees on. The row is
+    // laid out again from the cluster, the last column where the two still
+    // meet.
     assert!(
-        !second.contains(fam),
-        "the cluster did not change, so it must not be repainted: {second:?}"
+        second.contains(fam),
+        "the row must be repainted from the cluster: {second:?}"
     );
 }
 
@@ -2848,4 +2852,345 @@ fn an_empty_primary_at_a_split_insert_boundary_repaints_the_suffix() {
             assert!(screen.writer().is_empty());
         }
     }
+}
+
+const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+
+fn rendered_family_rows(fullscreen: bool) -> Screen<Vec<u8>> {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_fullscreen(fullscreen);
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    for (y, text) in [(0, "ABCDEFGHIJ"), (1, "abcdefghij")] {
+        screen.set_str((0, y), FAMILY, Style::EMPTY);
+        screen.set_str((8, y), text, Style::EMPTY);
+    }
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen
+}
+
+#[test]
+fn imperative_cursor_walks_the_rendered_row_after_normalizing_its_target() {
+    for fullscreen in [false, true] {
+        let mut screen = rendered_family_rows(fullscreen);
+        for (target, letter) in [((9, 0), "A"), ((49, 0), "a"), ((9, 99), "a")] {
+            screen.move_cursor_to(target).unwrap();
+            let out = s(screen.writer());
+            assert!(
+                out.ends_with(&format!("\x1b[?7l{FAMILY}{letter}\x1b[?7h")),
+                "fullscreen={fullscreen}, target={target:?}: {out:?}"
+            );
+            assert!(!out.contains('\t'), "a tab crossed the uncertain row");
+            assert_eq!(screen.tracked_cursor(), None);
+            assert_eq!(screen.diverge(), None);
+            screen.writer_mut().clear();
+        }
+        screen.move_cursor_to((0, 0)).unwrap();
+        screen.writer_mut().clear();
+        screen.move_cursor_by(9, 0).unwrap();
+        assert!(s(screen.writer()).contains(&format!("{FAMILY}A")));
+        assert_eq!(screen.tracked_cursor(), None);
+    }
+}
+
+#[test]
+fn imperative_cursor_respects_uncertain_cluster_boundaries() {
+    for (cluster, width) in [(FAMILY, 8), ("\u{2764}\u{fe0f}", 1), ("1\u{20e3}", 1)] {
+        let mut screen = Screen::for_test(Vec::new(), (40, 1));
+        screen.set_str((0, 0), "ab", Style::EMPTY);
+        screen.set_cell((2, 0), &Cell::new(cluster, width));
+        screen.set_str((2 + u16::from(width), 0), "A", Style::EMPTY);
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+
+        screen.move_cursor_to((1, 0)).unwrap();
+        assert!(printable_payload(screen.writer()).is_empty());
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(1, 0)));
+        screen.writer_mut().clear();
+
+        screen.move_cursor_to((3 + u16::from(width), 0)).unwrap();
+        assert!(s(screen.writer()).contains(&format!("{cluster}A")));
+        assert_eq!(screen.tracked_cursor(), None);
+        screen.writer_mut().clear();
+
+        if width > 1 {
+            screen.move_cursor_to((3, 0)).unwrap();
+            assert!(!s(screen.writer()).contains(cluster));
+            assert_eq!(screen.tracked_cursor(), None);
+        }
+    }
+}
+
+#[test]
+fn imperative_cursor_walk_uses_rendered_cells_instead_of_staged_edits() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_str((0, 0), "NEW CONTENT", Style::EMPTY);
+    screen.move_cursor_to((9, 0)).unwrap();
+
+    let out = s(screen.writer());
+    assert!(out.contains(&format!("{FAMILY}A")), "{out:?}");
+    assert!(!out.contains("NEW"), "the move emitted an unrendered edit");
+    assert!(screen.diverge().is_some());
+
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(s(screen.writer()).contains("NEW CONTENT"));
+    assert_eq!(screen.diverge(), None);
+}
+
+#[test]
+fn imperative_cursor_does_not_walk_a_staged_or_invalidated_row() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_str((0, 0), "old", Style::EMPTY);
+    screen.render().unwrap();
+    screen.set_str((0, 0), FAMILY, Style::EMPTY);
+    screen.writer_mut().clear();
+    screen.move_cursor_to((9, 0)).unwrap();
+    assert!(printable_payload(screen.writer()).is_empty());
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(9, 0)));
+
+    for invalidate in [
+        |s: &mut Screen<Vec<u8>>| s.resize((20, 1)),
+        |s: &mut Screen<Vec<u8>>| s.resize((40, 2)),
+        |s: &mut Screen<Vec<u8>>| s.set_fullscreen(true),
+        |s: &mut Screen<Vec<u8>>| s.set_grapheme_clusters(true),
+    ] {
+        let mut screen = rendered_family_rows(false);
+        invalidate(&mut screen);
+        screen.move_cursor_to((9, 0)).unwrap();
+        assert!(
+            printable_payload(screen.writer()).is_empty(),
+            "the move re-emitted invalidated contents: {:?}",
+            s(screen.writer())
+        );
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(9, 0)));
+    }
+}
+
+#[test]
+fn imperative_cursor_walk_does_not_suppress_the_sticky_resting_position() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_cursor_position((9, 0));
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
+    screen.move_cursor_to((10, 0)).unwrap();
+    assert!(s(screen.writer()).contains(&format!("{FAMILY}AB")));
+    assert_eq!(screen.tracked_cursor(), None);
+    screen.writer_mut().clear();
+
+    screen.render().unwrap();
+    assert!(
+        s(screen.writer()).contains(&format!("{FAMILY}A\x1b[?7h")),
+        "the render must restore the staged position: {:?}",
+        s(screen.writer())
+    );
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn imperative_cursor_walk_advances_past_a_trailing_erase() {
+    let mut screen = rendered_family_rows(false);
+    screen.move_cursor_to((30, 0)).unwrap();
+    let out = s(screen.writer());
+    assert!(
+        out.ends_with(&format!("{FAMILY}ABCDEFGHIJ\x1b[12X\x1b[12C\x1b[?7h")),
+        "{out:?}"
+    );
+    assert_eq!(screen.tracked_cursor(), None);
+}
+
+#[test]
+fn imperative_cursor_walk_closes_styles_and_links() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_str(
+        (8, 0),
+        "RED",
+        Style::EMPTY.fg(Color::Red).link("https://example.com", ""),
+    );
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.move_cursor_to((11, 0)).unwrap();
+    let out = s(screen.writer());
+    assert!(out.contains("RED"), "{out:?}");
+    assert!(out.contains("\x1b[31m"), "{out:?}");
+    assert!(out.contains("\x1b[m"), "{out:?}");
+    assert!(out.contains("\x1b]8;;\x1b\\"), "{out:?}");
+}
+
+#[test]
+fn resting_cursor_advances_past_a_trailing_erase() {
+    for start in [0, 3] {
+        let mut screen = Screen::for_test(Vec::new(), (40, 2));
+        screen.set_optimizations(Optimizations::all());
+        screen.set_grapheme_clusters(false);
+        screen.set_str((start, 0), FAMILY, Style::default());
+        screen.set_cursor_position(Position::new(30, 0));
+        screen.render().unwrap();
+
+        let count = 30 - start - 8;
+        let out = s(screen.writer());
+        assert!(
+            out.ends_with(&format!(
+                "{FAMILY}\x1b[{count}X\x1b[{count}C\x1b[?7h\x1b[?25h"
+            )),
+            "the resting walk must advance past its trailing erase: {out:?}"
+        );
+        assert_eq!(screen.tracked_cursor(), None);
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty(), "the resting target was reached");
+    }
+}
+
+/// The resting cursor is walked into a row that carries a ligatable
+/// cluster, not addressed by column.
+///
+/// The planner may pay for a short forward move with hardware tabs or by
+/// re-emitting a cell, and both are counted in columns. Past the cluster
+/// the terminal counts from the glyph it drew, so a tab lands on its own
+/// stop and a re-emitted cell is painted into a column the row never
+/// meant for it, undoing the repaint on every frame.
+#[test]
+fn resting_cursor_walks_into_a_row_holding_a_ligatable_cluster() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "ABCDEFGHIJ", Style::default());
+    screen.set_cursor_position(Position::new(17, 0));
+    screen.render().unwrap();
+
+    // Column seventeen is reached by writing the row's own cells from the
+    // cluster, so the cursor lands wherever the terminal put the ninth
+    // letter rather than on the model's count of it.
+    let out = s(screen.writer());
+    assert!(
+        out.ends_with(&format!(
+            "\x1b[2A\x1b[?7l{FAMILY}ABCDEFGHI\x1b[?7h\x1b[?25h"
+        )),
+        "frame did not end with the walk: {out:?}"
+    );
+    assert!(!out.contains('\t'), "a tab crossed the uncertain row");
+
+    // The terminal placed the cursor and this cannot name the column.
+    assert_eq!(screen.tracked_cursor(), None);
+}
+
+/// A resting position left of the cluster is reached the ordinary way.
+/// Those columns are measured the way the terminal draws them, so there
+/// is nothing to walk around.
+#[test]
+fn resting_cursor_left_of_a_ligatable_cluster_keeps_the_ordinary_move() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), "ab", Style::default());
+    screen.set_str((2, 0), FAMILY, Style::default());
+    screen.set_cursor_position(Position::new(1, 0));
+    screen.render().unwrap();
+
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(1, 0)));
+}
+
+/// The walk past a ligatable cluster leaves the column unknown and the row
+/// known. The frame after it has to earn the column back before it moves
+/// relative to it.
+///
+/// Dropping only the column is what the walk can honestly say: the
+/// terminal placed the cursor on a row the renderer chose. But a relative
+/// plan reads the unknown column as zero, and a bare `\n` keeps whatever
+/// column the cursor is really on, so the next row's first cell would land
+/// wherever the cluster pushed it.
+#[test]
+fn a_frame_after_the_walk_earns_the_column_back_before_moving() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 3));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "ABCDEFGHIJ", Style::default());
+    screen.set_cursor_position(Position::new(17, 0));
+    screen.render().unwrap();
+    assert_eq!(
+        screen.tracked_cursor(),
+        None,
+        "the walk left the column open"
+    );
+    screen.writer_mut().clear();
+
+    // A cell on the row below. Reaching it steps down one row, and the
+    // step has to start from a column this can name.
+    screen.clear_cursor_position();
+    screen.set_str((0, 1), "Z", Style::default());
+    screen.render().unwrap();
+
+    let out = s(screen.writer());
+    assert!(
+        out.contains("\r\nZ"),
+        "the step down must re-anchor the column first: {out:?}"
+    );
+}
+
+/// The walk past a ligatable cluster writes cells, and a cell carries
+/// style and links of its own. The frame epilogue has already returned
+/// the pen to default by then, so whatever the walk ends on would ride
+/// out with the frame and paint everything written after it.
+#[test]
+fn the_walk_to_the_resting_cursor_closes_the_style_it_opened() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "RED", Style::default().fg(Color::Red));
+    // Past the red run, so reaching it walks across the whole of it.
+    screen.set_cursor_position(Position::new(11, 0));
+    screen.render().unwrap();
+
+    let out = s(screen.writer());
+    let opened = out
+        .rfind("\u{1b}[31m")
+        .expect("the walk painted the red run");
+    assert!(
+        out[opened..].contains("\u{1b}[m"),
+        "the frame must close the red it opened: {out:?}"
+    );
+}
+
+/// A frame that walks the cursor past an uncertain cluster leaves the column
+/// for the terminal to name. A later render with nothing to change must still
+/// recognize the cursor as resting and write nothing at all.
+#[test]
+fn a_render_after_the_walk_with_nothing_to_change_writes_nothing() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    screen.set_str((0, 0), FAMILY, Style::default());
+    screen.set_str((8, 0), "AB", Style::default());
+    screen.set_cursor_position(Position::new(10, 0));
+    screen.render().unwrap();
+    assert!(
+        s(screen.writer()).contains(FAMILY),
+        "the first frame should walk past the cluster"
+    );
+
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert_eq!(
+        s(screen.writer()),
+        "",
+        "an idle render should write nothing"
+    );
+
+    // The rest is only good for the position that was asked for: moving the
+    // target still has to emit.
+    screen.set_cursor_position(Position::new(12, 0));
+    screen.render().unwrap();
+    assert!(
+        !s(screen.writer()).is_empty(),
+        "a new resting target should still emit a move"
+    );
 }
