@@ -2799,17 +2799,53 @@ fn an_inserted_empty_primary_opens_room_for_every_column_it_claims() {
     }
     screen.render().unwrap();
     screen.writer_mut().clear();
-    screen.set_cell((1, 0), &Cell::new("", 3));
-    screen.set_cell((2, 0), &Cell::CONTINUATION);
+    // The narrow prefix puts the insert boundary before the wide primary.
+    screen.set_cell((1, 0), &Cell::new("*", 1));
+    screen.set_cell((2, 0), &Cell::new("", 3));
     screen.set_cell((3, 0), &Cell::CONTINUATION);
+    screen.set_cell((4, 0), &Cell::CONTINUATION);
     for (i, ch) in "ABCDEFGHIJ".chars().enumerate() {
-        screen.set_cell((i as u16 + 4, 0), &Cell::new(ch.to_string(), 1));
+        screen.set_cell((i as u16 + 5, 0), &Cell::new(ch.to_string(), 1));
     }
     screen.render().unwrap();
 
     let frame = s(screen.writer());
-    assert!(
-        frame.contains("\x1b[4h   A"),
+    assert_eq!(
+        frame, "\x1b[?25lX*\x1b[4h   A\x1b[4l\x1b[?25h",
         "the inserted cell claims three columns, so it writes three: {frame:?}"
     );
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn an_empty_primary_at_a_split_insert_boundary_repaints_the_suffix() {
+    for ich in [false, true] {
+        for width in [2, 3, 8] {
+            let mut screen = Screen::for_test(Vec::new(), (20, 1));
+            let mut opts = Optimizations::all();
+            opts.set(Optimizations::ICH, ich);
+            screen.set_optimizations(opts);
+            screen.set_str((0, 0), "XABCDEFGHIJ", Style::EMPTY);
+            screen.render().unwrap();
+            screen.writer_mut().clear();
+
+            screen.set_cell((1, 0), &Cell::new("", width));
+            screen.set_str((u16::from(width) + 1, 0), "ABCDEFGHIJ", Style::EMPTY);
+            screen.render().unwrap();
+
+            assert_eq!(
+                s(screen.writer()),
+                format!(
+                    "\x1b[?25lX{}ABCDEFGHIJ\x1b[?25h",
+                    " ".repeat(width as usize)
+                ),
+                "the repaint must preserve the claimed columns and suffix, width={width}, ICH={ich}"
+            );
+            screen.writer_mut().clear();
+            screen.render().unwrap();
+            assert!(screen.writer().is_empty());
+        }
+    }
 }
