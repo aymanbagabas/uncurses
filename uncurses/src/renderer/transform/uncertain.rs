@@ -111,12 +111,28 @@ impl Renderer {
         y: u16,
         x: u16,
     ) -> io::Result<()> {
+        if self.walk_to_uncertain(out, buf, y, x)? {
+            Ok(())
+        } else {
+            self.move_to(out, buf, y, x)
+        }
+    }
+
+    /// Walk to a normalized target past an uncertain cluster in the
+    /// displayed row. Return false when ordinary cursor movement suffices.
+    pub(crate) fn walk_to_uncertain(
+        &mut self,
+        out: &mut Vec<u8>,
+        buf: &RenderBuffer,
+        y: u16,
+        x: u16,
+    ) -> io::Result<bool> {
         let Some(from) = buf
             .line(y)
             .and_then(|l| self.uncertain_from(l))
             .filter(|&from| from < x as usize)
         else {
-            return self.move_to(out, buf, y, x);
+            return Ok(false);
         };
         let line = buf.line(y).expect("row scanned above");
 
@@ -152,7 +168,7 @@ impl Renderer {
         // then, which is what it already means: a position the renderer
         // placed but cannot name.
         self.cur.x = None;
-        Ok(())
+        Ok(true)
     }
 
     /// Repaint `new_line[from..]` on row `y`, in place of diffing it.

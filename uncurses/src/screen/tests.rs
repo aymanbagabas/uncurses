@@ -2372,7 +2372,7 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
     );
 }
 
-/// An imperative cursor move happens between frames, where the desired grid
+/// An ordinary imperative move happens between frames, where the desired grid
 /// is not what the terminal shows. The move planner may pay for a short
 /// forward hop by re-emitting the cells it passes over, so planning it over
 /// that grid paints cells the terminal does not have — and it never records
@@ -2382,7 +2382,7 @@ fn scroll_optimize_off_leaves_a_fixed_column_untouched() {
 /// Three ways the desired grid diverges, each reached by a forward hop short
 /// enough for the overwrite candidate to beat CUF.
 #[test]
-fn move_cursor_to_never_emits_cell_content() {
+fn move_cursor_to_keeps_ordinary_moves_free_of_cell_content() {
     // (name, how the grid is made to diverge, where to move)
     #[allow(clippy::type_complexity)]
     let cases: [(&str, fn(&mut Screen<Vec<u8>>), (u16, u16)); 3] = [
@@ -2855,6 +2855,171 @@ fn an_empty_primary_at_a_split_insert_boundary_repaints_the_suffix() {
 }
 
 const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+
+fn rendered_family_rows(fullscreen: bool) -> Screen<Vec<u8>> {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_fullscreen(fullscreen);
+    screen.set_optimizations(Optimizations::all());
+    screen.set_grapheme_clusters(false);
+    for (y, text) in [(0, "ABCDEFGHIJ"), (1, "abcdefghij")] {
+        screen.set_str((0, y), FAMILY, Style::EMPTY);
+        screen.set_str((8, y), text, Style::EMPTY);
+    }
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen
+}
+
+#[test]
+fn imperative_cursor_walks_the_rendered_row_after_normalizing_its_target() {
+    for fullscreen in [false, true] {
+        let mut screen = rendered_family_rows(fullscreen);
+        for (target, letter) in [((9, 0), "A"), ((49, 0), "a"), ((9, 99), "a")] {
+            screen.move_cursor_to(target).unwrap();
+            let out = s(screen.writer());
+            assert!(
+                out.ends_with(&format!("\x1b[?7l{FAMILY}{letter}\x1b[?7h")),
+                "fullscreen={fullscreen}, target={target:?}: {out:?}"
+            );
+            assert!(!out.contains('\t'), "a tab crossed the uncertain row");
+            assert_eq!(screen.tracked_cursor(), None);
+            assert_eq!(screen.diverge(), None);
+            screen.writer_mut().clear();
+        }
+        screen.move_cursor_to((0, 0)).unwrap();
+        screen.writer_mut().clear();
+        screen.move_cursor_by(9, 0).unwrap();
+        assert!(s(screen.writer()).contains(&format!("{FAMILY}A")));
+        assert_eq!(screen.tracked_cursor(), None);
+    }
+}
+
+#[test]
+fn imperative_cursor_respects_uncertain_cluster_boundaries() {
+    for (cluster, width) in [(FAMILY, 8), ("\u{2764}\u{fe0f}", 1), ("1\u{20e3}", 1)] {
+        let mut screen = Screen::for_test(Vec::new(), (40, 1));
+        screen.set_str((0, 0), "ab", Style::EMPTY);
+        screen.set_cell((2, 0), &Cell::new(cluster, width));
+        screen.set_str((2 + u16::from(width), 0), "A", Style::EMPTY);
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+
+        screen.move_cursor_to((1, 0)).unwrap();
+        assert!(printable_payload(screen.writer()).is_empty());
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(1, 0)));
+        screen.writer_mut().clear();
+
+        screen.move_cursor_to((3 + u16::from(width), 0)).unwrap();
+        assert!(s(screen.writer()).contains(&format!("{cluster}A")));
+        assert_eq!(screen.tracked_cursor(), None);
+        screen.writer_mut().clear();
+
+        if width > 1 {
+            screen.move_cursor_to((3, 0)).unwrap();
+            assert!(!s(screen.writer()).contains(cluster));
+            assert_eq!(screen.tracked_cursor(), None);
+        }
+    }
+}
+
+#[test]
+fn imperative_cursor_walk_uses_rendered_cells_instead_of_staged_edits() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_str((0, 0), "NEW CONTENT", Style::EMPTY);
+    screen.move_cursor_to((9, 0)).unwrap();
+
+    let out = s(screen.writer());
+    assert!(out.contains(&format!("{FAMILY}A")), "{out:?}");
+    assert!(!out.contains("NEW"), "the move emitted an unrendered edit");
+    assert!(screen.diverge().is_some());
+
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(s(screen.writer()).contains("NEW CONTENT"));
+    assert_eq!(screen.diverge(), None);
+}
+
+#[test]
+fn imperative_cursor_does_not_walk_a_staged_or_invalidated_row() {
+    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    screen.set_str((0, 0), "old", Style::EMPTY);
+    screen.render().unwrap();
+    screen.set_str((0, 0), FAMILY, Style::EMPTY);
+    screen.writer_mut().clear();
+    screen.move_cursor_to((9, 0)).unwrap();
+    assert!(printable_payload(screen.writer()).is_empty());
+    assert_eq!(screen.tracked_cursor(), Some(Position::new(9, 0)));
+
+    for invalidate in [
+        |s: &mut Screen<Vec<u8>>| s.resize((20, 1)),
+        |s: &mut Screen<Vec<u8>>| s.resize((40, 2)),
+        |s: &mut Screen<Vec<u8>>| s.set_fullscreen(true),
+        |s: &mut Screen<Vec<u8>>| s.set_grapheme_clusters(true),
+    ] {
+        let mut screen = rendered_family_rows(false);
+        invalidate(&mut screen);
+        screen.move_cursor_to((9, 0)).unwrap();
+        assert!(
+            printable_payload(screen.writer()).is_empty(),
+            "the move re-emitted invalidated contents: {:?}",
+            s(screen.writer())
+        );
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(9, 0)));
+    }
+}
+
+#[test]
+fn imperative_cursor_walk_does_not_suppress_the_sticky_resting_position() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_cursor_position((9, 0));
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
+    screen.move_cursor_to((10, 0)).unwrap();
+    assert!(s(screen.writer()).contains(&format!("{FAMILY}AB")));
+    assert_eq!(screen.tracked_cursor(), None);
+    screen.writer_mut().clear();
+
+    screen.render().unwrap();
+    assert!(
+        s(screen.writer()).contains(&format!("{FAMILY}A\x1b[?7h")),
+        "the render must restore the staged position: {:?}",
+        s(screen.writer())
+    );
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn imperative_cursor_walk_advances_past_a_trailing_erase() {
+    let mut screen = rendered_family_rows(false);
+    screen.move_cursor_to((30, 0)).unwrap();
+    let out = s(screen.writer());
+    assert!(
+        out.ends_with(&format!("{FAMILY}ABCDEFGHIJ\x1b[12X\x1b[12C\x1b[?7h")),
+        "{out:?}"
+    );
+    assert_eq!(screen.tracked_cursor(), None);
+}
+
+#[test]
+fn imperative_cursor_walk_closes_styles_and_links() {
+    let mut screen = rendered_family_rows(false);
+    screen.set_str(
+        (8, 0),
+        "RED",
+        Style::EMPTY.fg(Color::Red).link("https://example.com", ""),
+    );
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.move_cursor_to((11, 0)).unwrap();
+    let out = s(screen.writer());
+    assert!(out.contains("RED"), "{out:?}");
+    assert!(out.contains("\x1b[31m"), "{out:?}");
+    assert!(out.contains("\x1b[m"), "{out:?}");
+    assert!(out.contains("\x1b]8;;\x1b\\"), "{out:?}");
+}
 
 #[test]
 fn resting_cursor_advances_past_a_trailing_erase() {

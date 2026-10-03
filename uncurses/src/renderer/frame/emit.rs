@@ -54,24 +54,16 @@ impl Renderer {
         self.move_to_with_pen(out, Some(buf), y, x, PenPolicy::ResetBeforeScroll)
     }
 
-    /// Like [`Renderer::move_to`], but plans over no cell contents, and
-    /// measures the move against `size` rather than the last rendered frame.
+    /// Move between frames, measured against the current managed `size`.
     ///
-    /// For a caller moving the cursor *between* frames rather than during a
-    /// diff. Two things separate that caller from the diff loop.
+    /// Ordinary moves use control sequences rather than the planner's
+    /// overwrite candidate. The desired grid can contain unrendered edits,
+    /// so it must not supply cells for a move between frames.
     ///
-    /// The planner can pay for a short forward move by re-emitting the cells
-    /// it passes over, which is only sound when those cells are what the
-    /// terminal currently shows. Inside the diff loop they are: a move there
-    /// targets a column the transform has proven equal between the tracked
-    /// and the new line. Between frames nothing establishes that — the
-    /// desired grid can hold an edit that has not been rendered, or a whole
-    /// frame belonging to the other screen buffer — and the planner does not
-    /// record the cells it re-emits in the tracked buffer, so the divergence
-    /// it creates is never diffed away. Withholding the row makes that
-    /// unrepresentable rather than guarded, and costs nothing: a resting
-    /// cursor is essentially never reached by a forward move short enough for
-    /// the overwrite candidate to win.
+    /// Past an uncertain cluster, the move instead walks the last rendered
+    /// row. Those cells describe what the terminal already shows. A pending
+    /// clear invalidates that snapshot, as after a resize or screen switch,
+    /// and restricts the move to control sequences until the next render.
     ///
     /// `size` is the surface the wrap and the clamp are measured against. The
     /// renderer's own size is whatever it last rendered, which is what a move
@@ -175,6 +167,19 @@ impl Renderer {
             let max_y = height - 1;
             if y > max_y {
                 y = max_y;
+            }
+        }
+
+        if buf.is_none() && !self.force_clear {
+            // Use the displayed snapshot, never the desired or staging grid.
+            // Restore it even if the walk reports an output error.
+            let current = self.cur_buf.take();
+            let walked = current.as_ref().map_or(Ok(false), |current| {
+                self.walk_to_uncertain(out, current, y, x)
+            });
+            self.cur_buf = current;
+            if walked? {
+                return Ok(());
             }
         }
 

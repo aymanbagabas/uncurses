@@ -104,6 +104,20 @@ fn main() -> io::Result<()> {
     writeln!(out, "  {}", printable(&bytes))?;
 
     let mut screen = row_screen(false)?;
+    let _ = place(&mut screen, FAMILY, width)?;
+    screen.set_cell((2 + u16::from(width), 0), &Cell::new("Y", 1));
+    screen.move_cursor_to((2 + u16::from(width) + 1, 0))?;
+    writeln!(
+        out,
+        "\nmoving the cursor now, before the staged edit is rendered"
+    )?;
+    writeln!(out, "  {}", printable(screen.writer()))?;
+    assert!(String::from_utf8_lossy(screen.writer()).contains(&format!("{FAMILY}Z")));
+    assert!(!screen.writer().contains(&b'Y'));
+    assert_eq!(screen.tracked_cursor(), None);
+    writeln!(out, "  the move follows the displayed Z; Y remains staged")?;
+
+    let mut screen = row_screen(false)?;
     screen.set_optimizations(Optimizations::all());
     let _ = place(&mut screen, FAMILY, width)?;
     screen.writer_mut().clear();

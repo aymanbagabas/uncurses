@@ -144,9 +144,9 @@ pub struct Screen<W: Write> {
     ///
     /// Paired with [`Renderer::cursor_placed_on_row`] this says "the cursor
     /// is already resting here", which the tracked position alone cannot,
-    /// because the walk deliberately forgets the column. The pairing needs no
-    /// invalidation: anything that moves the cursor writes a column back, and
-    /// the row check turns false the moment it does.
+    /// because the walk deliberately forgets the column. An immediate move
+    /// clears this record: another walk can leave the same row known while
+    /// it places the cursor at a different logical position.
     cursor_rested_at: Option<Position>,
 }
 
@@ -339,6 +339,15 @@ impl<W: Write> Screen<W> {
     /// request to wrap and is honored as one, even when the renderer is
     /// already tracking the cursor there with its wrap pending.
     ///
+    /// Past a cluster whose terminal width is uncertain, the move re-emits
+    /// cells from the last rendered row until it reaches the logical target.
+    /// It leaves staged edits for `render`. A target inside that cluster
+    /// rests on its primary cell. The tracked column becomes unknown because
+    /// the terminal decides how far each cluster advances.
+    ///
+    /// After a resize, screen switch, or invalidation, the move uses control
+    /// sequences until `render` establishes the displayed cells again.
+    ///
     /// This is imperative: the move is emitted and flushed now, independent of
     /// [`render`](Self::render). It does **not** affect the declarative resting
     /// position staged with [`set_cursor_position`](Self::set_cursor_position);
@@ -412,7 +421,7 @@ impl<W: Write> Screen<W> {
     /// [`invalidate_tracked_cursor`](Self::invalidate_tracked_cursor)). This
     /// is bookkeeping, not a live cursor-position query.
     ///
-    /// A [resting position](Self::set_cursor_position) past a cluster the
+    /// A cursor move past a cluster the
     /// terminal may measure differently also reads as unknown. The cursor is
     /// where it was asked to go, and the terminal is the only one that can
     /// say which column that is. See
@@ -770,6 +779,7 @@ impl<W: Write> Screen<W> {
     /// Stage a cursor move without flushing. See
     /// [`move_cursor_to`](Self::move_cursor_to).
     pub(crate) fn stage_move_cursor_to(&mut self, target: Position) {
+        self.cursor_rested_at = None;
         let size = self.size();
         self.renderer
             .move_to_between_frames(&mut self.out_buf, size, target.y, target.x)

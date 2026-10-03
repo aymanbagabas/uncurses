@@ -461,9 +461,9 @@ impl Renderer {
     /// walking the cursor past a cluster of uncertain width. A caller that
     /// remembers which column it asked for can pair that with this check to
     /// tell "the terminal placed the cursor where I wanted" apart from "the
-    /// column is unknown because the cursor could be anywhere". Every move
-    /// writes a column back, so the answer turns false as soon as anything
-    /// else moves the cursor.
+    /// column is unknown because the cursor could be anywhere". Ordinary
+    /// moves write a column back. Callers must discard their remembered
+    /// target before another walk, which can leave this answer true.
     pub(crate) fn cursor_placed_on_row(&self, y: u16) -> bool {
         self.cur.x.is_none() && self.cur.y == Some(y)
     }
