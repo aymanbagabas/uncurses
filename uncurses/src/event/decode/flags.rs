@@ -15,17 +15,18 @@
 //!
 //! ## Gotchas
 //!
-//! These flags are decoder construction-time policy. Choose them to match the
-//! bindings your application wants to expose; they are not terminal mode
-//! negotiation flags.
+//! These flags select legacy key interpretations. Choose them to match the
+//! bindings your application exposes. Backarrow mode supplies the baseline;
+//! the flags select explicit overrides.
 use bitflags::bitflags;
 
 bitflags! {
     /// Optional disambiguation knobs for the input decoder.
     ///
-    /// With no flag set, the decoder reports the following mappings:
+    /// With no flag set and Backarrow mode reset, the decoder reports:
     ///
     /// * `0x00` → `Ctrl+Space`
+    /// * `0x08` → `Ctrl+h`
     /// * `0x09` → `Tab`
     /// * `0x0a` → `Ctrl+j`
     /// * `0x0d` → `Enter`
@@ -38,8 +39,16 @@ bitflags! {
     ///
     /// In raw mode, terminals normally send LF for Ctrl+J and CR for Enter.
     /// An `ESC` prefix adds Alt to the selected interpretation.
+    ///
+    /// Backarrow mode (DECBKM) defaults to reset. When set, `0x08` reads as
+    /// Backspace and `0x7f` as Ctrl+Backspace. These are legacy byte
+    /// interpretations: terminals can send the same bytes for different keys.
+    ///
+    /// [`CTRL_H`](Self::CTRL_H) overrides `0x08` in either mode and takes
+    /// precedence over [`CTRL_BACKSPACE`](Self::CTRL_BACKSPACE).
+    /// [`DEL_IS_DELETE`](Self::DEL_IS_DELETE) overrides `0x7f` in either mode.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub struct DecoderFlags: u8 {
+    pub struct DecoderFlags: u16 {
         /// Report `0x00` as `Ctrl+@` instead of `Ctrl+Space`.
         const CTRL_AT             = 1 << 0;
         /// Report `0x09` as `Ctrl+i` instead of `Tab`.
@@ -55,7 +64,10 @@ bitflags! {
         /// them, which reads as `Alt+Ctrl+[`.
         const CTRL_OPEN_BRACKET   = 1 << 3;
         /// Report `0x7f` as `Delete` instead of `Backspace`.
-        const BACKSPACE_IS_DELETE = 1 << 4;
+        ///
+        /// Takes precedence over Backarrow mode, including when `0x7f`
+        /// would otherwise read as Ctrl+Backspace.
+        const DEL_IS_DELETE       = 1 << 4;
         /// Report `CSI 1 ~` as the VT220 `Find` key instead of `Home`.
         const FIND_KEY            = 1 << 5;
         /// Report `CSI 4 ~` as the VT220 `Select` key instead of `End`.
@@ -66,5 +78,16 @@ bitflags! {
         /// with CR-to-LF conversion enabled. CR keeps its own interpretation,
         /// selected by [`CTRL_M`](Self::CTRL_M).
         const LF_IS_ENTER         = 1 << 7;
+        /// Report `0x08` as `Ctrl+h` in either Backarrow mode.
+        ///
+        /// Takes precedence over [`CTRL_BACKSPACE`](Self::CTRL_BACKSPACE)
+        /// and the mode's Backspace interpretation.
+        const CTRL_H              = 1 << 8;
+        /// Report `0x08` as Ctrl+Backspace when Backarrow mode is reset.
+        ///
+        /// When the mode is set, `0x08` reads as Backspace and `0x7f`
+        /// already reads as Ctrl+Backspace. [`CTRL_H`](Self::CTRL_H) and
+        /// [`DEL_IS_DELETE`](Self::DEL_IS_DELETE) retain their precedence.
+        const CTRL_BACKSPACE      = 1 << 9;
     }
 }
