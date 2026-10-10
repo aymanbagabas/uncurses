@@ -53,6 +53,7 @@ reads the reply, and uses only what is actually there.
 - [Clipboard](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 52), system and primary
 - Window title and icon name (OSC 0/1/2)
 - [Taskbar progress](https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC) (OSC 9;4)
+- [Program status](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501): task states, messages, and child records
 - Typed key, mouse, paste, focus, and resize events
 
 ## Quickstart

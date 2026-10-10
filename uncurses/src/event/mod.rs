@@ -350,6 +350,14 @@ pub enum Event {
     /// [`Program::request_visibility`]: crate::program::Program::request_visibility
     Visibility(Visibility),
 
+    /// The terminal supports program status reports (OSC 7501).
+    ///
+    /// Sent in reply to [`Program::request_program_status`]. Future reply
+    /// extensions are ignored.
+    ///
+    /// [`Program::request_program_status`]: crate::program::Program::request_program_status
+    ProgramStatusSupported,
+
     // -- Clipboard / graphics ------------------------------------------------
     /// OSC 52 clipboard content reply.
     Clipboard {

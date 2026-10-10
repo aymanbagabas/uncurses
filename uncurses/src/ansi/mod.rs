@@ -74,6 +74,7 @@ pub mod palette;
 pub mod params;
 pub mod passthrough;
 pub mod paste;
+pub mod program_status;
 pub mod progress;
 pub mod screen;
 pub mod sgr;

@@ -68,6 +68,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+pub use crate::ansi::program_status::{ProgramStatus, ProgramStatusKind, ProgramStatusState};
 pub use state::Capabilities;
 
 use std::collections::VecDeque;
@@ -226,6 +227,12 @@ pub struct ProgramOptions {
     ///
     /// Defaults to an empty list. Queries follow the supplied order.
     pub query_palette_colors: Vec<u8>,
+    /// Include OSC 7501 support in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `false`. Initialization sends no queries.
+    /// [`Program::observe_event`] records support replies regardless of this
+    /// option. Reports and record lifetime are independent of query selection.
+    pub query_program_status: bool,
     /// How to read the ambiguous legacy keys.
     ///
     /// Defaults to [`empty`](DecoderFlags::empty). LF reads as Ctrl+J;
@@ -301,6 +308,7 @@ impl Default for ProgramOptions {
             query_background_color: false,
             query_cursor_color: false,
             query_palette_colors: Vec::new(),
+            query_program_status: false,
             legacy_keys: DecoderFlags::empty(),
         }
     }
@@ -754,6 +762,7 @@ where
             // A graphics response is the Kitty protocol's own support test:
             // terminals that do not implement it stay silent.
             Event::KittyGraphics { .. } => self.caps.kitty_graphics = true,
+            Event::ProgramStatusSupported => self.caps.program_status = true,
             // The terminal's own colors, as distinct from the overrides the
             // facade installs (tracked in `state`).
             Event::ForegroundColor(color) => self.caps.foreground_color = Some(color),
@@ -960,7 +969,7 @@ where
     /// default query set (Kitty keyboard, the DECRQM modes behind
     /// [`Capabilities`], XTVERSION, xterm modifyOtherKeys, and — when the
     /// environment did not already imply true color — XTGETTCAP `RGB`/`Tc`),
-    /// then the color queries selected in [`ProgramOptions`], then `extra`,
+    /// then the optional queries selected in [`ProgramOptions`], then `extra`,
     /// then a Primary DA request.
     ///
     /// `extra` is written verbatim, so it can carry any additional query
@@ -1075,6 +1084,10 @@ where
         }
         for &index in &self.options.query_palette_colors {
             color::write_request_palette_color(&mut self.screen, index)?;
+        }
+        if self.options.query_program_status {
+            self.screen
+                .write_all(crate::ansi::program_status::REQUEST_PROGRAM_STATUS)?;
         }
 
         self.screen.write_all(extra)?;

@@ -54,7 +54,7 @@ pub fn write_clear_clipboard<W: Write>(w: &mut W, pc: u8) -> io::Result<()> {
     write!(w, "\x1b]52;{};\x07", pc as char)
 }
 
-fn base64_encode(input: &[u8]) -> String {
+pub(super) fn base64_encode(input: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut i = 0;

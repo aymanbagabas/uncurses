@@ -34,6 +34,39 @@ const MOUSE_MODES: &[mode::Mode] = &[
 ];
 
 impl<I: Input, O: Write> Program<I, O> {
+    /// Send a complete OSC 7501 program status report and flush.
+    ///
+    /// Reports replace the addressed record. Include its app, title, and
+    /// message on every update when they should remain present. Use
+    /// [`ProgramStatusState::Clear`](super::ProgramStatusState::Clear) to
+    /// remove the record and its descendants; a root clear removes all records.
+    ///
+    /// The terminal owns record lifetime. Pause, resume, screen switches,
+    /// and finish leave these reports unchanged, so done and error records
+    /// can survive exit. Explicit discovery is optional; unsupported
+    /// terminals ignore reports.
+    ///
+    /// Invalid fields return [`io::ErrorKind::InvalidInput`] before output.
+    /// See [`write_program_status`](ansi::program_status::write_program_status)
+    /// for validation and protocol limits.
+    pub fn set_program_status(&mut self, report: &super::ProgramStatus<'_>) -> io::Result<()> {
+        ansi::program_status::write_program_status(&mut self.screen, report)?;
+        self.screen.flush()
+    }
+
+    /// Query OSC 7501 support and flush, without waiting for a reply.
+    ///
+    /// The reply is [`Event::ProgramStatusSupported`](crate::event::Event::ProgramStatusSupported).
+    /// Event observation records it in [`Capabilities::program_status`](super::Capabilities::program_status).
+    /// To include this query in [`Self::query_capabilities`], enable
+    /// [`ProgramOptions::query_program_status`](super::ProgramOptions::query_program_status).
+    /// Initialization sends no queries.
+    pub fn request_program_status(&mut self) -> io::Result<()> {
+        self.screen
+            .write_all(ansi::program_status::REQUEST_PROGRAM_STATUS)?;
+        self.screen.flush()
+    }
+
     /// Set the cursor shape and blinking state (`DECSCUSR`) and flush.
     ///
     /// * `shape` — the visual cursor shape ([`Block`](CursorShape::Block),
