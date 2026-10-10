@@ -28,6 +28,12 @@ options you turned on. The capability queries below are always a call you make.
 
 ## Capability probing
 
+Set `ProgramOptions::query_program_status` to `true` to include OSC 7501
+support detection in `query_capabilities`. The option defaults to `false`.
+See the
+[program status guide]({{< relref "program-status.md" >}}) for reports,
+feature detection, and record lifetime.
+
 Call `program.query_capabilities(&extra_bytes)?` when you want uncurses to ask
 for its standard capability set. It writes the default queries, then your extra
 bytes, then Primary Device Attributes last, and flushes. The Primary DA reply is

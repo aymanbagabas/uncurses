@@ -237,6 +237,7 @@ fn query_options_do_not_query_during_init() {
             query_background_color: true,
             query_cursor_color: true,
             query_palette_colors: vec![0, 15, 255],
+            query_program_status: true,
             legacy_keys: DecoderFlags::CTRL_BACKSPACE,
             ..ProgramOptions::default()
         })
@@ -246,11 +247,19 @@ fn query_options_do_not_query_during_init() {
     assert!(program.options.query_background_color);
     assert!(program.options.query_cursor_color);
     assert_eq!(program.options.query_palette_colors, [0, 15, 255]);
+    assert!(program.options.query_program_status);
     assert_eq!(program.options.legacy_keys, DecoderFlags::CTRL_BACKSPACE);
     assert!(!program.backspace_mode());
     let output = drain(&master);
     let output = String::from_utf8_lossy(&output);
-    for query in ["\x1b[?67", "\x1b]10;?", "\x1b]11;?", "\x1b]12;?", "\x1b]4;"] {
+    for query in [
+        "\x1b[?67",
+        "\x1b]10;?",
+        "\x1b]11;?",
+        "\x1b]12;?",
+        "\x1b]4;",
+        "\x1b]7501;",
+    ] {
         assert!(!output.contains(query));
     }
     program.finish().unwrap();
@@ -764,6 +773,169 @@ fn set_progress_state_emits_osc_9_4() {
         .set_progress_state(ProgressState::Normal(42))
         .unwrap();
     assert_eq!(written(&buf), "\x1b]9;4;1;42\x07");
+}
+
+#[test]
+fn program_status_reports_flush_and_survive_reset_restore() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    for state in [
+        ProgramStatusState::Idle,
+        ProgramStatusState::Working,
+        ProgramStatusState::Blocked,
+        ProgramStatusState::Done,
+        ProgramStatusState::Error,
+    ] {
+        let mut report = ProgramStatus::new(state);
+        report.message = Some("Build");
+        program.set_program_status(&report).unwrap();
+        assert!(written(&buf).ends_with(":msg=QnVpbGQ=\x1b\\"));
+        assert!(!program.capabilities().program_status());
+
+        buf.borrow_mut().clear();
+        program.reset().unwrap();
+        program.restore().unwrap();
+        program.teardown().unwrap();
+        assert!(!written(&buf).contains("7501"));
+    }
+    program
+        .set_program_status(&ProgramStatus::new(ProgramStatusState::Clear))
+        .unwrap();
+    assert!(written(&buf).ends_with("\x1b]7501;state=clear\x1b\\"));
+}
+
+#[test]
+fn program_status_query_is_explicit_and_observation_records_support() {
+    let buf = RefCell::new(Vec::new());
+    let input = null_input();
+    let terminal = Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+    let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+    program.query_capabilities(&[]).unwrap();
+    assert!(!written(&buf).contains("7501"));
+    buf.borrow_mut().clear();
+    program.request_program_status().unwrap();
+    assert_eq!(written(&buf), "\x1b]7501;?\x1b\\");
+    assert!(!program.capabilities().program_status());
+    buf.borrow_mut().clear();
+    program
+        .observe_event(&Event::ProgramStatusSupported)
+        .unwrap();
+    assert!(program.capabilities().program_status());
+    assert!(buf.borrow().is_empty());
+    program
+        .query_capabilities(crate::ansi::program_status::REQUEST_PROGRAM_STATUS)
+        .unwrap();
+    assert!(written(&buf).ends_with("\x1b]7501;?\x1b\\\x1b[c"));
+}
+
+#[test]
+fn program_status_query_option_preserves_options_and_reply_observation() {
+    use crate::terminal::EnvList;
+
+    assert!(!ProgramOptions::default().query_program_status);
+    for apple in [false, true] {
+        for query in [false, true] {
+            let buf = RefCell::new(Vec::new());
+            let input = null_input();
+            let terminal = Terminal::from_parts(
+                &input,
+                TestOut(&buf),
+                EnvList::from_pairs([(
+                    "TERM_PROGRAM",
+                    if apple { "Apple_Terminal" } else { "xterm" },
+                )]),
+            );
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            program.options.query_program_status = query;
+            for _ in 0..2 {
+                program.query_capabilities(b"extra").unwrap();
+                let output = written(&buf);
+                assert_eq!(
+                    output.matches("\x1b]7501;?\x1b\\").count(),
+                    usize::from(query)
+                );
+                let suffix = if query {
+                    "\x1b]7501;?\x1b\\extra\x1b[c"
+                } else {
+                    "extra\x1b[c"
+                };
+                assert!(output.ends_with(suffix));
+                assert_eq!(program.options.query_program_status, query);
+                buf.borrow_mut().clear();
+            }
+            assert!(!program.capabilities().program_status());
+            program
+                .observe_event(&Event::ProgramStatusSupported)
+                .unwrap();
+            assert!(program.capabilities().program_status());
+            assert_eq!(program.options.query_program_status, query);
+            assert!(buf.borrow().is_empty());
+        }
+    }
+}
+
+#[test]
+fn invalid_program_status_emits_nothing() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    let mut report = ProgramStatus::new(ProgramStatusState::Working);
+    report.id = Some("bad:id");
+    assert_eq!(
+        program.set_program_status(&report).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    assert!(buf.borrow().is_empty());
+}
+
+#[test]
+fn program_status_propagates_output_and_flush_errors() {
+    #[derive(Clone, Copy)]
+    struct FailingOutput {
+        fail_write: bool,
+    }
+
+    impl Write for FailingOutput {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.fail_write {
+                Err(io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(bytes.len())
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    for fail_write in [false, true] {
+        for query in [false, true] {
+            let input = null_input();
+            let terminal = Terminal::from_parts(
+                &input,
+                FailingOutput { fail_write },
+                crate::terminal::EnvList::new(),
+            );
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            let result = if query {
+                program.request_program_status()
+            } else {
+                program.set_program_status(&ProgramStatus::new(ProgramStatusState::Working))
+            };
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn program_status_synchronous_read_observes_support() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    writer.write_all(b"\x1b]7501;?\x1b\\").unwrap();
+    assert_eq!(program.read_event().unwrap(), Event::ProgramStatusSupported);
+    assert!(program.capabilities().program_status());
 }
 
 #[test]

@@ -208,6 +208,7 @@ pub struct Capabilities {
     pub(super) palette: BTreeMap<u8, Color>,
     pub(super) color_scheme: Option<ColorScheme>,
     pub(super) kitty_graphics: bool,
+    pub(super) program_status: bool,
 }
 
 impl Capabilities {
@@ -279,6 +280,14 @@ impl Capabilities {
     /// stays silent.
     pub fn kitty_graphics(&self) -> bool {
         self.kitty_graphics
+    }
+
+    /// Whether the terminal has answered an OSC 7501 support query.
+    ///
+    /// `false` means no reply has been observed, not a definitive rejection.
+    /// Send a query with [`Program::request_program_status`](super::Program::request_program_status).
+    pub fn program_status(&self) -> bool {
+        self.program_status
     }
 
     /// The Kitty keyboard enhancements the terminal reported, or `None` if it
