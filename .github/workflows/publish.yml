@@ -58,6 +58,13 @@ jobs:
 
           Guides, concepts, and API reference: **[uncurses.org](https://uncurses.org)**
 
+          EOF
+            notes=".github/releases/${GITHUB_REF_NAME}.md"
+            if [ -f "$notes" ]; then
+              cat "$notes"
+              printf '\n\n'
+            fi
+            cat <<'EOF'
           <details>
           <summary><b>Changelog</b></summary>
 
