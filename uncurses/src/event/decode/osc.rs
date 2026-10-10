@@ -143,13 +143,15 @@ mod tests {
 
     #[test]
     fn program_status_reports_and_other_oscs_remain_unknown() {
-        for body in ["7501;state=done", "7501;", "7501;yes", "7502;?"] {
+        for body in [
+            b"7501;state=done".as_slice(),
+            b"7501;",
+            b"7501;yes",
+            b"7502;?",
+        ] {
             let mut decoder = Decoder::new(DecoderFlags::empty());
-            let wire = format!("\x1b]{body}\x1b\\");
-            assert_eq!(
-                decoder.parse(wire.as_bytes()),
-                [Event::UnknownOsc(body.as_bytes().to_vec())]
-            );
+            let wire = [b"\x1b]".as_slice(), body, b"\x1b\\"].concat();
+            assert_eq!(decoder.parse(&wire), [Event::UnknownOsc(body.to_vec())]);
         }
     }
 }
