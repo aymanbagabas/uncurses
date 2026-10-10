@@ -96,6 +96,18 @@ fn main() -> io::Result<()> {
     out.write_all(&gap)?;
     writeln!(out)?;
 
+    let mut truncated = TextBuffer::new(12, 1);
+    truncated.set_str_truncate(
+        (0, 0),
+        "A long status message",
+        Style::new().fg(Color::Green),
+        "...",
+        Style::new().fg(Color::Red).bold(),
+    );
+    write!(out, "Green text with a red truncation tail: ")?;
+    truncated.encode(&mut out)?;
+    writeln!(out)?;
+
     out.flush()
 }
 
