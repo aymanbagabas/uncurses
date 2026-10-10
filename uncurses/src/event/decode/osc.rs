@@ -62,6 +62,7 @@ fn recognize(payload: &[u8]) -> Option<Event> {
         11 => parse_osc_color(rest).map(Event::BackgroundColor),
         12 => parse_osc_color(rest).map(Event::CursorColor),
         52 => parse_osc_clipboard(rest),
+        7501 if rest.starts_with(b"?") => Some(Event::ProgramStatusSupported),
         _ => None,
     }
 }
@@ -116,4 +117,39 @@ fn parse_osc_clipboard(s: &[u8]) -> Option<Event> {
     };
     let content = std::str::from_utf8(content).ok()?.to_string();
     Some(Event::Clipboard { selection, content })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::DecoderFlags;
+
+    #[test]
+    fn program_status_support_reply_accepts_extensions_and_split_input() {
+        for intro in [b"\x1b]".as_slice(), b"\x9d"] {
+            for ending in [b"\x07".as_slice(), b"\x1b\\", b"\x9c"] {
+                for body in [b"7501;?".as_slice(), b"7501;?:future=value"] {
+                    let wire = [intro, body, ending].concat();
+                    for split in 0..=wire.len() {
+                        let mut decoder = Decoder::new(DecoderFlags::empty());
+                        let mut events = decoder.parse(&wire[..split]);
+                        events.extend(decoder.parse(&wire[split..]));
+                        assert_eq!(events, [Event::ProgramStatusSupported]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn program_status_reports_and_other_oscs_remain_unknown() {
+        for body in ["7501;state=done", "7501;", "7501;yes", "7502;?"] {
+            let mut decoder = Decoder::new(DecoderFlags::empty());
+            let wire = format!("\x1b]{body}\x1b\\");
+            assert_eq!(
+                decoder.parse(wire.as_bytes()),
+                [Event::UnknownOsc(body.as_bytes().to_vec())]
+            );
+        }
+    }
 }
