@@ -86,6 +86,19 @@ Because the same drawing API works with `Vec<u8>`, `File`, and terminal output,
 you compose a frame once and choose only the writer and color profile for the
 place it is going.
 
+## Truncation with separate styles
+
+Use `set_str_truncate(pos, s, s_style, tail, tail_style)` to mark text that
+overflows a row. The text uses `s_style`; the indicator uses `tail_style`.
+The indicator appears only on rows that overflow.
+
+Use `set_str_rect_truncate(rect, s, s_style, tail, tail_style)` to restrict
+the same operation to a rectangle. Both methods paint literal text on a
+`TextBuffer` or `Screen`. Use `Painter` to interpret inline escapes in
+either string, with each supplied style as its starting style.
+
+The `offscreen` example shows green text with a red truncation indicator.
+
 ## Reading cells back
 
 The grid is also queryable. Walk it cell by cell to extract text directly, which

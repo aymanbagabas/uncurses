@@ -235,15 +235,16 @@ pub trait TextSurface: SurfaceMut {
     /// at the right edge. Painting resumes on the next row if `s` continues
     /// past a newline, so a multi-line `s` can stamp one tail per overflowing
     /// row. The tail appears only on rows that actually overflow. `tail` is
-    /// painted with `tail_style` and may carry inline escape sequences, so it
-    /// can be a single glyph (`"…"`), a word (`" more"`), or a multi-style
-    /// span. A tail wider than the surface is dropped in favor of a hard
+    /// painted literally with `tail_style`; `s` uses `s_style`. Use
+    /// [`Painter`](super::Painter) to interpret inline escapes in either
+    /// string. A tail wider than the surface is dropped in favor of a hard
     /// truncate.
     ///
     /// # Parameters
     ///
     /// * `pos` — starting cell position.
     /// * `s` — UTF-8 string to paint.
+    /// * `s_style` — style for the main text.
     /// * `tail` — truncation indicator, painted when `s` overflows.
     /// * `tail_style` — starting style for the tail.
     ///
@@ -259,6 +260,7 @@ pub trait TextSurface: SurfaceMut {
         &mut self,
         pos: impl Into<Position>,
         s: &str,
+        s_style: impl Into<Style>,
         tail: &str,
         tail_style: impl Into<Style>,
     ) -> Position {
@@ -269,6 +271,7 @@ pub trait TextSurface: SurfaceMut {
             pos.into(),
             clip,
             s,
+            &s_style.into(),
             tail,
             &tail_style.into(),
             mode,
@@ -286,6 +289,7 @@ pub trait TextSurface: SurfaceMut {
     ///
     /// * `rect` — clipping rectangle and starting origin.
     /// * `s` — UTF-8 string to paint.
+    /// * `s_style` — style for the main text.
     /// * `tail` — truncation indicator, painted when `s` overflows.
     /// * `tail_style` — starting style for the tail.
     ///
@@ -301,6 +305,7 @@ pub trait TextSurface: SurfaceMut {
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
+        s_style: impl Into<Style>,
         tail: &str,
         tail_style: impl Into<Style>,
     ) -> Position {
@@ -312,6 +317,7 @@ pub trait TextSurface: SurfaceMut {
             rect.position(),
             clip,
             s,
+            &s_style.into(),
             tail,
             &tail_style.into(),
             mode,
@@ -410,7 +416,7 @@ fn paint_literal<S: SurfaceMut + ?Sized>(
 
 /// Paint `s` literally with [`WrapMode::Truncate`], stamping `tail` on overflow.
 ///
-/// The main text is drawn with [`Style::default()`]; the tail is drawn with
+/// The main text is drawn with `s_style`; the tail is drawn with
 /// `tail_style`. The tail is dropped (hard truncate) when it is empty or wider
 /// than the clip.
 #[allow(clippy::too_many_arguments)]
@@ -419,6 +425,7 @@ fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
     start: Position,
     clip: Rect,
     s: &str,
+    s_style: &Style,
     tail_text: &str,
     tail_style: &Style,
     mode: WidthMode,
@@ -446,7 +453,7 @@ fn paint_literal_truncate<S: SurfaceMut + ?Sized>(
         WrapMode::Truncate,
         mode,
         eaw_wide,
-        &Style::default(),
+        s_style,
         tail,
     )
 }

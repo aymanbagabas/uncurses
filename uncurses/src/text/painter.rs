@@ -120,9 +120,9 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         start: Position,
         clip: Rect,
         s: &str,
+        s_style: Style,
         tail_text: &str,
         tail_style: Style,
-        style: Style,
     ) -> Position {
         if clip.is_empty() {
             return start;
@@ -137,7 +137,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 width: tail_w,
             })
         };
-        self.paint_inner(start, clip, s, WrapMode::Truncate, tail, style)
+        self.paint_inner(start, clip, s, WrapMode::Truncate, tail, s_style)
     }
 
     /// Stamp `tail` over the trailing `tail.width` columns of row `y`, ending
@@ -497,6 +497,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     ///
     /// * `pos` — starting cell position.
     /// * `s` — UTF-8 string to paint.
+    /// * `s_style` — starting style for the main text; inline escapes can change it.
     /// * `tail` — truncation indicator, painted when `s` overflows.
     /// * `tail_style` — starting style for the tail.
     ///
@@ -512,18 +513,12 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         &mut self,
         pos: impl Into<Position>,
         s: &str,
+        s_style: impl Into<Style>,
         tail: &str,
         tail_style: impl Into<Style>,
     ) -> Position {
         let clip = self.target.bounds();
-        self.paint_truncate(
-            pos.into(),
-            clip,
-            s,
-            tail,
-            tail_style.into(),
-            Style::default(),
-        )
+        self.paint_truncate(pos.into(), clip, s, s_style.into(), tail, tail_style.into())
     }
 
     /// Paint `s` inside `rect`, truncating with a `tail` indicator.
@@ -537,6 +532,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
     ///
     /// * `rect` — clipping rectangle and starting origin.
     /// * `s` — UTF-8 string to paint.
+    /// * `s_style` — starting style for the main text; inline escapes can change it.
     /// * `tail` — truncation indicator, painted when `s` overflows.
     /// * `tail_style` — starting style for the tail.
     ///
@@ -552,6 +548,7 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
         &mut self,
         rect: impl Into<Rect>,
         s: &str,
+        s_style: impl Into<Style>,
         tail: &str,
         tail_style: impl Into<Style>,
     ) -> Position {
@@ -561,9 +558,9 @@ impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
             rect.position(),
             clip,
             s,
+            s_style.into(),
             tail,
             tail_style.into(),
-            Style::default(),
         )
     }
 }
@@ -845,7 +842,13 @@ mod tests {
     #[test]
     fn truncate_tail_stamped_per_row() {
         let mut b = buf(4, 2);
-        Painter::new(&mut b).set_str_truncate((0, 0), "abcdef\nghijkl", "…", Style::default());
+        Painter::new(&mut b).set_str_truncate(
+            (0, 0),
+            "abcdef\nghijkl",
+            Style::default(),
+            "…",
+            Style::default(),
+        );
         assert_eq!(cell_at(&b, 3, 0).content(), "…");
         assert_eq!(cell_at(&b, 0, 1).content(), "g");
         assert_eq!(cell_at(&b, 3, 1).content(), "…");
@@ -1102,7 +1105,13 @@ mod tests {
     #[test]
     fn truncate_tail_not_shown_when_text_fits() {
         let mut b = buf(5, 1);
-        let end = Painter::new(&mut b).set_str_truncate((0, 0), "abc", "…", Style::default());
+        let end = Painter::new(&mut b).set_str_truncate(
+            (0, 0),
+            "abc",
+            Style::default(),
+            "…",
+            Style::default(),
+        );
         // "abc" fits in 5 columns, so no tail is stamped.
         assert_eq!(row(&b, 0), "abc  ");
         assert_eq!(end, Position::new(3, 0));
@@ -1111,7 +1120,13 @@ mod tests {
     #[test]
     fn truncate_single_cell_tail_on_overflow() {
         let mut b = buf(5, 1);
-        let end = Painter::new(&mut b).set_str_truncate((0, 0), "abcdefgh", "…", Style::default());
+        let end = Painter::new(&mut b).set_str_truncate(
+            (0, 0),
+            "abcdefgh",
+            Style::default(),
+            "…",
+            Style::default(),
+        );
         // 5 columns: 4 text columns + the 1-wide tail at the right edge.
         assert_eq!(row(&b, 0), "abcd…");
         assert_eq!(end, Position::new(5, 0));
@@ -1120,7 +1135,13 @@ mod tests {
     #[test]
     fn truncate_multi_cell_tail_reserves_its_width() {
         let mut b = buf(8, 1);
-        Painter::new(&mut b).set_str_truncate((0, 0), "abcdefghij", " more", Style::default());
+        Painter::new(&mut b).set_str_truncate(
+            (0, 0),
+            "abcdefghij",
+            Style::default(),
+            " more",
+            Style::default(),
+        );
         // 8 columns: 3 text columns + the 5-wide " more" tail.
         assert_eq!(row(&b, 0), "abc more");
     }
@@ -1131,6 +1152,7 @@ mod tests {
         Painter::new(&mut b).set_str_truncate(
             (0, 0),
             "abcdefgh",
+            Style::default(),
             "…",
             Style::default().fg(Color::Red),
         );
@@ -1139,9 +1161,115 @@ mod tests {
     }
 
     #[test]
+    fn truncate_methods_keep_text_and_tail_styles_separate() {
+        fn paint(
+            target: &mut impl TextSurface,
+            rect: bool,
+            text: &str,
+            style: &Style,
+            tail: &str,
+            tail_style: &Style,
+        ) -> Position {
+            if rect {
+                target.set_str_rect_truncate(Rect::new(1, 1, 5, 2), text, style, tail, tail_style)
+            } else {
+                target.set_str_truncate((0, 0), text, style, tail, tail_style)
+            }
+        }
+
+        let style = Style::new().fg(Color::Green).bold();
+        let tail_style = Style::new().fg(Color::Red).italic();
+        for painter in [false, true] {
+            for rect in [false, true] {
+                for (text, tail, expected) in [
+                    ("abc", ".", "abc  "),
+                    ("abcde", ".", "abcde"),
+                    ("abcdefgh", ".", "abcd."),
+                    ("abcdefgh", "", "abcde"),
+                    ("abcdefgh", " more!", "abcde"),
+                ] {
+                    let mut b = if rect { buf(7, 4) } else { buf(5, 2) };
+                    let text = format!("{text}\n{text}");
+                    let end = if painter {
+                        paint(
+                            &mut Painter::new(&mut b),
+                            rect,
+                            &text,
+                            &style,
+                            tail,
+                            &tail_style,
+                        )
+                    } else {
+                        paint(&mut b, rect, &text, &style, tail, &tail_style)
+                    };
+                    let offset = u16::from(rect);
+                    assert_eq!(
+                        end,
+                        Position::new(offset + expected.trim_end().len() as u16, offset + 1)
+                    );
+                    for y in 0..b.height() {
+                        for x in 0..b.width() {
+                            let expected_cell = if (offset..offset + 2).contains(&y)
+                                && (offset..offset + 5).contains(&x)
+                            {
+                                let ch = expected.as_bytes()[usize::from(x - offset)] as char;
+                                match ch {
+                                    ' ' => Cell::BLANK,
+                                    '.' => Cell::new(".", 1).style(&tail_style),
+                                    _ => Cell::new(ch.to_string(), 1).style(&style),
+                                }
+                            } else {
+                                Cell::BLANK
+                            };
+                            assert_eq!(cell_at(&b, x, y), expected_cell);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn truncate_inline_styles_start_from_independent_base_styles() {
+        for rect in [false, true] {
+            let mut b = buf(5, 1);
+            let text_style = Style::new().fg(Color::Green);
+            let tail_style = Style::new().fg(Color::Red);
+            let mut painter = Painter::new(&mut b);
+            if rect {
+                painter.set_str_rect_truncate(
+                    Rect::new(0, 0, 5, 1),
+                    "\x1b[1mabcdefgh",
+                    &text_style,
+                    "\x1b[3m.",
+                    &tail_style,
+                );
+            } else {
+                painter.set_str_truncate(
+                    (0, 0),
+                    "\x1b[1mabcdefgh",
+                    &text_style,
+                    "\x1b[3m.",
+                    &tail_style,
+                );
+            }
+            for x in 0..4 {
+                assert_eq!(cell_at(&b, x, 0).style, text_style.clone().bold());
+            }
+            assert_eq!(cell_at(&b, 4, 0).style, tail_style.italic());
+        }
+    }
+
+    #[test]
     fn truncate_tail_inline_escapes_apply() {
         let mut b = buf(5, 1);
-        Painter::new(&mut b).set_str_truncate((0, 0), "abcdefgh", "\x1b[1m…", Style::default());
+        Painter::new(&mut b).set_str_truncate(
+            (0, 0),
+            "abcdefgh",
+            Style::default(),
+            "\x1b[1m…",
+            Style::default(),
+        );
         // The tail's inline SGR bolds it even though the base style is empty.
         assert!(cell_at(&b, 4, 0).style.attrs.contains(AttrFlags::BOLD));
     }
@@ -1149,8 +1277,13 @@ mod tests {
     #[test]
     fn truncate_wide_tail_too_big_hard_truncates() {
         let mut b = buf(3, 1);
-        let end =
-            Painter::new(&mut b).set_str_truncate((0, 0), "abcdef", " more", Style::default());
+        let end = Painter::new(&mut b).set_str_truncate(
+            (0, 0),
+            "abcdef",
+            Style::default(),
+            " more",
+            Style::default(),
+        );
         // " more" is 5 wide but the clip is only 3, so it is dropped and the
         // text is hard-truncated with no tail.
         assert_eq!(row(&b, 0), "abc");
@@ -1182,7 +1315,13 @@ mod tests {
         // A wide cluster sits where the tail's left edge lands; stamping the
         // tail must blank the dangling wide primary.
         let mut b = buf(5, 1);
-        Painter::new(&mut b).set_str_truncate((0, 0), "ab中def", "…", Style::default());
+        Painter::new(&mut b).set_str_truncate(
+            (0, 0),
+            "ab中def",
+            Style::default(),
+            "…",
+            Style::default(),
+        );
         // "ab" + wide "中" fills columns 0..4; the tail overwrites column 4,
         // which is the continuation of "中", so the wide primary at 3 must be
         // blanked rather than left dangling.
