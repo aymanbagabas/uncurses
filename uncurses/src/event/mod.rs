@@ -186,6 +186,20 @@ impl std::fmt::Display for Visibility {
     }
 }
 
+/// Accepted program status names from an OSC 7501 query reply.
+///
+/// The decoder supplies fixed defaults for absent fields and preserves
+/// explicit empty lists and names from protocol extensions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramStatusCapabilities {
+    /// Accepted state names. An absent field means `idle`, `working`,
+    /// `done`, `blocked`, and `error`. The list excludes `clear`.
+    pub states: Vec<String>,
+    /// Accepted kind names. An absent field means `permission`,
+    /// `question`, and `auth`.
+    pub kinds: Vec<String>,
+}
+
 /// A terminal event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -350,13 +364,14 @@ pub enum Event {
     /// [`Program::request_visibility`]: crate::program::Program::request_visibility
     Visibility(Visibility),
 
-    /// The terminal supports program status reports (OSC 7501).
+    /// Supported program status states and kinds (OSC 7501).
     ///
-    /// Sent in reply to [`Program::request_program_status`]. Future reply
-    /// extensions are ignored.
+    /// Sent in reply to [`Program::request_program_status`]. Absent lists
+    /// use the protocol's fixed defaults. Names from future revisions are
+    /// preserved; unknown pairs are ignored.
     ///
     /// [`Program::request_program_status`]: crate::program::Program::request_program_status
-    ProgramStatusSupported,
+    ProgramStatus(ProgramStatusCapabilities),
 
     // -- Clipboard / graphics ------------------------------------------------
     /// OSC 52 clipboard content reply.
