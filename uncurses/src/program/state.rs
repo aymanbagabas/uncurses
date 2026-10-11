@@ -25,7 +25,7 @@ use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
-use crate::event::{ColorScheme, ModifyOtherKeysMode};
+use crate::event::{ColorScheme, ModifyOtherKeysMode, ProgramStatusCapabilities};
 
 use super::MouseTracking;
 use super::ProgressState;
@@ -208,7 +208,7 @@ pub struct Capabilities {
     pub(super) palette: BTreeMap<u8, Color>,
     pub(super) color_scheme: Option<ColorScheme>,
     pub(super) kitty_graphics: bool,
-    pub(super) program_status: bool,
+    pub(super) program_status: Option<ProgramStatusCapabilities>,
 }
 
 impl Capabilities {
@@ -282,12 +282,15 @@ impl Capabilities {
         self.kitty_graphics
     }
 
-    /// Whether the terminal has answered an OSC 7501 support query.
+    /// Accepted OSC 7501 states and kinds, or `None` before a reply.
     ///
-    /// `false` means no reply has been observed, not a definitive rejection.
+    /// `None` means support remains unconfirmed. A reply confirms support
+    /// even when both lists are empty. The decoder supplies fixed defaults
+    /// for absent fields and preserves names from protocol extensions.
+    ///
     /// Send a query with [`Program::request_program_status`](super::Program::request_program_status).
-    pub fn program_status(&self) -> bool {
-        self.program_status
+    pub fn program_status(&self) -> Option<&ProgramStatusCapabilities> {
+        self.program_status.as_ref()
     }
 
     /// The Kitty keyboard enhancements the terminal reported, or `None` if it
