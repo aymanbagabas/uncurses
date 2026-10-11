@@ -75,21 +75,18 @@ fn query_support() -> io::Result<Option<ProgramStatusCapabilities>> {
         })?;
         program.query_capabilities(&[])?;
 
-        let mut caps = None;
         let deadline = Instant::now() + Duration::from_millis(300);
         'wait: while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
             if !program.poll_event(Some(remaining))? {
                 break;
             }
             while let Some(event) = program.try_read_event()? {
-                match event {
-                    Event::ProgramStatus(report) => caps = Some(report),
-                    Event::PrimaryDeviceAttributes(_) => break 'wait,
-                    _ => {}
+                if matches!(event, Event::PrimaryDeviceAttributes(_)) {
+                    break 'wait;
                 }
             }
         }
-        Ok(caps)
+        Ok(program.capabilities().program_status().cloned())
     })();
     let finish = program.finish();
     let caps = result?;

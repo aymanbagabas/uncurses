@@ -282,34 +282,15 @@ impl Capabilities {
         self.kitty_graphics
     }
 
-    /// Whether the terminal has answered an OSC 7501 support query.
+    /// Accepted OSC 7501 states and kinds, or `None` before a reply.
     ///
-    /// `false` means no reply has been observed, not a definitive rejection.
+    /// `None` means support remains unconfirmed. A reply confirms support
+    /// even when both lists are empty. The decoder supplies fixed defaults
+    /// for absent fields and preserves names from protocol extensions.
+    ///
     /// Send a query with [`Program::request_program_status`](super::Program::request_program_status).
-    pub fn program_status(&self) -> bool {
-        self.program_status.is_some()
-    }
-
-    /// Accepted OSC 7501 state names, or `None` before a reply.
-    ///
-    /// An absent reply field uses the fixed defaults: `idle`, `working`,
-    /// `done`, `blocked`, and `error`. An explicit empty list stays empty.
-    /// Names from future revisions are preserved.
-    pub fn program_status_states(&self) -> Option<&[String]> {
-        self.program_status
-            .as_ref()
-            .map(|report| report.states.as_slice())
-    }
-
-    /// Accepted OSC 7501 kind names, or `None` before a reply.
-    ///
-    /// An absent reply field uses the fixed defaults: `permission`,
-    /// `question`, and `auth`. An explicit empty list stays empty.
-    /// Names from future revisions are preserved.
-    pub fn program_status_kinds(&self) -> Option<&[String]> {
-        self.program_status
-            .as_ref()
-            .map(|report| report.kinds.as_slice())
+    pub fn program_status(&self) -> Option<&ProgramStatusCapabilities> {
+        self.program_status.as_ref()
     }
 
     /// The Kitty keyboard enhancements the terminal reported, or `None` if it

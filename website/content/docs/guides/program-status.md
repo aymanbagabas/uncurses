@@ -74,16 +74,16 @@ with separate teardown behavior.
 Detection is optional. `program.request_program_status()?` sends the query.
 A supporting terminal replies with `Event::ProgramStatus(report)`.
 The `ProgramStatusCapabilities` payload owns the accepted `states` and `kinds` lists.
-Synchronous program reads observe the reply automatically and set
-`program.capabilities().program_status()` to `true`.
+Synchronous program reads observe the reply automatically.
+`program.capabilities().program_status()` returns `Some(&report)` after a reply.
+Read the accepted names from `report.states` and `report.kinds`.
 
 For async streams, pass the reply through `program.observe_event(&event)?`.
 Use a bounded wait with `poll_event` when you need a support decision.
-Before a reply, the capability flag means only that support is unconfirmed.
+Before a reply, the accessor returns `None`, which means support remains unconfirmed.
+Use `.is_some()` when you need only the support result.
 
-Read the accepted names through `program_status_states()` and
-`program_status_kinds()` on `program.capabilities()`. Both return `None`
-before a reply. A reply that omits a list uses the protocol's fixed defaults:
+A reply that omits a list uses the protocol's fixed defaults:
 `idle`, `working`, `done`, `blocked`, and `error` for states;
 `permission`, `question`, and `auth` for kinds.
 

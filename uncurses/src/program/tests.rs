@@ -790,7 +790,7 @@ fn program_status_reports_flush_and_survive_reset_restore() {
         report.message = Some("Build");
         program.set_program_status(&report).unwrap();
         assert!(written(&buf).ends_with(":msg=QnVpbGQ=\x1b\\"));
-        assert!(!program.capabilities().program_status());
+        assert!(program.capabilities().program_status().is_none());
 
         buf.borrow_mut().clear();
         program.reset().unwrap();
@@ -815,7 +815,7 @@ fn program_status_query_is_explicit_and_observation_records_support() {
     buf.borrow_mut().clear();
     program.request_program_status().unwrap();
     assert_eq!(written(&buf), "\x1b]7501;?\x1b\\");
-    assert!(!program.capabilities().program_status());
+    assert!(program.capabilities().program_status().is_none());
     buf.borrow_mut().clear();
     program
         .observe_event(&Event::ProgramStatus(ProgramStatusCapabilities {
@@ -823,7 +823,7 @@ fn program_status_query_is_explicit_and_observation_records_support() {
             kinds: vec![],
         }))
         .unwrap();
-    assert!(program.capabilities().program_status());
+    assert!(program.capabilities().program_status().is_some());
     assert!(buf.borrow().is_empty());
     program
         .query_capabilities(crate::ansi::program_status::REQUEST_PROGRAM_STATUS)
@@ -866,14 +866,14 @@ fn program_status_query_option_preserves_options_and_reply_observation() {
                 assert_eq!(program.options.query_program_status, query);
                 buf.borrow_mut().clear();
             }
-            assert!(!program.capabilities().program_status());
+            assert!(program.capabilities().program_status().is_none());
             program
                 .observe_event(&Event::ProgramStatus(ProgramStatusCapabilities {
                     states: vec![],
                     kinds: vec![],
                 }))
                 .unwrap();
-            assert!(program.capabilities().program_status());
+            assert!(program.capabilities().program_status().is_some());
             assert_eq!(program.options.query_program_status, query);
             assert!(buf.borrow().is_empty());
         }
@@ -884,9 +884,7 @@ fn program_status_query_option_preserves_options_and_reply_observation() {
 fn program_status_observation_replaces_both_lists() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (20, 1));
-    assert!(!program.capabilities().program_status());
-    assert_eq!(program.capabilities().program_status_states(), None);
-    assert_eq!(program.capabilities().program_status_kinds(), None);
+    assert_eq!(program.capabilities().program_status(), None);
 
     for (states, kinds) in [
         (
@@ -901,14 +899,9 @@ fn program_status_observation_replaces_both_lists() {
             kinds: kinds.clone(),
         });
         program.observe_event(&event).unwrap();
-        assert!(program.capabilities().program_status());
         assert_eq!(
-            program.capabilities().program_status_states(),
-            Some(states.as_slice())
-        );
-        assert_eq!(
-            program.capabilities().program_status_kinds(),
-            Some(kinds.as_slice())
+            program.capabilities().program_status(),
+            Some(&ProgramStatusCapabilities { states, kinds })
         );
         assert!(buf.borrow().is_empty());
     }
@@ -934,23 +927,14 @@ fn program_status_sends_discovered_extension_names() {
     let mut decoder = crate::event::decode::Decoder::new(DecoderFlags::empty());
     let events = decoder.parse(b"\x1b]7501;?:states=paused:kinds=confirm\x1b\\");
     program.observe_event(&events[0]).unwrap();
-    let states = program
-        .capabilities()
-        .program_status_states()
-        .unwrap()
-        .to_vec();
-    let kinds = program
-        .capabilities()
-        .program_status_kinds()
-        .unwrap()
-        .to_vec();
-    let mut report = ProgramStatus::new(ProgramStatusState::new(&states[0]));
+    let caps = program.capabilities().program_status().unwrap().clone();
+    let mut report = ProgramStatus::new(ProgramStatusState::new(&caps.states[0]));
     program.set_program_status(&report).unwrap();
     assert_eq!(written(&buf), "\x1b]7501;state=paused\x1b\\");
 
     buf.borrow_mut().clear();
     report.state = ProgramStatusState::BLOCKED;
-    report.kind = Some(ProgramStatusKind::new(&kinds[0]));
+    report.kind = Some(ProgramStatusKind::new(&caps.kinds[0]));
     program.set_program_status(&report).unwrap();
     assert_eq!(written(&buf), "\x1b]7501;state=blocked:kind=confirm\x1b\\");
 
@@ -1021,13 +1005,13 @@ fn program_status_synchronous_read_observes_support() {
                 .to_vec(),
         })
     );
-    assert!(program.capabilities().program_status());
+    assert!(program.capabilities().program_status().is_some());
     assert_eq!(
-        program.capabilities().program_status_states().unwrap(),
+        program.capabilities().program_status().unwrap().states,
         ["idle", "working", "done", "blocked", "error"]
     );
     assert_eq!(
-        program.capabilities().program_status_kinds().unwrap(),
+        program.capabilities().program_status().unwrap().kinds,
         ["permission", "question", "auth"]
     );
 
@@ -1036,14 +1020,15 @@ fn program_status_synchronous_read_observes_support() {
         .unwrap();
     program.read_event().unwrap();
     assert_eq!(
-        program.capabilities().program_status_states().unwrap(),
+        program.capabilities().program_status().unwrap().states,
         ["done", "paused"]
     );
     assert!(
         program
             .capabilities()
-            .program_status_kinds()
+            .program_status()
             .unwrap()
+            .kinds
             .is_empty()
     );
 }
