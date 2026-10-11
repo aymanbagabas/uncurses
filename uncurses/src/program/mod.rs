@@ -762,7 +762,9 @@ where
             // A graphics response is the Kitty protocol's own support test:
             // terminals that do not implement it stay silent.
             Event::KittyGraphics { .. } => self.caps.kitty_graphics = true,
-            Event::ProgramStatusSupported => self.caps.program_status = true,
+            Event::ProgramStatus(ref report) => {
+                self.caps.program_status = Some(report.clone());
+            }
             // The terminal's own colors, as distinct from the overrides the
             // facade installs (tracked in `state`).
             Event::ForegroundColor(color) => self.caps.foreground_color = Some(color),

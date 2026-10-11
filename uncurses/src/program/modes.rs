@@ -38,7 +38,7 @@ impl<I: Input, O: Write> Program<I, O> {
     ///
     /// Reports replace the addressed record. Include its app, title, and
     /// message on every update when they should remain present. Use
-    /// [`ProgramStatusState::Clear`](super::ProgramStatusState::Clear) to
+    /// [`ProgramStatusState::CLEAR`](super::ProgramStatusState::CLEAR) to
     /// remove the record and its descendants; a root clear removes all records.
     ///
     /// The terminal owns record lifetime. Pause, resume, screen switches,
@@ -56,8 +56,9 @@ impl<I: Input, O: Write> Program<I, O> {
 
     /// Query OSC 7501 support and flush, without waiting for a reply.
     ///
-    /// The reply is [`Event::ProgramStatusSupported`](crate::event::Event::ProgramStatusSupported).
-    /// Event observation records it in [`Capabilities::program_status`](super::Capabilities::program_status).
+    /// The reply is [`Event::ProgramStatus`](crate::event::Event::ProgramStatus),
+    /// with the accepted state and kind names. Event observation records
+    /// support and both lists in [`Capabilities`](super::Capabilities).
     /// To include this query in [`Self::query_capabilities`], enable
     /// [`ProgramOptions::query_program_status`](super::ProgramOptions::query_program_status).
     /// Initialization sends no queries.

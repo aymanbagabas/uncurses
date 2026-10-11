@@ -25,7 +25,7 @@ use crate::ansi::cursor::CursorStyle;
 use crate::ansi::kitty::KittyKeyboardFlags;
 use crate::ansi::mode::{Mode, ModeSetting};
 use crate::color::Color;
-use crate::event::{ColorScheme, ModifyOtherKeysMode};
+use crate::event::{ColorScheme, ModifyOtherKeysMode, ProgramStatusCapabilities};
 
 use super::MouseTracking;
 use super::ProgressState;
@@ -208,7 +208,7 @@ pub struct Capabilities {
     pub(super) palette: BTreeMap<u8, Color>,
     pub(super) color_scheme: Option<ColorScheme>,
     pub(super) kitty_graphics: bool,
-    pub(super) program_status: bool,
+    pub(super) program_status: Option<ProgramStatusCapabilities>,
 }
 
 impl Capabilities {
@@ -287,7 +287,29 @@ impl Capabilities {
     /// `false` means no reply has been observed, not a definitive rejection.
     /// Send a query with [`Program::request_program_status`](super::Program::request_program_status).
     pub fn program_status(&self) -> bool {
+        self.program_status.is_some()
+    }
+
+    /// Accepted OSC 7501 state names, or `None` before a reply.
+    ///
+    /// An absent reply field uses the fixed defaults: `idle`, `working`,
+    /// `done`, `blocked`, and `error`. An explicit empty list stays empty.
+    /// Names from future revisions are preserved.
+    pub fn program_status_states(&self) -> Option<&[String]> {
         self.program_status
+            .as_ref()
+            .map(|report| report.states.as_slice())
+    }
+
+    /// Accepted OSC 7501 kind names, or `None` before a reply.
+    ///
+    /// An absent reply field uses the fixed defaults: `permission`,
+    /// `question`, and `auth`. An explicit empty list stays empty.
+    /// Names from future revisions are preserved.
+    pub fn program_status_kinds(&self) -> Option<&[String]> {
+        self.program_status
+            .as_ref()
+            .map(|report| report.kinds.as_slice())
     }
 
     /// The Kitty keyboard enhancements the terminal reported, or `None` if it

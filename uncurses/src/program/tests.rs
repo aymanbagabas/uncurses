@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use super::*;
-use crate::event::SettingReport;
+use crate::event::{ProgramStatusCapabilities, SettingReport};
 use crate::text::TextSurface;
 
 #[cfg(unix)]
@@ -780,11 +780,11 @@ fn program_status_reports_flush_and_survive_reset_restore() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (20, 1));
     for state in [
-        ProgramStatusState::Idle,
-        ProgramStatusState::Working,
-        ProgramStatusState::Blocked,
-        ProgramStatusState::Done,
-        ProgramStatusState::Error,
+        ProgramStatusState::IDLE,
+        ProgramStatusState::WORKING,
+        ProgramStatusState::BLOCKED,
+        ProgramStatusState::DONE,
+        ProgramStatusState::ERROR,
     ] {
         let mut report = ProgramStatus::new(state);
         report.message = Some("Build");
@@ -799,7 +799,7 @@ fn program_status_reports_flush_and_survive_reset_restore() {
         assert!(!written(&buf).contains("7501"));
     }
     program
-        .set_program_status(&ProgramStatus::new(ProgramStatusState::Clear))
+        .set_program_status(&ProgramStatus::new(ProgramStatusState::CLEAR))
         .unwrap();
     assert!(written(&buf).ends_with("\x1b]7501;state=clear\x1b\\"));
 }
@@ -818,7 +818,10 @@ fn program_status_query_is_explicit_and_observation_records_support() {
     assert!(!program.capabilities().program_status());
     buf.borrow_mut().clear();
     program
-        .observe_event(&Event::ProgramStatusSupported)
+        .observe_event(&Event::ProgramStatus(ProgramStatusCapabilities {
+            states: vec![],
+            kinds: vec![],
+        }))
         .unwrap();
     assert!(program.capabilities().program_status());
     assert!(buf.borrow().is_empty());
@@ -865,7 +868,10 @@ fn program_status_query_option_preserves_options_and_reply_observation() {
             }
             assert!(!program.capabilities().program_status());
             program
-                .observe_event(&Event::ProgramStatusSupported)
+                .observe_event(&Event::ProgramStatus(ProgramStatusCapabilities {
+                    states: vec![],
+                    kinds: vec![],
+                }))
                 .unwrap();
             assert!(program.capabilities().program_status());
             assert_eq!(program.options.query_program_status, query);
@@ -875,11 +881,81 @@ fn program_status_query_option_preserves_options_and_reply_observation() {
 }
 
 #[test]
+fn program_status_observation_replaces_both_lists() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    assert!(!program.capabilities().program_status());
+    assert_eq!(program.capabilities().program_status_states(), None);
+    assert_eq!(program.capabilities().program_status_kinds(), None);
+
+    for (states, kinds) in [
+        (
+            vec!["idle".to_owned(), "paused".to_owned()],
+            vec!["confirm".to_owned()],
+        ),
+        (vec!["done".to_owned()], vec![]),
+        (vec![], vec![]),
+    ] {
+        let event = Event::ProgramStatus(ProgramStatusCapabilities {
+            states: states.clone(),
+            kinds: kinds.clone(),
+        });
+        program.observe_event(&event).unwrap();
+        assert!(program.capabilities().program_status());
+        assert_eq!(
+            program.capabilities().program_status_states(),
+            Some(states.as_slice())
+        );
+        assert_eq!(
+            program.capabilities().program_status_kinds(),
+            Some(kinds.as_slice())
+        );
+        assert!(buf.borrow().is_empty());
+    }
+}
+
+#[test]
 fn invalid_program_status_emits_nothing() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (20, 1));
-    let mut report = ProgramStatus::new(ProgramStatusState::Working);
+    let mut report = ProgramStatus::new(ProgramStatusState::WORKING);
     report.id = Some("bad:id");
+    assert_eq!(
+        program.set_program_status(&report).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    assert!(buf.borrow().is_empty());
+}
+
+#[test]
+fn program_status_sends_discovered_extension_names() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    let mut decoder = crate::event::decode::Decoder::new(DecoderFlags::empty());
+    let events = decoder.parse(b"\x1b]7501;?:states=paused:kinds=confirm\x1b\\");
+    program.observe_event(&events[0]).unwrap();
+    let states = program
+        .capabilities()
+        .program_status_states()
+        .unwrap()
+        .to_vec();
+    let kinds = program
+        .capabilities()
+        .program_status_kinds()
+        .unwrap()
+        .to_vec();
+    let mut report = ProgramStatus::new(ProgramStatusState::new(&states[0]));
+    program.set_program_status(&report).unwrap();
+    assert_eq!(written(&buf), "\x1b]7501;state=paused\x1b\\");
+
+    buf.borrow_mut().clear();
+    report.state = ProgramStatusState::BLOCKED;
+    report.kind = Some(ProgramStatusKind::new(&kinds[0]));
+    program.set_program_status(&report).unwrap();
+    assert_eq!(written(&buf), "\x1b]7501;state=blocked:kind=confirm\x1b\\");
+
+    buf.borrow_mut().clear();
+    report.kind = Some(ProgramStatusKind::new("bad:kind"));
     assert_eq!(
         program.set_program_status(&report).unwrap_err().kind(),
         io::ErrorKind::InvalidInput
@@ -920,7 +996,7 @@ fn program_status_propagates_output_and_flush_errors() {
             let result = if query {
                 program.request_program_status()
             } else {
-                program.set_program_status(&ProgramStatus::new(ProgramStatusState::Working))
+                program.set_program_status(&ProgramStatus::new(ProgramStatusState::WORKING))
             };
             assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         }
@@ -934,8 +1010,42 @@ fn program_status_synchronous_read_observes_support() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
     writer.write_all(b"\x1b]7501;?\x1b\\").unwrap();
-    assert_eq!(program.read_event().unwrap(), Event::ProgramStatusSupported);
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::ProgramStatus(ProgramStatusCapabilities {
+            states: ["idle", "working", "done", "blocked", "error"]
+                .map(String::from)
+                .to_vec(),
+            kinds: ["permission", "question", "auth"]
+                .map(String::from)
+                .to_vec(),
+        })
+    );
     assert!(program.capabilities().program_status());
+    assert_eq!(
+        program.capabilities().program_status_states().unwrap(),
+        ["idle", "working", "done", "blocked", "error"]
+    );
+    assert_eq!(
+        program.capabilities().program_status_kinds().unwrap(),
+        ["permission", "question", "auth"]
+    );
+
+    writer
+        .write_all(b"\x1b]7501;?:states=done,paused:kinds=\x07")
+        .unwrap();
+    program.read_event().unwrap();
+    assert_eq!(
+        program.capabilities().program_status_states().unwrap(),
+        ["done", "paused"]
+    );
+    assert!(
+        program
+            .capabilities()
+            .program_status_kinds()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

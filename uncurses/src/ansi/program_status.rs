@@ -14,57 +14,81 @@ use std::io::{self, Write};
 
 use super::clipboard::base64_encode;
 
-/// Query OSC 7501 support. A supporting terminal replies with the same sequence.
+/// Query OSC 7501 support. The reply starts with `?` and may list accepted
+/// states and kinds.
 pub const REQUEST_PROGRAM_STATUS: &[u8] = b"\x1b]7501;?\x1b\\";
 
 /// State of a program or one of its tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgramStatusState {
-    /// At rest, ready for the user's next instruction.
-    Idle,
-    /// Work is in progress.
-    Working,
-    /// Work finished and its result is ready.
-    Done,
-    /// Work requires user input before it can continue.
-    Blocked,
-    /// Work failed and stopped.
-    Error,
-    /// Remove the addressed record and all descendants.
-    Clear,
-}
+///
+/// Standard names are associated constants. Use [`Self::new`] for a name
+/// advertised by a protocol extension. The writer validates names before
+/// output; construction does not establish terminal support.
+///
+/// State and kind names are distinct types:
+///
+/// ```compile_fail
+/// use uncurses::ansi::program_status::{ProgramStatus, ProgramStatusKind};
+///
+/// let report = ProgramStatus::new(ProgramStatusKind::AUTH);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProgramStatusState<'a>(&'a str);
 
-impl ProgramStatusState {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Working => "working",
-            Self::Done => "done",
-            Self::Blocked => "blocked",
-            Self::Error => "error",
-            Self::Clear => "clear",
-        }
+impl<'a> ProgramStatusState<'a> {
+    /// At rest, ready for the user's next instruction.
+    pub const IDLE: Self = Self("idle");
+    /// Work is in progress.
+    pub const WORKING: Self = Self("working");
+    /// Work finished and its result is ready.
+    pub const DONE: Self = Self("done");
+    /// Work requires user input before it can continue.
+    pub const BLOCKED: Self = Self("blocked");
+    /// Work failed and stopped.
+    pub const ERROR: Self = Self("error");
+    /// Remove the addressed record and all descendants.
+    pub const CLEAR: Self = Self("clear");
+
+    /// Borrow a state name without validation.
+    ///
+    /// Check the terminal's accepted states before use. The writer accepts
+    /// nonempty values from `[A-Za-z0-9_.,+/=-]` within the sequence limit.
+    pub const fn new(name: &'a str) -> Self {
+        Self(name)
+    }
+
+    /// Return the state name used on the wire.
+    pub const fn as_str(self) -> &'a str {
+        self.0
     }
 }
 
 /// What a blocked program needs from the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgramStatusKind {
-    /// Approval for an action.
-    Permission,
-    /// An answer to a question.
-    Question,
-    /// Authentication, such as a login or credential.
-    Auth,
-}
+///
+/// Standard names are associated constants. Use [`Self::new`] for a name
+/// advertised by a protocol extension. The writer validates names before
+/// output; construction does not establish terminal support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProgramStatusKind<'a>(&'a str);
 
-impl ProgramStatusKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Permission => "permission",
-            Self::Question => "question",
-            Self::Auth => "auth",
-        }
+impl<'a> ProgramStatusKind<'a> {
+    /// Approval for an action.
+    pub const PERMISSION: Self = Self("permission");
+    /// An answer to a question.
+    pub const QUESTION: Self = Self("question");
+    /// Authentication, such as a login or credential.
+    pub const AUTH: Self = Self("auth");
+
+    /// Borrow a kind name without validation.
+    ///
+    /// Check the terminal's accepted kinds before use. The writer accepts
+    /// nonempty values from `[A-Za-z0-9_.,+/=-]` within the sequence limit.
+    pub const fn new(name: &'a str) -> Self {
+        Self(name)
+    }
+
+    /// Return the kind name used on the wire.
+    pub const fn as_str(self) -> &'a str {
+        self.0
     }
 }
 
@@ -77,14 +101,14 @@ impl ProgramStatusKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramStatus<'a> {
     /// Required record state.
-    pub state: ProgramStatusState,
+    pub state: ProgramStatusState<'a>,
     /// Optional record path. At most 128 bytes and eight slash-separated
     /// segments, each 1-32 bytes from `[A-Za-z0-9_.+-]`. `None` selects root.
     pub id: Option<&'a str>,
-    /// Reason for blocking. Terminals use this only with `Blocked`.
-    pub kind: Option<ProgramStatusKind>,
-    /// Percentage, from 0 to 100. Terminals use this only with `Working` or
-    /// `Blocked`. `None` means indeterminate progress.
+    /// Reason for blocking. Terminals use this only with state `blocked`.
+    pub kind: Option<ProgramStatusKind<'a>>,
+    /// Percentage, from 0 to 100. Terminals use this only with state `working`
+    /// or `blocked`. `None` means indeterminate progress.
     pub progress: Option<u8>,
     /// Program name: 1-32 bytes from `[A-Za-z0-9_.+-]`.
     pub app: Option<&'a str>,
@@ -98,7 +122,7 @@ pub struct ProgramStatus<'a> {
 
 impl<'a> ProgramStatus<'a> {
     /// Create a root report with the specified state and no optional fields.
-    pub fn new(state: ProgramStatusState) -> Self {
+    pub fn new(state: ProgramStatusState<'a>) -> Self {
         Self {
             state,
             id: None,
@@ -109,6 +133,12 @@ impl<'a> ProgramStatus<'a> {
             message: None,
         }
     }
+}
+
+pub(crate) fn valid_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"_.,+/=-".contains(&b))
 }
 
 fn valid_segment(value: &str) -> bool {
@@ -133,9 +163,11 @@ fn validate_text(value: Option<&str>, limit: usize, field: &str) -> io::Result<(
 /// Write one complete program status report without flushing.
 ///
 /// All fields are validated before any bytes are written. Invalid IDs,
-/// app names, text, or percentages return [`io::ErrorKind::InvalidInput`].
-/// Text limits count UTF-8 bytes before base64 encoding. The field limits
-/// keep the encoded sequence below the protocol's 4096-byte cap.
+/// state names, kind names, app names, text, or percentages return
+/// [`io::ErrorKind::InvalidInput`]. State and kind names must be nonempty
+/// values from `[A-Za-z0-9_.,+/=-]`.
+/// Text limits count UTF-8 bytes before base64 encoding. The complete
+/// encoded sequence, including its framing, must fit within 4096 bytes.
 ///
 /// A terminal may apply lower limits or ignore OSC 7501 entirely. This
 /// function reports write errors, not terminal acceptance.
@@ -145,7 +177,7 @@ fn validate_text(value: Option<&str>, limit: usize, field: &str) -> io::Result<(
 ///     ProgramStatus, ProgramStatusState, write_program_status,
 /// };
 ///
-/// let mut report = ProgramStatus::new(ProgramStatusState::Working);
+/// let mut report = ProgramStatus::new(ProgramStatusState::WORKING);
 /// report.app = Some("cargo");
 /// report.message = Some("Build");
 /// let mut bytes = Vec::new();
@@ -153,6 +185,17 @@ fn validate_text(value: Option<&str>, limit: usize, field: &str) -> io::Result<(
 /// assert_eq!(bytes, b"\x1b]7501;state=working:app=cargo:msg=QnVpbGQ=\x1b\\");
 /// ```
 pub fn write_program_status<W: Write>(w: &mut W, report: &ProgramStatus<'_>) -> io::Result<()> {
+    for (field, value) in [
+        ("state", Some(report.state.as_str())),
+        ("kind", report.kind.map(ProgramStatusKind::as_str)),
+    ] {
+        if value.is_some_and(|name| name.is_empty() || name.len() > 4096 || !valid_value(name)) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid program status {field} name"),
+            ));
+        }
+    }
     if report.id.is_some_and(|id| {
         id.len() > 128 || id.split('/').count() > 8 || !id.split('/').all(valid_segment)
     }) {
@@ -203,6 +246,12 @@ pub fn write_program_status<W: Write>(w: &mut W, report: &ProgramStatus<'_>) -> 
         sequence.push_str(&base64_encode(message.as_bytes()));
     }
     sequence.push_str("\x1b\\");
+    if sequence.len() > 4096 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "program status sequence exceeds 4096 bytes",
+        ));
+    }
     w.write_all(sequence.as_bytes())
 }
 
@@ -211,14 +260,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn program_status_names_have_value_equality() {
+        use std::collections::HashSet;
+
+        for state in [
+            ProgramStatusState::IDLE,
+            ProgramStatusState::WORKING,
+            ProgramStatusState::DONE,
+            ProgramStatusState::BLOCKED,
+            ProgramStatusState::ERROR,
+            ProgramStatusState::CLEAR,
+        ] {
+            let name = state.as_str().to_owned();
+            let constructed = ProgramStatusState::new(&name);
+            assert_eq!(state, constructed);
+            assert_eq!(HashSet::from([state, constructed]).len(), 1);
+        }
+        for kind in [
+            ProgramStatusKind::PERMISSION,
+            ProgramStatusKind::QUESTION,
+            ProgramStatusKind::AUTH,
+        ] {
+            let name = kind.as_str().to_owned();
+            let constructed = ProgramStatusKind::new(&name);
+            assert_eq!(kind, constructed);
+            assert_eq!(HashSet::from([kind, constructed]).len(), 1);
+        }
+        assert_ne!(
+            ProgramStatusState::new("paused"),
+            ProgramStatusState::WORKING
+        );
+        assert_ne!(ProgramStatusKind::new("confirm"), ProgramStatusKind::AUTH);
+    }
+
+    #[test]
     fn program_status_states_and_clear_records() {
         for (state, value) in [
-            (ProgramStatusState::Idle, "idle"),
-            (ProgramStatusState::Working, "working"),
-            (ProgramStatusState::Done, "done"),
-            (ProgramStatusState::Blocked, "blocked"),
-            (ProgramStatusState::Error, "error"),
-            (ProgramStatusState::Clear, "clear"),
+            (ProgramStatusState::IDLE, "idle"),
+            (ProgramStatusState::WORKING, "working"),
+            (ProgramStatusState::DONE, "done"),
+            (ProgramStatusState::BLOCKED, "blocked"),
+            (ProgramStatusState::ERROR, "error"),
+            (ProgramStatusState::CLEAR, "clear"),
         ] {
             let mut report = ProgramStatus::new(state);
             for id in [None, Some("build/test")] {
@@ -237,12 +320,12 @@ mod tests {
     #[test]
     fn program_status_encodes_all_fields_and_blocked_kinds() {
         for (kind, value) in [
-            (ProgramStatusKind::Permission, "permission"),
-            (ProgramStatusKind::Question, "question"),
-            (ProgramStatusKind::Auth, "auth"),
+            (ProgramStatusKind::PERMISSION, "permission"),
+            (ProgramStatusKind::QUESTION, "question"),
+            (ProgramStatusKind::AUTH, "auth"),
         ] {
             let report = ProgramStatus {
-                state: ProgramStatusState::Blocked,
+                state: ProgramStatusState::BLOCKED,
                 id: Some("build/test"),
                 kind: Some(kind),
                 progress: Some(42),
@@ -269,8 +352,90 @@ mod tests {
     }
 
     #[test]
+    fn program_status_accepts_borrowed_extension_names() {
+        let state_name = String::from("paused");
+        let kind_name = String::from("confirm");
+        let mut report = ProgramStatus::new(ProgramStatusState::new(&state_name));
+        let mut bytes = Vec::new();
+        write_program_status(&mut bytes, &report).unwrap();
+        assert_eq!(bytes, b"\x1b]7501;state=paused\x1b\\");
+        assert_eq!(report.state.as_str(), state_name);
+
+        report.state = ProgramStatusState::BLOCKED;
+        report.kind = Some(ProgramStatusKind::new(&kind_name));
+        let original = report.clone();
+        bytes.clear();
+        write_program_status(&mut bytes, &report).unwrap();
+        assert_eq!(bytes, b"\x1b]7501;state=blocked:kind=confirm\x1b\\");
+        assert_eq!(report.kind.unwrap().as_str(), kind_name);
+        assert_eq!(report, original);
+
+        report.state = ProgramStatusState::new("AZaz09_.,+/=-");
+        report.kind = Some(ProgramStatusKind::new("AZaz09_.,+/=-"));
+        bytes.clear();
+        write_program_status(&mut bytes, &report).unwrap();
+        assert_eq!(
+            bytes,
+            b"\x1b]7501;state=AZaz09_.,+/=-:kind=AZaz09_.,+/=-\x1b\\"
+        );
+    }
+
+    #[test]
+    fn program_status_rejects_invalid_extension_names_before_output() {
+        for name in [
+            "", "a:b", "a;b", "a b", "a\tb", "a\nb", "\x1b\\", "\u{e9}", "\u{9c}",
+        ] {
+            invalid(&ProgramStatus::new(ProgramStatusState::new(name)));
+            let mut report = ProgramStatus::new(ProgramStatusState::BLOCKED);
+            report.kind = Some(ProgramStatusKind::new(name));
+            invalid(&report);
+        }
+        for code in (0..=0x1f).chain(0x7f..=0x9f) {
+            let name = format!("a{}b", char::from_u32(code).unwrap());
+            invalid(&ProgramStatus::new(ProgramStatusState::new(&name)));
+            let mut report = ProgramStatus::new(ProgramStatusState::BLOCKED);
+            report.kind = Some(ProgramStatusKind::new(&name));
+            invalid(&report);
+        }
+    }
+
+    #[test]
+    fn program_status_extension_names_respect_complete_sequence_limit() {
+        for (kind, overhead) in [
+            (false, b"\x1b]7501;state=\x1b\\".len()),
+            (true, b"\x1b]7501;state=blocked:kind=\x1b\\".len()),
+        ] {
+            for extra in [0, 1, overhead + 1] {
+                let name = "a".repeat(4096 - overhead + extra);
+                let mut report = ProgramStatus::new(if kind {
+                    ProgramStatusState::BLOCKED
+                } else {
+                    ProgramStatusState::new(&name)
+                });
+                if kind {
+                    report.kind = Some(ProgramStatusKind::new(&name));
+                }
+                if extra == 0 {
+                    let mut bytes = Vec::new();
+                    write_program_status(&mut bytes, &report).unwrap();
+                    assert_eq!(bytes.len(), 4096);
+                    report.title = Some("x");
+                    invalid(&report);
+                } else {
+                    invalid(&report);
+                }
+            }
+        }
+
+        let name = "a".repeat(2100);
+        let mut report = ProgramStatus::new(ProgramStatusState::new(&name));
+        report.kind = Some(ProgramStatusKind::new(&name));
+        invalid(&report);
+    }
+
+    #[test]
     fn program_status_rejects_invalid_ids_apps_and_progress() {
-        let mut report = ProgramStatus::new(ProgramStatusState::Working);
+        let mut report = ProgramStatus::new(ProgramStatusState::WORKING);
         for id in ["", "/a", "a/", "a//b", "a:b", "a;b", "a=b", "a b", "\u{e9}"] {
             report.id = Some(id);
             invalid(&report);
@@ -298,7 +463,7 @@ mod tests {
     fn program_status_rejects_controls_and_text_over_limits() {
         for code in (0..=0x1f).chain(0x7f..=0x9f) {
             let text = format!("before{}after", char::from_u32(code).unwrap());
-            let mut report = ProgramStatus::new(ProgramStatusState::Done);
+            let mut report = ProgramStatus::new(ProgramStatusState::DONE);
             report.title = Some(&text);
             invalid(&report);
             report.title = None;
@@ -307,12 +472,12 @@ mod tests {
             report.message = None;
         }
         for title in ["a".repeat(193), "\u{e9}".repeat(97)] {
-            let mut report = ProgramStatus::new(ProgramStatusState::Done);
+            let mut report = ProgramStatus::new(ProgramStatusState::DONE);
             report.title = Some(&title);
             invalid(&report);
         }
         for message in ["a".repeat(2049), "\u{e9}".repeat(1025)] {
-            let mut report = ProgramStatus::new(ProgramStatusState::Done);
+            let mut report = ProgramStatus::new(ProgramStatusState::DONE);
             report.message = Some(&message);
             invalid(&report);
         }
@@ -332,9 +497,9 @@ mod tests {
         let title = "\u{e9}".repeat(96);
         let message = "\u{e9}".repeat(1024);
         let mut report = ProgramStatus {
-            state: ProgramStatusState::Blocked,
+            state: ProgramStatusState::BLOCKED,
             id: Some(&id),
-            kind: Some(ProgramStatusKind::Permission),
+            kind: Some(ProgramStatusKind::PERMISSION),
             progress: Some(100),
             app: Some(&app),
             title: Some(&title),
@@ -380,7 +545,7 @@ mod tests {
         let mut empty = [];
         let error = write_program_status(
             &mut empty.as_mut_slice(),
-            &ProgramStatus::new(ProgramStatusState::Idle),
+            &ProgramStatus::new(ProgramStatusState::IDLE),
         )
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::WriteZero);
