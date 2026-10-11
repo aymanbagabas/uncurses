@@ -51,7 +51,7 @@ impl<'a> ProgramStatusState<'a> {
     /// Borrow a state name without validation.
     ///
     /// Check the terminal's accepted states before use. The writer accepts
-    /// nonempty values from `[A-Za-z0-9_.+/=-]` within the sequence limit.
+    /// nonempty values from `[A-Za-z0-9_.,+/=-]` within the sequence limit.
     pub const fn new(name: &'a str) -> Self {
         Self(name)
     }
@@ -81,7 +81,7 @@ impl<'a> ProgramStatusKind<'a> {
     /// Borrow a kind name without validation.
     ///
     /// Check the terminal's accepted kinds before use. The writer accepts
-    /// nonempty values from `[A-Za-z0-9_.+/=-]` within the sequence limit.
+    /// nonempty values from `[A-Za-z0-9_.,+/=-]` within the sequence limit.
     pub const fn new(name: &'a str) -> Self {
         Self(name)
     }
@@ -141,10 +141,6 @@ pub(crate) fn valid_value(value: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b"_.,+/=-".contains(&b))
 }
 
-fn valid_name(name: &str) -> bool {
-    !name.is_empty() && !name.contains(',') && valid_value(name)
-}
-
 fn valid_segment(value: &str) -> bool {
     (1..=32).contains(&value.len())
         && value
@@ -169,7 +165,7 @@ fn validate_text(value: Option<&str>, limit: usize, field: &str) -> io::Result<(
 /// All fields are validated before any bytes are written. Invalid IDs,
 /// state names, kind names, app names, text, or percentages return
 /// [`io::ErrorKind::InvalidInput`]. State and kind names must be nonempty
-/// values from `[A-Za-z0-9_.+/=-]`. Commas separate names in query replies.
+/// values from `[A-Za-z0-9_.,+/=-]`.
 /// Text limits count UTF-8 bytes before base64 encoding. The complete
 /// encoded sequence, including its framing, must fit within 4096 bytes.
 ///
@@ -193,7 +189,7 @@ pub fn write_program_status<W: Write>(w: &mut W, report: &ProgramStatus<'_>) -> 
         ("state", Some(report.state.as_str())),
         ("kind", report.kind.map(ProgramStatusKind::as_str)),
     ] {
-        if value.is_some_and(|name| name.len() > 4096 || !valid_name(name)) {
+        if value.is_some_and(|name| name.is_empty() || name.len() > 4096 || !valid_value(name)) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("invalid program status {field} name"),
@@ -374,32 +370,39 @@ mod tests {
         assert_eq!(report.kind.unwrap().as_str(), kind_name);
         assert_eq!(report, original);
 
-        report.state = ProgramStatusState::new("AZaz09_.+/=-");
-        report.kind = Some(ProgramStatusKind::new("AZaz09_.+/=-"));
+        report.state = ProgramStatusState::new("AZaz09_.,+/=-");
+        report.kind = Some(ProgramStatusKind::new("AZaz09_.,+/=-"));
         bytes.clear();
         write_program_status(&mut bytes, &report).unwrap();
         assert_eq!(
             bytes,
-            b"\x1b]7501;state=AZaz09_.+/=-:kind=AZaz09_.+/=-\x1b\\"
+            b"\x1b]7501;state=AZaz09_.,+/=-:kind=AZaz09_.,+/=-\x1b\\"
         );
+    }
+
+    #[test]
+    fn program_status_preserves_commas_in_report_values() {
+        for name in [",", ",paused", "paused,", "paused,done"] {
+            let mut report = ProgramStatus::new(ProgramStatusState::new(name));
+            let mut bytes = Vec::new();
+            write_program_status(&mut bytes, &report).unwrap();
+            assert_eq!(bytes, format!("\x1b]7501;state={name}\x1b\\").as_bytes());
+
+            report.state = ProgramStatusState::BLOCKED;
+            report.kind = Some(ProgramStatusKind::new(name));
+            bytes.clear();
+            write_program_status(&mut bytes, &report).unwrap();
+            assert_eq!(
+                bytes,
+                format!("\x1b]7501;state=blocked:kind={name}\x1b\\").as_bytes()
+            );
+        }
     }
 
     #[test]
     fn program_status_rejects_invalid_extension_names_before_output() {
         for name in [
-            "",
-            "a:b",
-            "a;b",
-            "a b",
-            "a\tb",
-            "a\nb",
-            "\x1b\\",
-            "\u{e9}",
-            "\u{9c}",
-            ",",
-            ",paused",
-            "paused,",
-            "paused,done",
+            "", "a:b", "a;b", "a b", "a\tb", "a\nb", "\x1b\\", "\u{e9}", "\u{9c}",
         ] {
             invalid(&ProgramStatus::new(ProgramStatusState::new(name)));
             let mut report = ProgramStatus::new(ProgramStatusState::BLOCKED);

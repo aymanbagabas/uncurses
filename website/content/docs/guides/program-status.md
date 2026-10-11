@@ -99,8 +99,9 @@ Standard constants and constructed names compare by their text.
 For example, `ProgramStatusState::WORKING` equals
 `ProgramStatusState::new("working")`. State and kind remain distinct types.
 
-Commas separate names in query replies. The writer rejects commas inside
-individual state and kind names.
+The writer accepts commas under the protocol's value grammar.
+Query replies interpret commas as list separators, so discovery cannot
+represent a comma-containing name as one entry.
 
 The writer validates custom names before output and enforces the complete
 4096-byte sequence limit. Choose a supported standard name when the terminal
