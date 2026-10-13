@@ -33,6 +33,9 @@ pub const REQUEST_CURSOR_POSITION: &[u8] = b"\x1b[6n";
 /// Request extended cursor position: exact bytes `ESC [ ? 6 n` (`b"\x1b[?6n"`).
 ///
 /// The terminal replies with a private cursor-position report, optionally including page.
+/// The decoder emits [`Event::CursorPosition`](crate::event::Event::CursorPosition)
+/// with zero-based cell coordinates and the reported one-based page number.
+/// An absent page is zero.
 pub const REQUEST_EXTENDED_CURSOR_POSITION: &[u8] = b"\x1b[?6n";
 
 /// Request light/dark preference report: exact bytes `ESC [ ? 996 n` (`b"\x1b[?996n"`).

@@ -10,13 +10,16 @@
 //! Run with `cargo run --example query`. A terminal that does not support
 //! a given query simply never answers it, so the program gives up after a
 //! short deadline.
+//! Add `-- --extended` to request DECXCPR instead of standard CPR.
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use uncurses::ansi::color::REQUEST_BACKGROUND_COLOR;
 use uncurses::ansi::ctrl::REQUEST_PRIMARY_DA;
-use uncurses::ansi::cursor::write_request_cursor_position;
+use uncurses::ansi::cursor::{
+    write_request_cursor_position, write_request_extended_cursor_position,
+};
 use uncurses::ansi::mode::Mode;
 use uncurses::ansi::winop::REQUEST_CELL_PIXEL_SIZE;
 use uncurses::event::{Event, EventSource};
@@ -32,7 +35,11 @@ fn main() -> io::Result<()> {
     // Fire the requests. Primary DA goes last: its reply terminates the
     // batch, so seeing it means every earlier answer has already arrived.
     out.write_all(REQUEST_BACKGROUND_COLOR)?;
-    write_request_cursor_position(&mut out)?;
+    if std::env::args().any(|arg| arg == "--extended") {
+        write_request_extended_cursor_position(&mut out)?;
+    } else {
+        write_request_cursor_position(&mut out)?;
+    }
     Mode::BACKARROW_KEY.request(&mut out)?;
     out.write_all(REQUEST_CELL_PIXEL_SIZE)?;
     out.write_all(REQUEST_PRIMARY_DA)?;
@@ -48,8 +55,13 @@ fn main() -> io::Result<()> {
         while let Some(ev) = events.try_read() {
             match ev {
                 Event::BackgroundColor(c) => lines.push(format!("background color: {c:?}")),
-                Event::CursorPosition(p) => {
-                    lines.push(format!("cursor position: column {}, row {}", p.x, p.y))
+                Event::CursorPosition { position, page } => {
+                    let mut line =
+                        format!("cursor position: column {}, row {}", position.x, position.y);
+                    if page != 0 {
+                        line.push_str(&format!(", page {page}"));
+                    }
+                    lines.push(line);
                 }
                 Event::CellPixelSize { width, height } => {
                     lines.push(format!("cell size: {width}x{height} pixels"))

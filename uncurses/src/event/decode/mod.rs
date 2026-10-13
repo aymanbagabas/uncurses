@@ -853,11 +853,64 @@ mod tests {
         let events = parser.parse(b"\x1b[5;10R");
         assert_eq!(events.len(), 1);
         match &events[0] {
-            Event::CursorPosition(pos) => {
-                assert_eq!(pos.y, 4);
-                assert_eq!(pos.x, 9);
+            Event::CursorPosition { position, page } => {
+                assert_eq!(position.y, 4);
+                assert_eq!(position.x, 9);
+                assert_eq!(*page, 0);
             }
             _ => panic!("Expected CursorPosition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extended_cursor_position() {
+        for prefix in [b"\x1b[".as_slice(), b"\x9b".as_slice()] {
+            for (body, expected) in [
+                ("5;10R", (9, 4, 0)),
+                ("1;17R", (16, 0, 0)),
+                ("?5;10R", (9, 4, 0)),
+                ("?5;10;7R", (9, 4, 7)),
+                ("?5;10;65536R", (9, 4, 65536)),
+                ("?5;10;R", (9, 4, 0)),
+                ("?5;10;0R", (9, 4, 0)),
+                ("?1;5R", (4, 0, 0)),
+                ("?1;5;1R", (4, 0, 1)),
+                ("?1;5;2;3R", (4, 0, 2)),
+                ("?0;0R", (0, 0, 0)),
+                ("?;R", (0, 0, 0)),
+                ("?;;R", (0, 0, 0)),
+            ] {
+                let bytes = [prefix, body.as_bytes()].concat();
+                for split in 0..=bytes.len() {
+                    let mut parser = Decoder::new(DecoderFlags::empty());
+                    let mut events = parser.parse(&bytes[..split]);
+                    events.extend(parser.parse(&bytes[split..]));
+                    assert!(
+                        matches!(events.as_slice(), [Event::CursorPosition { position, page }]
+                            if (position.x, position.y, *page) == expected),
+                        "{bytes:?}, split {split}: {events:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_reject_unrecognized_extended_cursor_position() {
+        for bytes in [
+            b"\x1b[?R".as_slice(),
+            b"\x1b[?5R",
+            b"\x1b[?5;10 R",
+            b"\x1b[>5;10R",
+            b"\x1b[<5;10R",
+            b"\x1b[=5;10R",
+        ] {
+            let mut parser = Decoder::new(DecoderFlags::empty());
+            let events = parser.parse(bytes);
+            assert!(
+                matches!(events.as_slice(), [Event::UnknownCsi(raw)] if raw == bytes),
+                "{events:?}"
+            );
         }
     }
 
@@ -1774,6 +1827,78 @@ mod tests {
     }
 
     #[test]
+    fn test_csi_tilde_parameter_counts() {
+        for prefix in [b"\x1b[".as_slice(), b"\x9b".as_slice()] {
+            for (body, expected) in [
+                (
+                    "1~",
+                    Some(vec![Event::KeyPress(Key::new(
+                        KeyCode::Home,
+                        KeyModifiers::empty(),
+                    ))]),
+                ),
+                (
+                    "15;5~",
+                    Some(vec![Event::KeyPress(Key::new(
+                        KeyCode::F(5),
+                        KeyModifiers::CTRL,
+                    ))]),
+                ),
+                (
+                    "15;5:3~",
+                    Some(vec![Event::KeyRelease(Key::new(
+                        KeyCode::F(5),
+                        KeyModifiers::CTRL,
+                    ))]),
+                ),
+                (
+                    "27;5;97~",
+                    Some(vec![Event::KeyPress(Key::new(
+                        KeyCode::Char('a'),
+                        KeyModifiers::CTRL,
+                    ))]),
+                ),
+                (
+                    "200~\x1b[201~",
+                    Some(vec![Event::PasteStart, Event::PasteEnd]),
+                ),
+                ("201~", Some(vec![Event::PasteEnd])),
+                (
+                    "200~a\x1b[201;1~b\x1b[201~",
+                    Some(vec![
+                        Event::PasteStart,
+                        Event::PasteChunk(b"a\x1b[201;1~b".to_vec()),
+                        Event::PasteEnd,
+                    ]),
+                ),
+                ("27~", None),
+                ("27;5~", None),
+                ("27;5;97;1~", None),
+                ("27;5;97;~", None),
+                ("1;2;3~", None),
+                ("15;2;3~", None),
+                ("200;1~", None),
+                ("200;~", None),
+                ("200;1;2~", None),
+                ("201;1~", None),
+                ("201;~", None),
+                ("201;1;2~", None),
+            ] {
+                let mut wire = [prefix, body.as_bytes()].concat();
+                let mut expected =
+                    expected.unwrap_or_else(|| vec![Event::UnknownCsi(wire.clone())]);
+                wire.push(b'x');
+                expected.push(Event::KeyPress(Key::new(
+                    KeyCode::Char('x'),
+                    KeyModifiers::empty(),
+                )));
+                let mut parser = Decoder::new(DecoderFlags::empty());
+                assert_eq!(parser.parse(&wire), expected, "{wire:?}");
+            }
+        }
+    }
+
+    #[test]
     fn test_modify_other_keys_2() {
         let mut p = Decoder::new(DecoderFlags::empty());
         // Ctrl+a via modifyOtherKeys-2: CSI 27;5;97~
@@ -1802,6 +1927,56 @@ mod tests {
     }
 
     #[test]
+    fn test_csi_keys_reject_extra_parameters() {
+        for prefix in [b"\x1b[".as_slice(), b"\x9b".as_slice()] {
+            for final_byte in b"ABCDEFHPQRSZ" {
+                let bytes = [prefix, b"1;2;3", &[*final_byte]].concat();
+                for split in 0..=bytes.len() {
+                    let mut parser = Decoder::new(DecoderFlags::empty());
+                    let mut events = parser.parse(&bytes[..split]);
+                    events.extend(parser.parse(&bytes[split..]));
+                    assert!(
+                        matches!(events.as_slice(), [Event::UnknownCsi(raw)] if raw == &bytes),
+                        "{bytes:?}, split {split}: {events:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_csi_keys_keep_subparameters() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[1;5:2A\x1b[1;5:3Q");
+        assert!(
+            matches!(events.as_slice(), [Event::KeyRepeat(up), Event::KeyRelease(f2)]
+                if up.code == KeyCode::Up && up.modifiers == KeyModifiers::CTRL
+                    && f2.code == KeyCode::F(2) && f2.modifiers == KeyModifiers::CTRL),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn test_bare_csi_r_is_f3() {
+        for bytes in [b"\x1b[R".as_slice(), b"\x9bR".as_slice()] {
+            for split in 0..=bytes.len() {
+                let mut decoder = Decoder::new(DecoderFlags::empty());
+                let mut events = decoder.parse(&bytes[..split]);
+                events.extend(decoder.parse(&bytes[split..]));
+                assert_eq!(events.len(), 1);
+                assert!(
+                    matches!(
+                        &events[0],
+                        Event::KeyPress(key)
+                            if key.code == KeyCode::F(3) && key.modifiers.is_empty()
+                    ),
+                    "{events:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_f3_cpr_ambiguity_emits_multi() {
         let mut p = Decoder::new(DecoderFlags::empty());
         let evs = p.parse(b"\x1b[1;5R");
@@ -1814,7 +1989,8 @@ mod tests {
             other => panic!("expected F3, got {:?}", other),
         }
         match &evs[1] {
-            Event::CursorPosition(pos) if pos.x == 4 && pos.y == 0 => {}
+            Event::CursorPosition { position, page }
+                if position.x == 4 && position.y == 0 && *page == 0 => {}
             other => panic!("expected CursorPosition (4, 0), got {:?}", other),
         }
     }
