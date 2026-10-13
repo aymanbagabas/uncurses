@@ -313,6 +313,52 @@ mod tests {
     }
 
     #[test]
+    fn cursor_reports_and_f3_preserve_event_order() {
+        use crate::event::{Key, KeyModifiers};
+        use crate::layout::Position;
+
+        let cpr = |x, y, page| Event::CursorPosition {
+            position: Position::new(x, y),
+            page,
+        };
+        let f3 = |modifiers| Event::KeyPress(Key::new(KeyCode::F(3), modifiers));
+        for prefix in [b"\x1b[".as_slice(), b"\x9b".as_slice()] {
+            for (body, expected) in [
+                ("R", Some(vec![f3(KeyModifiers::empty())])),
+                ("1R", Some(vec![f3(KeyModifiers::empty())])),
+                ("1;5R", Some(vec![f3(KeyModifiers::CTRL), cpr(4, 0, 0)])),
+                ("5;10R", Some(vec![cpr(9, 4, 0)])),
+                ("1;17R", Some(vec![cpr(16, 0, 0)])),
+                ("?1;5R", Some(vec![cpr(4, 0, 0)])),
+                ("?5;10;2R", Some(vec![cpr(9, 4, 2)])),
+                ("?5;10;R", Some(vec![cpr(9, 4, 0)])),
+                ("?1;5;2;3R", Some(vec![cpr(4, 0, 2)])),
+                ("1;2;3R", None),
+                ("?R", None),
+                (">1;5R", None),
+                ("?1;5 R", None),
+            ] {
+                let mut wire = [prefix, body.as_bytes()].concat();
+                let mut expected =
+                    expected.unwrap_or_else(|| vec![Event::UnknownCsi(wire.clone())]);
+                wire.push(b'x');
+                expected.push(Event::KeyPress(Key::new(
+                    KeyCode::Char('x'),
+                    KeyModifiers::empty(),
+                )));
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx);
+                write_bytes(&tx, &wire);
+                for event in expected {
+                    assert!(src.poll(Some(Duration::from_secs(1))).unwrap(), "{wire:?}");
+                    assert_eq!(src.read().unwrap(), event, "{wire:?}");
+                }
+                assert!(src.try_read().is_none(), "{wire:?}");
+            }
+        }
+    }
+
+    #[test]
     fn timeout_returns_none() {
         let (rx, _tx) = make_pipe();
         let mut src = new_reader(rx);

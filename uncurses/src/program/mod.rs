@@ -793,9 +793,9 @@ where
             // Capture the reply to our own `request_origin`. Observing never
             // consumes, so an application that also queries the cursor still
             // sees this event.
-            Event::CursorPosition(pos) if self.origin_queries_pending > 0 => {
+            Event::CursorPosition { position, .. } if self.origin_queries_pending > 0 => {
                 self.origin_queries_pending -= 1;
-                self.origin = self.clip_origin(pos);
+                self.origin = self.clip_origin(position);
             }
             Event::Termcap {
                 recognized,

@@ -216,24 +216,27 @@ fn recognize(
         return Some(Event::FocusOut);
     }
 
-    // Cursor position report: CSI row ; col R. No private, no
-    // intermediate, exactly 2 params. Ambiguous with the modified-F3
-    // form `CSI 1 ; <mod> R` when the cursor is at row 1 (column - 1
-    // fits in the 4-bit modifier mask). In that case emit both events
-    // as a Multi and let the consumer decide.
-    if final_byte == b'R' && no_private && no_intermediate && params.len() == 2 {
+    // CPR: CSI row ; col R. DECXCPR adds `?` and an optional page.
+    // Only standard CPR can also mean modified F3. Emit both events
+    // when column - 1 fits in the 4-bit modifier mask on row 1.
+    if final_byte == b'R' && no_intermediate && params.len() >= 2 {
         let row = params.get_or(0, 1).max(1);
         let col = params.get_or(1, 1).max(1);
-        let cpr = Event::CursorPosition(crate::layout::Position::new(
-            (col - 1) as u16,
-            (row - 1) as u16,
-        ));
-        if row == 1 && col >= 1 && col - 1 <= 15 {
-            let mods = xterm_modifiers(col as u16);
-            let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods).normalized());
-            return Some(Event::Multi(vec![f3, cpr]));
+        let cpr = Event::CursorPosition {
+            position: crate::layout::Position::new((col - 1) as u16, (row - 1) as u16),
+            page: params.get_or(2, 0),
+        };
+        if view.private() == Some(b'?') {
+            return Some(cpr);
         }
-        return Some(cpr);
+        if no_private && params.len() == 2 {
+            if row == 1 && col >= 1 && col - 1 <= 15 {
+                let mods = xterm_modifiers(col as u16);
+                let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods).normalized());
+                return Some(Event::Multi(vec![f3, cpr]));
+            }
+            return Some(cpr);
+        }
     }
 
     // Light/dark color scheme report: CSI ? 997 ; {1|2} n.
@@ -392,8 +395,9 @@ fn recognize(
     }
 
     // Standard final-byte cursor / function-key dispatch. No private,
-    // no intermediate.
-    if no_private && no_intermediate {
+    // no intermediate, at most two parameters. Tilde forms have separate
+    // parameter rules.
+    if no_private && no_intermediate && (final_byte == b'~' || params.len() <= 2) {
         let key_code = match final_byte {
             b'A' => Some(KeyCode::Up),
             b'B' => Some(KeyCode::Down),
@@ -404,6 +408,7 @@ fn recognize(
             b'F' => Some(KeyCode::End),
             b'P' => Some(KeyCode::F(1)),
             b'Q' => Some(KeyCode::F(2)),
+            b'R' => Some(KeyCode::F(3)),
             b'S' => Some(KeyCode::F(4)),
             _ => None,
         };
@@ -435,11 +440,15 @@ fn recognize(
 
 /// Builtin handler for the `CSI Pn ~` family (PgUp, F-keys 5+,
 /// bracketed-paste boundaries, …).
+///
+/// modifyOtherKeys uses exactly three parameters. Other keys accept at most
+/// two, and paste boundaries require exactly one.
 fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
     let code = params.get_or(0, 0);
+    let count = params.len();
 
     // XTerm modifyOtherKeys-2: CSI 27 ; <modifier> ; <code> ~
-    if code == 27 && params.len() >= 3 {
+    if code == 27 && count == 3 {
         let mods = xterm_modifiers(params.get_or(1, 1) as u16);
         let r = params.get_or(2, 0);
         let key_code = match r {
@@ -455,12 +464,15 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
         return Some(Event::KeyPress(key));
     }
 
+    if count > 2 {
+        return None;
+    }
     let mods = csi_modifiers(params);
 
-    if code == 200 {
+    if code == 200 && count == 1 {
         return Some(Event::PasteStart);
     }
-    if code == 201 {
+    if code == 201 && count == 1 {
         return Some(Event::PasteEnd);
     }
     let key_code = u16::try_from(code)

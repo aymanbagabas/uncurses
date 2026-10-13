@@ -53,9 +53,9 @@ const CURSOR_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
 /// carrying both; unwrap that case too.
 fn cursor_position_report(ev: &Event) -> Option<Position> {
     match ev {
-        Event::CursorPosition(pos) => Some(*pos),
+        Event::CursorPosition { position, .. } => Some(*position),
         Event::Multi(events) => events.iter().find_map(|e| match e {
-            Event::CursorPosition(pos) => Some(*pos),
+            Event::CursorPosition { position, .. } => Some(*position),
             _ => None,
         }),
         _ => None,
@@ -1015,8 +1015,13 @@ mod tests {
 
     #[test]
     fn report_from_plain_cursor_position() {
-        let ev = Event::CursorPosition(Position::new(4, 9));
-        assert_eq!(cursor_position_report(&ev), Some(Position::new(4, 9)));
+        for page in [0, 2] {
+            let ev = Event::CursorPosition {
+                position: Position::new(4, 9),
+                page,
+            };
+            assert_eq!(cursor_position_report(&ev), Some(Position::new(4, 9)));
+        }
     }
 
     #[test]
@@ -1025,7 +1030,10 @@ mod tests {
         // the decoder emits both inside a Multi; the report is still found.
         let ev = Event::Multi(vec![
             Event::KeyPress(Key::new(KeyCode::F(3), KeyModifiers::empty())),
-            Event::CursorPosition(Position::new(2, 0)),
+            Event::CursorPosition {
+                position: Position::new(2, 0),
+                page: 0,
+            },
         ]);
         assert_eq!(cursor_position_report(&ev), Some(Position::new(2, 0)));
     }

@@ -51,6 +51,16 @@ fn written(buf: &RefCell<Vec<u8>>) -> String {
     String::from_utf8_lossy(&buf.borrow()).into_owned()
 }
 
+#[test]
+fn extended_cursor_position_request_flushes() {
+    let out = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&out, (80, 24));
+    program.request_extended_cursor_position().unwrap();
+    assert_eq!(written(&out), "\x1b[?6n");
+    program.request_cursor_position().unwrap();
+    assert_eq!(written(&out), "\x1b[?6n\x1b[6n");
+}
+
 impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
     /// Build a program over `buf` and a null input, with a managed area of
     /// `size`. Bypasses [`new`](Program::new) so no fds are needed: nothing
@@ -1437,14 +1447,20 @@ fn origin_captured_from_cursor_position_reply() {
     // The reply is observed (never consumed) and captured as the origin,
     // clipped so the 3-row area stays on program in an 8-row terminal.
     program
-        .observe_event(&Event::CursorPosition(Position::new(2, 7)))
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(2, 7),
+            page: 0,
+        })
         .unwrap();
     assert_eq!(program.origin_queries_pending, 0);
     assert_eq!(program.origin(), Position::new(2, 5));
 
     // A later stray CursorPosition (no request pending) is ignored.
     program
-        .observe_event(&Event::CursorPosition(Position::new(0, 0)))
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(0, 0),
+            page: 0,
+        })
         .unwrap();
     assert_eq!(program.origin(), Position::new(2, 5));
 }
@@ -1461,10 +1477,16 @@ fn a_burst_of_origin_requests_keeps_the_last_reply() {
     // A single flag would keep the first reply and drop the second, leaving
     // the origin at the position the drag started from.
     program
-        .observe_event(&Event::CursorPosition(Position::new(0, 4)))
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(0, 4),
+            page: 0,
+        })
         .unwrap();
     program
-        .observe_event(&Event::CursorPosition(Position::new(0, 9)))
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(0, 9),
+            page: 0,
+        })
         .unwrap();
     assert_eq!(program.origin_queries_pending, 0);
     assert_eq!(program.origin(), Position::new(0, 9));
@@ -1480,18 +1502,24 @@ fn an_unread_event_is_not_observed_a_second_time() {
     program.window_cells = Some(Size::new(10, 20));
     program.request_origin().unwrap();
     program
-        .observe_event(&Event::CursorPosition(Position::new(0, 4)))
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(0, 4),
+            page: 0,
+        })
         .unwrap();
     assert_eq!(program.origin_queries_pending, 0);
 
     // A second request is now in flight, and the app hands the spent reply
     // back. Reading it again must not consume that request.
     program.request_origin().unwrap();
-    program.unread_event(Event::CursorPosition(Position::new(0, 4)));
+    program.unread_event(Event::CursorPosition {
+        position: Position::new(0, 4),
+        page: 0,
+    });
     assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
     assert!(matches!(
         program.read_event().unwrap(),
-        Event::CursorPosition(_)
+        Event::CursorPosition { .. }
     ));
     assert_eq!(program.origin_queries_pending, 1);
 }
@@ -1532,23 +1560,33 @@ fn mouse_pixels_map_to_cells_without_running_past_the_grid() {
 #[cfg(unix)]
 #[test]
 fn a_synchronous_read_observes_without_a_second_call() {
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let buf = RefCell::new(Vec::new());
-    let mut program = Program::for_test_with_input(&buf, (10, 3), reader);
-    program.window_cells = Some(Size::new(10, 20));
-    program.request_origin().unwrap();
+    for (wire, expected_page) in [
+        (b"\x1b[5;3R".as_slice(), 0),
+        (b"\x1b[?5;3R", 0),
+        (b"\x1b[?5;3;2R", 2),
+    ] {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test_with_input(&buf, (10, 3), reader);
+        program.window_cells = Some(Size::new(10, 20));
+        program.request_origin().unwrap();
 
-    writer.write_all(b"\x1b[5;3R").unwrap();
-    drop(writer);
+        writer.write_all(wire).unwrap();
+        drop(writer);
 
-    let ev = program.read_event().unwrap();
-    assert!(matches!(ev, Event::CursorPosition(_)), "{ev:?}");
-    // No observe_event call here on purpose.
-    assert_eq!(
-        program.origin_queries_pending, 0,
-        "the read did not observe"
-    );
-    assert_eq!(program.origin(), Position::new(2, 4));
+        let ev = program.read_event().unwrap();
+        assert!(
+            matches!(ev, Event::CursorPosition { position, page }
+                if position == Position::new(2, 4) && page == expected_page),
+            "{ev:?}"
+        );
+        // No observe_event call here on purpose.
+        assert_eq!(
+            program.origin_queries_pending, 0,
+            "the read did not observe"
+        );
+        assert_eq!(program.origin(), Position::new(2, 4));
+    }
 }
 
 #[test]
@@ -1636,7 +1674,10 @@ fn request_origin_parks_the_cursor_and_asks_where_it_landed() {
     // The reply is captured as the origin, and observing stays pure.
     buf.borrow_mut().clear();
     program
-        .observe_event(&Event::CursorPosition(Position::new(2, 5)))
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(2, 5),
+            page: 0,
+        })
         .unwrap();
     assert_eq!(program.origin(), Position::new(2, 5));
     assert_eq!(program.origin_queries_pending, 0);

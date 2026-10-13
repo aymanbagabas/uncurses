@@ -991,9 +991,25 @@ impl<I: Input, O: Write> Program<I, O> {
 
     /// Request the cursor position (`CSI 6 n`). Reply:
     /// [`Event::CursorPosition`](crate::event::Event::CursorPosition).
+    ///
+    /// For a reply distinct from modified F3, use
+    /// [`request_extended_cursor_position`](Self::request_extended_cursor_position)
+    /// on terminals that support DECXCPR.
     pub fn request_cursor_position(&mut self) -> io::Result<()> {
         self.screen
             .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
+        self.screen.flush()
+    }
+
+    /// Request the extended cursor position (`CSI ? 6 n`) and flush.
+    ///
+    /// DECXCPR replies produce [`Event::CursorPosition`](crate::event::Event::CursorPosition)
+    /// with zero-based cell coordinates and a one-based page number when
+    /// reported. An absent page is zero. The private reply distinguishes cursor
+    /// reports from modified F3.
+    pub fn request_extended_cursor_position(&mut self) -> io::Result<()> {
+        self.screen
+            .write_all(crate::ansi::status::REQUEST_EXTENDED_CURSOR_POSITION)?;
         self.screen.flush()
     }
 

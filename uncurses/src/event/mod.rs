@@ -267,9 +267,20 @@ pub enum Event {
     PasteChunk(Vec<u8>),
 
     // -- Position / device attrs --------------------------------------------
-    /// Cursor position report (CPR). Coordinates are zero-based (the
+    /// Cursor position report (CPR or DECXCPR). Coordinates are zero-based (the
     /// 1-based wire form is normalized when parsed).
-    CursorPosition(crate::layout::Position),
+    ///
+    /// DECXCPR replies use `CSI ? row ; column R` or
+    /// `CSI ? row ; column ; page R`. The decoder retains the page number
+    /// and ignores additional parameters after it. These private replies
+    /// always produce a single cursor event, even at positions that make
+    /// standard CPR ambiguous with modified F3.
+    CursorPosition {
+        /// Zero-based cell coordinates.
+        position: crate::layout::Position,
+        /// One-based page number, or zero when absent.
+        page: u32,
+    },
     /// Primary device attributes (DA1) — list of decoded numeric attributes.
     PrimaryDeviceAttributes(Vec<Option<u32>>),
     /// Secondary device attributes (DA2).

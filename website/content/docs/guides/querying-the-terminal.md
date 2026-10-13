@@ -138,6 +138,14 @@ scan the `request_*` methods on
 [`Program`](/api/uncurses/program/struct.Program.html) in the API
 reference; each one documents the exact `Event` variant used for its reply.
 
+For cursor reports distinct from modified F3, use
+`program.request_extended_cursor_position()?` on terminals that support DECXCPR.
+The reply arrives as `Event::CursorPosition { position, page }`.
+`position` holds zero-based cell coordinates.
+`page` holds the reported one-based page number, or zero when absent.
+`request_cursor_position()` requests standard CPR.
+Run `cargo run --example query -- --extended` to try the extended request.
+
 ## Extra queries in the capability batch
 
 If you want your own query to share the Primary DA sentinel, pass its bytes as
