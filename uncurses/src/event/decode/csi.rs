@@ -33,8 +33,9 @@ use super::DecoderFlags;
 use super::kitty;
 use super::result::ParseResult;
 use super::util::{
-    ControlSequence, Params, csi_kitty_phase, csi_modifiers, intro_prefix_len, key_event_for_phase,
-    key_with_mods, lookup_legacy_key, remap_tilde, tilde_code_to_keycode, xterm_modifiers,
+    ControlSequence, Framing, Params, csi_kitty_phase, csi_modifiers, intro_prefix_len,
+    key_event_for_phase, key_with_mods, lookup_legacy_key, remap_tilde, tilde_code_to_keycode,
+    xterm_modifiers,
 };
 use crate::event::mouse::{
     decode_sgr_mouse, decode_urxvt_mouse, decode_utf8_mouse, decode_x10_mouse,
@@ -49,62 +50,49 @@ impl Decoder {
             return ParseResult::Incomplete;
         }
 
-        // Find the final byte (0x40-0x7e)
-        let mut i = prefix_len;
-        let mut has_private = false;
-        if i < buf.len() && (buf[i] == b'?' || buf[i] == b'<' || buf[i] == b'>' || buf[i] == b'=') {
-            has_private = true;
-            i += 1;
-        }
-
-        while i < buf.len() {
-            let b = buf[i];
-            if (0x40..=0x7e).contains(&b) {
-                // Found final byte
-                let seq = &buf[prefix_len..=i];
-                let consumed = i + 1;
-                return self.dispatch_csi(buf, seq, has_private, consumed);
+        // One walk answers all of it. The parser reads to the final byte
+        // whether or not the regions before it name a function, so where the
+        // sequence ends and what it means come back together and the body is
+        // not walked twice.
+        match ControlSequence::frame(&buf[prefix_len..]) {
+            Framing::Sequence(seq, rest) => self.dispatch_csi(buf, seq, buf.len() - rest.len()),
+            Framing::Unnamed(_, rest) => {
+                // Framed, but the regions name no function. URxvt terminates
+                // some keys with `$`, which is an intermediate byte, so the
+                // legacy table gets a look before this is called unknown.
+                let consumed = buf.len() - rest.len();
+                let raw = &buf[..consumed];
+                let evt = lookup_legacy_key(raw, self.flags)
+                    .map(Event::KeyPress)
+                    .unwrap_or_else(|| Event::UnknownCsi(raw.to_vec()));
+                ParseResult::Event(evt, consumed)
             }
-            if !((0x30..=0x3f).contains(&b) || b == b';' || b == b':') {
-                // Intermediate byte
-                if !(0x20..=0x2f).contains(&b) {
-                    // Invalid
-                    return ParseResult::None(i + 1);
-                }
-            }
-            i += 1;
+            // A byte outside every region, so there is no sequence here to
+            // end. It goes with the bytes it broke: it arrived as part of what
+            // looked like a sequence, and reading it as itself afterwards
+            // would deliver a control character the application never had
+            // typed at it.
+            Framing::Invalid(rest) => ParseResult::None(buf.len() - rest.len() + 1),
+            // The grammar ran out of bytes without reaching a final one. URxvt
+            // ends some keys with an intermediate instead of a final byte, so
+            // a body that stops there may be one of those rather than a
+            // sequence still arriving. They are the exception, so they are
+            // asked about last: the table is what knows which ones exist, and
+            // a body it does not name is simply incomplete.
+            Framing::Incomplete => match lookup_legacy_key(buf, self.flags) {
+                Some(key) => ParseResult::Event(Event::KeyPress(key), buf.len()),
+                None => ParseResult::Incomplete,
+            },
         }
-
-        // The grammar ran out of bytes without reaching a final one. URxvt ends
-        // some keys with an intermediate instead of a final byte, so a body
-        // that stops there may be one of those rather than a sequence still
-        // arriving. They are the exception, so they are asked about last: the
-        // table is what knows which ones exist, and a body it does not name is
-        // simply incomplete.
-        if let Some(key) = lookup_legacy_key(buf, self.flags) {
-            return ParseResult::Event(Event::KeyPress(key), buf.len());
-        }
-
-        ParseResult::Incomplete
     }
 
     pub(super) fn dispatch_csi(
         &self,
         buf: &[u8],
-        seq: &[u8],
-        has_private: bool,
+        view: ControlSequence<'_>,
         consumed: usize,
     ) -> ParseResult {
-        let Some((view, _)) = ControlSequence::parse(seq) else {
-            // Not a sequence ECMA-48 would recognize. URxvt terminates some
-            // keys with `$`, which is an intermediate byte, so the legacy
-            // table still gets a look before this is called unknown.
-            let raw = &buf[..consumed];
-            let evt = lookup_legacy_key(raw, self.flags)
-                .map(Event::KeyPress)
-                .unwrap_or_else(|| Event::UnknownCsi(raw.to_vec()));
-            return ParseResult::Event(evt, consumed);
-        };
+        let has_private = view.private().is_some();
         let final_byte = view.final_byte();
 
         // These two dispatch inline, above `recognize`, so they repeat the
@@ -168,6 +156,20 @@ fn recognize(
 ) -> Option<Event> {
     let final_byte = view.final_byte();
     let params = view.params();
+
+    // A private-use byte inside the parameter string leaves the sequence
+    // structurally sound and its meaning undefined, so none of the functions
+    // below can claim it. Every one of them reads particular groups and would
+    // otherwise read the numbers around the byte as though it had not been
+    // sent, which is how `CSI 1 ? ; 2 A` came to be answered as shift with up.
+    //
+    // The byte at the head of the string is a different thing. It marks which
+    // private convention the sequence belongs to, the sequence carries it
+    // separately, and the functions below match on it.
+    if params.has_private_use() {
+        return None;
+    }
+
     let intermediate = view.intermediate();
     let no_private = view.private().is_none();
     let no_intermediate = intermediate.is_none();
