@@ -71,6 +71,17 @@ renderer, because they all share the same
 [surface]({{< relref "surfaces.md" >}}) interface. `Screen` also accepts raw
 bytes written straight to it, and keeps them in order with its own output.
 
+## Regions
+
+A screen also owns rectangular content that needs its own terminal representation.
+Sized text uses this facility for headings and smaller text.
+Stable keys let the screen identify each placement across frames.
+
+The screen combines regions and ordinary cells in drawing order.
+A later cell write appears over the affected part of a region.
+See the [sized text guide]({{< relref "../guides/sized-text.md" >}}) for examples.
+The [image crate]({{< relref "images.md" >}}) uses the same facility for native pictures.
+
 ## Inline or fullscreen
 
 A `Screen` starts inline: it owns a band of rows in the normal terminal window,

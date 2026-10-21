@@ -10,6 +10,67 @@ use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 
 impl Renderer {
+    /// Diff exposed intervals only. ECH and REP keep their exact footprints;
+    /// row-wide shifts and erases belong to the unprotected row path.
+    fn transform_region_line(
+        &mut self,
+        out: &mut Vec<u8>,
+        new_buf: &RenderBuffer,
+        mut old: Option<&mut [Cell]>,
+        y: u16,
+        first_diff: usize,
+    ) -> io::Result<()> {
+        let line = new_buf.line(y).expect("validated row");
+        let tail = self.uncertain_bail(line, old.as_deref(), first_diff);
+        let end = tail.unwrap_or(line.len());
+        let mut x = 0;
+        let mut covered = 0;
+        while x < end {
+            while self
+                .region_coverage
+                .row(y)
+                .get(covered)
+                .is_some_and(|span| usize::from(span.end) <= x)
+            {
+                covered += 1;
+            }
+            let next = self
+                .region_coverage
+                .row(y)
+                .get(covered)
+                .map(|span| (usize::from(span.start), usize::from(span.end)));
+            if let Some((start, stop)) = next
+                && start <= x
+            {
+                x = stop;
+                continue;
+            }
+            let stop = next.map_or(end, |(start, _)| start.min(end));
+            let first =
+                (x..stop).find(|&i| old.as_deref().and_then(|l| l.get(i)) != Some(&line[i]));
+            if let Some(first) = first {
+                let first = super::emit::cluster_start(line, first).max(x);
+                let last = (first..stop)
+                    .rfind(|&i| old.as_deref().and_then(|l| l.get(i)) != Some(&line[i]))
+                    .expect("first differing cell");
+                let last = super::emit::cluster_end(line, last).min(stop - 1);
+                self.move_to(out, new_buf, y, first as u16)?;
+                self.put_range(out, new_buf, old.as_deref(), line, y, first, last)?;
+                if let Some(old) = old.as_deref_mut() {
+                    old[first..=last].clone_from_slice(&line[first..=last]);
+                }
+            }
+            x = stop;
+        }
+        if let Some(tail) = tail {
+            self.repaint_tail(out, new_buf, line, y, tail)?;
+            if let Some(old) = old {
+                old[tail..].clone_from_slice(&line[tail..]);
+            }
+        }
+        Ok(())
+    }
+
     /// Transform a single line — the core diff algorithm.
     ///
     /// Compares old vs new cells and writes the minimal escape sequence to update.
@@ -103,6 +164,15 @@ impl Renderer {
         if first_diff == width {
             return Ok(None);
         }
+        let protected_end = self
+            .region_coverage
+            .row(y)
+            .last()
+            .map_or(0, |span| usize::from(span.end));
+        if first_diff < protected_end {
+            self.transform_region_line(out, new_buf, cur_line, y, first_diff)?;
+            return Ok(None);
+        }
 
         // === Step 0: give up on the diff at a cluster of uncertain width ===
         //
@@ -172,7 +242,9 @@ impl Renderer {
                 copy_from = first_cell;
                 let leading = n_first - o_first;
                 const EL1_COST: usize = 4; // ESC [ 1 K
-                if EL1_COST < leading {
+                if EL1_COST < leading
+                    && !self.region_intersects(crate::layout::Rect::new(0, y, n_first as u16, 1))
+                {
                     if n_first >= width {
                         self.move_to(out, new_buf, y, 0)?;
                         self.update_pen(out, Some(leading_blank))?;
@@ -371,6 +443,11 @@ impl Renderer {
                 matches!((a, b), (Some(x), Some(y)) if x == y)
             }
             while cells_eq(cell_at_isize(new_line, n_lc), cur_at_isize(o_lc)) {
+                if protected_end > 0
+                    && (n_lc <= protected_end as isize || o_lc <= protected_end as isize)
+                {
+                    break;
+                }
                 if !cells_eq(cell_at_isize(new_line, n_lc - 1), cur_at_isize(o_lc - 1)) {
                     break;
                 }

@@ -81,7 +81,7 @@ impl Renderer {
     /// [`Renderer::width_is_uncertain`] can only hold under
     /// [`WidthMode::Wc`], so any other policy skips the scan rather than
     /// walking the row to a foregone answer.
-    pub(super) fn uncertain_from(&self, line: &[Cell]) -> Option<usize> {
+    pub(in crate::renderer) fn uncertain_from(&self, line: &[Cell]) -> Option<usize> {
         if self.width_mode != WidthMode::Wc {
             return None;
         }

@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::buffer::SurfaceMut;
 use crate::event::{ProgramStatusCapabilities, SettingReport};
 use crate::text::TextSurface;
 
@@ -59,6 +60,98 @@ fn extended_cursor_position_request_flushes() {
     assert_eq!(written(&out), "\x1b[?6n");
     program.request_cursor_position().unwrap();
     assert_eq!(written(&out), "\x1b[?6n\x1b[6n");
+}
+
+#[test]
+fn regions_cleanup_precedes_screen_switch_after_unrendered_clear() {
+    let out = RefCell::new(Vec::new());
+    let mut p = Program::for_test(&out, (40, 8));
+    p.enter_alt_screen().unwrap();
+    p.screen
+        .set_sized_text(
+            "title",
+            (2, 2),
+            "Build",
+            crate::style::Style::default(),
+            crate::screen::TextSizing::default(),
+        )
+        .unwrap();
+    p.screen.render().unwrap();
+    out.borrow_mut().clear();
+    p.screen.clear();
+    p.exit_alt_screen().unwrap();
+    let bytes = written(&out);
+    let cleanup = bytes.find("\x1b[X").unwrap();
+    let switch = bytes.find("\x1b[?1049l").unwrap();
+    assert!(cleanup < switch, "{bytes:?}");
+}
+
+#[test]
+fn regions_survive_desired_state_handoff_and_restore() {
+    let out = RefCell::new(Vec::new());
+    let mut p = Program::for_test(&out, (40, 8));
+    p.enter_alt_screen().unwrap();
+    p.screen
+        .set_sized_text(
+            "title",
+            (2, 2),
+            "Build",
+            crate::style::Style::default(),
+            crate::screen::TextSizing::default(),
+        )
+        .unwrap();
+    p.screen.render().unwrap();
+    p.reset().unwrap();
+    p.screen.flush().unwrap();
+    out.borrow_mut().clear();
+    p.restore().unwrap();
+    p.screen.render().unwrap();
+    assert!(written(&out).contains("]66;"));
+}
+
+#[test]
+fn regions_cleanup_error_still_flushes_terminal_restoration() {
+    use crate::layout::{Rect, Size};
+    use crate::screen::{PreparedRegion, Region, RegionContext, RegionOp};
+
+    struct FailingCleanup;
+
+    impl Region for FailingCleanup {
+        fn same(&self, other: &dyn Region) -> bool {
+            other.downcast_ref::<Self>().is_some()
+        }
+
+        fn prepare(&self, _: Size, _: RegionContext) -> io::Result<PreparedRegion> {
+            Ok(PreparedRegion {
+                draw: vec![RegionOp::Write(b"X".to_vec())],
+                erase: vec![RegionOp::Write(b"discard this cleanup".to_vec())],
+            })
+        }
+    }
+
+    for teardown in [false, true] {
+        let out = RefCell::new(Vec::new());
+        let mut p = Program::for_test(&out, (40, 8));
+        p.enter_alt_screen().unwrap();
+        p.screen
+            .set_region("bad", Rect::new(2, 2, 1, 1), FailingCleanup)
+            .unwrap();
+        p.screen.render().unwrap();
+        p.screen.resize((1, 1));
+        out.borrow_mut().clear();
+        let result = if teardown {
+            p.teardown()
+        } else {
+            p.exit_alt_screen()
+        };
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "region cleanup after resize requires clipped erase operations"
+        );
+        let bytes = written(&out);
+        assert!(bytes.contains("\x1b[?1049l"), "{bytes:?}");
+        assert!(!bytes.contains("discard this cleanup"), "{bytes:?}");
+    }
 }
 
 impl<'a> Program<std::io::PipeReader, TestOut<'a>> {

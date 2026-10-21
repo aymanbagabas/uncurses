@@ -90,12 +90,15 @@
 //!
 //! # Output buffering and flushing
 //!
-//! Painting is infallible. Drawing cells with
+//! Ordinary cell painting is infallible. Drawing cells with
 //! [`set_str`](text::TextSurface::set_str),
 //! [`set_cell`](screen::Screen::set_cell), and friends only updates an
 //! in-memory frame; nothing is written until you call
 //! [`render`](screen::Screen::render), which diffs that frame against the
 //! terminal and writes just the changed cells.
+//! [`Screen`](screen::Screen) also owns keyed [`Region`](screen::Region)
+//! content, including [`SizedText`](screen::SizedText). Region methods validate
+//! their content and geometry before frame output.
 //!
 //! Mode changes are applied immediately. Entering the alternate screen,
 //! hiding the cursor, enabling mouse reporting, setting the title, and similar

@@ -45,7 +45,7 @@ impl<O: Write> Screen<O> {
     }
 
     fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
-        self.eaw_wide = eaw_wide;
+        self.set_eaw_wide(eaw_wide);
         self
     }
 
@@ -150,6 +150,35 @@ fn default_width_mode_is_wc() {
 fn with_eaw_wide_sets_eaw_wide() {
     let screen = Screen::for_test(Vec::new(), (20, 1)).with_eaw_wide(true);
     assert!(screen.eaw_wide());
+}
+
+#[test]
+fn ambiguous_width_changes_repaint_and_preserve_buffered_widths_until_redraw() {
+    let mut screen = Screen::new(Vec::new(), (5, 1));
+    for eaw_wide in [false, true, false] {
+        screen.set_eaw_wide(eaw_wide);
+        screen.clear();
+        screen.set_str((0, 0), "\u{2580}X", Style::default());
+        let width = if eaw_wide { 2 } else { 1 };
+        assert_eq!(screen.cell(Position::ORIGIN).unwrap().width(), width);
+        assert_eq!(
+            screen.cell((u16::from(width), 0).into()).unwrap().content(),
+            "X"
+        );
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+
+        screen.set_eaw_wide(eaw_wide);
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+
+        screen.set_eaw_wide(!eaw_wide);
+        assert!(screen.writer().is_empty());
+        assert_eq!(screen.cell(Position::ORIGIN).unwrap().width(), width);
+        screen.render().unwrap();
+        assert!(screen.writer().contains(&b'X'));
+        screen.writer_mut().clear();
+    }
 }
 
 #[test]

@@ -191,6 +191,36 @@ mod tests {
     }
 
     #[test]
+    fn regions_allow_scoped_scroll_and_block_larger_idl_footprints() {
+        for shift in [-2, 2] {
+            for csr in [false, true] {
+                let opts = Optimizations::IL_DL
+                    | if csr {
+                        Optimizations::CSR
+                    } else {
+                        Optimizations::empty()
+                    };
+                for region_y in [3, 6] {
+                    let mut renderer = make_renderer(10, 8, opts);
+                    renderer.set_region_rects(
+                        [crate::layout::Rect::new(2, region_y, 2, 1)].into_iter(),
+                    );
+                    let mut new_buf = RenderBuffer::new(10, 8);
+                    new_buf.clear_touched();
+                    let mut out = Vec::new();
+                    scrolln(&mut out, &mut renderer, &mut new_buf, shift, 2, 5, 7).unwrap();
+                    let allowed = csr && region_y == 6;
+                    assert_eq!(!out.is_empty(), allowed);
+                    assert_eq!(new_buf.has_changes(), allowed);
+                    if allowed {
+                        assert!(out.windows(6).any(|b| b == b"\x1b[3;6r"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn scrolln_down_il_dl_pairs_dl_and_il_in_partial_region() {
         let opts = Optimizations::default()
             .union(Optimizations::IL_DL)

@@ -29,6 +29,14 @@ pub(super) fn scrolln(
     if n == 0 || top > bot || bot > max_y {
         return Ok(());
     }
+    if renderer.region_intersects(crate::layout::Rect::new(
+        0,
+        top as u16,
+        new_buf.width(),
+        (bot - top + 1) as u16,
+    )) {
+        return Ok(());
+    }
 
     let mut v;
     if n > 0 {
@@ -41,7 +49,15 @@ pub(super) fn scrolln(
             ansi::screen::write_reset_scroll_region(out)?;
             renderer.invalidate_cursor();
         }
-        if !v && renderer.opts.contains(Optimizations::IL_DL) {
+        if !v
+            && renderer.opts.contains(Optimizations::IL_DL)
+            && !renderer.region_intersects(crate::layout::Rect::new(
+                0,
+                top as u16,
+                new_buf.width(),
+                (max_y - top + 1) as u16,
+            ))
+        {
             v = scroll_idl(out, renderer, new_buf, amt, top, bot + 1 - amt as usize)?;
         }
     } else {
@@ -54,7 +70,15 @@ pub(super) fn scrolln(
             ansi::screen::write_reset_scroll_region(out)?;
             renderer.invalidate_cursor();
         }
-        if !v && renderer.opts.contains(Optimizations::IL_DL) {
+        if !v
+            && renderer.opts.contains(Optimizations::IL_DL)
+            && !renderer.region_intersects(crate::layout::Rect::new(
+                0,
+                top as u16,
+                new_buf.width(),
+                (max_y - top + 1) as u16,
+            ))
+        {
             v = scroll_idl(out, renderer, new_buf, amt, bot + 1 - amt as usize, top)?;
         }
     }

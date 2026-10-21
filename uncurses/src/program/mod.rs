@@ -923,8 +923,10 @@ where
     /// Hand the terminal back: reset every staged mode and the managed area to defaults, and flush. The
     /// caller restores the saved raw-mode state afterward.
     fn teardown(&mut self) -> io::Result<()> {
-        self.reset()?;
-        self.screen.flush()
+        let reset = self.reset();
+        let flushed = self.screen.flush();
+        reset?;
+        flushed
     }
 }
 

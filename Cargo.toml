@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["uncurses", "uncurses-ratatui", "examples"]
+members = ["uncurses", "uncurses-ratatui", "uncurses-image", "examples"]
 
 [workspace.package]
 version = "0.0.7"
@@ -10,6 +10,7 @@ license = "MIT"
 repository = "https://github.com/aymanbagabas/uncurses"
 
 [workspace.dependencies]
+image = { version = "0.25.10", default-features = false }
 bitflags = "2"
 compact_str = "0.8"
 rustc-hash = "2"

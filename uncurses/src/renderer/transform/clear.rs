@@ -54,8 +54,16 @@ impl Renderer {
         // disjoint from `self.cur_buf` reads below, so the loop runs
         // without cloning the cell.
         {
+            let coverage = self
+                .region_barriers
+                .as_ref()
+                .unwrap_or(&self.region_coverage);
             let blank: &Cell = self.cur.current_blank();
             for y in (0..height).rev() {
+                if !coverage.row(y).is_empty() {
+                    last_nonblank = y + 1;
+                    break;
+                }
                 let new_all_blank = match new_buf.line(y) {
                     Some(l) => l.iter().all(|c| cells_equal_blank(c, blank)),
                     None => true,

@@ -208,7 +208,7 @@ impl RenderBuffer {
     /// either half left standing has to be repainted even though it sits
     /// outside the region asked for. The row is read before the shift, which
     /// is what destroys the evidence.
-    fn shift_span(&self, pos: Position, bounds_right: u16) -> (u16, u16) {
+    pub(crate) fn shift_span(&self, pos: Position, bounds_right: u16) -> (u16, u16) {
         let last = bounds_right.min(self.width()).saturating_sub(1);
         (
             self.owned_from(pos),
