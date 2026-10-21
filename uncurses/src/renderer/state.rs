@@ -18,7 +18,7 @@ use crate::text::WidthMode;
 /// "unknown" bits that say whether each coordinate of `pos` is a
 /// trustworthy reflection of where the terminal cursor actually sits.
 #[derive(Debug, Clone)]
-pub(super) struct Cursor {
+pub(crate) struct Cursor {
     /// Active style applied to subsequent glyph output, including any
     /// open hyperlink. Kept in sync with the terminal's SGR + OSC 8
     /// state by [`Renderer::update_pen`]. Mutate via
@@ -185,8 +185,9 @@ impl Default for Cursor {
 pub struct Renderer {
     /// The current (on-screen) buffer state.
     pub(super) cur_buf: Option<RenderBuffer>,
-    /// Staging buffer: equals the caller's front buffer after
-    /// [`Renderer::sync_front`], but only the cells that genuinely
+    /// Staging buffer: the caller's cells after region coverage is projected.
+    /// Without regions it equals the front buffer after [`Renderer::sync_front`].
+    /// Only the cells that genuinely
     /// differ from `cur_buf` carry `touched` flags. The diff pipeline
     /// (prepare / diff / finalize) consumes this, so rows the caller
     /// touched without actually changing are never re-emitted.
@@ -250,6 +251,12 @@ pub struct Renderer {
     /// differently, and so have to be repainted rather than diffed. See
     /// [`Renderer::width_is_uncertain`].
     pub(super) width_mode: WidthMode,
+    pub(crate) regions: Option<Box<super::regions::Regions>>,
+    pub(super) region_coverage: super::regions::Coverage,
+    /// Retained physical blocks during a frame; target coverage also masks
+    /// blocks that have not been drawn yet.
+    pub(super) region_barriers: Option<super::regions::Coverage>,
+    pub(super) cursor_move_row: u16,
 }
 
 impl Renderer {
@@ -285,6 +292,10 @@ impl Renderer {
             tabs: tabstops::TabStops::default_for(0),
             hashtab: Vec::new(),
             width_mode: WidthMode::default(),
+            regions: None,
+            region_coverage: super::regions::Coverage::default(),
+            region_barriers: None,
+            cursor_move_row: 0,
         }
     }
 }

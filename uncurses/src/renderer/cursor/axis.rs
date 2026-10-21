@@ -434,6 +434,7 @@ impl Renderer {
         // cost floor already loses, keeping the planner allocation- and
         // iteration-free on long forward moves.
         if (n as usize) < cuf
+            && !self.region_intersects(crate::layout::Rect::new(fx, self.cursor_move_row, n, 1))
             && let Some(line) = overwrite_line
             && let Some(ow) = cost::overwrite_cost(line, self.cur.style(), fx, tx)
             && ow < best_cost

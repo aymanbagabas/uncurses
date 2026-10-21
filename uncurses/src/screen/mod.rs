@@ -75,6 +75,16 @@
 //!    └─────────────────────────────┘
 //! ```
 
+mod regions;
+mod sized_text;
+
+#[doc(inline)]
+pub use regions::{
+    AnchoredRegion, PreparedRegion, Region, RegionCells, RegionContext, RegionOp, RegionPlacement,
+    RegionResource,
+};
+#[doc(inline)]
+pub use sized_text::{SizedText, TextSizing};
 #[cfg(test)]
 mod tests;
 
@@ -86,7 +96,6 @@ pub use crate::renderer::Optimizations;
 
 use std::io::{self, Write};
 
-use crate::ansi::mode;
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::layout::{Position, Rect, Size};
@@ -216,12 +225,43 @@ impl<W: Write> Screen<W> {
     /// A continuation is placed by the wide cell that owns it, so one passed
     /// here is ignored and the column keeps the value its owner gave it.
     pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
-        self.front_buf.set_cell(pos.into(), cell);
+        self.refresh_anchored_regions();
+        let pos = pos.into();
+        if !cell.is_continuation()
+            && let Some(regions) = &mut self.renderer.regions
+            && regions.has_coverage_at(pos.y)
+            && let Some(previous) = self.front_buf.cell(pos)
+        {
+            let width = u16::from(cell.width().max(previous.width()).max(1));
+            let (first, last) = self.front_buf.shift_span(pos, pos.x.saturating_add(width));
+            regions.overwrite(
+                Rect::new(first, pos.y, last - first + 1, 1),
+                &mut self.front_buf,
+            );
+        }
+        self.front_buf.set_cell(pos, cell);
     }
 
     /// Borrow the cell at `pos` mutably, marking its columns touched.
+    ///
+    /// With regions, this access counts as an ordered text write even if the
+    /// cell stays equal. Its glyph's columns appear over intersecting regions.
+    /// Use `set_cell` when the display width changes.
     pub fn cell_mut(&mut self, pos: impl Into<Position>) -> Option<&mut Cell> {
-        self.front_buf.cell_mut(pos.into())
+        self.refresh_anchored_regions();
+        let pos = pos.into();
+        if let Some(regions) = &mut self.renderer.regions
+            && regions.has_coverage_at(pos.y)
+        {
+            let cell = self.front_buf.cell(pos)?;
+            let end = pos.x.saturating_add(u16::from(cell.width().max(1)));
+            let (first, last) = self.front_buf.shift_span(pos, end);
+            regions.overwrite(
+                Rect::new(first, pos.y, last - first + 1, 1),
+                &mut self.front_buf,
+            );
+        }
+        self.front_buf.cell_mut(pos)
     }
 
     /// The managed area size in cells.
@@ -237,11 +277,33 @@ impl<W: Write> Screen<W> {
     /// there at the end of the frame, inside the same hide/synchronized-output
     /// bracket as the cell diff, so it lands atomically and without flicker.
     pub fn render(&mut self) -> io::Result<()> {
-        let changed = self.renderer.sync_front(&mut self.front_buf);
-        if changed || self.cursor_move_pending() {
-            self.write_frame();
+        self.refresh_anchored_regions();
+        let pending = self.front_buf.has_changes() || self.renderer.frame_pending();
+        let mut regions = if pending {
+            self.renderer.prepare_regions(&self.front_buf)?
+        } else {
+            None
+        };
+        let changed = pending && self.renderer.sync_frame(&mut self.front_buf);
+        if changed
+            || regions.as_ref().is_some_and(|frame| frame.has_output())
+            || self.cursor_move_pending()
+        {
+            let cursor = self.desired_cursor.map(|pos| self.clamp_to_surface(pos));
+            self.renderer.stage_frame(
+                &mut self.out_buf,
+                &self.front_buf,
+                regions.as_mut(),
+                cursor,
+                self.cursor_visible,
+            );
+            if cursor.is_some() {
+                self.cursor_rested_at = cursor;
+            }
         }
-        self.flush()
+        self.flush()?;
+        self.renderer.commit_regions(regions);
+        Ok(())
     }
 
     /// Force a full redraw on the next [`render`](Self::render).
@@ -273,18 +335,28 @@ impl<W: Write> Screen<W> {
     /// Insert `content` into the scrollback above the managed area and flush
     /// it to the writer. Inline this pushes the lines into the terminal's
     /// scrollback; in fullscreen they go into the alternate screen's hidden
-    /// scrollback. The managed area is preserved in place, so no redraw is
-    /// needed and a following [`render`](Self::render) sees no change. An
-    /// empty string is a no-op.
+    /// scrollback. The managed area is preserved in place. With displayed
+    /// regions, the screen repaints the displayed frame after insertion.
+    /// Pending desired edits stay staged for [`render`](Self::render). An
+    /// empty string is a no-op. After a size change, replay uses the new
+    /// viewport when all displayed regions still fit.
     ///
     /// # Errors
     ///
-    /// Returns any error from flushing the inserted lines to the writer.
+    /// Returns an error if a displayed region does not fit the viewport
+    /// or the writer fails.
     pub fn insert_above(&mut self, content: &str) -> io::Result<()> {
         if content.is_empty() {
             return Ok(());
         }
+        if self.renderer.has_displayed_regions() {
+            return self.insert_above_regions(content);
+        }
+        self.stage_insert_above(content);
+        self.flush()
+    }
 
+    fn stage_insert_above(&mut self, content: &str) {
         let width = self.width;
         let height = self.height;
         let y = self.renderer.cursor_position().y;
@@ -324,7 +396,7 @@ impl<W: Write> Screen<W> {
         }
 
         self.renderer.set_cursor_position(Position { y: 0, x: 0 });
-        self.flush()
+        self.cursor_rested_at = None;
     }
 
     // --- Cursor position ------------------------------------------------
@@ -498,6 +570,8 @@ impl<W: Write> Screen<W> {
     ///
     /// An actual change discards the tracked contents, so the next
     /// [`render`](Self::render) is a full repaint.
+    /// With a bare screen, call [`release_regions`](Self::release_regions)
+    /// before switching the terminal buffer. `Program` handles this step.
     ///
     /// [`Program::enter_alt_screen`]: crate::program::Program::enter_alt_screen
     /// [`Program::exit_alt_screen`]: crate::program::Program::exit_alt_screen
@@ -600,6 +674,24 @@ impl<W: Write> Screen<W> {
     /// [`set_grapheme_clusters`](Self::set_grapheme_clusters).
     pub fn grapheme_clusters(&self) -> bool {
         self.grapheme_clusters
+    }
+
+    /// Set the East-Asian Ambiguous width policy for text and image symbols.
+    ///
+    /// When enabled, ambiguous characters occupy two cells. The default is
+    /// one cell. Match this setting to the terminal's width policy.
+    ///
+    /// A change discards the tracked terminal contents and makes the next
+    /// [`render`](Self::render) repaint the screen. Buffered cells retain their
+    /// existing widths, so redraw text and images after a change. Setting the
+    /// current value is a no-op.
+    ///
+    /// Read the policy through [`TextSurface::eaw_wide`].
+    pub fn set_eaw_wide(&mut self, eaw_wide: bool) {
+        if self.eaw_wide != eaw_wide {
+            self.eaw_wide = eaw_wide;
+            self.invalidate();
+        }
     }
 
     /// Enable or disable synchronized-output frame wrapping.
@@ -727,55 +819,6 @@ impl<W: Write> Screen<W> {
 
     // --- Render staging internals ---------------------------------------
 
-    /// Stage a single rendered frame into [`out_buf`](Self::out_buf):
-    /// synchronized-output begin, the renderer's cell diff, the optional
-    /// declarative cursor move, synchronized-output end. Assumes the front
-    /// buffer was synced.
-    ///
-    /// A visible cursor is hidden around the diff so it doesn't dance across
-    /// cells as the renderer repositions it, *unless* synchronized output is
-    /// enabled. A synchronized frame is presented in one step, so the cursor
-    /// never visibly moves mid-frame; the hide/show pair is then skipped, both
-    /// because it is redundant and because toggling DECTCEM every frame resets
-    /// the cursor's blink phase, which reads as flicker. Whether to trust
-    /// synchronized output is the caller's choice via
-    /// [`set_synchronized_output`](Self::set_synchronized_output), not gated on
-    /// detected capabilities.
-    fn write_frame(&mut self) {
-        let bracket_cursor = self.cursor_visible && !self.sync_updates;
-
-        if self.sync_updates {
-            mode::Mode::SYNCHRONIZED_OUTPUT
-                .set(&mut self.out_buf)
-                .unwrap();
-        }
-        if bracket_cursor {
-            mode::Mode::CURSOR_VISIBLE.reset(&mut self.out_buf).unwrap();
-        }
-
-        self.renderer.render_back(&mut self.out_buf).unwrap();
-
-        // Apply the declarative resting position (if any) inside the same
-        // bracket as the cell diff, so the cursor lands atomically.
-        // Sticky: re-applied every frame; move_to no-ops when already there.
-        if let Some(pos) = self.desired_cursor {
-            let pos = self.clamp_to_surface(pos);
-            self.renderer
-                .move_to_resting(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
-                .unwrap();
-            self.cursor_rested_at = Some(pos);
-        }
-
-        if bracket_cursor {
-            mode::Mode::CURSOR_VISIBLE.set(&mut self.out_buf).unwrap();
-        }
-        if self.sync_updates {
-            mode::Mode::SYNCHRONIZED_OUTPUT
-                .reset(&mut self.out_buf)
-                .unwrap();
-        }
-    }
-
     /// Stage a cursor move without flushing. See
     /// [`move_cursor_to`](Self::move_cursor_to).
     pub(crate) fn stage_move_cursor_to(&mut self, target: Position) {
@@ -837,12 +880,18 @@ impl<W: Write> Write for Screen<W> {
     }
 
     /// Drain the staging buffer to the writer and flush it.
+    ///
+    /// Returns the original writer error and discards the staged bytes.
+    /// Partial output can leave terminal state inconsistent with the renderer.
+    /// The caller handles terminal recovery before further output, then calls
+    /// [`invalidate`](Self::invalidate) to request a full repaint.
     fn flush(&mut self) -> io::Result<()> {
         if !self.out_buf.is_empty() {
             #[cfg(debug_assertions)]
             crate::trace::tee_output(&self.out_buf);
-            self.writer.write_all(&self.out_buf)?;
+            let result = self.writer.write_all(&self.out_buf);
             self.out_buf.clear();
+            result?;
         }
         self.writer.flush()
     }
@@ -862,27 +911,121 @@ impl<W: Write> Surface for Screen<W> {
 
 impl<W: Write> SurfaceMut for Screen<W> {
     fn set_cell(&mut self, pos: Position, cell: &Cell) {
-        self.front_buf.set_cell(pos, cell);
+        Screen::set_cell(self, pos, cell);
     }
 
     fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.front_buf.cell_mut(pos)
+        Screen::cell_mut(self, pos)
+    }
+
+    /// Clear the desired text and region declarations for a new frame.
+    ///
+    /// Displayed content stays tracked until `render`. Rebuilding an equal
+    /// frame under the same region keys therefore produces no extra output.
+    /// Callers can also omit this method and update the existing frame.
+    fn clear(&mut self) {
+        self.front_buf.clear();
+        if let Some(regions) = &mut self.renderer.regions {
+            regions.clear();
+        }
+    }
+
+    fn fill(&mut self, cell: &Cell) {
+        if cell.is_continuation() {
+            return;
+        }
+        self.front_buf.fill(cell);
+        if let Some(regions) = &mut self.renderer.regions {
+            regions.clear();
+        }
+    }
+
+    fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
+        self.refresh_anchored_regions();
+        let rect = rect.intersection(self.bounds());
+        if rect.is_empty() || cell.is_continuation() {
+            return;
+        }
+        if rect == self.bounds() {
+            self.fill(cell);
+        } else {
+            if let Some(regions) = &mut self.renderer.regions {
+                for y in rect.top()..rect.bottom() {
+                    let (first, last) = self.front_buf.shift_span((rect.x, y).into(), rect.right());
+                    regions.overwrite(
+                        Rect::new(first, y, last - first + 1, 1),
+                        &mut self.front_buf,
+                    );
+                }
+            }
+            self.front_buf.fill_rect(rect, cell);
+        }
     }
 
     fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        self.refresh_anchored_regions();
         self.front_buf.insert_lines(y, n, bounds_bottom, fill);
+        if n != 0
+            && let Some(regions) = &mut self.renderer.regions
+        {
+            regions.overwrite(
+                Rect::new(0, y, self.width, bounds_bottom.saturating_sub(y)),
+                &mut self.front_buf,
+            );
+        }
     }
 
     fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+        self.refresh_anchored_regions();
         self.front_buf.delete_lines(y, n, bounds_bottom, fill);
+        if n != 0
+            && let Some(regions) = &mut self.renderer.regions
+        {
+            regions.overwrite(
+                Rect::new(0, y, self.width, bounds_bottom.saturating_sub(y)),
+                &mut self.front_buf,
+            );
+        }
     }
 
     fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+        self.refresh_anchored_regions();
+        let span = self
+            .renderer
+            .regions
+            .as_ref()
+            .map(|_| self.front_buf.shift_span(pos, bounds_right));
         self.front_buf.insert_cells(pos, n, bounds_right, fill);
+        if n != 0
+            && pos.x < bounds_right.min(self.width)
+            && let Some(regions) = &mut self.renderer.regions
+            && let Some((first, last)) = span
+        {
+            regions.overwrite(
+                Rect::new(first, pos.y, last.saturating_sub(first) + 1, 1),
+                &mut self.front_buf,
+            );
+        }
     }
 
     fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+        self.refresh_anchored_regions();
+        let span = self
+            .renderer
+            .regions
+            .as_ref()
+            .map(|_| self.front_buf.shift_span(pos, bounds_right));
         self.front_buf.delete_cells(pos, n, bounds_right, fill);
+        if n != 0
+            && pos.x < bounds_right.min(self.width)
+            && let Some(regions) = &mut self.renderer.regions
+            && let Some((first, last)) = span
+        {
+            regions.overwrite(
+                Rect::new(first, pos.y, last.saturating_sub(first) + 1, 1),
+                &mut self.front_buf,
+            );
+        }
     }
 }
 

@@ -117,6 +117,7 @@ impl Renderer {
         overwrite_line: Option<&[Cell]>,
         pen: PenPolicy,
     ) -> io::Result<()> {
+        self.cursor_move_row = to.y;
         if from.y == to.y && from.x == to.x && self.cur.known() {
             return Ok(());
         }

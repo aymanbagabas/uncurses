@@ -75,7 +75,7 @@ jobs:
           echo "Base URL: $url"
 
       - name: Build API reference (rustdoc)
-        run: cargo doc --no-deps --all-features -p uncurses -p uncurses-ratatui
+        run: cargo doc --no-deps --all-features -p uncurses -p uncurses-ratatui -p uncurses-image
 
       - name: Build site
         working-directory: website

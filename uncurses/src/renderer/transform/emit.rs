@@ -299,7 +299,7 @@ impl Renderer {
     /// operation; otherwise the cursor naturally landed at `end + 1`
     /// and no move is required.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn put_range(
+    pub(in crate::renderer) fn put_range(
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,

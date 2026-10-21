@@ -13,8 +13,12 @@
 
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
+use crate::renderer::regions::Coverage;
 
 use crate::buffer::Surface;
+use crate::cell::Cell;
+#[cfg(any(test, uncurses_bench))]
+use crate::layout::Rect;
 
 impl Renderer {
     /// Sync a caller-facing buffer into the renderer staging buffer.
@@ -37,6 +41,17 @@ impl Renderer {
     /// continuation cells, steps by wide-cell width, and clears
     /// `front`'s touched flags before returning.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
+        self.sync_front_covered(front, &Coverage::default())
+    }
+
+    /// Project covered glyphs as styled spaces into the existing staging buffer.
+    /// The source keeps its cells, including text beneath regions.
+    /// Region lookups advance by covered runs rather than by individual cells.
+    pub(crate) fn sync_front_covered(
+        &mut self,
+        front: &mut RenderBuffer,
+        coverage: &Coverage,
+    ) -> bool {
         let width = front.width();
         let height = front.height();
         if self.back_buf.width() != width || self.back_buf.height() != height {
@@ -49,12 +64,17 @@ impl Renderer {
             // [`crate::screen::Screen::resize`]) to drive a full
             // repaint when dimensions change.
             self.back_buf.clear_touched();
+            if self.cur_buf.is_some() {
+                self.request_clear();
+            }
         }
 
         for y in 0..height {
             let Some(span) = front.touched(y) else {
                 continue;
             };
+            let covered = coverage.row(y);
+            let mut index = covered.partition_point(|r| r.end <= span.first);
             let mut x = span.first;
             while x <= span.last {
                 let pos = (x, y).into();
@@ -76,16 +96,73 @@ impl Renderer {
                 // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
-                self.back_buf.set_cell(pos, new_cell);
+                let step = u16::from(new_cell.width().max(1));
+                while covered.get(index).is_some_and(|r| x >= r.end) {
+                    index += 1;
+                }
+                if covered
+                    .get(index)
+                    .is_some_and(|r| r.start < x.saturating_add(step))
+                {
+                    // A glyph cannot be partially visible behind a region.
+                    let blank = Cell::BLANK.style(new_cell.style.clone());
+                    for col in x..x.saturating_add(step).min(width) {
+                        self.back_buf.set_cell((col, y), &blank);
+                    }
+                } else {
+                    self.back_buf.set_cell(pos, new_cell);
+                }
                 // Step over any continuation columns owned by the cell
                 // we just wrote so we don't try to re-copy them.
-                let step = (new_cell.width() as u16).max(1);
                 x = x.saturating_add(step);
             }
         }
         front.clear_touched();
 
         self.force_clear || self.back_buf.has_changes()
+    }
+}
+
+#[cfg(uncurses_bench)]
+mod bench {
+    extern crate test;
+
+    use super::*;
+    use test::{Bencher, black_box};
+
+    fn sync_touched(b: &mut Bencher, rects: impl Iterator<Item = Rect> + Clone) {
+        let coverage = Coverage::from_rects(rects);
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(160, 48);
+        for y in 0..48 {
+            for x in 0..160 {
+                front.set_cell((x, y), &Cell::new("x", 1));
+            }
+        }
+        renderer.sync_front_covered(&mut front, &coverage);
+        renderer.back_buf.clear_touched();
+        b.iter(|| {
+            front.touch_all();
+            black_box(renderer.sync_front_covered(black_box(&mut front), black_box(&coverage)));
+        });
+    }
+
+    #[bench]
+    fn text_only(b: &mut Bencher) {
+        sync_touched(b, std::iter::empty());
+    }
+
+    #[bench]
+    fn one_region(b: &mut Bencher) {
+        sync_touched(b, [Rect::new(4, 2, 8, 2)].into_iter());
+    }
+
+    #[bench]
+    fn many_regions(b: &mut Bencher) {
+        let rects: std::collections::BTreeMap<_, _> = (0..64)
+            .map(|i| (i, Rect::new((i % 8) * 20 + 4, (i / 8) * 6 + 2, 8, 2)))
+            .collect();
+        sync_touched(b, rects.values().copied());
     }
 }
 
@@ -97,6 +174,129 @@ mod tests {
 
     fn cell(c: &str) -> Cell {
         Cell::new(c, 1)
+    }
+
+    #[test]
+    fn regions_project_whole_wide_glyphs_without_changing_source_cells() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(10, 2);
+        front.set_cell((1, 0), &Cell::new("\u{754c}", 2));
+        front.set_cell((5, 0), &cell("X"));
+        let covered = [Rect::new(2, 0, 4, 1)];
+        renderer.sync_front_covered(&mut front, &Coverage::from_rects(covered.into_iter()));
+        assert_eq!(front.cell((1, 0).into()).unwrap().content(), "\u{754c}");
+        assert_eq!(front.cell((5, 0).into()).unwrap().content(), "X");
+        for x in 1..6 {
+            assert!(renderer.back_buf.cell((x, 0).into()).unwrap().is_blank());
+        }
+        front.touch_full_line(0);
+        renderer.sync_front(&mut front);
+        assert_eq!(renderer.back_buf.line(0), front.line(0));
+    }
+
+    #[test]
+    fn region_split_spaces_preserve_the_complete_glyph_style() {
+        use crate::color::Color;
+        use crate::style::Style;
+
+        let style = Style::default()
+            .fg(Color::BrightYellow)
+            .bg(Color::Blue)
+            .bold()
+            .faint()
+            .italic()
+            .link("https://example.com", "id=split");
+        let glyph = Cell::new("\u{754c}", 2).style(style.clone());
+        for covered in [Rect::new(1, 0, 1, 1), Rect::new(2, 0, 1, 1)] {
+            let mut renderer = Renderer::new();
+            let mut front = RenderBuffer::new(5, 1);
+            front.set_cell((1, 0), &glyph);
+            let coverage = Coverage::from_rects([covered].into_iter());
+            renderer.sync_front_covered(&mut front, &coverage);
+            for x in 1..3 {
+                assert_eq!(
+                    renderer.back_buf.cell((x, 0).into()),
+                    Some(&Cell::BLANK.style(style.clone()))
+                );
+            }
+            assert_eq!(front.cell((1, 0).into()), Some(&glyph));
+            let mut out = Vec::new();
+            renderer.set_region_rects([covered].into_iter());
+            renderer.render_back(&mut out).unwrap();
+            renderer.region_drawn(covered);
+            assert_eq!(
+                renderer.cur_buf.as_ref().unwrap().line(0),
+                renderer.back_buf.line(0)
+            );
+            front.touch_all();
+            assert!(!renderer.sync_front_covered(&mut front, &coverage));
+            front.touch_all();
+            renderer.sync_front(&mut front);
+            assert_eq!(renderer.back_buf.cell((1, 0).into()), Some(&glyph));
+        }
+    }
+
+    #[test]
+    fn region_projection_reuses_cached_row_coverage() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(160, 3);
+        front.touch_all();
+        let visits = std::cell::Cell::new(0);
+        let rects = [Rect::new(16, 1, 96, 1)]
+            .into_iter()
+            .inspect(|_| visits.set(visits.get() + 1));
+        let coverage = Coverage::from_rects(rects);
+        for _ in 0..3 {
+            front.touch_all();
+            renderer.sync_front_covered(&mut front, &coverage);
+        }
+        assert_eq!(visits.get(), 1);
+    }
+
+    #[test]
+    fn region_projection_handles_unordered_rectangles_and_wide_boundaries() {
+        let cases = [
+            vec![],
+            vec![
+                Rect::new(8, 0, 2, 1),
+                Rect::new(2, 0, 2, 2),
+                Rect::new(4, 0, 2, 1),
+            ],
+            vec![Rect::new(4, 0, 7, 1), Rect::new(2, 0, 2, 2)],
+            vec![Rect::new(2, 0, 0, 2), Rect::new(1, 0, 4, 0)],
+        ];
+        for rects in cases {
+            let mut front = RenderBuffer::new(14, 2);
+            fill_row(&mut front, 0, "abcdefghijklmn");
+            fill_row(&mut front, 1, "ABCDEFGHIJKLMN");
+            for x in [1, 5, 7] {
+                front.set_cell((x, 0), &Cell::new("\u{754c}", 2));
+            }
+            let source = front.clone();
+            let mut expected = RenderBuffer::new(14, 2);
+            for y in 0..2 {
+                for x in 0..14 {
+                    let cell = source.cell((x, y).into()).unwrap();
+                    if cell.is_continuation() {
+                        continue;
+                    }
+                    let footprint = Rect::new(x, y, u16::from(cell.width().max(1)), 1);
+                    if !rects.iter().any(|r| !r.intersection(footprint).is_empty()) {
+                        expected.set_cell((x, y), cell);
+                    }
+                }
+            }
+            let mut renderer = Renderer::new();
+            let coverage = Coverage::from_rects(rects.iter().copied());
+            renderer.sync_front_covered(&mut front, &coverage);
+            for y in 0..2 {
+                assert_eq!(renderer.back_buf.line(y), expected.line(y), "{rects:?}");
+                assert_eq!(front.line(y), source.line(y));
+            }
+            renderer.back_buf.clear_touched();
+            front.touch_all();
+            assert!(!renderer.sync_front_covered(&mut front, &coverage));
+        }
     }
 
     fn fill_row(buf: &mut RenderBuffer, y: u16, content: &str) {

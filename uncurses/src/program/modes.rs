@@ -416,6 +416,11 @@ impl<I: Input, O: Write> Program<I, O> {
     /// only on an actual transition.
     pub(super) fn set_alt_screen(&mut self, enter: bool) -> io::Result<()> {
         let changed = self.state.alt_screen != enter;
+        let cleanup = if changed {
+            self.screen.release_regions()
+        } else {
+            Ok(())
+        };
         if changed && enter {
             // Capture the inline anchor before the buffer switch hides it.
             self.screen.save_cursor();
@@ -444,7 +449,9 @@ impl<I: Input, O: Write> Program<I, O> {
                 )?;
             }
         }
-        self.screen.flush()
+        let flushed = self.screen.flush();
+        cleanup?;
+        flushed
     }
 
     /// Show the terminal cursor (DECSET 25) and flush.
@@ -723,6 +730,7 @@ impl<I: Input, O: Write> Program<I, O> {
         }
 
         // --- Render-coupled modes ---
+        let cleanup = self.screen.release_regions();
         // Park the cursor below the managed area before any teardown, so the
         // shell prompt lands where the user expects.
         self.screen.park_cursor()?;
@@ -755,7 +763,7 @@ impl<I: Input, O: Write> Program<I, O> {
             mode::Mode::UNICODE_CORE.reset(&mut self.screen)?;
         }
         self.screen.invalidate_cursor();
-        Ok(())
+        cleanup
     }
 
     /// Re-emit every mode held in the tracked state — the render-coupled

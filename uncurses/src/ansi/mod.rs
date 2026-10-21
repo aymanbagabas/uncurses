@@ -82,6 +82,7 @@ pub mod status;
 pub mod strip;
 pub mod termcap;
 pub mod text;
+pub mod text_sizing;
 pub mod title;
 pub mod truncate;
 pub mod urxvt;

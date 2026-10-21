@@ -35,6 +35,7 @@ reads the reply, and uses only what is actually there.
 
 - Capability discovery by querying the terminal
 - Diffing renderer: only changed cells are written
+- Images through `uncurses-image`: native graphics, relative groups, and a selectable symbol fallback
 - Inline or [alternate screen](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html), with suspend and resume
 - Truecolor that degrades to [256-color, ANSI, or mono](https://github.com/termstandard/colors)
 - [Styled underlines](https://sw.kovidgoyal.net/kitty/underlines/): curly, dotted, dashed, double
@@ -100,6 +101,7 @@ Per-crate guides and more examples:
 
 - [`uncurses`](uncurses/): program, screen, rendering, input, and the event loop.
 - [`uncurses-ratatui`](uncurses-ratatui/): drive ratatui widgets through uncurses.
+- [`uncurses-image`](uncurses-image/): fit, crop, and draw terminal images.
 
 ### Examples
 
