@@ -23,6 +23,9 @@
 
 use std::io::{self, Write};
 
+mod diacritics;
+pub use diacritics::KITTY_PLACEHOLDER_DIACRITICS;
+
 /// Frame a Sixel payload as `ESC P <p1> ; <p2> [;<p3>] q <payload> ESC \`.
 ///
 /// `p1` and `p2` are omitted when negative, while their semicolon separator remains. `p3` is emitted only when greater than zero. `payload` is copied verbatim between the `q` final byte and `ST`.
