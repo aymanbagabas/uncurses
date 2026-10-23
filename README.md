@@ -35,6 +35,7 @@ reads the reply, and uses only what is actually there.
 
 - Capability discovery by querying the terminal
 - Diffing renderer: only changed cells are written
+- ANSI placements: opaque draw and erase bytes share the ordinary frame
 - Inline or [alternate screen](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html), with suspend and resume
 - Truecolor that degrades to [256-color, ANSI, or mono](https://github.com/termstandard/colors)
 - [Styled underlines](https://sw.kovidgoyal.net/kitty/underlines/): curly, dotted, dashed, double
@@ -100,10 +101,33 @@ Per-crate guides and more examples:
 
 - [`uncurses`](uncurses/): program, screen, rendering, input, and the event loop.
 - [`uncurses-ratatui`](uncurses-ratatui/): drive ratatui widgets through uncurses.
+- [`uncurses-images`](uncurses-images/): native images, Kitty placeholders, and ordinary symbol cells.
 
 ### Examples
 
-A curated few, each `cargo run -p examples --example <name>`:
+The examples require Rust 1.90 or newer.
+Run each with `cargo run -p examples --example <name>`:
+
+**`placements`, `images_drag`, and `sized_text_drag`**
+
+`placements` demonstrates opaque ANSI output, text overlays, movement, and removal.
+`images_drag` supports symbols, Kitty, placeholders, iTerm2, and Sixel.
+`sized_text_drag` demonstrates whole-placement erasure for sized text.
+
+```sh
+cargo run -p examples --example placements
+cargo run -p examples --example images_drag -- --kitty --overlay
+cargo run -p examples --example images_drag -- --sixel --overlay
+cargo run -p examples --example images_drag -- --iterm2 --overlay
+cargo run -p examples --example sized_text_drag -- --overlay
+```
+
+The image dialog uses cropped placements for native Kitty.
+Sixel and iTerm2 emit the full image before the dialog text.
+Confirm their visual behavior in Rio and iTerm2.
+Use Space to toggle the dialog and Shift+arrows to move it.
+
+`kitty_stream_order` demonstrates native Kitty z-order and retained text.
 
 **`tour`**
 
@@ -158,6 +182,7 @@ For more, browse the [`examples/`](examples/examples) directory.
 
 - [`uncurses`](uncurses/): the core library: screen, renderer, input, ANSI, terminal.
 - [`uncurses-ratatui`](uncurses-ratatui/): a [ratatui](https://ratatui.rs) `Backend` built on the `Program` facade.
+- [`uncurses-images`](uncurses-images/): image preparation, protocol bytes, placeholders, and symbols.
 
 ## Install
 
@@ -168,8 +193,9 @@ Not on crates.io yet, so depend on it straight from git:
 uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
 
-Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
-the latest stable Rust (currently 1.88 or newer).
+Runs on Linux, macOS, Windows, and the BSDs. The core library uses the 2024
+edition and requires Rust 1.88 or newer. `uncurses-images` and the examples
+require Rust 1.90 or newer.
 
 ## Credits
 
