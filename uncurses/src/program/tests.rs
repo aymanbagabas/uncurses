@@ -61,6 +61,43 @@ fn extended_cursor_position_request_flushes() {
     assert_eq!(written(&out), "\x1b[?6n\x1b[6n");
 }
 
+#[test]
+fn sized_text_delegates_to_the_screen_without_flushing() {
+    use crate::buffer::Surface;
+
+    let out = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&out, (20, 6));
+    let sizing = TextSizing {
+        scale: 2,
+        width: 4,
+        ..Default::default()
+    };
+    let style = Style::new().bold();
+    program
+        .set_sized_text(1, (2, 1), "Demo", sizing, &style)
+        .unwrap();
+    assert!(out.borrow().is_empty());
+    assert_eq!(program.screen().cell((2, 1).into()).unwrap().style, style);
+    program.screen_mut().flush().unwrap();
+    assert!(out.borrow().is_empty());
+    program.screen_mut().render().unwrap();
+    assert!(written(&out).contains("\x1b]66;s=2:w=4:n=0:d=0:v=0:h=0;Demo\x1b\\"));
+    out.borrow_mut().clear();
+    assert_eq!(
+        program
+            .set_sized_text(1, (19, 5), "Invalid", sizing, &style)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+    program.screen_mut().render().unwrap();
+    assert!(out.borrow().is_empty());
+    program.screen_mut().remove_placement(1);
+    program.screen_mut().render().unwrap();
+    assert!(!written(&out).contains("\x1b]66;"));
+    assert!(program.state.chosen.is_empty());
+}
+
 impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
     /// Build a program over `buf` and a null input, with a managed area of
     /// `size`. Bypasses [`new`](Program::new) so no fds are needed: nothing
@@ -1972,6 +2009,40 @@ fn enter_and_exit_alt_screen_emit_1049_and_retarget_the_screen() {
     program.exit_alt_screen().unwrap();
     assert!(!program.screen().fullscreen());
     assert!(written(&buf).contains("\x1b[?1049l"));
+}
+
+#[test]
+fn placement_handoffs_erase_before_switch_and_preserve_pending_content() {
+    use crate::{layout::Rect, screen::PlacementOptions};
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (40, 12));
+    let options = PlacementOptions {
+        draw: b"DRAW".to_vec(),
+        erase: b"ERASE".to_vec(),
+        ..Default::default()
+    };
+    program
+        .screen_mut()
+        .set_placement(1, Rect::new(2, 2, 8, 2), &options)
+        .unwrap();
+    program.screen_mut().render().unwrap();
+    program
+        .screen_mut()
+        .set_placement(2, Rect::new(14, 2, 8, 2), &options)
+        .unwrap();
+    buf.borrow_mut().clear();
+    program.enter_alt_screen().unwrap();
+    let output = written(&buf);
+    assert!(output.find("ERASE").unwrap() < output.find("\x1b[?1049h").unwrap());
+    assert!(!output.contains("\0p"));
+    buf.borrow_mut().clear();
+    program.screen_mut().render().unwrap();
+    assert_eq!(written(&buf).matches("DRAW").count(), 2);
+    buf.borrow_mut().clear();
+    program.enter_alt_screen().unwrap();
+    assert!(!written(&buf).contains("ERASE"));
+    program.exit_alt_screen().unwrap();
+    assert_eq!(written(&buf).matches("ERASE").count(), 2);
 }
 
 /// Some terminals track DECTCEM per screen buffer, so a hidden cursor must be

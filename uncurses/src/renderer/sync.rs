@@ -8,8 +8,7 @@
 //! when the destination cell actually differs. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
-//! Only the cells inside `front_buf.touched(y)` spans are read — no
-//! full-buffer scan.
+//! A placeholder immediately after a touched span also gets a fresh anchor check.
 
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
@@ -37,6 +36,18 @@ impl Renderer {
     /// continuation cells, steps by wide-cell width, and clears
     /// `front`'s touched flags before returning.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
+        self.sync_front_impl::<true>(front)
+            .expect("placement metadata is accepted")
+    }
+
+    pub(crate) fn sync_front_text(&mut self, front: &mut RenderBuffer) -> std::io::Result<bool> {
+        self.sync_front_impl::<false>(front)
+    }
+
+    fn sync_front_impl<const PLACEMENTS: bool>(
+        &mut self,
+        front: &mut RenderBuffer,
+    ) -> std::io::Result<bool> {
         let width = front.width();
         let height = front.height();
         if self.back_buf.width() != width || self.back_buf.height() != height {
@@ -56,7 +67,16 @@ impl Renderer {
                 continue;
             };
             let mut x = span.first;
-            while x <= span.last {
+            let last = span.last.saturating_add(1);
+            let last = if front
+                .cell((last, y).into())
+                .is_some_and(super::placeholders::is_placeholder)
+            {
+                last
+            } else {
+                span.last
+            };
+            while x <= last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
                     x += 1;
@@ -76,7 +96,24 @@ impl Renderer {
                 // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
-                self.back_buf.set_cell(pos, new_cell);
+                if new_cell.is_placement() {
+                    if !PLACEMENTS {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "unregistered placement cell",
+                        ));
+                    }
+                    self.back_buf
+                        .set_cell(pos, &crate::cell::Cell::BLANK.style(&new_cell.style));
+                } else {
+                    if let Some(cell) =
+                        super::placeholders::compressed(front.line(y).unwrap(), usize::from(x))
+                    {
+                        self.back_buf.set_cell(pos, &cell);
+                    } else {
+                        self.back_buf.set_cell(pos, new_cell);
+                    }
+                }
                 // Step over any continuation columns owned by the cell
                 // we just wrote so we don't try to re-copy them.
                 let step = (new_cell.width() as u16).max(1);
@@ -85,7 +122,7 @@ impl Renderer {
         }
         front.clear_touched();
 
-        self.force_clear || self.back_buf.has_changes()
+        Ok(self.force_clear || self.back_buf.has_changes())
     }
 }
 
@@ -103,6 +140,22 @@ mod tests {
         for (x, ch) in content.chars().enumerate() {
             buf.set_cell((x as u16, y), &cell(&ch.to_string()));
         }
+    }
+
+    #[test]
+    fn sync_placement_preserves_style_in_backing_blank() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(2, 1);
+        let style = crate::style::Style::new()
+            .bold()
+            .bg(crate::color::Color::Blue)
+            .link("https://example.com", "");
+        front.set_cell((0, 0), &Cell::placement(1).style(&style));
+        renderer.sync_front(&mut front);
+        assert_eq!(
+            renderer.back_buf.cell((0, 0).into()),
+            Some(&Cell::BLANK.style(style))
+        );
     }
 
     #[test]
