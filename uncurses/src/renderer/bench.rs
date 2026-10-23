@@ -15,11 +15,84 @@ extern crate test;
 
 use test::{Bencher, black_box};
 
+use crate::buffer::SurfaceMut;
 use crate::cell::Cell;
 use crate::renderer::{RenderBuffer, Renderer};
 
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
+
+fn bench_placements(b: &mut Bencher, count: u64, workload: u8) {
+    use crate::{
+        layout::Rect,
+        screen::{PlacementOptions, Screen},
+        style::Style,
+        text::TextSurface,
+    };
+    let mut screen = Screen::new(Vec::new(), (240, 80));
+    screen.set_fullscreen(true);
+    let options = PlacementOptions {
+        draw: b"PLACEMENT".to_vec(),
+        ..Default::default()
+    };
+    let paint = |screen: &mut Screen<Vec<u8>>, offset: u16| {
+        for id in 1..=count {
+            let x = ((id - 1) % 8) as u16 * 28 + 2 + if id == 1 { offset } else { 0 };
+            let y = ((id - 1) / 8) as u16 * 8 + 3;
+            screen
+                .set_placement(id, Rect::new(x, y, 12, 3), &options)
+                .unwrap();
+        }
+    };
+    paint(&mut screen, 0);
+    screen.render().unwrap();
+    let mut tick = false;
+    b.iter(|| {
+        screen.writer_mut().clear();
+        tick = !tick;
+        match workload {
+            0 => {}
+            1 => {
+                screen.set_str((2, 78), if tick { "a" } else { "b" }, Style::EMPTY);
+            }
+            2 => paint(&mut screen, 0),
+            3 => {
+                screen.clear();
+                paint(&mut screen, u16::from(tick));
+            }
+            4 => {
+                paint(&mut screen, 0);
+                screen.set_str((5, 4), if tick { "TOP" } else { "top" }, Style::EMPTY);
+            }
+            _ => unreachable!(),
+        }
+        screen.render().unwrap();
+        black_box(screen.writer());
+    });
+}
+
+macro_rules! placement_benchmark {
+    ($name:ident, $count:expr, $workload:expr) => {
+        #[bench]
+        fn $name(b: &mut Bencher) {
+            bench_placements(b, $count, $workload);
+        }
+    };
+}
+
+placement_benchmark!(placements_unchanged_0, 0, 0);
+placement_benchmark!(placements_unchanged_1, 1, 0);
+placement_benchmark!(placements_unchanged_64, 64, 0);
+placement_benchmark!(placements_sparse_0, 0, 1);
+placement_benchmark!(placements_sparse_1, 1, 1);
+placement_benchmark!(placements_sparse_64, 64, 1);
+placement_benchmark!(placements_equal_0, 0, 2);
+placement_benchmark!(placements_equal_1, 1, 2);
+placement_benchmark!(placements_equal_64, 64, 2);
+placement_benchmark!(placements_move_1, 1, 3);
+placement_benchmark!(placements_move_64, 64, 3);
+placement_benchmark!(placements_overlay_1, 1, 4);
+placement_benchmark!(placements_overlay_64, 64, 4);
 
 fn filled_buffer(offset: u8) -> RenderBuffer {
     let mut buf = RenderBuffer::new(WIDTH, HEIGHT);
