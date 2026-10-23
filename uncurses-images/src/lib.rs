@@ -8,12 +8,14 @@ mod native;
 mod options;
 mod protocols;
 pub mod quant;
+mod renderer;
 
 pub use ::image::{ImageFormat, imageops::FilterType};
 pub use image::Image;
 pub use native::PreparedImage;
 pub use options::{Crop, Fit, ImageOptions};
 pub use protocols::{kitty_placeholders::CellImage, symbols::SymbolSet};
+pub use renderer::{ImageCapabilities, ImageProtocol, ImageRenderer};
 
 /// A native terminal image protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
