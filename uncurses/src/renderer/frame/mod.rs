@@ -3,11 +3,11 @@
 //! The top-level [`Renderer::render`] orchestrator splits frame
 //! production into four phases that each live in their own submodule:
 //!
-//! - [`prepare`] – pre-frame setup: cur_buf initialisation, resize
+//! - [`prepare`] – placement cleanup, cur_buf initialisation, resize
 //!   handling, inline-shrink partial clears, force-clear preface,
 //!   and the scroll-detection pass.
-//! - [`diff`] – the line-by-line diff: bottom-trim ED followed by
-//!   the per-row transform loop.
+//! - [`diff`] – bottom-trim ED, the per-row transform loop, placement
+//!   payloads, and overlay cells.
 //! - [`emit`] – cursor and glyph emission helpers used by
 //!   both the diff loop and the rest of the renderer.
 //! - [`finalize`] – per-frame epilogue: inline-resize cursor snap and
@@ -61,7 +61,14 @@ impl Renderer {
         let width = new_buf.width();
         let height = new_buf.height();
 
-        if !self.force_clear && !new_buf.has_changes() {
+        if !self.force_clear
+            && !new_buf.has_changes()
+            && !self
+                .placements
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.has_changes())
+        {
             return Ok(());
         }
 
