@@ -75,8 +75,11 @@
 //!    └─────────────────────────────┘
 //! ```
 
+mod placements;
 #[cfg(test)]
 mod tests;
+pub use crate::ansi::text_sizing::TextSizing;
+pub use placements::{PlacementId, PlacementOptions};
 
 /// Cell-diff capability flags controlling which optimized escape
 /// sequences the screen's renderer may emit. Re-exported from the
@@ -98,6 +101,7 @@ use crate::text::{TextSurface, WidthMode};
 /// `Screen` is [`Send`] and [`Sync`] whenever its writer is, so it can be
 /// moved onto another thread or held across an `.await` point.
 pub struct Screen<W: Write> {
+    render_epoch: u64,
     /// Where rendered bytes go.
     writer: W,
     /// Caller-facing desired cell grid. Touched spans record where the
@@ -168,6 +172,7 @@ impl<W: Write> Screen<W> {
         renderer.set_fullscreen(false);
         renderer.set_relative_cursor(true);
         let mut screen = Self {
+            render_epoch: 0,
             writer,
             front_buf: RenderBuffer::new(0, 0),
             renderer,
@@ -237,15 +242,33 @@ impl<W: Write> Screen<W> {
     /// there at the end of the frame, inside the same hide/synchronized-output
     /// bracket as the cell diff, so it lands atomically and without flicker.
     pub fn render(&mut self) -> io::Result<()> {
-        let changed = self.renderer.sync_front(&mut self.front_buf);
-        if changed || self.cursor_move_pending() {
-            self.write_frame();
+        self.render_frame(false)
+    }
+
+    fn render_frame(&mut self, release: bool) -> io::Result<()> {
+        let changed = self
+            .renderer
+            .sync_frame(&mut self.front_buf, self.render_epoch, release)?;
+        let start = self.out_buf.len();
+        self.renderer.upload_resources(&mut self.out_buf);
+        if (changed || self.cursor_move_pending())
+            && let Err(error) = self.write_frame()
+        {
+            self.out_buf.truncate(start);
+            return Err(error);
         }
-        self.flush()
+        self.flush()?;
+        self.renderer.complete_frame(self.render_epoch);
+        if self.renderer.delete_resources(&mut self.out_buf) {
+            self.flush()?;
+        }
+        self.renderer.complete_resource_cleanup();
+        Ok(())
     }
 
     /// Force a full redraw on the next [`render`](Self::render).
     pub fn invalidate(&mut self) {
+        self.render_epoch = self.render_epoch.wrapping_add(1);
         self.renderer.request_clear();
     }
 
@@ -267,7 +290,7 @@ impl<W: Write> Screen<W> {
         self.width = size.width;
         self.height = size.height;
         self.front_buf.resize(size.width, size.height);
-        self.renderer.request_clear();
+        self.invalidate();
     }
 
     /// Insert `content` into the scrollback above the managed area and flush
@@ -283,6 +306,13 @@ impl<W: Write> Screen<W> {
     pub fn insert_above(&mut self, content: &str) -> io::Result<()> {
         if content.is_empty() {
             return Ok(());
+        }
+        if self.renderer.placements.has_output() {
+            self.release_placements()?;
+            let inserted = self.insert_above(content);
+            self.invalidate();
+            inserted?;
+            return self.render();
         }
 
         let width = self.width;
@@ -692,8 +722,23 @@ impl<W: Write> Screen<W> {
     }
 
     /// Set the color profile used when emitting styled cells.
+    ///
+    /// A profile change also repaints placement overlays.
     pub fn set_color_profile(&mut self, profile: crate::color::Profile) {
+        if self.color_profile() != profile {
+            self.render_epoch = self.render_epoch.wrapping_add(1);
+        }
         self.renderer.set_color_profile(profile);
+    }
+
+    /// Set whether East Asian Ambiguous characters occupy two cells.
+    ///
+    /// Rewrite existing text after a policy change to measure it again.
+    pub fn set_eaw_wide(&mut self, enabled: bool) {
+        if self.eaw_wide != enabled {
+            self.eaw_wide = enabled;
+            self.invalidate();
+        }
     }
 
     /// Return the color profile used when emitting styled cells.
@@ -741,7 +786,8 @@ impl<W: Write> Screen<W> {
     /// synchronized output is the caller's choice via
     /// [`set_synchronized_output`](Self::set_synchronized_output), not gated on
     /// detected capabilities.
-    fn write_frame(&mut self) {
+    fn write_frame(&mut self) -> io::Result<()> {
+        let start = self.out_buf.len();
         let bracket_cursor = self.cursor_visible && !self.sync_updates;
 
         if self.sync_updates {
@@ -753,7 +799,16 @@ impl<W: Write> Screen<W> {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.out_buf).unwrap();
         }
 
-        self.renderer.render_back(&mut self.out_buf).unwrap();
+        let body = self.out_buf.len();
+        if let Err(error) = self.renderer.render_back(&mut self.out_buf) {
+            self.out_buf.truncate(start);
+            self.renderer.discard_frame();
+            self.invalidate();
+            return Err(error);
+        }
+        if self.out_buf.len() != body {
+            self.cursor_rested_at = None;
+        }
 
         // Apply the declarative resting position (if any) inside the same
         // bracket as the cell diff, so the cursor lands atomically.
@@ -761,19 +816,30 @@ impl<W: Write> Screen<W> {
         if let Some(pos) = self.desired_cursor {
             let pos = self.clamp_to_surface(pos);
             self.renderer
-                .move_to_resting(&mut self.out_buf, &self.front_buf, pos.y, pos.x)
-                .unwrap();
+                .move_to_resting(&mut self.out_buf, &self.front_buf, pos.y, pos.x)?;
             self.cursor_rested_at = Some(pos);
         }
 
-        if bracket_cursor {
-            mode::Mode::CURSOR_VISIBLE.set(&mut self.out_buf).unwrap();
+        if self.out_buf.len() == body {
+            self.out_buf.truncate(start);
+        } else {
+            if bracket_cursor {
+                mode::Mode::CURSOR_VISIBLE.set(&mut self.out_buf).unwrap();
+            }
+            if self.sync_updates {
+                mode::Mode::SYNCHRONIZED_OUTPUT
+                    .reset(&mut self.out_buf)
+                    .unwrap();
+            }
         }
-        if self.sync_updates {
-            mode::Mode::SYNCHRONIZED_OUTPUT
-                .reset(&mut self.out_buf)
-                .unwrap();
-        }
+        Ok(())
+    }
+
+    fn fail_frame(&mut self) {
+        self.out_buf.clear();
+        self.cursor_rested_at = None;
+        self.invalidate();
+        self.renderer.output_failed(self.render_epoch);
     }
 
     /// Stage a cursor move without flushing. See
@@ -841,10 +907,18 @@ impl<W: Write> Write for Screen<W> {
         if !self.out_buf.is_empty() {
             #[cfg(debug_assertions)]
             crate::trace::tee_output(&self.out_buf);
-            self.writer.write_all(&self.out_buf)?;
+            let result = self.writer.write_all(&self.out_buf);
             self.out_buf.clear();
+            if let Err(error) = result {
+                self.fail_frame();
+                return Err(error);
+            }
         }
-        self.writer.flush()
+        if let Err(error) = self.writer.flush() {
+            self.fail_frame();
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
