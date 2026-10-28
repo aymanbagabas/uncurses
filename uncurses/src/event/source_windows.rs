@@ -96,10 +96,11 @@ where
     /// Build a new Windows event source for `input`.
     ///
     /// Construction captures the console input handle, creates the wake event,
-    /// detects whether virtual-terminal input is enabled, and registers the
-    /// input and wake handles with the Windows poll backend. Resize events arrive
-    /// as `WINDOW_BUFFER_SIZE_EVENT` records on the input handle, so no separate
-    /// signal or resize pipe is needed.
+    /// and registers the input and wake handles with the Windows poll backend.
+    /// Whether the console delivers virtual-terminal input is read again for
+    /// every batch of records, because it changes when the terminal enters raw
+    /// mode. Resize events arrive as `WINDOW_BUFFER_SIZE_EVENT` records on the
+    /// input handle, so no separate signal or resize pipe is needed.
     ///
     /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and
     /// [`DEFAULT_PASTE_IDLE_TIMEOUT`]; override them with
@@ -121,9 +122,7 @@ where
         }
         let waker = Waker::from_windows_inner(Arc::new(WindowsWakerInner { event: wake_event }));
 
-        let mut mode: u32 = 0;
-        let vt_input = unsafe { GetConsoleMode(input_handle, &mut mode) } != 0
-            && (mode & ENABLE_VIRTUAL_TERMINAL_INPUT) != 0;
+        let vt_input = console_vt_input(input_handle);
 
         // Watch input and wake handles — in the fixed index order the
         // wait path relies on. `input_is_tty` is meaningless on Windows
@@ -203,6 +202,9 @@ where
             return Err(io::Error::last_os_error());
         }
 
+        // The program switches the console to raw mode, which turns virtual-terminal input on,
+        // after this source was built, so the mode is read again for every batch.
+        self.vt_input = console_vt_input(self.input_handle());
         let mut bytes: Vec<u8> = Vec::with_capacity(read_n as usize * 8);
         for record in &records[..read_n as usize] {
             self.serialize_record(record, &mut bytes);
@@ -254,6 +256,13 @@ where
     }
 }
 
+/// Whether the console input handle currently delivers virtual-terminal input.
+fn console_vt_input(handle: HANDLE) -> bool {
+    let mut mode: u32 = 0;
+    let read = unsafe { GetConsoleMode(handle, &mut mode) };
+    read != 0 && (mode & ENABLE_VIRTUAL_TERMINAL_INPUT) != 0
+}
+
 fn serialize_key_event(
     kev: &windows_sys::Win32::System::Console::KEY_EVENT_RECORD,
     vt_input: bool,
@@ -265,19 +274,23 @@ fn serialize_key_event(
     let kd_idx: usize = if key_down { 1 } else { 0 };
 
     if vt_input {
-        if let Some(high) = pending_high_surrogate[kd_idx].take() {
-            if let Some(Ok(c)) = char::decode_utf16([high, unicode_char]).next() {
-                push_utf8(buf, c);
-            }
-        } else if (0xD800..=0xDBFF).contains(&unicode_char) {
+        if (0xD800..=0xDBFF).contains(&unicode_char) {
             pending_high_surrogate[kd_idx] = Some(unicode_char);
         } else if (0xDC00..=0xDFFF).contains(&unicode_char) {
-            // Lone low surrogate — drop.
-        } else if key_down
-            && unicode_char != 0
-            && let Some(c) = char::from_u32(unicode_char as u32)
-        {
-            push_utf8(buf, c);
+            // A low surrogate completes the pending high one; alone it is dropped.
+            if let Some(high) = pending_high_surrogate[kd_idx].take()
+                && let Some(Ok(c)) = char::decode_utf16([high, unicode_char]).next()
+            {
+                push_utf8(buf, c);
+            }
+        } else if unicode_char != 0 {
+            // A character that is not a surrogate ends any half pair before it. Records without
+            // a character do not: the console wraps a character it cannot type directly in the
+            // Alt and numpad key records of an Alt code, and its two halves arrive between them.
+            pending_high_surrogate[kd_idx] = None;
+            if key_down && let Some(c) = char::from_u32(unicode_char as u32) {
+                push_utf8(buf, c);
+            }
         }
     } else if kev.wVirtualKeyCode == 0 {
         if key_down
@@ -534,6 +547,49 @@ mod tests {
         serialize_key_event(&low, true, &mut pending, &mut buf);
         assert_eq!(buf, [0xF0, 0x9F, 0x98, 0x80]);
         assert_eq!(pending[1], None);
+    }
+
+    #[test]
+    fn key_event_vt_input_pairs_surrogates_split_by_records_without_a_character() {
+        // A character outside the console's code page arrives as the Alt and numpad key records
+        // of an Alt code, whose releases carry the two halves with numpad releases between them.
+        let mut buf = Vec::new();
+        let mut pending = [None, None];
+        for (down, vk, ch) in [
+            (false, 0x12, 0xD83D),
+            (false, 0x66, 0),
+            (false, 0x63, 0),
+            (false, 0x12, 0xDE80),
+        ] {
+            serialize_key_event(
+                &key_record(down, vk, 0, ch, 0, 1),
+                true,
+                &mut pending,
+                &mut buf,
+            );
+        }
+        assert_eq!(buf, "\u{1F680}".as_bytes());
+        assert_eq!(pending, [None, None]);
+    }
+
+    #[test]
+    fn key_event_vt_input_keeps_a_character_that_follows_a_lone_high_surrogate() {
+        let mut buf = Vec::new();
+        let mut pending = [None, None];
+        serialize_key_event(
+            &key_record(true, 0, 0, 0xD83D, 0, 1),
+            true,
+            &mut pending,
+            &mut buf,
+        );
+        serialize_key_event(
+            &key_record(true, 0, 0, b'a' as u16, 0, 1),
+            true,
+            &mut pending,
+            &mut buf,
+        );
+        assert_eq!(buf, b"a");
+        assert_eq!(pending, [None, None]);
     }
 
     #[test]
