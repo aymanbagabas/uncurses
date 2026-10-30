@@ -720,6 +720,75 @@ fn equal_wide_cell_after_screen_shrink_is_normalized() {
 
 // --- insert_above ---
 
+fn three_inline_rows() -> Screen<Vec<u8>> {
+    let mut screen = Screen::new(Vec::new(), (10, 3));
+    for (y, row) in ["aaaa", "bbbb", "cccc"].into_iter().enumerate() {
+        screen.set_str((0, y as u16), row, Style::default());
+    }
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen
+}
+
+#[test]
+fn resize_height_preserves_retained_rows() {
+    for (height, new_text, expected) in [
+        (4, Some("dddd"), "\x1b[?25l\ndddd\r\x1b[?25h"),
+        (5, None, "\x1b[?25l\n\n\x1b[?25h"),
+        (3, None, ""),
+        (2, None, "\x1b[?25l\x1b[J\x1bM\x1b[?25h"),
+        (0, None, "\x1b[?25l\x1b[2A\x1b[J\x1b[?25h"),
+    ] {
+        let mut screen = three_inline_rows();
+        screen.resize_height(height);
+        if let Some(text) = new_text {
+            screen.set_str((0, height - 1), text, Style::default());
+        }
+        screen.render().unwrap();
+        assert_eq!(s(screen.writer()), expected, "height={height}");
+        assert_eq!(screen.diverge(), None);
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty(), "height={height}");
+    }
+}
+
+#[test]
+fn resize_height_keeps_pending_edits_and_invalidation() {
+    let mut screen = three_inline_rows();
+    screen.set_str((4, 0), "X", Style::default());
+    screen.resize_height(4);
+    screen.render().unwrap();
+    let output = s(screen.writer());
+    assert!(output.contains('X'));
+    for retained in ["aaaa", "bbbb", "cccc"] {
+        assert!(!output.contains(retained), "{output:?}");
+    }
+    screen.writer_mut().clear();
+    screen.invalidate();
+    screen.resize_height(5);
+    screen.render().unwrap();
+    assert!(s(screen.writer()).contains("aaaaX"));
+}
+
+#[test]
+fn resize_height_shrink_keeps_the_next_diff_and_zero_can_grow() {
+    let mut screen = three_inline_rows();
+    screen.resize_height(2);
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.set_str((4, 1), "B", Style::default());
+    screen.render().unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25l\x1b[4CB\x1b[?25h");
+    screen.resize_height(0);
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.resize_height(1);
+    screen.set_str((0, 0), "z", Style::default());
+    screen.render().unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25lz\r\x1b[?25h");
+}
+
 #[test]
 fn ambiguous_width_changes_invalidate_only_when_the_policy_changes() {
     let mut screen = Screen::new(Vec::new(), (10, 2));

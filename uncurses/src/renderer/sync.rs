@@ -41,13 +41,8 @@ impl Renderer {
         let height = front.height();
         if self.back_buf.width() != width || self.back_buf.height() != height {
             self.back_buf.resize(width, height);
-            // `resize` touches every row as a bookkeeping side effect.
-            // We use `touched` to mean "differs from the wire", so
-            // reset it; cell-by-cell copies below will re-touch only
-            // rows that actually changed. The caller is expected to
-            // have set `force_clear` (e.g. via `request_clear` from
-            // [`crate::screen::Screen::resize`]) to drive a full
-            // repaint when dimensions change.
+            // Copies below mark real cell changes; geometry changes also
+            // reach the frame pipeline when every added cell is blank.
             self.back_buf.clear_touched();
         }
 
@@ -85,7 +80,11 @@ impl Renderer {
         }
         front.clear_touched();
 
-        self.force_clear || self.back_buf.has_changes()
+        self.force_clear || self.back_buf.has_changes() || self.size_changed(width, height)
+    }
+
+    pub(super) fn size_changed(&self, width: u16, height: u16) -> bool {
+        self.cur_buf.is_some() && (width != self.last_width || height != self.last_height)
     }
 }
 

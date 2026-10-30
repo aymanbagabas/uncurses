@@ -270,6 +270,18 @@ impl<W: Write> Screen<W> {
         self.renderer.request_clear();
     }
 
+    /// Change the managed height while preserving the displayed row cache.
+    ///
+    /// The next render draws changed cells and erases removed inline rows.
+    /// Added blank rows extend the managed area. Use [`resize`](Self::resize)
+    /// after a terminal resize to re-establish its geometry.
+    pub fn resize_height(&mut self, height: u16) {
+        if height != self.height {
+            self.height = height;
+            self.front_buf.resize_height(height);
+        }
+    }
+
     /// Insert `content` into the scrollback above the managed area and flush
     /// it to the writer. Inline this pushes the lines into the terminal's
     /// scrollback; in fullscreen they go into the alternate screen's hidden

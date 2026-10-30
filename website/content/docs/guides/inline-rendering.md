@@ -57,22 +57,28 @@ yourself.
 
 ## Growing the region
 
-Inline regions are not fixed. Call `resize` again whenever your content changes
-height, and the renderer reflows the block in place. A prompt that grows as the
-user types resizes as the line count changes: keep the width at
-`program.screen().width()` and vary only the height.
-
-`resize` re-establishes the region, so the next render repaints it. Call it when
-the height actually changes rather than on every keystroke:
+Use `resize_height` when your content changes height.
+The next render preserves unchanged rows, draws added content, and erases
+removed inline rows. Added blank rows also extend the region.
+The same height leaves the frame unchanged.
 
 ```rust
-let screen = program.screen_mut();
-let height = lines.len() as u16;
-if screen.height() != height {
-    let width = screen.width();
-    screen.resize((width, height));
+use uncurses::{screen::Screen, style::Style, text::TextSurface};
+
+fn main() -> std::io::Result<()> {
+    let mut screen = Screen::new(Vec::new(), (40, 1));
+    screen.set_str((0, 0), "First row", Style::default());
+    screen.render()?;
+    screen.resize_height(2);
+    screen.set_str((0, 1), "Second row", Style::default());
+    screen.render()
 }
 ```
+
+Use `resize` after a terminal resize. It re-establishes the region and requests
+a full repaint, including when its dimensions stay the same.
+
+Run `cargo run -p examples --example inline_height` to inspect the emitted bytes.
 
 To follow the terminal instead of your own content, use
 [`autoresize`](https://docs.rs/uncurses/latest/uncurses/program/struct.Program.html#method.autoresize):
