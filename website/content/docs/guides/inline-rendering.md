@@ -116,7 +116,24 @@ The terminal places the cursor, so `tracked_cursor()` then returns `None`.
 After a resize or screen switch, render the content before you place the caret
 relative to that content.
 
-## Committing to scrollback
+## Releasing completed rows
+
+Use `screen.commit_rows(count)?` when the top rows of your inline region are complete.
+It renders pending edits and releases those rows as permanent output.
+The retained rows stay on the terminal and start at row zero in the smaller region.
+Releasing every row starts an empty region on the next line.
+
+For streamed text, keep the unfinished line in the region.
+Use `resize_height` to add new lines, then commit the completed lines.
+Run `cargo run -p examples --example streaming -- --dump` to inspect this process.
+
+The method clamps the count to the height.
+Fullscreen screens and zero counts preserve pending edits and output.
+If the initial render fails, the screen retains its rows.
+If the final flush fails, the rows stay released.
+Retry with `std::io::Write::flush(screen)` to send pending bytes without releasing more rows.
+
+## Inserting separate output
 
 Sometimes you want a line to leave the live region and become permanent history,
 the way a shell prints a command's output above the next prompt. That is
