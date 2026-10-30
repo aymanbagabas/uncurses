@@ -94,6 +94,7 @@ fn tokenize_32k_malformed(b: &mut Bencher) {
                 Token::Text { text, width } => text.len() + width as usize,
                 Token::Escape(seq) => seq.len(),
                 Token::Control(_) => 1,
+                Token::ControlUtf8(_) => 2,
             };
         }
         black_box(n)

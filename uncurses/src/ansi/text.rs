@@ -6,13 +6,14 @@
 //! complete ANSI escape/string sequences, or standalone control bytes. Width,
 //! stripping, truncation, and wrapping utilities all build on this stream.
 //!
-//! ## 7-bit and 8-bit controls
+//! ## Control encodings
 //!
 //! Both 7-bit forms (`ESC [`, `ESC ]`, `ESC P`, `ESC X`, `ESC ^`, `ESC _`) and
 //! their 8-bit C1 bytes (`0x9B`, `0x9D`, `0x90`, `0x98`, `0x9E`, `0x9F`) open a
-//! sequence.
+//! sequence. The tokenizer also accepts UTF-8 C1 characters (`C2 80` through
+//! `C2 9F`) as controls.
 //!
-//! A control string ends at ST, in either form - the byte `0x9C`, or `ESC \`.
+//! A control string ends at ST: `0x9C`, `C2 9C`, or `ESC \`.
 //! **`BEL` ends an OSC and nothing else**: `OSC Ps ; Pt BEL` is an xterm
 //! convention rather than a rule about control strings, and ECMA-48 gives them
 //! all one terminator. A `0x07` inside a DCS, SOS, PM or APC is payload, which
@@ -26,12 +27,13 @@
 //! is and on nothing else, so:
 //!
 //! - the byte `0x9C` is 8-bit ST, and the byte `0x9D` opens an OSC;
-//! - `C2 9C` is the *character* U+009C and is text, as is `C2 9D`;
+//! - `C2 9C` is UTF-8 ST, and `C2 9D` opens an OSC;
 //! - the `0x9C` inside `E2 9C 85` ("✅") is neither, and is never examined.
 //!
 //! That last case is why every code point in U+2700..U+273F survives inside an
-//! OSC title. A `&str` cannot hold a raw C1 byte at all, which is what the
-//! 7-bit forms are for.
+//! OSC title. UTF-8 C1 support lets text utilities parse controls in a `&str`.
+//! This is an input-text convention. Terminal output should use 7-bit controls:
+//! xterm processes control bytes before UTF-8 decoding.
 //!
 //! ## Malformed input
 //!
@@ -54,10 +56,8 @@ use crate::unicode::graphemes;
 pub enum Token<'a> {
     /// One grapheme cluster and its display width.
     ///
-    /// Always whole, well-formed UTF-8. The width may be zero - a combining
-    /// mark, a variation selector, or a C1 character such as U+009C written
-    /// as `C2 9C` - so "visible" here means "not a control byte", not
-    /// "occupies a cell".
+    /// Always whole, well-formed UTF-8. A combining mark or variation selector
+    /// can have zero width.
     Text {
         /// Grapheme bytes.
         text: &'a [u8],
@@ -70,6 +70,11 @@ pub enum Token<'a> {
     /// that introduces nothing, or a byte that begins no well-formed UTF-8
     /// character. All are zero width.
     Control(u8),
+    /// A C1 control encoded as UTF-8: `0xC2` followed by this control byte.
+    ///
+    /// This variant preserves the encoding of standalone C1 controls.
+    /// C1 sequence introducers produce [`Token::Escape`] with the original bytes.
+    ControlUtf8(u8),
 }
 
 /// Return the display width of `bytes` ignoring ANSI escapes.
@@ -191,19 +196,27 @@ impl<'a> Iterator for Tokenizer<'a> {
         }
 
         // Keep escape introducers ahead of the run check for dense sequences.
-        if b == 0x1b || is_c1_introducer(b) {
+        let c1 = c1_at(self.bytes, self.pos);
+        if b == 0x1b || c1.is_some_and(|(control, _)| is_c1_introducer(control)) {
             let start = self.pos;
             let end = scan_sequence(self.bytes, start);
             self.pos = end;
             return Some(Token::Escape(&self.bytes[start..end]));
         }
+        if let Some((control, size)) = c1 {
+            self.pos += size;
+            return Some(if size == 1 {
+                Token::Control(control)
+            } else {
+                Token::ControlUtf8(control)
+            });
+        }
 
         // A cached run contains only validated plain text. Check remaining
         // control bytes and find a new run only after that run ends.
         if self.run.is_empty() {
-            // C0 controls (incl. DEL) and non-introducer C1 bytes are emitted as
-            // single control bytes.
-            if b < 0x20 || b == 0x7f || (0x80..=0x9f).contains(&b) {
+            // C0 controls and DEL occupy one byte.
+            if b < 0x20 || b == 0x7f {
                 self.pos += 1;
                 return Some(Token::Control(b));
             }
@@ -222,7 +235,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 let mut end = self.pos;
                 while end < self.bytes.len() {
                     let bb = self.bytes[end];
-                    if bb == 0x1b || bb < 0x20 || bb == 0x7f || (0x80..=0x9f).contains(&bb) {
+                    if bb < 0x20 || bb == 0x7f || c1_at(self.bytes, end).is_some() {
                         break;
                     }
                     match utf8_char_at(self.bytes, end) {
@@ -297,16 +310,30 @@ fn is_c1_introducer(b: u8) -> bool {
     matches!(b, 0x90 | 0x98 | 0x9b | 0x9d | 0x9e | 0x9f)
 }
 
+#[inline]
+fn c1_at(bytes: &[u8], at: usize) -> Option<(u8, usize)> {
+    let b = bytes[at];
+    if (0x80..=0x9f).contains(&b) {
+        Some((b, 1))
+    } else if b == 0xc2
+        && let Some(&control @ 0x80..=0x9f) = bytes.get(at + 1)
+    {
+        Some((control, 2))
+    } else {
+        None
+    }
+}
+
 /// Return the byte index past the end of an escape sequence starting at
 /// `start`.
 ///
-/// `bytes[start]` is either `0x1B` (ESC) or an 8-bit C1 sequence introducer
+/// `bytes[start]` starts ESC or a raw or UTF-8 C1 sequence introducer
 /// (`0x9B`, `0x9D`, `0x90`, `0x98`, `0x9E`, `0x9F`). The returned index points
 /// to the first byte after the sequence. If the sequence is incomplete the
 /// index is the end of `bytes`.
 fn scan_sequence(bytes: &[u8], start: usize) -> usize {
     let len = bytes.len();
-    let head = bytes[start];
+    let (head, size) = c1_at(bytes, start).unwrap_or((bytes[start], 1));
 
     match head {
         0x1b => {
@@ -322,9 +349,9 @@ fn scan_sequence(bytes: &[u8], start: usize) -> usize {
                 _ => scan_esc_intermediate(bytes, i),
             }
         }
-        0x9b => scan_csi(bytes, start + 1),
-        0x9d => scan_string(bytes, start + 1, true),
-        0x90 | 0x98 | 0x9e | 0x9f => scan_string(bytes, start + 1, false),
+        0x9b => scan_csi(bytes, start + size),
+        0x9d => scan_string(bytes, start + size, true),
+        0x90 | 0x98 | 0x9e | 0x9f => scan_string(bytes, start + size, false),
         _ => start + 1,
     }
 }
@@ -363,8 +390,10 @@ fn scan_string(bytes: &[u8], from: usize, bel_ends: bool) -> usize {
     let mut i = from;
     while i < len {
         let b = bytes[i];
-        // At a boundary, so this is C1 ST and not a continuation byte.
-        if b == 0x9c || (b == 0x07 && bel_ends) {
+        if let Some((0x9c, size)) = c1_at(bytes, i) {
+            return i + size;
+        }
+        if b == 0x07 && bel_ends {
             return i + 1;
         }
         if b == 0x1b && i + 1 < len && bytes[i + 1] == b'\\' {
@@ -434,15 +463,19 @@ mod util {
             match t {
                 Token::Text { text, .. } | Token::Escape(text) => out.extend_from_slice(text),
                 Token::Control(c) => out.push(*c),
+                Token::ControlUtf8(c) => out.extend_from_slice(&[0xc2, *c]),
             }
         }
         out
     }
 
-    /// A control function in both of its forms: `ESC x` and the single C1
-    /// byte. Every sequence test runs over both, so every test needs this.
-    pub(super) fn forms(seven: &[u8], eight: u8) -> [(&'static str, Vec<u8>); 2] {
-        [("7-bit", seven.to_vec()), ("8-bit", vec![eight])]
+    /// A control function in 7-bit, raw C1, and UTF-8 C1 forms.
+    pub(super) fn forms(seven: &[u8], eight: u8) -> [(&'static str, Vec<u8>); 3] {
+        [
+            ("7-bit", seven.to_vec()),
+            ("8-bit", vec![eight]),
+            ("UTF-8", vec![0xc2, eight]),
+        ]
     }
 }
 
@@ -469,6 +502,19 @@ mod tests {
         assert_eq!(toks.len(), 4);
         assert!(matches!(toks[0], Token::Escape(b"\x1b[31m")));
         assert!(matches!(toks[3], Token::Escape(b"\x1b[m")));
+    }
+
+    #[test]
+    fn utf8_c1_sequences_are_zero_width() {
+        for input in [
+            &b"\x9b31mhello\x9bm"[..],
+            b"\xc2\x9b31mhello\xc2\x9bm",
+            b"\xc2\x9d8;;https://example.com\xc2\x9chello\xc2\x9d8;;\xc2\x9c",
+        ] {
+            for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+                assert_eq!(string_width(input, mode, false), 5, "{input:x?}");
+            }
+        }
     }
 
     #[test]
@@ -604,6 +650,7 @@ mod sequences {
         ("BEL", b"\x07"),
         ("ESC backslash", b"\x1b\\"),
         ("8-bit ST", b"\x9c"),
+        ("UTF-8 ST", b"\xc2\x9c"),
     ];
 
     /// Payloads with and without UTF-8. The non-ASCII one is chosen for the
@@ -792,53 +839,20 @@ mod sequences {
         }
     }
 
-    /// A byte in `0x80..=0x9F` is a C1 control between characters and a
-    /// continuation byte inside one. Which it is depends only on the decoder's
-    /// state, never on what a caller meant.
-    ///
-    /// So `C2 9C` is the character U+009C - a lead byte, then a continuation
-    /// byte collected as part of it - and not 8-bit ST, which is the single
-    /// byte `9C`. Likewise `C2 9D` is the character U+009D and does not open
-    /// an OSC. A `&str` cannot hold a raw C1 byte at all, which is what 7-bit
-    /// `ESC \` and `ESC ]` are for.
     #[test]
-    fn a_c1_byte_inside_a_character_is_not_a_control() {
-        // Between characters: 8-bit ST, and the sequence ends.
-        let toks = tokens(b"\x1b]0;title\x9cZ");
-        assert_eq!(toks[0], Token::Escape(b"\x1b]0;title\x9c"));
-        assert_eq!(
-            toks[1],
-            Token::Text {
-                text: b"Z",
-                width: 1
-            }
-        );
-
-        // Inside a character: a continuation byte, and the sequence runs on.
-        // `C2 9C` is the character U+009C - what `"\u{9c}"` would compile to -
-        // so the OSC here is simply unterminated.
-        let unterminated = b"\x1b]0;title\xc2\x9cZ";
-        assert_eq!(tokens(unterminated), vec![Token::Escape(&unterminated[..])]);
-
-        // The same for an introducer: the byte opens a sequence, the
-        // character does not.
-        let toks = tokens(b"\x9d0;title\x07Z");
-        assert_eq!(toks[0], Token::Escape(b"\x9d0;title\x07"));
-        let toks = tokens(b"\xc2\x9d0;title\x07Z");
-        assert!(
-            !matches!(toks[0], Token::Escape(_)),
-            "the character U+009D opened a sequence: {toks:?}"
-        );
-        // U+009D measures zero, `0;title` seven, BEL zero, `Z` one.
-        assert_eq!(
-            string_width(b"\xc2\x9d0;title\x07Z", WidthMode::Wc, false),
-            8
-        );
-
-        // And the case that made this matter: the `9C` inside "✅" is a
-        // continuation byte, so the title survives whole.
-        let toks = tokens(b"\x1b]0;\xe2\x9c\x85\x07Z");
-        assert_eq!(toks[0], Token::Escape(b"\x1b]0;\xe2\x9c\x85\x07"));
+    fn c1_encodings_preserve_sequence_boundaries() {
+        for input in [
+            &b"\x1b]0;title\x9cZ"[..],
+            b"\x1b]0;title\xc2\x9cZ",
+            b"\x9d0;title\x07Z",
+            b"\xc2\x9d0;title\x07Z",
+            b"\x1b]0;\xe2\x9c\x85\x07Z",
+        ] {
+            let toks = tokens(input);
+            assert_eq!(toks[0], Token::Escape(&input[..input.len() - 1]));
+            assert_eq!(visible(&toks), "Z");
+            assert_eq!(rebuild(&toks), input);
+        }
     }
 
     /// `BEL` ends an OSC and only an OSC.
@@ -891,65 +905,121 @@ mod sequences {
         }
     }
 
-    /// The rule, over every C1 byte rather than the two that caused trouble.
-    ///
-    /// `C2 xx` encodes U+0080..U+00BF, so for any C1 byte there is a
-    /// character that carries it as a continuation byte. On its own the byte
-    /// is a control; inside that character it is not.
     #[test]
-    fn every_c1_byte_depends_on_the_decoder_state() {
+    fn every_c1_control_preserves_its_encoding() {
         for c in 0x80u8..=0x9f {
-            // Between characters: a control, either standalone or opening a
-            // sequence.
-            let single = [c];
-            let alone: Vec<Token<'_>> = tokenize(&single, WidthMode::Wc, false).collect();
-            match alone.as_slice() {
-                [Token::Control(got)] => assert_eq!(*got, c),
-                [Token::Escape(seq)] => assert!(
-                    is_c1_introducer(c) && *seq == &single[..],
-                    "0x{c:02x} opened a sequence but is not an introducer"
-                ),
-                other => panic!("0x{c:02x} alone produced {other:?}"),
+            for input in [vec![c], vec![0xc2, c]] {
+                for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+                    let toks: Vec<_> = tokenize(&input, mode, false).collect();
+                    let expected = if is_c1_introducer(c) {
+                        Token::Escape(&input)
+                    } else if input.len() == 1 {
+                        Token::Control(c)
+                    } else {
+                        Token::ControlUtf8(c)
+                    };
+                    assert_eq!(toks, [expected]);
+                    assert_eq!(rebuild(&toks), input);
+                    assert_eq!(string_width(&input, mode, false), 0);
+
+                    let payload = [b"\x1b]0;", input.as_slice(), b"Z\x07"].concat();
+                    let expected_len = if c == 0x9c {
+                        4 + input.len()
+                    } else {
+                        payload.len()
+                    };
+                    assert_eq!(
+                        tokenize(&payload, mode, false).next(),
+                        Some(Token::Escape(&payload[..expected_len])),
+                    );
+                }
             }
-            assert_eq!(string_width(&single, WidthMode::Wc, false), 0);
+        }
+    }
+}
 
-            // Inside a character: one zero-width text token, no control.
-            let encoded = [0xc2, c];
-            let inside: Vec<Token<'_>> = tokenize(&encoded, WidthMode::Wc, false).collect();
-            assert_eq!(
-                inside,
-                vec![Token::Text {
-                    text: &encoded[..],
-                    width: 0
-                }],
-                "U+{:04X} was not read as a character",
-                0x80 + u32::from(c) - 0x80
-            );
+#[cfg(test)]
+mod utf8_c1 {
+    use super::{util::*, *};
+    use crate::ansi::{strip::strip, truncate, wrap};
 
-            // The same inside a control string: the byte ends it only if it
-            // is ST, the character never does.
-            let mut raw = b"\x1b]0;".to_vec();
-            raw.push(c);
-            raw.extend_from_slice(b"Z\x07");
-            let ends_early = matches!(
-                tokenize(&raw, WidthMode::Wc, false).next(),
-                Some(Token::Escape(seq)) if seq.len() < raw.len()
-            );
-            assert_eq!(
-                ends_early,
-                c == 0x9c || c == 0x1b,
-                "0x{c:02x} in a payload terminated the sequence unexpectedly"
-            );
+    #[test]
+    fn text_utilities_preserve_standalone_control_encoding() {
+        let input = std::str::from_utf8(b"ab\xc2\x80cdef").unwrap();
+        assert_eq!(strip(input), input);
+        assert_eq!(
+            wrap::hardwrap(input, 3, true).as_bytes(),
+            b"ab\xc2\x80c\ndef"
+        );
+        for result in [
+            wrap::wordwrap(
+                std::str::from_utf8(b"ab\xc2\x80 cd").unwrap(),
+                2,
+                wrap::DEFAULT_BREAKPOINTS,
+            ),
+            wrap::wrap(
+                std::str::from_utf8(b"ab\xc2\x80 cd").unwrap(),
+                2,
+                wrap::DEFAULT_BREAKPOINTS,
+            ),
+        ] {
+            assert_eq!(result.as_bytes(), b"ab\xc2\x80\ncd");
+        }
+        assert_eq!(truncate::truncate(input, 4, "").as_bytes(), b"ab\xc2\x80cd");
+        assert_eq!(
+            truncate::truncate_left(input, 4, "").as_bytes(),
+            b"\xc2\x80cdef"
+        );
+        assert_eq!(truncate::cut(input, 1, 1).as_bytes(), b"b\xc2\x80cde");
+    }
 
-            let mut encoded_in = b"\x1b]0;".to_vec();
-            encoded_in.extend_from_slice(&encoded);
-            encoded_in.extend_from_slice(b"Z\x07");
-            let len = encoded_in.len();
-            assert_eq!(
-                tokenize(&encoded_in, WidthMode::Wc, false).next(),
-                Some(Token::Escape(&encoded_in[..len])),
-                "U+00{c:02X} in a payload ended the sequence"
-            );
+    #[test]
+    fn text_utilities_preserve_encoded_sequences() {
+        let input = std::str::from_utf8(b"\xc2\x9b31mabcdef\xc2\x9bm").unwrap();
+        assert_eq!(strip(input), "abcdef");
+        assert_eq!(
+            wrap::hardwrap(input, 3, true).as_bytes(),
+            b"\xc2\x9b31mabc\ndef\xc2\x9bm"
+        );
+        assert_eq!(
+            truncate::truncate(input, 4, "").as_bytes(),
+            b"\xc2\x9b31mabcd\xc2\x9bm"
+        );
+        assert_eq!(
+            truncate::truncate_left(input, 4, "").as_bytes(),
+            b"\xc2\x9b31mcdef\xc2\x9bm"
+        );
+        assert_eq!(
+            truncate::cut(input, 1, 1).as_bytes(),
+            b"\xc2\x9b31mbcde\xc2\x9bm"
+        );
+    }
+
+    #[test]
+    fn other_two_byte_characters_remain_text() {
+        for lead in 0xc2..=0xdf {
+            for tail in 0x80..=0xbf {
+                if lead == 0xc2 && tail <= 0x9f {
+                    continue;
+                }
+                let input = [lead, tail];
+                let toks = tokens(&input);
+                assert!(matches!(toks.as_slice(), [Token::Text { text, .. }] if *text == input));
+                assert_eq!(rebuild(&toks), input);
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_leads_preserve_encoded_controls_and_progress() {
+        for input in [
+            &b"\xc2\xc2\x9b31mZ"[..],
+            b"\xe0\xc2\x9d0;title\xc2\x9cZ",
+            b"\xc2\x1b]0;title\xc2\x9cZ",
+        ] {
+            let toks = tokens(input);
+            assert_eq!(visible(&toks), "Z");
+            assert_eq!(rebuild(&toks), input);
         }
     }
 }
@@ -967,9 +1037,12 @@ mod fast_path {
             &b"\n"[..],
             b"\x7f",
             b"\x9c",
+            b"\xc2\x9c",
             b"\xff",
             b"\x1b[31m",
             b"\x9b31m",
+            b"\xc2\x9b31m",
+            b"\xc2\x9d0;title\xc2\x9c",
             b"\x1b]0;title\x07",
             b"\x1bPpayload\x1b\\",
         ] {
@@ -1135,7 +1208,7 @@ mod fast_path {
                 for t in tokenize(&input, WidthMode::Wc, false) {
                     let bytes = match t {
                         Token::Text { text, .. } | Token::Escape(text) => text,
-                        Token::Control(_) => continue,
+                        Token::Control(_) | Token::ControlUtf8(_) => continue,
                     };
                     assert!(
                         std::str::from_utf8(bytes).is_ok(),
@@ -1243,6 +1316,7 @@ mod fast_path {
                     Token::Text { text, width } => format!("T{text:x?}w{width}"),
                     Token::Escape(b) => format!("E{b:x?}"),
                     Token::Control(c) => format!("C{c:02x}"),
+                    Token::ControlUtf8(c) => format!("U{c:02x}"),
                 })
                 .collect();
             assert_eq!(rendered.join(" "), *expected, "input {seed:x?}");
@@ -1318,6 +1392,22 @@ mod scaling {
         let _ = visible(&toks);
         assert_eq!(rebuild(&toks), bytes, "tokens did not reassemble the input");
         (t.scanned, t.validated)
+    }
+
+    #[test]
+    fn utf8_c1_boundaries_keep_scans_linear() {
+        for unit in [
+            &b"\xe7\x95\x8c\xc2\x9b31m\xe7\x95\x8c\xc2\x9bm"[..],
+            b"\xe7\x95\x8c\xc2\x80\xe7\x95\x8c",
+            b"\xe7\x95\x8c\xc2\x9d0;title\xc2\x9c",
+        ] {
+            for count in [1_000, 4_000, 16_000] {
+                let input = unit.repeat(count);
+                let (scanned, validated) = scan_cost(&input);
+                assert!(scanned <= input.len());
+                assert!(validated <= input.len());
+            }
+        }
     }
 
     /// Tokenizing one long line must cost work proportional to its length.

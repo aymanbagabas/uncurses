@@ -1464,8 +1464,11 @@ fn ambiguous_width_changes_invalidate_only_when_the_policy_changes() {
 #[test]
 fn insert_above_counts_wrapped_rows_and_protects_the_right_edge() {
     let styled = "\x1b[1;38;2;255;121;198mstyled\x1b[m ".repeat(10);
+    let utf8_styled = "\u{9b}1;38;2;255;121;198mstyled\u{9b}m ".repeat(10);
     for (width, content, rows, erase, wide, grapheme) in [
         (80, styled.as_str(), 1, true, false, false),
+        (80, utf8_styled.as_str(), 1, true, false, false),
+        (10, "\u{9b}1mxxxxxxxxxx\u{9b}m", 1, false, false, false),
         (10, "xxxxxxxxxx", 1, false, false, false),
         (10, "yyyyyyyyyyy", 2, true, false, false),
         (10, "yyyyyyyyyyyyyyyyyyyy", 2, false, false, false),

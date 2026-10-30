@@ -1,0 +1,45 @@
+//! Parse UTF-8 C1 escapes in text, then render ordinary terminal controls.
+
+use std::io;
+
+use uncurses::{
+    ansi::{strip::strip, text::string_width, wrap::hardwrap},
+    buffer::Surface,
+    screen::Screen,
+    style::{AttrFlags, Style},
+    text::{Painter, TextSurface, WidthMode},
+};
+
+fn main() -> io::Result<()> {
+    for (name, csi) in [("7-bit", "\x1b["), ("UTF-8 C1", "\u{9b}")] {
+        let input = format!("{csi}1mhello{csi}m");
+        let width = string_width(input.as_bytes(), WidthMode::Wc, false);
+        assert_eq!(width, 5);
+        assert_eq!(strip(&input), "hello");
+        let wrapped = hardwrap(&input, 3, true);
+        assert_eq!(strip(&wrapped), "hel\nlo");
+
+        let mut screen = Screen::new(Vec::new(), (10, 1));
+        Painter::new(&mut screen).set_str((0, 0), &input, Style::default());
+        assert!(
+            screen
+                .cell((0, 0).into())
+                .unwrap()
+                .style
+                .attrs
+                .contains(AttrFlags::BOLD)
+        );
+        screen.render()?;
+        assert!(screen.writer().contains(&0x1b));
+        assert!(!screen.writer().contains(&0xc2));
+        println!(
+            "{name}: width={width}, plain={:?}, wrapped={wrapped:?}",
+            strip(&input)
+        );
+        println!(
+            "Rendered bytes: {:?}",
+            String::from_utf8_lossy(screen.writer())
+        );
+    }
+    Ok(())
+}

@@ -73,7 +73,7 @@ pub fn truncate_mode(
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
         match tok {
             Token::Escape(esc) => out.push_str(bs(esc)),
-            Token::Control(b) => {
+            Token::Control(b) | Token::ControlUtf8(b) => {
                 if !tail_inserted {
                     out.push(b as char);
                 }
@@ -136,7 +136,7 @@ pub fn truncate_left_mode(
                     out.push_str(bs(esc));
                 }
             }
-            Token::Control(b) => {
+            Token::Control(b) | Token::ControlUtf8(b) => {
                 if !dropping {
                     out.push(b as char);
                 }
@@ -192,7 +192,7 @@ pub fn cut_mode(s: &str, left: usize, right: usize, mode: WidthMode, eaw_wide: b
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
         match tok {
             Token::Escape(esc) => out.push_str(bs(esc)),
-            Token::Control(b) => {
+            Token::Control(b) | Token::ControlUtf8(b) => {
                 if col >= left && emitted < target {
                     out.push(b as char);
                 }

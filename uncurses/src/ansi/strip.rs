@@ -8,7 +8,7 @@
 //! ## Parser conventions
 //!
 //! Tokenization recognizes CSI, OSC, DCS, SOS, PM, APC, and two-byte ESC
-//! sequences in both 7-bit and 8-bit forms. Escape tokens contribute no output.
+//! sequences in 7-bit, raw C1, and UTF-8 C1 forms. Escape tokens contribute no output.
 //!
 //! ## Mode interaction
 //!
@@ -31,7 +31,7 @@ pub fn strip(s: &str) -> String {
     for tok in tokenize(s.as_bytes(), WidthMode::default(), false) {
         match tok {
             Token::Text { text, .. } => out.push_str(bs(text)),
-            Token::Control(b) => out.push(b as char),
+            Token::Control(b) | Token::ControlUtf8(b) => out.push(b as char),
             Token::Escape(_) => {}
         }
     }

@@ -71,7 +71,7 @@ pub fn hardwrap_mode(
                 out.push('\n');
                 col = 0;
             }
-            Token::Control(b) => out.push(b as char),
+            Token::Control(b) | Token::ControlUtf8(b) => out.push(b as char),
             Token::Text { text, width } => {
                 let w = width as usize;
                 if w == 0 {
@@ -221,7 +221,7 @@ fn wordwrap_inner(
                 space.clear();
                 space_w = 0;
             }
-            Token::Control(b) => {
+            Token::Control(b) | Token::ControlUtf8(b) => {
                 // Treat as part of the current word.
                 word.push(b as char);
             }
