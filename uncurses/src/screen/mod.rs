@@ -277,6 +277,9 @@ impl<W: Write> Screen<W> {
     /// needed and a following [`render`](Self::render) sees no change. An
     /// empty string is a no-op.
     ///
+    /// Wrapped rows follow the screen's width policy. ANSI escapes contribute
+    /// no width. A full final row skips erasure to preserve its last column.
+    ///
     /// # Errors
     ///
     /// Returns any error from flushing the inserted lines to the writer.
@@ -285,7 +288,6 @@ impl<W: Write> Screen<W> {
             return Ok(());
         }
 
-        let width = self.width;
         let height = self.height;
         let y = self.renderer.cursor_position().y;
 
@@ -296,15 +298,13 @@ impl<W: Write> Screen<W> {
         }
 
         let lines: Vec<&str> = content.split('\n').collect();
-        let mut offset: u16 = lines.len() as u16;
-        let width_mode = self.width_mode();
-        for line in &lines {
-            let lw =
-                crate::ansi::text::string_width(line.as_bytes(), width_mode, self.eaw_wide) as u16;
-            if let Some(n) = lw.checked_div(width) {
-                offset = offset.saturating_add(n);
-            }
-        }
+        let sizes: Vec<_> = lines
+            .iter()
+            .map(|line| self.insert_above_size(line))
+            .collect();
+        let offset = sizes
+            .iter()
+            .fold(0u16, |sum, &(rows, _)| sum.saturating_add(rows));
 
         for _ in 0..offset {
             self.out_buf.write_all(b"\n").unwrap();
@@ -315,16 +315,52 @@ impl<W: Write> Screen<W> {
             crate::ansi::cursor::write_cuu(&mut self.out_buf, up).unwrap();
         }
         crate::ansi::screen::write_insert_lines(&mut self.out_buf, offset).unwrap();
-        for line in &lines {
+        for (line, &(_, column)) in lines.iter().zip(&sizes) {
             self.out_buf.write_all(line.as_bytes()).unwrap();
-            self.out_buf
-                .write_all(crate::ansi::screen::ERASE_LINE_RIGHT)
-                .unwrap();
+            if self.width == 0 || column != usize::from(self.width) {
+                self.out_buf
+                    .write_all(crate::ansi::screen::ERASE_LINE_RIGHT)
+                    .unwrap();
+            }
             self.out_buf.write_all(b"\r\n").unwrap();
         }
 
         self.renderer.set_cursor_position(Position { y: 0, x: 0 });
         self.flush()
+    }
+
+    fn insert_above_size(&self, line: &str) -> (u16, usize) {
+        let mut rows = 1u16;
+        let mut column = 0usize;
+        let width = usize::from(self.width);
+        let mut advance = |cells: usize| {
+            if cells == 0 {
+                return;
+            }
+            if width > 0 && column > 0 && column + cells > width {
+                rows = rows.saturating_add(1);
+                column = 0;
+            }
+            column += cells;
+            if width > 0 && column > width {
+                rows = rows.saturating_add(((column - 1) / width) as u16);
+                column = (column - 1) % width + 1;
+            }
+        };
+        let mode = self.width_mode();
+        for token in crate::ansi::text::tokenize(line.as_bytes(), mode, self.eaw_wide) {
+            if let crate::ansi::text::Token::Text { text, width } = token {
+                if mode == WidthMode::Grapheme {
+                    advance(usize::from(width));
+                } else {
+                    // Code-point terminals can wrap within a joined cluster.
+                    for ch in std::str::from_utf8(text).unwrap().chars() {
+                        advance(usize::from(crate::text::char_width(ch, self.eaw_wide)));
+                    }
+                }
+            }
+        }
+        (rows, column)
     }
 
     // --- Cursor position ------------------------------------------------
@@ -600,6 +636,17 @@ impl<W: Write> Screen<W> {
     /// [`set_grapheme_clusters`](Self::set_grapheme_clusters).
     pub fn grapheme_clusters(&self) -> bool {
         self.grapheme_clusters
+    }
+
+    /// Set whether East Asian Ambiguous characters occupy two columns.
+    ///
+    /// A changed policy invalidates the displayed frame. Rewrite text whose
+    /// measured width changes before the next render.
+    pub fn set_ambiguous_wide(&mut self, wide: bool) {
+        if self.eaw_wide != wide {
+            self.eaw_wide = wide;
+            self.invalidate();
+        }
     }
 
     /// Enable or disable synchronized-output frame wrapping.
