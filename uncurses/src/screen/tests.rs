@@ -954,6 +954,88 @@ fn insert_above_before_growth_from_rendered_zero_height_keeps_the_anchor() {
 }
 
 #[test]
+fn commit_rows_releases_displayed_rows_without_output() {
+    let mut screen = three_inline_rows();
+    screen.commit_rows(2).unwrap();
+    assert!(screen.writer().is_empty());
+    assert_eq!(screen.size(), Size::new(10, 1));
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+    assert_eq!(screen.cell(Position::ORIGIN).unwrap().content(), "c");
+    screen.set_str((4, 0), "C", Style::default());
+    screen.render().unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25l\x1b[4CC\x1b[?25h");
+    assert_eq!(screen.diverge(), None);
+}
+
+#[test]
+fn commit_rows_renders_pending_edits_first() {
+    let mut screen = three_inline_rows();
+    screen.set_str((4, 2), "!", Style::default());
+    screen.commit_rows(1).unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25l\x1b[4C!\x1b[?25h");
+    assert_eq!(screen.cell((4, 1).into()).unwrap().content(), "!");
+}
+
+#[test]
+fn commit_rows_rebases_cursors_and_repaint_starts_at_the_new_origin() {
+    let mut screen = three_inline_rows();
+    screen.save_cursor();
+    screen.set_cursor_position((3, 2));
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.commit_rows(2).unwrap();
+    assert_eq!(screen.desired_cursor, Some(Position::new(3, 0)));
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+    screen.restore_cursor();
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+    screen.clear_cursor_position();
+    screen.invalidate();
+    screen.render().unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25l\x1b[Jcccc\x1b[?25h");
+}
+
+#[test]
+fn commit_rows_moves_off_released_rows() {
+    let mut screen = three_inline_rows();
+    screen.set_cursor_position(Position::ORIGIN);
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.commit_rows(1).unwrap();
+    assert_eq!(screen.writer(), b"\n");
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+}
+
+#[test]
+fn commit_all_rows_starts_a_fresh_line_and_can_grow_again() {
+    let mut screen = three_inline_rows();
+    screen.commit_rows(u16::MAX).unwrap();
+    assert_eq!(screen.writer(), b"\r\n");
+    assert_eq!(screen.size(), Size::new(10, 0));
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+    screen.writer_mut().clear();
+    screen.resize_height(1);
+    screen.set_str((0, 0), "NEW", Style::default());
+    screen.render().unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25lNEW\r\x1b[?25h");
+}
+
+#[test]
+fn commit_rows_no_op_preserves_pending_output_and_edits() {
+    for (fullscreen, count) in [(false, 0), (true, 0), (true, 1), (true, 10)] {
+        let mut screen = three_inline_rows();
+        screen.set_fullscreen(fullscreen);
+        screen.set_str((0, 0), "X", Style::default());
+        screen.write_all(b"raw").unwrap();
+        screen.commit_rows(count).unwrap();
+        assert!(screen.writer().is_empty());
+        assert_eq!(screen.out_buf, b"raw");
+        assert!(screen.front_buf.has_changes());
+        assert_eq!(screen.size().height, 3);
+    }
+}
+
+#[test]
 fn insert_above_after_cursor_move_into_pending_growth_keeps_displayed_rows() {
     let mut screen = Screen::new(Vec::new(), (10, 3));
     let mut display = InlineDisplay::new();
@@ -1058,6 +1140,126 @@ fn resize_height_from_empty_fullscreen_keeps_absolute_geometry() {
         screen.writer_mut().clear();
         screen.render().unwrap();
         assert!(screen.writer().is_empty());
+    }
+}
+
+#[test]
+fn commit_rows_handles_zero_width_and_repeated_commits() {
+    for count in [1, 2] {
+        let mut screen = Screen::new(Vec::new(), (0, 0));
+        screen.resize_height(2);
+        screen.commit_rows(count).unwrap();
+        assert_eq!(screen.size(), Size::new(0, 2 - count));
+        assert_eq!(screen.renderer.last_size(), (0, 2 - count));
+        assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+    }
+    let mut screen = three_inline_rows();
+    screen.commit_rows(1).unwrap();
+    screen.commit_rows(1).unwrap();
+    assert!(screen.writer().is_empty());
+    assert_eq!(screen.cell(Position::ORIGIN).unwrap().content(), "c");
+    screen.resize_height(2);
+    screen.set_str((0, 1), "dddd", Style::default());
+    screen.render().unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25l\ndddd\r\x1b[?25h");
+}
+
+#[derive(Default)]
+struct CommitWriter {
+    bytes: Vec<u8>,
+    fail_write: bool,
+    partial: usize,
+    flushes: usize,
+    fail_flush_at: usize,
+}
+
+impl Write for CommitWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.fail_write {
+            if self.partial > 0 {
+                let count = self.partial.min(bytes.len());
+                self.bytes.extend_from_slice(&bytes[..count]);
+                self.partial = 0;
+                return Ok(count);
+            }
+            return Err(io::Error::other("commit output failed"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flushes += 1;
+        if self.flushes == self.fail_flush_at {
+            return Err(io::Error::other("commit flush failed"));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn commit_rows_output_failures_preserve_the_logical_release() {
+    for failure in ["render", "write", "partial", "flush"] {
+        let mut screen = Screen::new(CommitWriter::default(), (10, 3));
+        for (y, row) in ["AAAA", "BBBB", "CCCC"].into_iter().enumerate() {
+            screen.set_str((0, y as u16), row, Style::default());
+        }
+        screen.render().unwrap();
+        screen.writer_mut().bytes.clear();
+        if failure == "render" {
+            screen.set_str((0, 0), "X", Style::default());
+        }
+        if failure == "flush" {
+            screen.writer_mut().fail_flush_at = screen.writer().flushes + 2;
+        } else {
+            screen.writer_mut().fail_write = true;
+            screen.writer_mut().partial = usize::from(failure == "partial");
+        }
+        assert!(screen.commit_rows(3).is_err(), "{failure}");
+        let retained = if failure == "render" { 3 } else { 0 };
+        assert_eq!(screen.size().height, retained, "{failure}");
+        assert_eq!(screen.front_buf.height(), retained, "{failure}");
+        screen.writer_mut().fail_write = false;
+        screen.writer_mut().fail_flush_at = 0;
+        screen.flush().unwrap();
+        if failure == "render" {
+            screen.commit_rows(3).unwrap();
+        }
+        screen.writer_mut().bytes.clear();
+        screen.resize_height(1);
+        screen.set_str((0, 0), "NEW", Style::default());
+        screen.render().unwrap();
+        let output = s(&screen.writer().bytes);
+        assert!(output.contains("NEW"), "{failure}: {output:?}");
+        assert!(!output.contains("\x1bM"), "{failure}: {output:?}");
+        assert!(!output.contains("A"), "{failure}: {output:?}");
+    }
+}
+
+#[test]
+fn commit_rows_final_flush_failure_keeps_retained_rows_editable() {
+    for count in [1, 3] {
+        let mut screen = Screen::new(CommitWriter::default(), (10, 3));
+        for (y, row) in ["AAAA", "BBBB", "CCCC"].into_iter().enumerate() {
+            screen.set_str((0, y as u16), row, Style::default());
+        }
+        screen.set_cursor_position((1, 0));
+        screen.render().unwrap();
+        screen.writer_mut().fail_flush_at = screen.writer().flushes + 2;
+        assert!(screen.commit_rows(count).is_err());
+        assert_eq!(screen.size().height, 3 - count);
+        screen.resize_height(4 - count);
+        if count == 1 {
+            screen.set_str((0, 0), "EDIT", Style::default());
+        }
+        screen.set_str((0, 3 - count), "NEW", Style::default());
+        screen.render().unwrap();
+        assert_eq!(screen.cell((0, 3 - count).into()).unwrap().content(), "N");
+        if count == 1 {
+            assert_eq!(screen.cell(Position::ORIGIN).unwrap().content(), "E");
+            assert_eq!(screen.cell((0, 1).into()).unwrap().content(), "C");
+        }
+        assert_eq!(screen.diverge(), None);
     }
 }
 

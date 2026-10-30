@@ -67,6 +67,7 @@
 pub(crate) mod buffer;
 pub(crate) mod caps;
 pub(crate) mod color_cache;
+mod commit;
 pub(crate) mod cursor;
 #[cfg(test)]
 mod cursor_planner_tests;
