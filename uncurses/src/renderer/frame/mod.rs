@@ -61,7 +61,7 @@ impl Renderer {
         let width = new_buf.width();
         let height = new_buf.height();
 
-        if !self.force_clear && !new_buf.has_changes() {
+        if !self.force_clear && !new_buf.has_changes() && !self.size_changed(width, height) {
             return Ok(());
         }
 
