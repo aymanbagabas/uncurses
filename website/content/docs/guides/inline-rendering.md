@@ -124,6 +124,11 @@ program.screen_mut().insert_above("compiled in 1.2s")?;
 It flushes immediately and leaves your live block untouched, so the committed
 line lands in scrollback and the block keeps drawing right below it.
 
+Wrapped lines follow the screen's width policy, including wide characters.
+ANSI style sequences contribute no columns.
+Use `screen.set_ambiguous_wide(true)` when the terminal displays ambiguous
+characters as two columns. Rewrite existing text after changing that policy.
+
 A multiline prompt that commits its buffer on `Ctrl-D` does exactly this: render
 the editable block inline, and on commit push the finished text up with
 `insert_above` and clear the block for the next entry.

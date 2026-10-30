@@ -45,7 +45,7 @@ impl<O: Write> Screen<O> {
     }
 
     fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
-        self.eaw_wide = eaw_wide;
+        self.set_ambiguous_wide(eaw_wide);
         self
     }
 
@@ -719,6 +719,77 @@ fn equal_wide_cell_after_screen_shrink_is_normalized() {
 }
 
 // --- insert_above ---
+
+#[test]
+fn ambiguous_width_changes_invalidate_only_when_the_policy_changes() {
+    let mut screen = Screen::new(Vec::new(), (10, 2));
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+    screen.set_ambiguous_wide(false);
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+    screen.set_ambiguous_wide(true);
+    assert!(screen.eaw_wide());
+    assert_eq!(screen.str_width("…"), 2);
+    screen.render().unwrap();
+    assert!(!screen.writer().is_empty());
+    screen.writer_mut().clear();
+    screen.set_ambiguous_wide(true);
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn insert_above_counts_wrapped_rows_and_protects_the_right_edge() {
+    let styled = "\x1b[1;38;2;255;121;198mstyled\x1b[m ".repeat(10);
+    for (width, content, rows, erase, wide, grapheme) in [
+        (80, styled.as_str(), 1, true, false, false),
+        (10, "xxxxxxxxxx", 1, false, false, false),
+        (10, "yyyyyyyyyyy", 2, true, false, false),
+        (10, "yyyyyyyyyyyyyyyyyyyy", 2, false, false, false),
+        (5, "界界界界界", 3, true, false, false),
+        (3, "界界界", 3, true, false, true),
+        (5, "aaaa界aaa", 2, false, false, false),
+        (5, "\x1b[1m界界界界界\x1b[m", 3, true, false, true),
+        (5, "aaaa界aaa\u{301}", 2, false, false, true),
+        (3, "……………", 2, true, false, false),
+        (3, "……………", 5, true, true, false),
+        (3, "aa…a", 2, false, true, true),
+        (3, "👨‍👩‍👧‍👦", 4, true, false, false),
+        (3, "👨‍👩‍👧‍👦", 1, true, false, true),
+        (0, "abc", 1, true, false, false),
+    ] {
+        let mut screen = Screen::new(Vec::new(), (width, 2)).with_eaw_wide(wide);
+        screen.set_grapheme_clusters(grapheme);
+        screen.insert_above(content).unwrap();
+        let mut expected = format!("\r\x1b[B{}\x1b[{}A", "\n".repeat(rows), rows + 1);
+        if rows == 1 {
+            expected.push_str("\x1b[L");
+        } else {
+            expected.push_str(&format!("\x1b[{rows}L"));
+        }
+        expected.push_str(content);
+        if erase {
+            expected.push_str("\x1b[K");
+        }
+        expected.push_str("\r\n");
+        assert_eq!(
+            s(screen.writer()),
+            expected,
+            "width={width}, wide={wide}, grapheme={grapheme}, content={content:?}"
+        );
+    }
+}
+
+#[test]
+fn insert_above_preserves_empty_lines() {
+    let mut screen = Screen::new(Vec::new(), (10, 2));
+    screen.insert_above("a\n").unwrap();
+    assert_eq!(
+        s(screen.writer()),
+        "\r\x1b[B\n\n\x1b[3A\x1b[2La\x1b[K\r\n\x1b[K\r\n"
+    );
+}
 
 #[test]
 fn insert_above_emits_il_and_content() {
