@@ -294,6 +294,8 @@ impl<W: Write> Screen<W> {
     /// Tabs use stops every eight columns and clamp at the right edge.
     /// [`Program`](crate::program::Program) establishes these stops. A caller
     /// that drives `Screen` directly must establish the same terminal stops.
+    /// A pending height change takes effect on the next render. Insertion
+    /// uses the last rendered height and leaves pending cell edits staged.
     ///
     /// # Errors
     ///
@@ -303,13 +305,19 @@ impl<W: Write> Screen<W> {
             return Ok(());
         }
 
-        let height = self.height;
+        let height = self
+            .renderer
+            .last_size()
+            .map_or(self.height, |(_, height)| height);
         let y = self.renderer.cursor_position().y;
 
         self.out_buf.write_all(b"\r").unwrap();
-        let down = height.saturating_sub(y).saturating_sub(1);
-        if down > 0 {
-            crate::ansi::cursor::write_cud(&mut self.out_buf, down).unwrap();
+        let bottom = height.saturating_sub(1);
+        if y < bottom {
+            crate::ansi::cursor::write_cud(&mut self.out_buf, bottom - y).unwrap();
+        } else if y > bottom {
+            // An immediate cursor move can enter rows of a pending growth.
+            crate::ansi::cursor::write_cuu(&mut self.out_buf, y - bottom).unwrap();
         }
 
         let lines: Vec<&str> = content.split('\n').collect();
@@ -869,8 +877,9 @@ impl<W: Write> Screen<W> {
     /// height, so a terminal that grew between the last render and the
     /// handoff does not push the cursor below where the user started.
     pub(crate) fn park_cursor(&mut self) -> io::Result<()> {
-        let (last_width, last_height) = self.renderer.last_size();
-        if last_height > 0 {
+        if let Some((last_width, last_height)) = self.renderer.last_size()
+            && last_height > 0
+        {
             let last = Size::new(last_width, last_height);
             self.renderer
                 .move_to_between_frames(&mut self.out_buf, last, last_height - 1, 0)?;

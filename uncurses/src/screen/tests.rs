@@ -720,6 +720,90 @@ fn equal_wide_cell_after_screen_shrink_is_normalized() {
 
 // --- insert_above ---
 
+// Replay these ASCII fixtures on a ten-column terminal with spare rows.
+// This checks physical rows independently of the renderer's cell cache.
+struct InlineDisplay {
+    rows: Vec<Vec<u8>>,
+    x: usize,
+    y: usize,
+}
+
+impl InlineDisplay {
+    fn new() -> Self {
+        let mut rows = vec![vec![b' '; 10]; 24];
+        rows[3][..5].copy_from_slice(b"shell");
+        Self { rows, x: 0, y: 4 }
+    }
+
+    fn replay(&mut self, output: &[u8]) {
+        let mut bytes = output.iter().copied();
+        while let Some(byte) = bytes.next() {
+            match byte {
+                b'\r' => self.x = 0,
+                b'\n' => self.y += 1,
+                b'\x1b' => match bytes.next().unwrap() {
+                    b'M' => self.y = self.y.saturating_sub(1),
+                    b'[' => {
+                        let mut params = String::new();
+                        let command = loop {
+                            let byte = bytes.next().unwrap();
+                            if (0x40..=0x7e).contains(&byte) {
+                                break byte;
+                            }
+                            params.push(char::from(byte));
+                        };
+                        if params.starts_with('?') {
+                            assert_eq!(params, "?25");
+                            assert!(matches!(command, b'h' | b'l'));
+                            continue;
+                        }
+                        let n = if params.is_empty() {
+                            1
+                        } else {
+                            params.parse::<usize>().unwrap()
+                        };
+                        match command {
+                            b'A' => self.y = self.y.saturating_sub(n),
+                            b'B' => self.y += n,
+                            b'C' => self.x += n,
+                            b'D' => self.x = self.x.saturating_sub(n),
+                            b'J' => {
+                                assert!(params.is_empty() || params == "0");
+                                self.rows[self.y][self.x..].fill(b' ');
+                                for row in &mut self.rows[self.y + 1..] {
+                                    row.fill(b' ');
+                                }
+                            }
+                            b'K' => {
+                                assert!(params.is_empty() || params == "0");
+                                self.rows[self.y][self.x..].fill(b' ');
+                            }
+                            b'L' => {
+                                let width = self.rows[0].len();
+                                for _ in 0..n {
+                                    self.rows.insert(self.y, vec![b' '; width]);
+                                    self.rows.pop();
+                                }
+                            }
+                            _ => panic!("unexpected CSI {params}{command:?}"),
+                        }
+                    }
+                    byte => panic!("unexpected escape {byte:?}"),
+                },
+                b' '..=b'~' => {
+                    self.rows[self.y][self.x] = byte;
+                    self.x += 1;
+                }
+                _ => panic!("unexpected byte {byte:?}"),
+            }
+        }
+    }
+
+    fn row(&self, y: usize) -> &str {
+        std::str::from_utf8(&self.rows[y]).unwrap().trim_end()
+    }
+}
+
 fn three_inline_rows() -> Screen<Vec<u8>> {
     let mut screen = Screen::new(Vec::new(), (10, 3));
     for (y, row) in ["aaaa", "bbbb", "cccc"].into_iter().enumerate() {
@@ -728,6 +812,181 @@ fn three_inline_rows() -> Screen<Vec<u8>> {
     screen.render().unwrap();
     screen.writer_mut().clear();
     screen
+}
+
+#[test]
+fn insert_above_before_height_shrink_uses_rendered_geometry() {
+    let mut screen = three_inline_rows();
+    screen.resize_height(1);
+    screen.insert_above("log").unwrap();
+    assert_eq!(s(screen.writer()), "\r\n\x1b[3A\x1b[Llog\x1b[K\r\n");
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert_eq!(s(screen.writer()), "\x1b[?25l\n\x1b[J\x1b[A\x1b[?25h");
+}
+
+#[test]
+fn insert_above_keeps_pending_height_and_cells_until_render() {
+    for width in [0, 10] {
+        for height in [0, 1, 2, 4, 5] {
+            for rested_row in [None, Some(0), Some(1), Some(2)] {
+                let mut screen = Screen::new(Vec::new(), (width, 3));
+                let mut display = InlineDisplay::new();
+                for (y, row) in ["aaaa", "bbbb", "cccc"].into_iter().enumerate() {
+                    screen.set_str((0, y as u16), row, Style::default());
+                }
+                if let Some(y) = rested_row {
+                    screen.set_cursor_position((3, y));
+                }
+                screen.render().unwrap();
+                display.replay(screen.writer());
+                screen.writer_mut().clear();
+
+                screen.resize_height(height);
+                if height > 0 {
+                    screen.set_str((4, 0), "X", Style::default());
+                }
+                if height > 3 {
+                    screen.set_str((0, height - 1), "dddd", Style::default());
+                }
+                let desired = Position::new(2, height.saturating_sub(1));
+                screen.set_cursor_position(desired);
+                screen.write_all(b"\x1b[?25l").unwrap();
+                screen.insert_above("log").unwrap();
+                assert!(screen.writer().starts_with(b"\x1b[?25l\r"));
+                assert!(!s(screen.writer()).contains('X'));
+                assert!(!s(screen.writer()).contains("dddd"));
+                assert_eq!(screen.renderer.last_size(), Some((width, 3)));
+                assert_eq!(screen.desired_cursor, Some(desired));
+                assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+                display.replay(screen.writer());
+                assert_eq!(display.row(3), "shell");
+                assert_eq!(display.row(4), "log");
+                for (y, row) in ["aaaa", "bbbb", "cccc"].into_iter().enumerate() {
+                    assert_eq!(display.row(5 + y), if width == 0 { "" } else { row });
+                }
+                assert_eq!((display.x, display.y), (0, 5));
+                screen.writer_mut().clear();
+
+                // A second insertion must still use the displayed three rows.
+                screen.insert_above("next").unwrap();
+                assert_eq!(s(screen.writer()), "\r\x1b[2B\n\x1b[3A\x1b[Lnext\x1b[K\r\n");
+                display.replay(screen.writer());
+                assert_eq!(display.row(4), "log");
+                assert_eq!(display.row(5), "next");
+                screen.writer_mut().clear();
+
+                screen.render().unwrap();
+                display.replay(screen.writer());
+                for y in 0..height as usize {
+                    let expected = if width == 0 {
+                        ""
+                    } else {
+                        match y {
+                            0 => "aaaaX",
+                            1 => "bbbb",
+                            2 => "cccc",
+                            y if y == height as usize - 1 => "dddd",
+                            _ => "",
+                        }
+                    };
+                    assert_eq!(display.row(6 + y), expected);
+                }
+                for y in 6 + height as usize..display.rows.len() {
+                    assert_eq!(display.row(y), "");
+                }
+                assert_eq!(
+                    (display.x, display.y),
+                    (
+                        if width == 0 { 0 } else { 2 },
+                        6 + height.saturating_sub(1) as usize
+                    )
+                );
+                assert_eq!(screen.diverge(), None);
+                screen.writer_mut().clear();
+                screen.render().unwrap();
+                assert!(screen.writer().is_empty());
+
+                if height > 0 && width > 0 {
+                    screen.set_str((0, 0), "Z", Style::default());
+                    screen.render().unwrap();
+                    display.replay(screen.writer());
+                    assert_eq!(display.row(6), "ZaaaX");
+                    assert_eq!(display.row(5), "next");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn insert_above_before_growth_from_rendered_zero_height_keeps_the_anchor() {
+    for width in [0, 10] {
+        let mut screen = Screen::new(Vec::new(), (width, 1));
+        let mut display = InlineDisplay::new();
+        screen.render().unwrap();
+        display.replay(screen.writer());
+        screen.writer_mut().clear();
+        screen.resize_height(0);
+        screen.render().unwrap();
+        display.replay(screen.writer());
+        screen.writer_mut().clear();
+        assert_eq!(screen.renderer.last_size(), Some((width, 0)));
+
+        screen.resize_height(2);
+        screen.set_str((0, 0), "new", Style::default());
+        screen.insert_above("log").unwrap();
+        assert_eq!(s(screen.writer()), "\r\n\x1b[Llog\x1b[K\r\n");
+        display.replay(screen.writer());
+        assert_eq!(display.row(5), "log");
+        assert_eq!((display.x, display.y), (0, 6));
+        screen.writer_mut().clear();
+
+        screen.render().unwrap();
+        display.replay(screen.writer());
+        assert_eq!(display.row(6), if width == 0 { "" } else { "new" });
+        assert_eq!(display.row(5), "log");
+        assert_eq!((display.x, display.y), (0, 7));
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+}
+
+#[test]
+fn insert_above_after_cursor_move_into_pending_growth_keeps_displayed_rows() {
+    let mut screen = Screen::new(Vec::new(), (10, 3));
+    let mut display = InlineDisplay::new();
+    for (y, row) in ["aaaa", "bbbb", "cccc"].into_iter().enumerate() {
+        screen.set_str((0, y as u16), row, Style::default());
+    }
+    screen.render().unwrap();
+    display.replay(screen.writer());
+    screen.writer_mut().clear();
+
+    screen.resize_height(5);
+    screen.set_str((4, 0), "X", Style::default());
+    screen.move_cursor_to((0, 4)).unwrap();
+    display.replay(screen.writer());
+    assert_eq!((display.x, display.y), (0, 8));
+    screen.writer_mut().clear();
+
+    screen.insert_above("log").unwrap();
+    assert_eq!(s(screen.writer()), "\r\x1b[2A\n\x1b[3A\x1b[Llog\x1b[K\r\n");
+    display.replay(screen.writer());
+    assert_eq!(display.row(4), "log");
+    assert_eq!(display.row(5), "aaaa");
+    assert_eq!(display.row(6), "bbbb");
+    assert_eq!(display.row(7), "cccc");
+    assert_eq!((display.x, display.y), (0, 5));
+    screen.writer_mut().clear();
+
+    screen.render().unwrap();
+    display.replay(screen.writer());
+    assert_eq!(display.row(5), "aaaaX");
+    assert_eq!(display.row(6), "bbbb");
+    assert_eq!(display.row(7), "cccc");
+    assert_eq!((display.x, display.y), (0, 9));
 }
 
 #[test]
