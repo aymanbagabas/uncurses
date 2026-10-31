@@ -81,6 +81,8 @@ use bitflags::bitflags;
 use crate::ansi::{mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
+#[cfg(windows)]
+use crate::event::SourceFlags;
 use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
@@ -1294,6 +1296,11 @@ where
         // behind the source, so the option is carried there as it is taken.
         self.set_decoder_flags(self.options.legacy_keys);
         self.terminal.make_raw()?;
+        {
+            let mut source = self.source.lock().unwrap();
+            let flags = source.flags() | SourceFlags::VT_INPUT;
+            source.set_flags(flags);
+        }
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
@@ -1391,6 +1398,11 @@ where
     /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        {
+            let mut source = self.source.lock().unwrap();
+            let flags = source.flags() | SourceFlags::VT_INPUT;
+            source.set_flags(flags);
+        }
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;

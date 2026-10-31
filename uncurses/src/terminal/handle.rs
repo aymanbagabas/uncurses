@@ -24,7 +24,7 @@
 //! ```rust,ignore
 //! use std::io::Write;
 //! use uncurses::buffer::TextBuffer;
-//! use uncurses::event::EventSource;
+//! use uncurses::event::{EventSource, SourceFlags};
 //! use uncurses::terminal::Terminal;
 //! use uncurses::text::Encode;
 //!
@@ -32,7 +32,7 @@
 //! let _saved = term.make_raw()?;
 //! let size = term.get_window_size()?;
 //! let mut frame = TextBuffer::new(size.col, size.row);
-//! let mut source = EventSource::new(term.input())?;
+//! let mut source = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
 //!
 //! // Paint `frame`, read events from `source`.
 //! frame.encode(&mut term.output())?;

@@ -38,17 +38,17 @@ use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Console::{
-    ENABLE_VIRTUAL_TERMINAL_INPUT, FOCUS_EVENT, GetConsoleMode, GetNumberOfConsoleInputEvents,
-    INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, MENU_EVENT, MOUSE_EVENT,
-    MOUSE_HWHEELED, MOUSE_MOVED, MOUSE_WHEELED, RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED,
-    ReadConsoleInputW, SHIFT_PRESSED, WINDOW_BUFFER_SIZE_EVENT,
+    FOCUS_EVENT, GetNumberOfConsoleInputEvents, INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED,
+    LEFT_CTRL_PRESSED, MENU_EVENT, MOUSE_EVENT, MOUSE_HWHEELED, MOUSE_MOVED, MOUSE_WHEELED,
+    RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED,
+    WINDOW_BUFFER_SIZE_EVENT,
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
-    Waker,
+    SourceFlags, Waker,
 };
 
 const READ_BATCH: usize = 64;
@@ -96,20 +96,22 @@ where
     /// Build a new Windows event source for `input`.
     ///
     /// Construction captures the console input handle, creates the wake event,
-    /// detects whether virtual-terminal input is enabled, and registers the
-    /// input and wake handles with the Windows poll backend. Resize events arrive
-    /// as `WINDOW_BUFFER_SIZE_EVENT` records on the input handle, so no separate
-    /// signal or resize pipe is needed.
+    /// and registers the input and wake handles with the Windows poll backend.
+    /// Resize events arrive as `WINDOW_BUFFER_SIZE_EVENT` records on the input
+    /// handle, so no separate signal or resize pipe is needed.
     ///
     /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and
     /// [`DEFAULT_PASTE_IDLE_TIMEOUT`]; override them with
     /// [`EventSource::with_esc_timeout`] and
     /// [`EventSource::with_paste_idle_timeout`].
     ///
+    /// `flags` selects the input source behavior. Set [`SourceFlags::VT_INPUT`]
+    /// when the console uses virtual-terminal input.
+    ///
     /// Returns any OS error from wake-event creation or poller construction. It
     /// does not read console records until [`EventSource::poll`] or
     /// [`EventSource::read`] is called.
-    pub fn new(input: I) -> io::Result<Self> {
+    pub fn new_with_flags(input: I, flags: SourceFlags) -> io::Result<Self> {
         let input_handle = {
             use std::os::windows::io::AsRawHandle;
             input.as_handle().as_raw_handle() as HANDLE
@@ -120,10 +122,6 @@ where
             return Err(io::Error::last_os_error());
         }
         let waker = Waker::from_windows_inner(Arc::new(WindowsWakerInner { event: wake_event }));
-
-        let mut mode: u32 = 0;
-        let vt_input = unsafe { GetConsoleMode(input_handle, &mut mode) } != 0
-            && (mode & ENABLE_VIRTUAL_TERMINAL_INPUT) != 0;
 
         // Watch input and wake handles — in the fixed index order the
         // wait path relies on. `input_is_tty` is meaningless on Windows
@@ -137,6 +135,7 @@ where
 
         Ok(Self {
             input,
+            flags,
             parser: Decoder::new(DecoderFlags::empty()),
             pending: super::pending::Pending::with_capacity(DEFAULT_BUFFER_CAPACITY),
             esc_timeout: DEFAULT_ESC_TIMEOUT,
@@ -148,7 +147,6 @@ where
             handle_resize: true,
             poller,
             wake_event,
-            vt_input,
             pending_high_surrogate: [None, None],
             last_size: None,
             last_mouse_buttons: 0,
@@ -232,7 +230,12 @@ where
         match record.EventType as u32 {
             KEY_EVENT => {
                 let kev = unsafe { record.Event.KeyEvent };
-                serialize_key_event(&kev, self.vt_input, &mut self.pending_high_surrogate, buf);
+                serialize_key_event(
+                    &kev,
+                    self.flags.contains(SourceFlags::VT_INPUT),
+                    &mut self.pending_high_surrogate,
+                    buf,
+                );
             }
             MOUSE_EVENT => {
                 let mev = unsafe { record.Event.MouseEvent };
@@ -265,19 +268,21 @@ fn serialize_key_event(
     let kd_idx: usize = if key_down { 1 } else { 0 };
 
     if vt_input {
-        if let Some(high) = pending_high_surrogate[kd_idx].take() {
-            if let Some(Ok(c)) = char::decode_utf16([high, unicode_char]).next() {
-                push_utf8(buf, c);
-            }
-        } else if (0xD800..=0xDBFF).contains(&unicode_char) {
+        if (0xD800..=0xDBFF).contains(&unicode_char) {
             pending_high_surrogate[kd_idx] = Some(unicode_char);
         } else if (0xDC00..=0xDFFF).contains(&unicode_char) {
-            // Lone low surrogate — drop.
-        } else if key_down
-            && unicode_char != 0
-            && let Some(c) = char::from_u32(unicode_char as u32)
-        {
-            push_utf8(buf, c);
+            if let Some(high) = pending_high_surrogate[kd_idx].take()
+                && let Some(Ok(c)) = char::decode_utf16([high, unicode_char]).next()
+            {
+                push_utf8(buf, c);
+            }
+        } else if unicode_char != 0 {
+            // Alt-code surrogates can have character-free numpad releases
+            // between their halves. Only another character ends a pending pair.
+            pending_high_surrogate[kd_idx] = None;
+            if key_down && let Some(c) = char::from_u32(unicode_char as u32) {
+                push_utf8(buf, c);
+            }
         }
     } else if kev.wVirtualKeyCode == 0 {
         if key_down
@@ -510,12 +515,25 @@ mod tests {
     }
 
     #[test]
-    fn key_event_vt_input_writes_utf8() {
-        let mut buf = Vec::new();
-        let mut pending = [None, None];
-        let kev = key_record(true, 0x41, 0x1E, b'A' as u16, 0, 1);
-        serialize_key_event(&kev, true, &mut pending, &mut buf);
-        assert_eq!(buf, b"A");
+    fn serialize_record_uses_current_source_flags() {
+        let (reader, _writer) = io::pipe().unwrap();
+        let mut source = EventSource::new_with_flags(reader, SourceFlags::VT_INPUT).unwrap();
+        assert_eq!(source.flags(), SourceFlags::VT_INPUT);
+        let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
+        record.EventType = KEY_EVENT as u16;
+        record.Event.KeyEvent = key_record(true, 0x41, 0x1E, b'A' as u16, 0, 1);
+
+        for (flags, expected) in [
+            (SourceFlags::VT_INPUT, b"A".as_slice()),
+            (SourceFlags::empty(), b"\x1b[65;30;65;1;0;1_".as_slice()),
+            (SourceFlags::VT_INPUT, b"A".as_slice()),
+        ] {
+            source.set_flags(flags);
+            assert_eq!(source.flags(), flags);
+            let mut buf = Vec::new();
+            source.serialize_record(&record, &mut buf);
+            assert_eq!(buf, expected);
+        }
     }
 
     #[test]
@@ -534,6 +552,38 @@ mod tests {
         serialize_key_event(&low, true, &mut pending, &mut buf);
         assert_eq!(buf, [0xF0, 0x9F, 0x98, 0x80]);
         assert_eq!(pending[1], None);
+    }
+
+    #[test]
+    fn key_event_vt_input_pairs_alt_code_surrogates() {
+        let mut buf = Vec::new();
+        let mut pending = [None, None];
+        for (vk, ch) in [(0x12, 0xD83D), (0x66, 0), (0x63, 0), (0x12, 0xDE80)] {
+            serialize_key_event(
+                &key_record(false, vk, 0, ch, 0, 1),
+                true,
+                &mut pending,
+                &mut buf,
+            );
+        }
+        assert_eq!(buf, b"\xf0\x9f\x9a\x80");
+        assert_eq!(pending, [None, None]);
+    }
+
+    #[test]
+    fn key_event_vt_input_keeps_character_after_unpaired_high_surrogate() {
+        let mut buf = Vec::new();
+        let mut pending = [None, None];
+        for ch in [0xD83D, b'a' as u16, 0xDE80] {
+            serialize_key_event(
+                &key_record(true, 0, 0, ch, 0, 1),
+                true,
+                &mut pending,
+                &mut buf,
+            );
+        }
+        assert_eq!(buf, b"a");
+        assert_eq!(pending, [None, None]);
     }
 
     #[test]
