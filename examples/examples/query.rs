@@ -22,7 +22,7 @@ use uncurses::ansi::cursor::{
 };
 use uncurses::ansi::mode::Mode;
 use uncurses::ansi::winop::REQUEST_CELL_PIXEL_SIZE;
-use uncurses::event::{Event, EventSource};
+use uncurses::event::{Event, EventSource, SourceFlags};
 use uncurses::terminal::Terminal;
 
 fn main() -> io::Result<()> {
@@ -30,7 +30,7 @@ fn main() -> io::Result<()> {
     let mut term = Terminal::stdio();
     term.make_raw()?;
     let mut out = term.output();
-    let mut events = EventSource::new(term.input())?;
+    let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
 
     // Fire the requests. Primary DA goes last: its reply terminates the
     // batch, so seeing it means every earlier answer has already arrived.

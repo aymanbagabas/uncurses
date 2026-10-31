@@ -22,7 +22,7 @@ use uncurses::ansi::mode::{Mode, write_reset_mode, write_set_mode};
 use uncurses::ansi::screen::write_erase_screen;
 use uncurses::buffer::{SurfaceMut, TextBuffer};
 use uncurses::color::Color;
-use uncurses::event::{Event, EventSource};
+use uncurses::event::{Event, EventSource, SourceFlags};
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout, Terminal};
 use uncurses::text::{Encode, TextSurface};
@@ -40,7 +40,7 @@ fn main() -> std::io::Result<()> {
 
     // 3. The input decoder over the terminal's input half, and an owned
     //    handle to the output half to write escapes through.
-    let mut events = EventSource::new(term.input())?;
+    let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
     let mut out = term.output();
 
     // Switch to the alternate screen and hide the cursor by writing the mode

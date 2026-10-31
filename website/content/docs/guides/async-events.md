@@ -150,7 +150,7 @@ over the input half, and turn it into an [`EventStream`](/api/uncurses/event/str
 
 ```rust
 use tokio_stream::StreamExt;
-use uncurses::event::{Event, EventSource, Key};
+use uncurses::event::{Event, EventSource, Key, SourceFlags};
 use uncurses::terminal::Terminal;
 
 async fn run() -> std::io::Result<()> {
@@ -158,7 +158,7 @@ async fn run() -> std::io::Result<()> {
     term.make_raw()?;
 
     let quit: Key = "ctrl+c".parse().unwrap();
-    let mut events = EventSource::new(term.input())?.into_stream();
+    let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?.into_stream();
 
     while let Some(event) = events.next().await {
         match event? {
