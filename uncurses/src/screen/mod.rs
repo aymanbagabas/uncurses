@@ -279,6 +279,9 @@ impl<W: Write> Screen<W> {
     ///
     /// Wrapped rows follow the screen's width policy. ANSI escapes contribute
     /// no width. A full final row skips erasure to preserve its last column.
+    /// Tabs use stops every eight columns and clamp at the right edge.
+    /// [`Program`](crate::program::Program) establishes these stops. A caller
+    /// that drives `Screen` directly must establish the same terminal stops.
     ///
     /// # Errors
     ///
@@ -333,9 +336,9 @@ impl<W: Write> Screen<W> {
         let mut rows = 1u16;
         let mut column = 0usize;
         let width = usize::from(self.width);
-        let mut advance = |cells: usize| {
+        let mut advance = |mut column: usize, cells: usize| {
             if cells == 0 {
-                return;
+                return column;
             }
             if width > 0 && column > 0 && column + cells > width {
                 rows = rows.saturating_add(1);
@@ -346,18 +349,30 @@ impl<W: Write> Screen<W> {
                 rows = rows.saturating_add(((column - 1) / width) as u16);
                 column = (column - 1) % width + 1;
             }
+            column
         };
         let mode = self.width_mode();
         for token in crate::ansi::text::tokenize(line.as_bytes(), mode, self.eaw_wide) {
-            if let crate::ansi::text::Token::Text { text, width } = token {
-                if mode == WidthMode::Grapheme {
-                    advance(usize::from(width));
-                } else {
-                    // Code-point terminals can wrap within a joined cluster.
-                    for ch in std::str::from_utf8(text).unwrap().chars() {
-                        advance(usize::from(crate::text::char_width(ch, self.eaw_wide)));
+            match token {
+                // A tab preserves pending wrap instead of starting a new row.
+                crate::ansi::text::Token::Control(b'\t') if width > 0 && column < width => {
+                    let interval = usize::from(crate::renderer::tabstops::DEFAULT_TAB_INTERVAL);
+                    column = ((column / interval + 1) * interval).min(width - 1);
+                }
+                crate::ansi::text::Token::Text { text, width } => {
+                    if mode == WidthMode::Grapheme {
+                        column = advance(column, usize::from(width));
+                    } else {
+                        // Code-point terminals can wrap within a joined cluster.
+                        for ch in std::str::from_utf8(text).unwrap().chars() {
+                            column = advance(
+                                column,
+                                usize::from(crate::text::char_width(ch, self.eaw_wide)),
+                            );
+                        }
                     }
                 }
+                _ => {}
             }
         }
         (rows, column)
