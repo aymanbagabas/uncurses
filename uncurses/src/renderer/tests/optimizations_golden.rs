@@ -218,28 +218,26 @@ fn no_cha_no_hpa_jump_to_col_50_uses_cr_plus_cuf() {
 }
 
 #[test]
-fn vpa_enabled_jump_to_row_10_uses_cud_chain_anyway() {
-    // After an empty first frame the planner has an (unknown, unknown)
-    // cursor and walks down with `\r` plus 10× LF rather than a CUP
-    // `\x1b[11;1H` (7 bytes).
+fn vpa_enabled_jump_to_row_10_after_blank_frame_uses_cuu() {
+    // The blank first frame leaves the cursor on row 19.
     let opts = Optimizations::none().union(Optimizations::VPA);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(10, 20);
     let _ = render_to_vec(&mut r, &mut buf);
     buf.set_cell((0, 10), &Cell::new("X", 1));
     let actual = render_to_vec(&mut r, &mut buf);
-    assert_golden(actual, b"\r\n\n\n\n\n\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n");
+    assert_golden(actual, b"\x1b[9AX");
 }
 
 #[test]
-fn vpa_disabled_jump_to_row_10_uses_cud_chain() {
+fn vpa_disabled_jump_to_row_10_after_blank_frame_uses_cuu() {
     let opts = Optimizations::none().difference(Optimizations::VPA);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(10, 20);
     let _ = render_to_vec(&mut r, &mut buf);
     buf.set_cell((0, 10), &Cell::new("X", 1));
     let actual = render_to_vec(&mut r, &mut buf);
-    assert_golden(actual, b"\r\n\n\n\n\n\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n");
+    assert_golden(actual, b"\x1b[9AX");
 }
 
 #[test]

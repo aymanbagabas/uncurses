@@ -28,8 +28,8 @@ impl Renderer {
     ///
     /// `true` when the renderer has real work to render: either the
     /// staging buffer now has touched rows that differ from its previous
-    /// contents, or a force-clear is pending. Returns `false` for pure
-    /// no-op writes.
+    /// contents, the dimensions changed, or a force-clear is pending.
+    /// Returns `false` for pure no-op writes.
     ///
     /// # Behavior
     ///
@@ -84,7 +84,7 @@ impl Renderer {
     }
 
     pub(super) fn size_changed(&self, width: u16, height: u16) -> bool {
-        self.cur_buf.is_some() && (width != self.last_width || height != self.last_height)
+        width != self.last_width || height != self.last_height
     }
 }
 
@@ -140,9 +140,9 @@ mod tests {
         let mut front = RenderBuffer::new(10, 3);
         fill_row(&mut front, 0, "Hello");
         fill_row(&mut front, 1, "World");
-        // First sync: back_buf gets the content + touched.
+        // Render the first sync to establish the displayed geometry.
         assert!(r.sync_front(&mut front));
-        r.back_buf.clear_touched();
+        r.render_back(&mut Vec::new()).unwrap();
 
         // Second pass: touch every row but write identical content.
         front.touch_all();

@@ -5,6 +5,21 @@ use std::io;
 use uncurses::{screen::Screen, style::Style, text::TextSurface};
 
 fn main() -> io::Result<()> {
+    let mut empty = Screen::new(Vec::new(), (0, 0));
+    empty.render()?;
+    assert!(empty.writer().is_empty());
+    empty.resize_height(3);
+    empty.render()?;
+    assert_eq!(empty.writer(), b"\x1b[?25l\r\n\n\x1b[?25h");
+    println!(
+        "Grow from empty: {:?}",
+        String::from_utf8_lossy(empty.writer())
+    );
+    empty.writer_mut().clear();
+    empty.render()?;
+    assert!(empty.writer().is_empty());
+    println!("Unchanged empty rows: zero bytes");
+
     let mut screen = Screen::new(Vec::new(), (40, 1));
     screen.set_str((0, 0), "First row", Style::default());
     screen.render()?;
