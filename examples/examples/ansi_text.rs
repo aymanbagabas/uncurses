@@ -3,7 +3,11 @@
 use std::io;
 
 use uncurses::{
-    ansi::{strip::strip, text::string_width, wrap::hardwrap},
+    ansi::{
+        strip::strip,
+        text::{Token, TokenKind, string_width, tokenize},
+        wrap::hardwrap,
+    },
     buffer::Surface,
     screen::Screen,
     style::{AttrFlags, Style},
@@ -11,6 +15,25 @@ use uncurses::{
 };
 
 fn main() -> io::Result<()> {
+    for input in [b"\x85".as_slice(), b"\xc2\x85"] {
+        let tokens: Vec<_> = tokenize(input, WidthMode::Wc, false).collect();
+        assert_eq!(
+            tokens,
+            [Token {
+                kind: TokenKind::Control,
+                bytes: input,
+                width: 0,
+                control: 0x85,
+            }]
+        );
+        for token in tokens {
+            println!(
+                "{:?}: bytes={:02x?}, width={}, control={:02x}",
+                token.kind, token.bytes, token.width, token.control,
+            );
+        }
+    }
+
     for (name, csi) in [("7-bit", "\x1b["), ("UTF-8 C1", "\u{9b}")] {
         let input = format!("{csi}1mhello{csi}m");
         let width = string_width(input.as_bytes(), WidthMode::Wc, false);

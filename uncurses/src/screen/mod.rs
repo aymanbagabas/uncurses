@@ -382,18 +382,20 @@ impl<W: Write> Screen<W> {
         };
         let mode = self.width_mode();
         for token in crate::ansi::text::tokenize(line.as_bytes(), mode, self.eaw_wide) {
-            match token {
+            match token.kind {
                 // A tab preserves pending wrap instead of starting a new row.
-                crate::ansi::text::Token::Control(b'\t') if width > 0 && column < width => {
+                crate::ansi::text::TokenKind::Control
+                    if token.control == b'\t' && width > 0 && column < width =>
+                {
                     let interval = usize::from(crate::renderer::tabstops::DEFAULT_TAB_INTERVAL);
                     column = ((column / interval + 1) * interval).min(width - 1);
                 }
-                crate::ansi::text::Token::Text { text, width } => {
+                crate::ansi::text::TokenKind::Text => {
                     if mode == WidthMode::Grapheme {
-                        column = advance(column, usize::from(width));
+                        column = advance(column, usize::from(token.width));
                     } else {
                         // Code-point terminals can wrap within a joined cluster.
-                        for ch in std::str::from_utf8(text).unwrap().chars() {
+                        for ch in std::str::from_utf8(token.bytes).unwrap().chars() {
                             column = advance(
                                 column,
                                 usize::from(crate::text::char_width(ch, self.eaw_wide)),
@@ -961,7 +963,7 @@ impl<W: Write> Write for Screen<W> {
 }
 
 fn normalize_insert_above(content: &str) -> Cow<'_, str> {
-    use crate::ansi::text::{Token, tokenize};
+    use crate::ansi::text::{TokenKind, tokenize};
 
     if !content
         .chars()
@@ -971,13 +973,14 @@ fn normalize_insert_above(content: &str) -> Cow<'_, str> {
     }
     let mut output = Vec::with_capacity(content.len());
     for token in tokenize(content.as_bytes(), WidthMode::Wc, false) {
-        match token {
-            Token::Text { text, .. } => output.extend_from_slice(text),
-            Token::Control(control) => output.push(control),
-            Token::ControlUtf8(control) => {
-                output.extend_from_slice(&[0x1b, control - 0x40]);
+        match token.kind {
+            TokenKind::Text => output.extend_from_slice(token.bytes),
+            TokenKind::Control if token.bytes.len() == 2 => {
+                output.extend_from_slice(&[0x1b, token.control - 0x40]);
             }
-            Token::Escape(mut sequence) => {
+            TokenKind::Control => output.extend_from_slice(token.bytes),
+            TokenKind::Escape => {
+                let mut sequence = token.bytes;
                 let string = matches!(
                     sequence,
                     [0xc2, 0x90 | 0x98 | 0x9d | 0x9e | 0x9f, ..]
