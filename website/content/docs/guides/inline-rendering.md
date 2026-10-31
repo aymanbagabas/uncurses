@@ -126,6 +126,9 @@ line lands in scrollback and the block keeps drawing right below it.
 
 Wrapped lines follow the screen's width policy, including wide characters.
 ANSI style sequences contribute no columns.
+Tabs keep their bytes and follow stops every eight columns, with a clamp at
+the right edge. `Program` establishes these stops during session setup.
+If you drive `Screen` directly, establish the same terminal stops first.
 Use `screen.set_ambiguous_wide(true)` when the terminal displays ambiguous
 characters as two columns. Rewrite existing text after changing that policy.
 

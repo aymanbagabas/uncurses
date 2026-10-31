@@ -757,7 +757,25 @@ fn insert_above_counts_wrapped_rows_and_protects_the_right_edge() {
         (3, "aa…a", 2, false, true, true),
         (3, "👨‍👩‍👧‍👦", 4, true, false, false),
         (3, "👨‍👩‍👧‍👦", 1, true, false, true),
+        (10, "a\t123456789", 2, true, false, false),
+        (10, "\t12", 1, false, false, false),
+        (10, "12345678\t12", 2, true, false, false),
+        (10, "123456789\t12", 2, true, false, false),
+        (10, "1234567890\t12", 2, true, false, false),
+        (10, "1234567890\t", 1, false, false, false),
+        (10, "123456789\t", 1, true, false, false),
+        (10, "\t\t\t12", 2, true, false, false),
+        (20, "\t\t1234", 1, false, false, false),
+        (8, "\t12", 2, true, false, false),
+        (1, "\t12", 2, false, false, false),
+        (10, "\x1b[1m界\t界\x1b[m", 1, false, false, true),
+        (10, "界界界界\t界", 2, true, false, false),
+        (10, "aaaaaaa…\t12", 2, true, true, true),
+        (10, "\u{301}\t12", 1, false, false, true),
+        (10, "1234567890\t\u{301}", 1, false, false, true),
         (0, "abc", 1, true, false, false),
+        (0, "\t", 1, true, false, false),
+        (0, "a\t123456789", 1, true, false, false),
     ] {
         let mut screen = Screen::new(Vec::new(), (width, 2)).with_eaw_wide(wide);
         screen.set_grapheme_clusters(grapheme);
@@ -777,6 +795,19 @@ fn insert_above_counts_wrapped_rows_and_protects_the_right_edge() {
             s(screen.writer()),
             expected,
             "width={width}, wide={wide}, grapheme={grapheme}, content={content:?}"
+        );
+    }
+}
+
+#[test]
+fn insert_above_tabs_follow_session_stops_with_cursor_tabs_disabled_or_enabled() {
+    for tabs in [false, true] {
+        let mut screen = Screen::new(Vec::new(), (10, 2));
+        screen.set_optimizations(screen.optimizations().with_tabs(tabs));
+        screen.insert_above("a\t123456789").unwrap();
+        assert_eq!(
+            s(screen.writer()),
+            "\r\x1b[B\n\n\x1b[3A\x1b[2La\t123456789\x1b[K\r\n"
         );
     }
 }
