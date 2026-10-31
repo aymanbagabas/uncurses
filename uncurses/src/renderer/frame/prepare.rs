@@ -35,7 +35,7 @@ impl Renderer {
         // Handle resize. We don't force a full clear here — instead we
         // invalidate the line hashes (so scroll detection starts fresh)
         // and, when shrinking inline at the same width, emit a partial
-        // clear at the new bottom row to wipe any orphan rows the
+        // clear at the first removed row to wipe any orphan rows the
         // surface used to occupy. After the normal transform pass an
         // inline resize also snaps the cursor back to the bottom-left
         // of the new surface so subsequent inline output starts in the
@@ -43,11 +43,17 @@ impl Renderer {
         let prev_width = self.last_width;
         let prev_height = self.last_height;
         let resized = width != prev_width || height != prev_height;
-        let inline_partial_clear = resized
-            && !self.fullscreen
-            && self.cur_buf.is_some()
-            && width == prev_width
-            && height < prev_height;
+        let inline_partial_clear =
+            resized && !self.fullscreen && width == prev_width && height < prev_height;
+        if inline_partial_clear && !self.force_clear {
+            self.reset_pen(out)?;
+            // Use the previous geometry while the first removed row fits.
+            let current = self.cur_buf.take().unwrap();
+            let result = self.move_to_keeping_pen(out, &current, height, 0);
+            self.cur_buf = Some(current);
+            result?;
+            self.clear_to_bottom(out)?;
+        }
         if resized {
             if let Some(ref mut cb) = self.cur_buf {
                 cb.resize(width, height);
@@ -60,12 +66,6 @@ impl Renderer {
         }
         self.last_width = width;
         self.last_height = height;
-
-        if inline_partial_clear && height > 0 && !self.force_clear {
-            let last_row = height - 1;
-            self.reset_pen(out)?;
-            self.clear_below(out, new_buf, last_row)?;
-        }
 
         if self.force_clear {
             self.clear_update(out, new_buf)?;

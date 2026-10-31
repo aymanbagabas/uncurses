@@ -75,6 +75,7 @@
 //!    └─────────────────────────────┘
 //! ```
 
+mod commit;
 #[cfg(test)]
 mod tests;
 
@@ -84,7 +85,10 @@ mod tests;
 /// [`Screen::set_optimizations`] without depending on renderer internals.
 pub use crate::renderer::Optimizations;
 
-use std::io::{self, Write};
+use std::{
+    borrow::Cow,
+    io::{self, Write},
+};
 
 use crate::ansi::mode;
 use crate::buffer::{Bounded, Surface, SurfaceMut};
@@ -270,12 +274,48 @@ impl<W: Write> Screen<W> {
         self.renderer.request_clear();
     }
 
+    /// Change the managed height while preserving the displayed row cache.
+    ///
+    /// The next render draws changed cells and erases removed inline rows.
+    /// Added blank rows extend the managed area. Use [`resize`](Self::resize)
+    /// after a terminal resize to re-establish its geometry.
+    pub fn resize_height(&mut self, height: u16) {
+        if height != self.height {
+            self.height = height;
+            self.front_buf.resize_height(height);
+        }
+    }
+
     /// Insert `content` into the scrollback above the managed area and flush
     /// it to the writer. Inline this pushes the lines into the terminal's
     /// scrollback; in fullscreen they go into the alternate screen's hidden
-    /// scrollback. The managed area is preserved in place, so no redraw is
-    /// needed and a following [`render`](Self::render) sees no change. An
-    /// empty string is a no-op.
+    /// scrollback. Styled text preserves the managed area in place, so no
+    /// redraw is needed and a following [`render`](Self::render) sees no change.
+    /// An empty string is a no-op.
+    ///
+    /// # Input
+    ///
+    /// Content must contain only text, newlines, tabs, complete SGR style
+    /// sequences, and OSC 8 hyperlinks. The caller must ensure that the content
+    /// satisfies this input requirement.
+    ///
+    /// Keep other controls and escapes out of the input. Cursor movement,
+    /// erasure, scrolling, and mode changes fall outside this contract and can
+    /// overwrite the managed area or preceding output. This includes standalone
+    /// NEL, IND, and RI controls and their equivalent escape sequences.
+    ///
+    /// Wrapped rows follow the screen's width policy. ANSI escapes contribute
+    /// no width. A full final row skips erasure to preserve its last column.
+    ///
+    /// Tabs use stops every eight columns and clamp at the right edge.
+    /// [`Program`](crate::program::Program) establishes these stops. A caller
+    /// that drives `Screen` directly must establish the same terminal stops.
+    /// A pending height change takes effect on the next render. Insertion
+    /// uses the last rendered height and leaves pending cell edits staged.
+    ///
+    /// Supported UTF-8 C1 style and hyperlink sequences use their 7-bit
+    /// terminal forms for both measurement and output. Hyperlink payloads
+    /// retain their original UTF-8 bytes.
     ///
     /// # Errors
     ///
@@ -284,27 +324,31 @@ impl<W: Write> Screen<W> {
         if content.is_empty() {
             return Ok(());
         }
+        let content = normalize_insert_above(content);
 
-        let width = self.width;
-        let height = self.height;
+        let height = self
+            .renderer
+            .last_size()
+            .map_or(self.height, |(_, height)| height);
         let y = self.renderer.cursor_position().y;
 
         self.out_buf.write_all(b"\r").unwrap();
-        let down = height.saturating_sub(y).saturating_sub(1);
-        if down > 0 {
-            crate::ansi::cursor::write_cud(&mut self.out_buf, down).unwrap();
+        let bottom = height.saturating_sub(1);
+        if y < bottom {
+            crate::ansi::cursor::write_cud(&mut self.out_buf, bottom - y).unwrap();
+        } else if y > bottom {
+            // An immediate cursor move can enter rows of a pending growth.
+            crate::ansi::cursor::write_cuu(&mut self.out_buf, y - bottom).unwrap();
         }
 
         let lines: Vec<&str> = content.split('\n').collect();
-        let mut offset: u16 = lines.len() as u16;
-        let width_mode = self.width_mode();
-        for line in &lines {
-            let lw =
-                crate::ansi::text::string_width(line.as_bytes(), width_mode, self.eaw_wide) as u16;
-            if let Some(n) = lw.checked_div(width) {
-                offset = offset.saturating_add(n);
-            }
-        }
+        let sizes: Vec<_> = lines
+            .iter()
+            .map(|line| self.insert_above_size(line))
+            .collect();
+        let offset = sizes
+            .iter()
+            .fold(0u16, |sum, &(rows, _)| sum.saturating_add(rows));
 
         for _ in 0..offset {
             self.out_buf.write_all(b"\n").unwrap();
@@ -315,16 +359,66 @@ impl<W: Write> Screen<W> {
             crate::ansi::cursor::write_cuu(&mut self.out_buf, up).unwrap();
         }
         crate::ansi::screen::write_insert_lines(&mut self.out_buf, offset).unwrap();
-        for line in &lines {
+        for (line, &(_, column)) in lines.iter().zip(&sizes) {
             self.out_buf.write_all(line.as_bytes()).unwrap();
-            self.out_buf
-                .write_all(crate::ansi::screen::ERASE_LINE_RIGHT)
-                .unwrap();
+            if self.width == 0 || column != usize::from(self.width) {
+                self.out_buf
+                    .write_all(crate::ansi::screen::ERASE_LINE_RIGHT)
+                    .unwrap();
+            }
             self.out_buf.write_all(b"\r\n").unwrap();
         }
 
         self.renderer.set_cursor_position(Position { y: 0, x: 0 });
         self.flush()
+    }
+
+    fn insert_above_size(&self, line: &str) -> (u16, usize) {
+        let mut rows = 1u16;
+        let mut column = 0usize;
+        let width = usize::from(self.width);
+        let mut advance = |mut column: usize, cells: usize| {
+            if cells == 0 {
+                return column;
+            }
+            if width > 0 && column > 0 && column + cells > width {
+                rows = rows.saturating_add(1);
+                column = 0;
+            }
+            column += cells;
+            if width > 0 && column > width {
+                rows = rows.saturating_add(((column - 1) / width) as u16);
+                column = (column - 1) % width + 1;
+            }
+            column
+        };
+        let mode = self.width_mode();
+        for token in crate::ansi::text::tokenize(line.as_bytes(), mode, self.eaw_wide) {
+            match token.kind {
+                // A tab preserves pending wrap instead of starting a new row.
+                crate::ansi::text::TokenKind::Control
+                    if token.control == b'\t' && width > 0 && column < width =>
+                {
+                    let interval = usize::from(crate::renderer::tabstops::DEFAULT_TAB_INTERVAL);
+                    column = ((column / interval + 1) * interval).min(width - 1);
+                }
+                crate::ansi::text::TokenKind::Text => {
+                    if mode == WidthMode::Grapheme {
+                        column = advance(column, usize::from(token.width));
+                    } else {
+                        // Code-point terminals can wrap within a joined cluster.
+                        for ch in std::str::from_utf8(token.bytes).unwrap().chars() {
+                            column = advance(
+                                column,
+                                usize::from(crate::text::char_width(ch, self.eaw_wide)),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        (rows, column)
     }
 
     // --- Cursor position ------------------------------------------------
@@ -602,6 +696,17 @@ impl<W: Write> Screen<W> {
         self.grapheme_clusters
     }
 
+    /// Set whether East Asian Ambiguous characters occupy two columns.
+    ///
+    /// A changed policy invalidates the displayed frame. Rewrite text whose
+    /// measured width changes before the next render.
+    pub fn set_ambiguous_wide(&mut self, wide: bool) {
+        if self.eaw_wide != wide {
+            self.eaw_wide = wide;
+            self.invalidate();
+        }
+    }
+
     /// Enable or disable synchronized-output frame wrapping.
     ///
     /// When enabled, each non-empty [`render`](Self::render) is wrapped in
@@ -795,8 +900,9 @@ impl<W: Write> Screen<W> {
     /// height, so a terminal that grew between the last render and the
     /// handoff does not push the cursor below where the user started.
     pub(crate) fn park_cursor(&mut self) -> io::Result<()> {
-        let (last_width, last_height) = self.renderer.last_size();
-        if last_height > 0 {
+        if let Some((last_width, last_height)) = self.renderer.last_size()
+            && last_height > 0
+        {
             let last = Size::new(last_width, last_height);
             self.renderer
                 .move_to_between_frames(&mut self.out_buf, last, last_height - 1, 0)?;
@@ -837,15 +943,76 @@ impl<W: Write> Write for Screen<W> {
     }
 
     /// Drain the staging buffer to the writer and flush it.
+    ///
+    /// A write error retains only unsent bytes for the next flush.
+    /// A writer flush error leaves the staging buffer empty.
     fn flush(&mut self) -> io::Result<()> {
         if !self.out_buf.is_empty() {
             #[cfg(debug_assertions)]
             crate::trace::tee_output(&self.out_buf);
-            self.writer.write_all(&self.out_buf)?;
-            self.out_buf.clear();
+            let mut written = 0;
+            let result = loop {
+                if written == self.out_buf.len() {
+                    break Ok(());
+                }
+                match self.writer.write(&self.out_buf[written..]) {
+                    Ok(0) => {
+                        break Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "writer returned 0 with non-empty buffer",
+                        ));
+                    }
+                    Ok(count) => written += count,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => break Err(error),
+                }
+            };
+            self.out_buf.drain(..written);
+            result?;
         }
         self.writer.flush()
     }
+}
+
+fn normalize_insert_above(content: &str) -> Cow<'_, str> {
+    use crate::ansi::text::{TokenKind, tokenize};
+
+    if !content
+        .chars()
+        .any(|ch| ('\u{80}'..='\u{9f}').contains(&ch))
+    {
+        return Cow::Borrowed(content);
+    }
+    let mut output = Vec::with_capacity(content.len());
+    for token in tokenize(content.as_bytes(), WidthMode::Wc, false) {
+        match token.kind {
+            TokenKind::Text => output.extend_from_slice(token.bytes),
+            TokenKind::Control if token.bytes.len() == 2 => {
+                output.extend_from_slice(&[0x1b, token.control - 0x40]);
+            }
+            TokenKind::Control => output.extend_from_slice(token.bytes),
+            TokenKind::Escape => {
+                let mut sequence = token.bytes;
+                let string = matches!(
+                    sequence,
+                    [0xc2, 0x90 | 0x98 | 0x9d | 0x9e | 0x9f, ..]
+                        | [0x1b, b'P' | b'X' | b']' | b'^' | b'_', ..]
+                );
+                if let [0xc2, control @ 0x80..=0x9f, rest @ ..] = sequence {
+                    output.extend_from_slice(&[0x1b, control - 0x40]);
+                    sequence = rest;
+                }
+                // Only string framing changes; encoded controls inside the payload stay opaque.
+                if string && let Some(payload) = sequence.strip_suffix(&[0xc2, 0x9c]) {
+                    output.extend_from_slice(payload);
+                    output.extend_from_slice(b"\x1b\\");
+                } else {
+                    output.extend_from_slice(sequence);
+                }
+            }
+        }
+    }
+    Cow::Owned(String::from_utf8(output).unwrap())
 }
 
 impl<W: Write> Bounded for Screen<W> {

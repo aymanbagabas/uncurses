@@ -8,7 +8,7 @@
 //! ## Parser conventions
 //!
 //! Tokenization recognizes CSI, OSC, DCS, SOS, PM, APC, and two-byte ESC
-//! sequences in both 7-bit and 8-bit forms. Escape tokens contribute no output.
+//! sequences in 7-bit, raw C1, and UTF-8 C1 forms. Escape tokens contribute no output.
 //!
 //! ## Mode interaction
 //!
@@ -19,7 +19,7 @@
 //! which byte ends a control string, and when a byte in `0x80..=0x9F`
 //! is a C1 control rather than part of a character, are documented there.
 
-use super::text::{Token, WidthMode, tokenize};
+use super::text::{TokenKind, WidthMode, tokenize};
 
 /// Return `s` with ANSI escape sequences removed.
 ///
@@ -29,10 +29,9 @@ use super::text::{Token, WidthMode, tokenize};
 pub fn strip(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for tok in tokenize(s.as_bytes(), WidthMode::default(), false) {
-        match tok {
-            Token::Text { text, .. } => out.push_str(bs(text)),
-            Token::Control(b) => out.push(b as char),
-            Token::Escape(_) => {}
+        match tok.kind {
+            TokenKind::Text | TokenKind::Control => out.push_str(bs(tok.bytes)),
+            TokenKind::Escape => {}
         }
     }
     out

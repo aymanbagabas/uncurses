@@ -28,8 +28,8 @@ impl Renderer {
     ///
     /// `true` when the renderer has real work to render: either the
     /// staging buffer now has touched rows that differ from its previous
-    /// contents, or a force-clear is pending. Returns `false` for pure
-    /// no-op writes.
+    /// contents, the dimensions changed, or a force-clear is pending.
+    /// Returns `false` for pure no-op writes.
     ///
     /// # Behavior
     ///
@@ -41,13 +41,8 @@ impl Renderer {
         let height = front.height();
         if self.back_buf.width() != width || self.back_buf.height() != height {
             self.back_buf.resize(width, height);
-            // `resize` touches every row as a bookkeeping side effect.
-            // We use `touched` to mean "differs from the wire", so
-            // reset it; cell-by-cell copies below will re-touch only
-            // rows that actually changed. The caller is expected to
-            // have set `force_clear` (e.g. via `request_clear` from
-            // [`crate::screen::Screen::resize`]) to drive a full
-            // repaint when dimensions change.
+            // Copies below mark real cell changes; geometry changes also
+            // reach the frame pipeline when every added cell is blank.
             self.back_buf.clear_touched();
         }
 
@@ -85,7 +80,11 @@ impl Renderer {
         }
         front.clear_touched();
 
-        self.force_clear || self.back_buf.has_changes()
+        self.force_clear || self.back_buf.has_changes() || self.size_changed(width, height)
+    }
+
+    pub(super) fn size_changed(&self, width: u16, height: u16) -> bool {
+        width != self.last_width || height != self.last_height
     }
 }
 
@@ -141,9 +140,9 @@ mod tests {
         let mut front = RenderBuffer::new(10, 3);
         fill_row(&mut front, 0, "Hello");
         fill_row(&mut front, 1, "World");
-        // First sync: back_buf gets the content + touched.
+        // Render the first sync to establish the displayed geometry.
         assert!(r.sync_front(&mut front));
-        r.back_buf.clear_touched();
+        r.render_back(&mut Vec::new()).unwrap();
 
         // Second pass: touch every row but write identical content.
         front.touch_all();
