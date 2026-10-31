@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(renderer.cur.pos(), Position::new(2, 1));
         assert_eq!(renderer.saved.y, None);
         assert!(!renderer.saved.at_phantom);
-        assert_eq!(renderer.last_size(), (8, 2));
+        assert_eq!(renderer.last_size(), Some((8, 2)));
         assert!(renderer.old_hashes.is_empty());
         assert!(renderer.new_hashes.is_empty());
     }
