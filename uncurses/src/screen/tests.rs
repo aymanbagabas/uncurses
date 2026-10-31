@@ -1165,6 +1165,95 @@ fn commit_rows_handles_zero_width_and_repeated_commits() {
 }
 
 #[derive(Default)]
+struct FlushWriter {
+    bytes: Vec<u8>,
+    writes: std::collections::VecDeque<io::Result<usize>>,
+    flushes: usize,
+    flush_error: Option<io::ErrorKind>,
+}
+
+impl Write for FlushWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let count = self.writes.pop_front().unwrap_or(Ok(bytes.len()))?;
+        assert!(count <= bytes.len());
+        self.bytes.extend_from_slice(&bytes[..count]);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flushes += 1;
+        match self.flush_error.take() {
+            Some(kind) => Err(io::Error::new(kind, "flush failed")),
+            None => Ok(()),
+        }
+    }
+}
+
+#[test]
+fn flush_partial_writes_retain_only_unsent_bytes() {
+    for failure in [Err(io::Error::other("write failed")), Ok(0)] {
+        let expected_kind = match &failure {
+            Err(error) => error.kind(),
+            Ok(_) => io::ErrorKind::WriteZero,
+        };
+        let writer = FlushWriter {
+            writes: [Ok(1), Ok(2), failure].into(),
+            ..Default::default()
+        };
+        let mut screen = Screen::new(writer, (0, 0));
+        screen.write_all(b"abcdef").unwrap();
+        assert_eq!(screen.flush().unwrap_err().kind(), expected_kind);
+        assert_eq!(screen.writer().bytes, b"abc");
+        assert_eq!(screen.out_buf, b"def");
+        assert_eq!(screen.writer().flushes, 0);
+
+        screen.writer_mut().writes = [Ok(1), Ok(1), Ok(1), Ok(2)].into();
+        screen.write_all(b"gh").unwrap();
+        screen.flush().unwrap();
+        assert_eq!(screen.writer().bytes, b"abcdefgh");
+        assert!(screen.out_buf.is_empty());
+        assert_eq!(screen.writer().flushes, 1);
+    }
+}
+
+#[test]
+fn flush_retries_interrupted_writes() {
+    let interrupted = || Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
+    let writer = FlushWriter {
+        writes: [interrupted(), Ok(1), interrupted(), Ok(2)].into(),
+        ..Default::default()
+    };
+    let mut screen = Screen::new(writer, (0, 0));
+    screen.write_all(b"abc").unwrap();
+    screen.flush().unwrap();
+    assert_eq!(screen.writer().bytes, b"abc");
+    assert!(screen.out_buf.is_empty());
+    assert!(screen.writer().writes.is_empty());
+    assert_eq!(screen.writer().flushes, 1);
+}
+
+#[test]
+fn flush_writer_errors_do_not_replay_accepted_bytes() {
+    for kind in [io::ErrorKind::Other, io::ErrorKind::Interrupted] {
+        let writer = FlushWriter {
+            writes: [Ok(1), Ok(2)].into(),
+            flush_error: Some(kind),
+            ..Default::default()
+        };
+        let mut screen = Screen::new(writer, (0, 0));
+        screen.write_all(b"abc").unwrap();
+        assert_eq!(screen.flush().unwrap_err().kind(), kind);
+        assert_eq!(screen.writer().bytes, b"abc");
+        assert!(screen.out_buf.is_empty());
+        assert_eq!(screen.writer().flushes, 1);
+
+        screen.flush().unwrap();
+        assert_eq!(screen.writer().bytes, b"abc");
+        assert_eq!(screen.writer().flushes, 2);
+    }
+}
+
+#[derive(Default)]
 struct CommitWriter {
     bytes: Vec<u8>,
     fail_write: bool,
@@ -1195,6 +1284,37 @@ impl Write for CommitWriter {
         }
         Ok(())
     }
+}
+
+#[test]
+fn commit_rows_partial_write_retry_does_not_replay_line_feeds() {
+    let mut screen = Screen::new(CommitWriter::default(), (10, 3));
+    for (y, row) in ["AAAA", "BBBB", "CCCC"].into_iter().enumerate() {
+        screen.set_str((0, y as u16), row, Style::default());
+    }
+    screen.set_cursor_position(Position::ORIGIN);
+    screen.render().unwrap();
+    screen.writer_mut().bytes.clear();
+    screen.writer_mut().fail_write = true;
+    screen.writer_mut().partial = 1;
+
+    assert!(screen.commit_rows(2).is_err());
+    assert_eq!(screen.writer().bytes, b"\n");
+    assert_eq!(screen.out_buf, b"\n");
+    assert_eq!(screen.size(), Size::new(10, 1));
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+    assert_eq!(screen.cell(Position::ORIGIN).unwrap().content(), "C");
+
+    screen.writer_mut().fail_write = false;
+    screen.flush().unwrap();
+    screen.set_str((4, 0), "!", Style::default());
+    screen.render().unwrap();
+    assert_eq!(
+        s(&screen.writer().bytes),
+        "\n\n\x1b[?25l\x1b[4C!\r\x1b[?25h"
+    );
+    assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
+    assert_eq!(screen.diverge(), None);
 }
 
 #[test]
