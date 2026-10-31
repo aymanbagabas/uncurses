@@ -324,7 +324,7 @@ impl<W: Write> Screen<W> {
         if content.is_empty() {
             return Ok(());
         }
-        let content = normalize_insert_above(content);
+        let content = normalize_insert_above(content, self.width_mode(), self.eaw_wide);
 
         let height = self
             .renderer
@@ -974,7 +974,7 @@ impl<W: Write> Write for Screen<W> {
     }
 }
 
-fn normalize_insert_above(content: &str) -> Cow<'_, str> {
+fn normalize_insert_above(content: &str, mode: WidthMode, eaw_wide: bool) -> Cow<'_, str> {
     use crate::ansi::text::{TokenKind, tokenize};
 
     if !content
@@ -984,7 +984,7 @@ fn normalize_insert_above(content: &str) -> Cow<'_, str> {
         return Cow::Borrowed(content);
     }
     let mut output = Vec::with_capacity(content.len());
-    for token in tokenize(content.as_bytes(), WidthMode::Wc, false) {
+    for token in tokenize(content.as_bytes(), mode, eaw_wide) {
         match token.kind {
             TokenKind::Text => output.extend_from_slice(token.bytes),
             TokenKind::Control if token.bytes.len() == 2 => {

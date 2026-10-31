@@ -1539,6 +1539,38 @@ fn insert_above_normalizes_utf8_csi_at_the_right_edge() {
 }
 
 #[test]
+fn insert_above_normalizes_utf8_styles_with_screen_width_policy() {
+    for grapheme in [false, true] {
+        for wide in [false, true] {
+            for (text, rows) in [
+                ("……………", if wide { 5 } else { 2 }),
+                ("👨‍👩‍👧‍👦", if grapheme { 1 } else { 4 }),
+            ] {
+                let mut screen = Screen::new(Vec::new(), (3, 2)).with_eaw_wide(wide);
+                screen.set_grapheme_clusters(grapheme);
+                screen
+                    .insert_above(&format!("\u{9b}1m{text}\u{9b}m"))
+                    .unwrap();
+                let insert = if rows == 1 {
+                    "\x1b[L".to_string()
+                } else {
+                    format!("\x1b[{rows}L")
+                };
+                assert_eq!(
+                    s(screen.writer()),
+                    format!(
+                        "\r\x1b[B{}\x1b[{}A{insert}\x1b[1m{text}\x1b[m\x1b[K\r\n",
+                        "\n".repeat(rows),
+                        rows + 1,
+                    ),
+                    "wide={wide}, grapheme={grapheme}, text={text:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn insert_above_normalizes_string_framing_and_preserves_payloads() {
     let payload = "0;qÜ✅\u{9b}\u{85}\u{9d}";
     for (encoded, seven_bit) in [
