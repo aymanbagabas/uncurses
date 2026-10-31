@@ -38,7 +38,7 @@
 //! ## Malformed input
 //!
 //! [`tokenize`] takes bytes, so its input need not be valid UTF-8. A byte that
-//! begins no well-formed character is emitted as [`Token::Control`] to keep
+//! begins no well-formed character is emitted as [`TokenKind::Control`] to keep
 //! forward progress, and contributes no width. Tokens always concatenate back
 //! to the input exactly.
 //!
@@ -51,30 +51,37 @@
 pub use crate::text::WidthMode;
 use crate::unicode::graphemes;
 
+/// The category of a token produced by [`tokenize`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenKind {
+    /// One whole, well-formed UTF-8 grapheme cluster.
+    Text,
+    /// An ANSI escape sequence or control string, with zero display width.
+    Escape,
+    /// A standalone C0 control, DEL, C1 control, or malformed byte, with zero display width.
+    Control,
+}
+
 /// A single token produced by [`tokenize`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Token<'a> {
-    /// One grapheme cluster and its display width.
+pub struct Token<'a> {
+    /// The token category.
+    pub kind: TokenKind,
+    /// The original input bytes, borrowed without modification.
     ///
-    /// Always whole, well-formed UTF-8. A combining mark or variation selector
-    /// can have zero width.
-    Text {
-        /// Grapheme bytes.
-        text: &'a [u8],
-        /// Display width in terminal cells.
-        width: u16,
-    },
-    /// An ANSI escape sequence (passed through verbatim, no width).
-    Escape(&'a [u8]),
-    /// A single byte that stands on its own: a C0 control, DEL, a C1 byte
-    /// that introduces nothing, or a byte that begins no well-formed UTF-8
-    /// character. All are zero width.
-    Control(u8),
-    /// A C1 control encoded as UTF-8: `0xC2` followed by this control byte.
+    /// Tokens returned by [`tokenize`] contain a nonempty slice.
+    /// Standalone UTF-8 C1 controls contain `0xC2` followed by the control code.
+    pub bytes: &'a [u8],
+    /// The display width in terminal cells.
     ///
-    /// This variant preserves the encoding of standalone C1 controls.
-    /// C1 sequence introducers produce [`Token::Escape`] with the original bytes.
-    ControlUtf8(u8),
+    /// Escape and control tokens have width zero. Text width depends on the
+    /// selected width mode and can be zero for combining marks.
+    pub width: u16,
+    /// The decoded byte for a control token, or zero for text and escape tokens.
+    ///
+    /// Raw and UTF-8 C1 encodings produce the same control code.
+    /// A malformed byte retains its byte value here.
+    pub control: u8,
 }
 
 /// Return the display width of `bytes` ignoring ANSI escapes.
@@ -82,10 +89,7 @@ pub enum Token<'a> {
 /// Non-UTF-8 bytes contribute no width.
 pub fn string_width(bytes: &[u8], mode: WidthMode, eaw_wide: bool) -> usize {
     tokenize(bytes, mode, eaw_wide)
-        .filter_map(|t| match t {
-            Token::Text { width, .. } => Some(width as usize),
-            _ => None,
-        })
+        .map(|t| usize::from(t.width))
         .sum()
 }
 
@@ -157,6 +161,17 @@ pub struct Tokenizer<'a> {
 }
 
 impl<'a> Tokenizer<'a> {
+    fn control_token(&mut self, control: u8, size: usize) -> Token<'a> {
+        let start = self.pos;
+        self.pos += size;
+        Token {
+            kind: TokenKind::Control,
+            bytes: &self.bytes[start..self.pos],
+            width: 0,
+            control,
+        }
+    }
+
     /// Set `run` to the validated text from `pos` up to `to`.
     ///
     /// The byte count lives here rather than at the call site on purpose: the
@@ -189,9 +204,11 @@ impl<'a> Iterator for Tokenizer<'a> {
             if !self.run.is_empty() {
                 self.run = &self.run[1..];
             }
-            return Some(Token::Text {
-                text: &self.bytes[start..self.pos],
+            return Some(Token {
+                kind: TokenKind::Text,
+                bytes: &self.bytes[start..self.pos],
                 width: 1,
+                control: 0,
             });
         }
 
@@ -201,15 +218,15 @@ impl<'a> Iterator for Tokenizer<'a> {
             let start = self.pos;
             let end = scan_sequence(self.bytes, start);
             self.pos = end;
-            return Some(Token::Escape(&self.bytes[start..end]));
+            return Some(Token {
+                kind: TokenKind::Escape,
+                bytes: &self.bytes[start..end],
+                width: 0,
+                control: 0,
+            });
         }
         if let Some((control, size)) = c1 {
-            self.pos += size;
-            return Some(if size == 1 {
-                Token::Control(control)
-            } else {
-                Token::ControlUtf8(control)
-            });
+            return Some(self.control_token(control, size));
         }
 
         // A cached run contains only validated plain text. Check remaining
@@ -217,8 +234,7 @@ impl<'a> Iterator for Tokenizer<'a> {
         if self.run.is_empty() {
             // C0 controls and DEL occupy one byte.
             if b < 0x20 || b == 0x7f {
-                self.pos += 1;
-                return Some(Token::Control(b));
+                return Some(self.control_token(b, 1));
             }
 
             // Plain text — walk forward one grapheme at a time, stopping at any
@@ -256,8 +272,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 // Nothing plain starts here, or what does is not valid UTF-8.
                 // Either way the byte is emitted verbatim to keep forward
                 // progress, exactly as an invalid leading byte always was.
-                self.pos += 1;
-                return Some(Token::Control(b));
+                return Some(self.control_token(b, 1));
             }
         }
         let g = graphemes(self.run).next()?;
@@ -265,9 +280,11 @@ impl<'a> Iterator for Tokenizer<'a> {
         self.pos += g.len();
         self.run = &self.run[g.len()..];
         let width = self.mode.grapheme_width(g, self.eaw_wide) as u16;
-        Some(Token::Text {
-            text: &self.bytes[start..self.pos],
+        Some(Token {
+            kind: TokenKind::Text,
+            bytes: &self.bytes[start..self.pos],
             width,
+            control: 0,
         })
     }
 }
@@ -435,6 +452,33 @@ fn scan_esc_intermediate(bytes: &[u8], at: usize) -> usize {
 mod util {
     use super::*;
 
+    pub(super) fn text_token(bytes: &[u8], width: u16) -> Token<'_> {
+        Token {
+            kind: TokenKind::Text,
+            bytes,
+            width,
+            control: 0,
+        }
+    }
+
+    pub(super) fn escape_token(bytes: &[u8]) -> Token<'_> {
+        Token {
+            kind: TokenKind::Escape,
+            bytes,
+            width: 0,
+            control: 0,
+        }
+    }
+
+    pub(super) fn control_token(bytes: &[u8]) -> Token<'_> {
+        Token {
+            kind: TokenKind::Control,
+            bytes,
+            width: 0,
+            control: *bytes.last().unwrap(),
+        }
+    }
+
     pub(super) fn tokens(input: &[u8]) -> Vec<Token<'_>> {
         tokenize(input, WidthMode::Grapheme, false).collect()
     }
@@ -446,12 +490,8 @@ mod util {
     /// rendering it as U+FFFD hides the failure these tests exist to catch.
     pub(super) fn visible(toks: &[Token<'_>]) -> String {
         toks.iter()
-            .filter_map(|t| match t {
-                Token::Text { text, .. } => {
-                    Some(std::str::from_utf8(text).expect("a text token is whole UTF-8"))
-                }
-                _ => None,
-            })
+            .filter(|t| t.kind == TokenKind::Text)
+            .map(|t| std::str::from_utf8(t.bytes).expect("a text token is whole UTF-8"))
             .collect()
     }
 
@@ -460,11 +500,7 @@ mod util {
     pub(super) fn rebuild(toks: &[Token<'_>]) -> Vec<u8> {
         let mut out = Vec::new();
         for t in toks {
-            match t {
-                Token::Text { text, .. } | Token::Escape(text) => out.extend_from_slice(text),
-                Token::Control(c) => out.push(*c),
-                Token::ControlUtf8(c) => out.extend_from_slice(&[0xc2, *c]),
-            }
+            out.extend_from_slice(t.bytes);
         }
         out
     }
@@ -481,27 +517,47 @@ mod util {
 
 #[cfg(test)]
 mod tests {
+    use super::util::*;
     use super::*;
+
+    #[test]
+    fn token_fields_preserve_bytes_widths_and_control_codes() {
+        let input = b"A\x1b[31m\t\x85\xc2\x85\xff\xe4\xb8\xad";
+        let expected = [
+            text_token(b"A", 1),
+            escape_token(b"\x1b[31m"),
+            control_token(b"\t"),
+            control_token(b"\x85"),
+            control_token(b"\xc2\x85"),
+            control_token(b"\xff"),
+            text_token(b"\xe4\xb8\xad", 2),
+        ];
+        for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+            let toks: Vec<_> = tokenize(input, mode, false).collect();
+            assert_eq!(toks, expected);
+            let mut offset = 0;
+            for token in &toks {
+                assert_eq!(token.bytes.as_ptr(), input[offset..].as_ptr());
+                offset += token.bytes.len();
+            }
+            assert_eq!(offset, input.len());
+            assert_eq!(rebuild(&toks), input);
+        }
+    }
 
     #[test]
     fn tokenize_plain_text() {
         let toks: Vec<_> = tokenize(b"abc", WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 3);
-        assert!(matches!(
-            toks[0],
-            Token::Text {
-                text: b"a",
-                width: 1
-            }
-        ));
+        assert_eq!(toks[0], text_token(b"a", 1));
     }
 
     #[test]
     fn tokenize_csi() {
         let toks: Vec<_> = tokenize(b"\x1b[31mhi\x1b[m", WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 4);
-        assert!(matches!(toks[0], Token::Escape(b"\x1b[31m")));
-        assert!(matches!(toks[3], Token::Escape(b"\x1b[m")));
+        assert_eq!(toks[0], escape_token(b"\x1b[31m"));
+        assert_eq!(toks[3], escape_token(b"\x1b[m"));
     }
 
     #[test]
@@ -520,28 +576,28 @@ mod tests {
     #[test]
     fn tokenize_osc_bel() {
         let toks: Vec<_> = tokenize(b"\x1b]0;title\x07rest", WidthMode::Grapheme, false).collect();
-        assert!(matches!(toks[0], Token::Escape(b"\x1b]0;title\x07")));
+        assert_eq!(toks[0], escape_token(b"\x1b]0;title\x07"));
     }
 
     #[test]
     fn tokenize_osc_st() {
         let toks: Vec<_> =
             tokenize(b"\x1b]0;title\x1b\\rest", WidthMode::Grapheme, false).collect();
-        assert!(matches!(toks[0], Token::Escape(b"\x1b]0;title\x1b\\")));
+        assert_eq!(toks[0], escape_token(b"\x1b]0;title\x1b\\"));
     }
 
     #[test]
     fn tokenize_wide_char() {
         let toks: Vec<_> = tokenize("中".as_bytes(), WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 1);
-        assert!(matches!(toks[0], Token::Text { width: 2, .. }));
+        assert_eq!(toks[0], text_token("中".as_bytes(), 2));
     }
 
     #[test]
     fn tokenize_newline_control() {
         let toks: Vec<_> = tokenize(b"a\nb", WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 3);
-        assert!(matches!(toks[1], Token::Control(b'\n')));
+        assert_eq!(toks[1], control_token(b"\n"));
     }
 
     #[test]
@@ -559,15 +615,15 @@ mod tests {
     #[test]
     fn tokenize_8bit_csi() {
         let toks: Vec<_> = tokenize(b"\x9b31mhi\x9bm", WidthMode::Grapheme, false).collect();
-        assert!(matches!(toks[0], Token::Escape(b"\x9b31m")));
-        assert!(matches!(toks[3], Token::Escape(b"\x9bm")));
+        assert_eq!(toks[0], escape_token(b"\x9b31m"));
+        assert_eq!(toks[3], escape_token(b"\x9bm"));
     }
 
     #[test]
     fn tokenize_8bit_osc_with_8bit_st() {
         // 0x9d "0;title" 0x9c "rest"
         let toks: Vec<_> = tokenize(b"\x9d0;title\x9crest", WidthMode::Grapheme, false).collect();
-        assert!(matches!(toks[0], Token::Escape(b"\x9d0;title\x9c")));
+        assert_eq!(toks[0], escape_token(b"\x9d0;title\x9c"));
         // "rest" tokenizes to 4 single-grapheme Text tokens.
         assert_eq!(toks.len(), 5);
     }
@@ -575,7 +631,7 @@ mod tests {
     #[test]
     fn tokenize_8bit_dcs() {
         let toks: Vec<_> = tokenize(b"\x90q!data\x9cafter", WidthMode::Grapheme, false).collect();
-        assert!(matches!(toks[0], Token::Escape(b"\x90q!data\x9c")));
+        assert_eq!(toks[0], escape_token(b"\x90q!data\x9c"));
     }
 
     #[test]
@@ -585,13 +641,7 @@ mod tests {
             input.extend_from_slice(b"payload");
             input.push(0x9c);
             let toks: Vec<_> = tokenize(&input, WidthMode::Grapheme, false).collect();
-            match toks[0] {
-                Token::Escape(esc) => {
-                    assert_eq!(esc[0], intro);
-                    assert_eq!(*esc.last().unwrap(), 0x9c);
-                }
-                ref other => panic!("expected Escape for 0x{intro:02x}, got {other:?}"),
-            }
+            assert_eq!(toks[0], escape_token(&input));
         }
     }
 
@@ -600,7 +650,7 @@ mod tests {
         // IND (0x84) standalone — not an introducer, emitted as Control.
         let toks: Vec<_> = tokenize(b"a\x84b", WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 3);
-        assert!(matches!(toks[1], Token::Control(0x84)));
+        assert_eq!(toks[1], control_token(b"\x84"));
     }
 
     #[test]
@@ -608,7 +658,7 @@ mod tests {
         // Bare 0x9c with no preceding string is just a control byte.
         let toks: Vec<_> = tokenize(b"\x9c", WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 1);
-        assert!(matches!(toks[0], Token::Control(0x9c)));
+        assert_eq!(toks[0], control_token(b"\x9c"));
     }
 
     #[test]
@@ -616,7 +666,7 @@ mod tests {
         // ESC = (DECKPAM)
         let toks: Vec<_> = tokenize(b"a\x1b=b", WidthMode::Grapheme, false).collect();
         assert_eq!(toks.len(), 3);
-        assert!(matches!(toks[1], Token::Escape(b"\x1b=")));
+        assert_eq!(toks[1], escape_token(b"\x1b="));
     }
 }
 
@@ -684,7 +734,7 @@ mod sequences {
                         let toks = tokens(&input);
                         assert_eq!(
                             toks.first(),
-                            Some(&Token::Escape(&input[..seq_len])),
+                            Some(&escape_token(&input[..seq_len])),
                             "{what}: the sequence is not one token"
                         );
                         assert_eq!(
@@ -716,7 +766,7 @@ mod sequences {
                     let toks = tokens(&input);
                     assert_eq!(
                         toks,
-                        vec![Token::Escape(&input[..])],
+                        vec![escape_token(&input[..])],
                         "{name} {form} {pname}: an unterminated sequence should be one token"
                     );
                     assert_eq!(string_width(&input, WidthMode::Grapheme, false), 0);
@@ -739,21 +789,15 @@ mod sequences {
                 let toks = tokens(&input);
                 assert_eq!(
                     toks[0],
-                    Token::Escape(&input[..cut]),
+                    escape_token(&input[..cut]),
                     "{name} {form}: the string should stop at the ESC"
                 );
                 assert_eq!(
                     toks[1],
-                    Token::Escape(b"\x1b[31m"),
+                    escape_token(b"\x1b[31m"),
                     "{name} {form}: the CSI after it should survive whole"
                 );
-                assert_eq!(
-                    toks[2],
-                    Token::Text {
-                        text: b"Z",
-                        width: 1
-                    }
-                );
+                assert_eq!(toks[2], text_token(b"Z", 1));
             }
         }
     }
@@ -777,16 +821,9 @@ mod sequences {
         ];
         for (input, first, second) in cases {
             let toks = tokens(input);
-            assert_eq!(toks[0], Token::Escape(first), "{input:x?}");
-            assert_eq!(toks[1], Token::Escape(second), "{input:x?}");
-            assert_eq!(
-                toks[2],
-                Token::Text {
-                    text: b"Z",
-                    width: 1
-                },
-                "{input:x?}"
-            );
+            assert_eq!(toks[0], escape_token(first), "{input:x?}");
+            assert_eq!(toks[1], escape_token(second), "{input:x?}");
+            assert_eq!(toks[2], text_token(b"Z", 1), "{input:x?}");
         }
     }
 
@@ -828,7 +865,7 @@ mod sequences {
         ];
         for (what, input, opening, want) in cases {
             let toks = tokens(input);
-            assert_eq!(toks.first(), Some(&Token::Escape(opening)), "{what}");
+            assert_eq!(toks.first(), Some(&escape_token(opening)), "{what}");
             assert_eq!(visible(&toks), *want, "{what}");
             // Nothing is invented or dropped anywhere in the stream.
             assert_eq!(
@@ -849,7 +886,7 @@ mod sequences {
             b"\x1b]0;\xe2\x9c\x85\x07Z",
         ] {
             let toks = tokens(input);
-            assert_eq!(toks[0], Token::Escape(&input[..input.len() - 1]));
+            assert_eq!(toks[0], escape_token(&input[..input.len() - 1]));
             assert_eq!(visible(&toks), "Z");
             assert_eq!(rebuild(&toks), input);
         }
@@ -876,29 +913,22 @@ mod sequences {
                 if *name == "OSC" {
                     assert_eq!(
                         toks[0],
-                        Token::Escape(&input[..bel_at]),
+                        escape_token(&input[..bel_at]),
                         "{what}: BEL should have ended it"
                     );
                     // What followed the BEL is now visible text.
                     assert!(
                         toks.iter()
-                            .any(|t| matches!(t, Token::Text { text: b"l", .. })),
+                            .any(|t| t.kind == TokenKind::Text && t.bytes == b"l"),
                         "{what}: text after the BEL went missing"
                     );
                 } else {
                     assert_eq!(
                         toks[0],
-                        Token::Escape(&input[..input.len() - 1]),
+                        escape_token(&input[..input.len() - 1]),
                         "{what}: BEL is payload, so it should have run to the ST"
                     );
-                    assert_eq!(
-                        toks[1],
-                        Token::Text {
-                            text: b"Z",
-                            width: 1
-                        },
-                        "{what}"
-                    );
+                    assert_eq!(toks[1], text_token(b"Z", 1), "{what}");
                     assert_eq!(string_width(&input, WidthMode::Grapheme, false), 1);
                 }
             }
@@ -912,11 +942,9 @@ mod sequences {
                 for mode in [WidthMode::Wc, WidthMode::Grapheme] {
                     let toks: Vec<_> = tokenize(&input, mode, false).collect();
                     let expected = if is_c1_introducer(c) {
-                        Token::Escape(&input)
-                    } else if input.len() == 1 {
-                        Token::Control(c)
+                        escape_token(&input)
                     } else {
-                        Token::ControlUtf8(c)
+                        control_token(&input)
                     };
                     assert_eq!(toks, [expected]);
                     assert_eq!(rebuild(&toks), input);
@@ -930,7 +958,7 @@ mod sequences {
                     };
                     assert_eq!(
                         tokenize(&payload, mode, false).next(),
-                        Some(Token::Escape(&payload[..expected_len])),
+                        Some(escape_token(&payload[..expected_len])),
                     );
                 }
             }
@@ -1004,7 +1032,9 @@ mod utf8_c1 {
                 }
                 let input = [lead, tail];
                 let toks = tokens(&input);
-                assert!(matches!(toks.as_slice(), [Token::Text { text, .. }] if *text == input));
+                assert_eq!(toks.len(), 1);
+                assert_eq!(toks[0].kind, TokenKind::Text);
+                assert_eq!(toks[0].bytes, input);
                 assert_eq!(rebuild(&toks), input);
             }
         }
@@ -1063,17 +1093,17 @@ mod fast_path {
 
     fn text_tokens_eaw(s: &str, mode: WidthMode, eaw_wide: bool) -> Vec<(String, u16)> {
         tokenize(s.as_bytes(), mode, eaw_wide)
-            .filter_map(|t| match t {
+            .filter(|t| t.kind == TokenKind::Text)
+            .map(|t| {
                 // Not lossy: a token that is not valid UTF-8 is a bug, and
                 // rendering it as U+FFFD hides exactly the failure these
                 // tests exist to catch.
-                Token::Text { text, width } => Some((
-                    std::str::from_utf8(text)
+                (
+                    std::str::from_utf8(t.bytes)
                         .expect("a text token is whole UTF-8")
                         .to_owned(),
-                    width,
-                )),
-                _ => None,
+                    t.width,
+                )
             })
             .collect()
     }
@@ -1157,23 +1187,33 @@ mod fast_path {
             let input = [b];
             let toks: Vec<_> = tokenize(&input, WidthMode::Wc, false).collect();
             match toks.as_slice() {
-                [Token::Text { text, width }] => {
+                [
+                    Token {
+                        kind: TokenKind::Text,
+                        bytes,
+                        width,
+                        control,
+                    },
+                ] => {
                     assert!(
                         (0x20..=0x7e).contains(&b),
                         "0x{b:02x} was emitted as text, but only printable ASCII may be"
                     );
-                    assert_eq!(*text, &input[..]);
+                    assert_eq!(*bytes, &input[..]);
                     assert_eq!(*width, 1);
+                    assert_eq!(*control, 0);
                 }
-                [Token::Control(c)] => {
-                    assert_eq!(*c, b);
+                [token] if token.kind == TokenKind::Control => {
+                    assert_eq!(*token, control_token(&input));
                     assert!(
                         b < 0x20 || b == 0x7f,
                         "0x{b:02x} is printable but was emitted as a control"
                     );
                 }
                 // A bare ESC opens a sequence with nothing in it.
-                [Token::Escape(seq)] => assert_eq!(*seq, b"\x1b"),
+                [token] if token.kind == TokenKind::Escape => {
+                    assert_eq!(*token, escape_token(b"\x1b"));
+                }
                 other => panic!("0x{b:02x} produced {other:?}"),
             }
         }
@@ -1206,10 +1246,10 @@ mod fast_path {
                 input.extend_from_slice(c.to_string().as_bytes());
                 input.extend_from_slice(b"\x07after");
                 for t in tokenize(&input, WidthMode::Wc, false) {
-                    let bytes = match t {
-                        Token::Text { text, .. } | Token::Escape(text) => text,
-                        Token::Control(_) | Token::ControlUtf8(_) => continue,
-                    };
+                    if t.kind == TokenKind::Control {
+                        continue;
+                    }
+                    let bytes = t.bytes;
                     assert!(
                         std::str::from_utf8(bytes).is_ok(),
                         "{input:x?} produced a token split mid-character: {bytes:x?}"
@@ -1225,21 +1265,19 @@ mod fast_path {
             input.extend_from_slice(b"\x07after");
             let toks: Vec<_> = tokenize(&input, WidthMode::Wc, false).collect();
             let (escape, rest) = toks.split_first().expect("a token");
-            let Token::Escape(seq) = escape else {
-                panic!("expected the OSC to be one escape token, got {escape:?}")
-            };
+            assert_eq!(escape.kind, TokenKind::Escape);
             let mut want = b"\x1b]0;Build ".to_vec();
             want.extend_from_slice(c.to_string().as_bytes());
             want.push(0x07);
-            assert_eq!(*seq, &want[..], "the sequence is whole");
+            assert_eq!(*escape, escape_token(&want), "the sequence is whole");
             assert_eq!(visible(rest), "after");
         }
         // A bare ESC takes the whole character after it, not its lead byte.
         let toks: Vec<_> = tokenize(b"\x1b\xe2\x9c\x85x", WidthMode::Wc, false).collect();
-        assert_eq!(toks[0], Token::Escape(b"\x1b\xe2\x9c\x85"));
+        assert_eq!(toks[0], escape_token(b"\x1b\xe2\x9c\x85"));
         // A `0x9C` on a character boundary is still an 8-bit ST.
         let toks: Vec<_> = tokenize(b"\x1b]0;t\x9cx", WidthMode::Wc, false).collect();
-        assert!(matches!(toks[0], Token::Escape(b"\x1b]0;t\x9c")));
+        assert_eq!(toks[0], escape_token(b"\x1b]0;t\x9c"));
     }
 
     /// A malformed byte in a payload must not eat the terminator.
@@ -1261,7 +1299,7 @@ mod fast_path {
             let toks: Vec<_> = tokenize(input, WidthMode::Wc, false).collect();
             assert_eq!(
                 toks.first(),
-                Some(&Token::Escape(escape)),
+                Some(&escape_token(escape)),
                 "input {input:x?} did not stop at its terminator"
             );
             assert!(
@@ -1271,8 +1309,8 @@ mod fast_path {
         }
         // A bare ESC must not consume the CSI that follows a malformed byte.
         let toks: Vec<_> = tokenize(b"\x1b\xe0\x1b[31mZ", WidthMode::Wc, false).collect();
-        assert_eq!(toks[0], Token::Escape(b"\x1b\xe0"));
-        assert_eq!(toks[1], Token::Escape(b"\x1b[31m"));
+        assert_eq!(toks[0], escape_token(b"\x1b\xe0"));
+        assert_eq!(toks[1], escape_token(b"\x1b[31m"));
     }
 
     /// Arbitrary bytes must not panic, and must not produce a token that
@@ -1294,29 +1332,28 @@ mod fast_path {
         let pinned: &[(&[u8], &str)] = &[
             (
                 b"\xe0\x20\x0d\xef\xb8\x8f",
-                "Ce0 T[20]w1 C0d T[ef, b8, 8f]w0",
+                "C[e0] T[20]w1 C[0d] T[ef, b8, 8f]w0",
             ),
             (
                 b"\xf0\x30\x0d\x5b\xe2\x9c\x85\x30",
-                "Cf0 T[30]w1 C0d T[5b]w1 T[e2, 9c, 85]w2 T[30]w1",
+                "C[f0] T[30]w1 C[0d] T[5b]w1 T[e2, 9c, 85]w2 T[30]w1",
             ),
             (
                 b"\xe0\x41\x1b\x41\xc3\xa9",
-                "Ce0 T[41]w1 E[1b, 41] T[c3, a9]w1",
+                "C[e0] T[41]w1 E[1b, 41] T[c3, a9]w1",
             ),
-            (b"\xcf\xc8\x9c", "Ccf T[c8, 9c]w1"),
+            (b"\xcf\xc8\x9c", "C[cf] T[c8, 9c]w1"),
             (
                 b"\xe3\x61\x0a\xc4\x81\xc4\x81\x78",
-                "Ce3 T[61]w1 C0a T[c4, 81]w1 T[c4, 81]w1 T[78]w1",
+                "C[e3] T[61]w1 C[0a] T[c4, 81]w1 T[c4, 81]w1 T[78]w1",
             ),
         ];
         for (seed, expected) in pinned {
             let rendered: Vec<String> = tokenize(seed, WidthMode::Grapheme, false)
-                .map(|t| match t {
-                    Token::Text { text, width } => format!("T{text:x?}w{width}"),
-                    Token::Escape(b) => format!("E{b:x?}"),
-                    Token::Control(c) => format!("C{c:02x}"),
-                    Token::ControlUtf8(c) => format!("U{c:02x}"),
+                .map(|t| match t.kind {
+                    TokenKind::Text => format!("T{:x?}w{}", t.bytes, t.width),
+                    TokenKind::Escape => format!("E{:x?}", t.bytes),
+                    TokenKind::Control => format!("C{:02x?}", t.bytes),
                 })
                 .collect();
             assert_eq!(rendered.join(" "), *expected, "input {seed:x?}");
@@ -1353,10 +1390,29 @@ mod fast_path {
             }
             let input = &buf[..len];
             for t in tokenize(input, WidthMode::Grapheme, false) {
-                if let Token::Text { text, .. } = t {
+                assert!(!t.bytes.is_empty());
+                match t.kind {
+                    TokenKind::Text => assert_eq!(t.control, 0),
+                    TokenKind::Escape => {
+                        assert_eq!(t.width, 0);
+                        assert_eq!(t.control, 0);
+                    }
+                    TokenKind::Control => {
+                        assert_eq!(t.width, 0);
+                        assert_eq!(t.control, *t.bytes.last().unwrap());
+                        if t.bytes.len() == 2 {
+                            assert_eq!(t.bytes[0], 0xc2);
+                            assert!((0x80..=0x9f).contains(&t.control));
+                        } else {
+                            assert_eq!(t.bytes.len(), 1);
+                        }
+                    }
+                }
+                if t.kind == TokenKind::Text {
                     assert!(
-                        std::str::from_utf8(text).is_ok(),
-                        "{input:x?} produced a split character {text:x?}"
+                        std::str::from_utf8(t.bytes).is_ok(),
+                        "{input:x?} produced a split character {:x?}",
+                        t.bytes
                     );
                 }
             }

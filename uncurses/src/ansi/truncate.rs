@@ -22,7 +22,7 @@
 //! which byte ends a control string, and when a byte in `0x80..=0x9F`
 //! is a C1 control rather than part of a character, are documented there.
 
-use super::text::{Token, WidthMode, string_width, tokenize};
+use super::text::{TokenKind, WidthMode, string_width, tokenize};
 
 #[inline]
 fn bs(b: &[u8]) -> &str {
@@ -71,15 +71,15 @@ pub fn truncate_mode(
     let mut used = 0usize;
     let mut tail_inserted = false;
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
-        match tok {
-            Token::Escape(esc) => out.push_str(bs(esc)),
-            Token::Control(b) | Token::ControlUtf8(b) => {
+        match tok.kind {
+            TokenKind::Escape => out.push_str(bs(tok.bytes)),
+            TokenKind::Control => {
                 if !tail_inserted {
-                    out.push(b as char);
+                    out.push_str(bs(tok.bytes));
                 }
             }
-            Token::Text { text, width } => {
-                let w = width as usize;
+            TokenKind::Text => {
+                let w = usize::from(tok.width);
                 if used + w > budget {
                     if !tail_inserted {
                         out.push_str(tail);
@@ -88,7 +88,7 @@ pub fn truncate_mode(
                     // Continue scanning to capture trailing escapes (e.g. SGR reset).
                     continue;
                 }
-                out.push_str(bs(text));
+                out.push_str(bs(tok.bytes));
                 used += w;
             }
         }
@@ -128,28 +128,28 @@ pub fn truncate_left_mode(
     let mut dropped = 0usize;
     let mut dropping = true;
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
-        match tok {
-            Token::Escape(esc) => {
+        match tok.kind {
+            TokenKind::Escape => {
                 if dropping {
-                    head_escapes.push_str(bs(esc));
+                    head_escapes.push_str(bs(tok.bytes));
                 } else {
-                    out.push_str(bs(esc));
+                    out.push_str(bs(tok.bytes));
                 }
             }
-            Token::Control(b) | Token::ControlUtf8(b) => {
+            TokenKind::Control => {
                 if !dropping {
-                    out.push(b as char);
+                    out.push_str(bs(tok.bytes));
                 }
             }
-            Token::Text { text, width } => {
-                let w = width as usize;
+            TokenKind::Text => {
+                let w = usize::from(tok.width);
                 if dropping {
                     dropped += w;
                     if dropped >= drop {
                         dropping = false;
                     }
                 } else {
-                    out.push_str(bs(text));
+                    out.push_str(bs(tok.bytes));
                 }
             }
         }
@@ -190,17 +190,17 @@ pub fn cut_mode(s: &str, left: usize, right: usize, mode: WidthMode, eaw_wide: b
     let mut col = 0usize;
     let mut emitted = 0usize;
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
-        match tok {
-            Token::Escape(esc) => out.push_str(bs(esc)),
-            Token::Control(b) | Token::ControlUtf8(b) => {
+        match tok.kind {
+            TokenKind::Escape => out.push_str(bs(tok.bytes)),
+            TokenKind::Control => {
                 if col >= left && emitted < target {
-                    out.push(b as char);
+                    out.push_str(bs(tok.bytes));
                 }
             }
-            Token::Text { text, width } => {
-                let w = width as usize;
+            TokenKind::Text => {
+                let w = usize::from(tok.width);
                 if col >= left && emitted + w <= target {
-                    out.push_str(bs(text));
+                    out.push_str(bs(tok.bytes));
                     emitted += w;
                 }
                 col += w;

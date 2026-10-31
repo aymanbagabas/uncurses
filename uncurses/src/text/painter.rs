@@ -62,7 +62,7 @@
 
 use crate::ansi::hyperlink::parse_hyperlink;
 use crate::ansi::params::Params;
-use crate::ansi::text::{Token, string_width, tokenize};
+use crate::ansi::text::{TokenKind, string_width, tokenize};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::layout::{Position, Rect, overruns};
@@ -201,7 +201,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
             // A zero-width grapheme appends to the pending cell without
             // finalizing it. Everything else finalizes the pending cell first,
             // writing it with the current style: the pen inherited onto base.
-            if !matches!(tok, Token::Text { width: 0, .. })
+            if !(tok.kind == TokenKind::Text && tok.width == 0)
                 && let Some((px, py, content, w)) = pending.take()
                 && clip.contains(Position::new(px, py))
             {
@@ -210,19 +210,22 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
             }
 
-            match tok {
+            match tok.kind {
                 // SAFETY (all `from_utf8_unchecked`): the tokenizer cuts on
                 // grapheme-cluster boundaries of a valid `&str`, so each slice
                 // is valid UTF-8. Checked under `debug_assert!` for the same
                 // reason as `ansi::wrap::bs` - the invariant is the tokenizer's
                 // to keep, and when it stopped keeping it this was UB.
-                Token::Text { text, width: 0 } => {
+                TokenKind::Text if tok.width == 0 => {
+                    let text = tok.bytes;
                     if let Some((_, _, ref mut content, _)) = pending {
                         debug_assert!(std::str::from_utf8(text).is_ok());
                         content.push_str(unsafe { std::str::from_utf8_unchecked(text) });
                     }
                 }
-                Token::Text { text, width } => {
+                TokenKind::Text => {
+                    let text = tok.bytes;
+                    let width = tok.width;
                     debug_assert!(std::str::from_utf8(text).is_ok());
                     if truncated {
                         continue;
@@ -254,7 +257,8 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     pending = Some((x, y, g.to_string(), cw));
                     x += cw as u16;
                 }
-                Token::Escape(seq) => {
+                TokenKind::Escape => {
+                    let seq = tok.bytes;
                     if seq.last() == Some(&b'm')
                         && let Some(body) = csi_body(seq)
                     {
@@ -265,7 +269,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                         pen = pen.link(url, params);
                     }
                 }
-                Token::Control(0x0A) => {
+                TokenKind::Control if tok.control == b'\n' => {
                     y = y.saturating_add(1);
                     x = clip.left();
                     truncated = false;
@@ -273,11 +277,11 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                         return Position::new(x, y);
                     }
                 }
-                Token::Control(0x0D) => {
+                TokenKind::Control if tok.control == b'\r' => {
                     x = clip.left();
                     truncated = false;
                 }
-                Token::Control(_) | Token::ControlUtf8(_) => {}
+                TokenKind::Control => {}
             }
         }
 
