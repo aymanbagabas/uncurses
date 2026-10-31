@@ -14,11 +14,11 @@ use std::time::{Duration, Instant};
 
 use uncurses::event::{Event, KeyCode, KeyModifiers};
 use uncurses::program::{Program, ProgramOptions};
+use uncurses::terminal::{Terminal, TtyInput, TtyOutput};
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleCP,
-    GetConsoleMode, GetStdHandle, HPCON, STD_INPUT_HANDLE, SetConsoleCP, SetConsoleMode,
-    SetConsoleOutputCP,
+    GetConsoleMode, HPCON, SetConsoleCP, SetConsoleMode, SetConsoleOutputCP,
 };
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
@@ -191,10 +191,10 @@ fn run_conpty(child_test: &str) {
     reader.join().unwrap().unwrap();
 }
 
-fn input_mode() -> u32 {
+fn input_mode(input: TtyInput) -> u32 {
     let mut mode = 0;
     assert_ne!(
-        unsafe { GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &mut mode) },
+        unsafe { GetConsoleMode(input.as_raw_handle(), &mut mode) },
         0,
         "GetConsoleMode: {}",
         io::Error::last_os_error()
@@ -202,7 +202,7 @@ fn input_mode() -> u32 {
     mode
 }
 
-fn check_input(program: &mut Program<uncurses::terminal::TtyInput, uncurses::terminal::TtyOutput>) {
+fn check_input(program: &mut Program<TtyInput, TtyOutput>) {
     for code in [
         KeyCode::Char('c'),
         KeyCode::Char('a'),
@@ -250,11 +250,14 @@ fn run_child(code_page: u32) {
         "SetConsoleOutputCP: {}",
         io::Error::last_os_error()
     );
+    let terminal = Terminal::open().unwrap();
+    let input = terminal.input();
+    let mut output = terminal.output();
     assert_ne!(
         unsafe {
             SetConsoleMode(
-                GetStdHandle(STD_INPUT_HANDLE),
-                input_mode() & !ENABLE_VIRTUAL_TERMINAL_INPUT,
+                input.as_raw_handle(),
+                input_mode(input) & !ENABLE_VIRTUAL_TERMINAL_INPUT,
             )
         },
         0,
@@ -262,24 +265,24 @@ fn run_child(code_page: u32) {
         io::Error::last_os_error()
     );
     let mut program = Program::open().unwrap();
-    assert_eq!(input_mode() & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
+    assert_eq!(input_mode(input) & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
     program.init_with(ProgramOptions::default()).unwrap();
 
     for marker in ["CONPTY_READY_INIT", "CONPTY_READY_RESUME"] {
         assert_eq!(unsafe { GetConsoleCP() }, code_page);
-        assert_ne!(input_mode() & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
-        println!("{marker}");
-        io::stdout().flush().unwrap();
+        assert_ne!(input_mode(input) & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
+        write!(output, "{marker}\r\n").unwrap();
+        output.flush().unwrap();
         check_input(&mut program);
         if marker == "CONPTY_READY_INIT" {
             program.pause().unwrap();
-            assert_eq!(input_mode() & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
+            assert_eq!(input_mode(input) & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
             program.resume().unwrap();
         }
     }
     program.finish().unwrap();
-    println!("CONPTY_INPUT_PASS");
-    io::stdout().flush().unwrap();
+    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
+    output.flush().unwrap();
 }
 
 #[test]
