@@ -921,12 +921,32 @@ impl<W: Write> Write for Screen<W> {
     }
 
     /// Drain the staging buffer to the writer and flush it.
+    ///
+    /// A write error retains only unsent bytes for the next flush.
+    /// A writer flush error leaves the staging buffer empty.
     fn flush(&mut self) -> io::Result<()> {
         if !self.out_buf.is_empty() {
             #[cfg(debug_assertions)]
             crate::trace::tee_output(&self.out_buf);
-            self.writer.write_all(&self.out_buf)?;
-            self.out_buf.clear();
+            let mut written = 0;
+            let result = loop {
+                if written == self.out_buf.len() {
+                    break Ok(());
+                }
+                match self.writer.write(&self.out_buf[written..]) {
+                    Ok(0) => {
+                        break Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "writer returned 0 with non-empty buffer",
+                        ));
+                    }
+                    Ok(count) => written += count,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => break Err(error),
+                }
+            };
+            self.out_buf.drain(..written);
+            result?;
         }
         self.writer.flush()
     }

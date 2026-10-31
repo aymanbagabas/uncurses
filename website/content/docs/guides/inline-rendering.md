@@ -132,6 +132,8 @@ Fullscreen screens and zero counts preserve pending edits and output.
 If the initial render fails, the screen retains its rows.
 If the final flush fails, the rows stay released.
 Retry with `std::io::Write::flush(screen)` to send pending bytes without releasing more rows.
+The screen retains unsent bytes after a write error and removes bytes that the writer accepts.
+If the writer's flush fails, the next retry flushes the writer without repeating accepted bytes.
 
 ## Inserting separate output
 
