@@ -40,6 +40,18 @@ fn main() -> io::Result<()> {
             "Rendered bytes: {:?}",
             String::from_utf8_lossy(screen.writer())
         );
+
+        let inserted = format!("{csi}1mxxxxxxxxxx{csi}m");
+        let mut screen = Screen::new(Vec::new(), (10, 1));
+        screen.insert_above(&inserted)?;
+        assert_eq!(
+            screen.writer(),
+            b"\r\n\x1b[A\x1b[L\x1b[1mxxxxxxxxxx\x1b[m\r\n"
+        );
+        println!(
+            "Inserted bytes (one full row): {:?}",
+            String::from_utf8_lossy(screen.writer())
+        );
     }
     Ok(())
 }

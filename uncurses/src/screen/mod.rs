@@ -85,7 +85,10 @@ mod tests;
 /// [`Screen::set_optimizations`] without depending on renderer internals.
 pub use crate::renderer::Optimizations;
 
-use std::io::{self, Write};
+use std::{
+    borrow::Cow,
+    io::{self, Write},
+};
 
 use crate::ansi::mode;
 use crate::buffer::{Bounded, Surface, SurfaceMut};
@@ -292,11 +295,15 @@ impl<W: Write> Screen<W> {
     ///
     /// Wrapped rows follow the screen's width policy. ANSI escapes contribute
     /// no width. A full final row skips erasure to preserve its last column.
+    ///
     /// Tabs use stops every eight columns and clamp at the right edge.
     /// [`Program`](crate::program::Program) establishes these stops. A caller
     /// that drives `Screen` directly must establish the same terminal stops.
     /// A pending height change takes effect on the next render. Insertion
     /// uses the last rendered height and leaves pending cell edits staged.
+    ///
+    /// UTF-8 C1 controls use their 7-bit terminal forms for both measurement
+    /// and output. Control string payloads retain their original UTF-8 bytes.
     ///
     /// # Errors
     ///
@@ -305,6 +312,7 @@ impl<W: Write> Screen<W> {
         if content.is_empty() {
             return Ok(());
         }
+        let content = normalize_insert_above(content);
 
         let height = self
             .renderer
@@ -950,6 +958,46 @@ impl<W: Write> Write for Screen<W> {
         }
         self.writer.flush()
     }
+}
+
+fn normalize_insert_above(content: &str) -> Cow<'_, str> {
+    use crate::ansi::text::{Token, tokenize};
+
+    if !content
+        .chars()
+        .any(|ch| ('\u{80}'..='\u{9f}').contains(&ch))
+    {
+        return Cow::Borrowed(content);
+    }
+    let mut output = Vec::with_capacity(content.len());
+    for token in tokenize(content.as_bytes(), WidthMode::Wc, false) {
+        match token {
+            Token::Text { text, .. } => output.extend_from_slice(text),
+            Token::Control(control) => output.push(control),
+            Token::ControlUtf8(control) => {
+                output.extend_from_slice(&[0x1b, control - 0x40]);
+            }
+            Token::Escape(mut sequence) => {
+                let string = matches!(
+                    sequence,
+                    [0xc2, 0x90 | 0x98 | 0x9d | 0x9e | 0x9f, ..]
+                        | [0x1b, b'P' | b'X' | b']' | b'^' | b'_', ..]
+                );
+                if let [0xc2, control @ 0x80..=0x9f, rest @ ..] = sequence {
+                    output.extend_from_slice(&[0x1b, control - 0x40]);
+                    sequence = rest;
+                }
+                // Only string framing changes; encoded controls inside the payload stay opaque.
+                if string && let Some(payload) = sequence.strip_suffix(&[0xc2, 0x9c]) {
+                    output.extend_from_slice(payload);
+                    output.extend_from_slice(b"\x1b\\");
+                } else {
+                    output.extend_from_slice(sequence);
+                }
+            }
+        }
+    }
+    Cow::Owned(String::from_utf8(output).unwrap())
 }
 
 impl<W: Write> Bounded for Screen<W> {

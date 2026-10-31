@@ -95,6 +95,8 @@ escape sequences in the string are drawn as visible characters, not interpreted.
 `Painter` and ANSI text utilities accept UTF-8 C1 controls in input strings.
 For example, `\u{9b}1m` sets bold, like `\x1b[1m`.
 The renderer writes cell styles with ordinary terminal controls.
+`Screen::insert_above` also converts UTF-8 C1 framing to 7-bit forms before
+it measures and writes inserted content.
 Use 7-bit escapes when you write raw commands to a terminal.
 Run `cargo run -p examples --example ansi_text` to compare both input encodings.
 

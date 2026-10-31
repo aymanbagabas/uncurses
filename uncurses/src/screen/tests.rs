@@ -1467,8 +1467,6 @@ fn insert_above_counts_wrapped_rows_and_protects_the_right_edge() {
     let utf8_styled = "\u{9b}1;38;2;255;121;198mstyled\u{9b}m ".repeat(10);
     for (width, content, rows, erase, wide, grapheme) in [
         (80, styled.as_str(), 1, true, false, false),
-        (80, utf8_styled.as_str(), 1, true, false, false),
-        (10, "\u{9b}1mxxxxxxxxxx\u{9b}m", 1, false, false, false),
         (10, "xxxxxxxxxx", 1, false, false, false),
         (10, "yyyyyyyyyyy", 2, true, false, false),
         (10, "yyyyyyyyyyyyyyyyyyyy", 2, false, false, false),
@@ -1521,6 +1519,102 @@ fn insert_above_counts_wrapped_rows_and_protects_the_right_edge() {
             expected,
             "width={width}, wide={wide}, grapheme={grapheme}, content={content:?}"
         );
+    }
+    let mut screen = Screen::new(Vec::new(), (80, 2));
+    screen.insert_above(&utf8_styled).unwrap();
+    assert_eq!(
+        s(screen.writer()),
+        format!("\r\x1b[B\n\x1b[2A\x1b[L{styled}\x1b[K\r\n")
+    );
+}
+
+#[test]
+fn insert_above_normalizes_utf8_csi_at_the_right_edge() {
+    let mut screen = Screen::new(Vec::new(), (10, 2));
+    screen.insert_above("\u{9b}1mxxxxxxxxxx\u{9b}m").unwrap();
+    assert_eq!(
+        s(screen.writer()),
+        "\r\x1b[B\n\x1b[2A\x1b[L\x1b[1mxxxxxxxxxx\x1b[m\r\n"
+    );
+}
+
+#[test]
+fn insert_above_normalizes_string_framing_and_preserves_payloads() {
+    let payload = "0;qÜ✅\u{9b}\u{85}\u{9d}";
+    for (encoded, seven_bit) in [
+        ("\u{9d}", "\x1b]"),
+        ("\u{90}", "\x1bP"),
+        ("\u{98}", "\x1bX"),
+        ("\u{9e}", "\x1b^"),
+        ("\u{9f}", "\x1b_"),
+    ] {
+        for head in [encoded, seven_bit] {
+            for end in ["\u{9c}", "\x1b\\"] {
+                let input = format!("{head}{payload}{end}xxxxxxxxxx");
+                let mut screen = Screen::new(Vec::new(), (10, 2));
+                screen.insert_above(&input).unwrap();
+                assert_eq!(
+                    s(screen.writer()),
+                    format!("\r\x1b[B\n\x1b[2A\x1b[L{seven_bit}{payload}\x1b\\xxxxxxxxxx\r\n"),
+                    "input={input:?}"
+                );
+            }
+        }
+    }
+    let mut screen = Screen::new(Vec::new(), (10, 2));
+    screen.insert_above("\u{9d}0;Ü✅\x07xxxxxxxxxx").unwrap();
+    assert_eq!(
+        s(screen.writer()),
+        "\r\x1b[B\n\x1b[2A\x1b[L\x1b]0;Ü✅\x07xxxxxxxxxx\r\n"
+    );
+}
+
+#[test]
+fn insert_above_preserves_utf8_and_incomplete_sequences() {
+    for (input, emitted, rows, erase) in [
+        ("1234567Ü✅", "1234567Ü✅", 1, false),
+        ("12345678Ü✅", "12345678Ü✅", 2, true),
+        ("\u{9b}1;", "\x1b[1;", 1, true),
+        ("\u{9b}1;\u{9c}", "\x1b[1;\u{9c}", 1, true),
+        ("\u{9d}0;Ü✅\u{85}", "\x1b]0;Ü✅\u{85}", 1, true),
+        ("\x1b]0;Ü✅\u{85}", "\x1b]0;Ü✅\u{85}", 1, true),
+        ("\u{90}qÜ✅\x07", "\x1bPqÜ✅\x07", 1, true),
+        ("\u{9d}0;Ü✅\x1b[1mX", "\x1b]0;Ü✅\x1b[1mX", 1, true),
+        ("\x1b[1mÜ✅\x1b[m", "\x1b[1mÜ✅\x1b[m", 1, true),
+        ("\x1bÜ\u{9c}", "\x1bÜ\x1b\\", 1, true),
+        ("\x1b\u{9c}", "\x1b\u{9c}", 1, true),
+        ("\x1b", "\x1b", 1, true),
+        (
+            "\u{80}\u{84}\u{85}\u{8d}\u{9c}",
+            "\x1b@\x1bD\x1bE\x1bM\x1b\\",
+            1,
+            true,
+        ),
+    ] {
+        let mut screen = Screen::new(Vec::new(), (10, 2));
+        screen.insert_above(input).unwrap();
+        let expected = format!(
+            "\r\x1b[B{}\x1b[{}A{}{emitted}{}\r\n",
+            "\n".repeat(rows),
+            rows + 1,
+            if rows == 1 { "\x1b[L" } else { "\x1b[2L" },
+            if erase { "\x1b[K" } else { "" },
+        );
+        assert_eq!(s(screen.writer()), expected, "input={input:?}");
+    }
+}
+
+#[test]
+fn insert_above_normalizes_each_standalone_encoded_control() {
+    for control in 0x80..=0x9f {
+        let input = char::from(control).to_string();
+        let mut screen = Screen::new(Vec::new(), (10, 2));
+        screen.insert_above(&input).unwrap();
+        let expected = format!(
+            "\r\x1b[B\n\x1b[2A\x1b[L\x1b{}\x1b[K\r\n",
+            char::from(control - 0x40)
+        );
+        assert_eq!(s(screen.writer()), expected, "control={control:02x}");
     }
 }
 
