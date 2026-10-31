@@ -289,9 +289,20 @@ impl<W: Write> Screen<W> {
     /// Insert `content` into the scrollback above the managed area and flush
     /// it to the writer. Inline this pushes the lines into the terminal's
     /// scrollback; in fullscreen they go into the alternate screen's hidden
-    /// scrollback. The managed area is preserved in place, so no redraw is
-    /// needed and a following [`render`](Self::render) sees no change. An
-    /// empty string is a no-op.
+    /// scrollback. Styled text preserves the managed area in place, so no
+    /// redraw is needed and a following [`render`](Self::render) sees no change.
+    /// An empty string is a no-op.
+    ///
+    /// # Input
+    ///
+    /// Content must contain only text, newlines, tabs, complete SGR style
+    /// sequences, and OSC 8 hyperlinks. The caller must ensure that the content
+    /// satisfies this input requirement.
+    ///
+    /// Keep other controls and escapes out of the input. Cursor movement,
+    /// erasure, scrolling, and mode changes fall outside this contract and can
+    /// overwrite the managed area or preceding output. This includes standalone
+    /// NEL, IND, and RI controls and their equivalent escape sequences.
     ///
     /// Wrapped rows follow the screen's width policy. ANSI escapes contribute
     /// no width. A full final row skips erasure to preserve its last column.
@@ -302,8 +313,9 @@ impl<W: Write> Screen<W> {
     /// A pending height change takes effect on the next render. Insertion
     /// uses the last rendered height and leaves pending cell edits staged.
     ///
-    /// UTF-8 C1 controls use their 7-bit terminal forms for both measurement
-    /// and output. Control string payloads retain their original UTF-8 bytes.
+    /// Supported UTF-8 C1 style and hyperlink sequences use their 7-bit
+    /// terminal forms for both measurement and output. Hyperlink payloads
+    /// retain their original UTF-8 bytes.
     ///
     /// # Errors
     ///
