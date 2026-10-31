@@ -537,6 +537,34 @@ mod tests {
     }
 
     #[test]
+    fn source_flags_reset_surrogates_on_vt_input_changes() {
+        let (reader, _writer) = io::pipe().unwrap();
+        let mut source = EventSource::new_with_flags(reader, SourceFlags::VT_INPUT).unwrap();
+        let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
+        record.EventType = KEY_EVENT as u16;
+        let mut buf = Vec::new();
+
+        for (flags, key_down, ch) in [
+            (SourceFlags::VT_INPUT, true, 0xD83D),
+            (SourceFlags::VT_INPUT, true, 0xDE80),
+            (SourceFlags::VT_INPUT, true, 0xD83D),
+            (SourceFlags::VT_INPUT, false, 0xD83D),
+            (SourceFlags::empty(), true, b'a' as u16),
+            (SourceFlags::VT_INPUT, true, 0xDE80),
+            (SourceFlags::VT_INPUT, false, 0xDE80),
+        ] {
+            source.set_flags(flags);
+            if flags.is_empty() {
+                assert_eq!(source.pending_high_surrogate, [None, None]);
+            }
+            record.Event.KeyEvent = key_record(key_down, 0, 0, ch, 0, 1);
+            source.serialize_record(&record, &mut buf);
+        }
+        assert_eq!(buf, b"\xf0\x9f\x9a\x80a");
+        assert_eq!(source.pending_high_surrogate, [None, None]);
+    }
+
+    #[test]
     fn key_event_vt_input_pairs_surrogates() {
         let mut buf = Vec::new();
         let mut pending = [None, None];

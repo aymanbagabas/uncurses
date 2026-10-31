@@ -309,7 +309,13 @@ where
     }
 
     /// Set the input source flags without changing terminal modes or decoder flags.
+    ///
+    /// On Windows, a [`SourceFlags::VT_INPUT`] change discards incomplete UTF-16 pairs.
     pub fn set_flags(&mut self, flags: SourceFlags) {
+        #[cfg(windows)]
+        if (self.flags ^ flags).contains(SourceFlags::VT_INPUT) {
+            self.pending_high_surrogate = [None, None];
+        }
         self.flags = flags;
     }
 
