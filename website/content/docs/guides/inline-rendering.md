@@ -154,6 +154,13 @@ ANSI style sequences contribute no columns.
 Tabs keep their bytes and follow stops every eight columns, with a clamp at
 the right edge. `Program` establishes these stops during session setup.
 If you drive `Screen` directly, establish the same terminal stops first.
+
+`insert_above` converts UTF-8 C1 controls to 7-bit forms before it measures
+and writes the content. It preserves UTF-8 text inside control strings,
+with terminal-compatible introducers and terminators.
+Run `cargo run -p examples --example ansi_text` to see both input encodings
+produce the same inserted bytes.
+
 Use `screen.set_ambiguous_wide(true)` when the terminal displays ambiguous
 characters as two columns. Rewrite existing text after changing that policy.
 
