@@ -1150,7 +1150,7 @@ fn commit_rows_handles_zero_width_and_repeated_commits() {
         screen.resize_height(2);
         screen.commit_rows(count).unwrap();
         assert_eq!(screen.size(), Size::new(0, 2 - count));
-        assert_eq!(screen.renderer.last_size(), None);
+        assert_eq!(screen.renderer.last_size(), Some((0, 2 - count)));
         assert_eq!(screen.tracked_cursor(), Some(Position::ORIGIN));
     }
     let mut screen = three_inline_rows();
