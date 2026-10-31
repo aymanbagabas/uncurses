@@ -41,6 +41,7 @@ reads the reply, and uses only what is actually there.
 - [Clickable hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) (OSC 8)
 - [Unicode core](https://contour-terminal.org/vt-extensions/unicode-core/) (Mode 2027): width by grapheme cluster
 - Unambiguous keys, with release: [kitty keyboard](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) or [`modifyOtherKeys`](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Alt-and-Meta-Keys)
+- [Win32 input mode](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md#win32-input-mode-sequences) (Mode 9001): key presses, releases, and repeats
 - [Mouse](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking) clicks, motion, wheel, and [pixel positions](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Extended-coordinates)
 - [Pointer shapes](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 22)
 - [Bracketed paste](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-ordered-by-the-final-character_s_) (Mode 2004)
