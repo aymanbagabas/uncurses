@@ -146,8 +146,17 @@ inline block, then keeps drawing the block below it.
 program.screen_mut().insert_above("compiled in 1.2s")?;
 ```
 
-It flushes immediately and leaves your live block untouched, so the committed
-line lands in scrollback and the block keeps drawing right below it.
+Use styled text: text, newlines, tabs, complete SGR style sequences, and
+OSC 8 hyperlinks. The caller must ensure that the content satisfies this
+input requirement.
+
+**Warning:** Keep other controls and escapes out of the input.
+Cursor movement, erasure, scrolling, and mode changes can overwrite the live
+block or preceding output. This includes NEL, IND, and RI controls and their
+equivalent escape sequences.
+
+With styled text, it flushes immediately and leaves your live block untouched.
+The committed line lands in scrollback, and the block stays below it.
 
 Wrapped lines follow the screen's width policy, including wide characters.
 ANSI style sequences contribute no columns.
@@ -155,9 +164,9 @@ Tabs keep their bytes and follow stops every eight columns, with a clamp at
 the right edge. `Program` establishes these stops during session setup.
 If you drive `Screen` directly, establish the same terminal stops first.
 
-`insert_above` converts UTF-8 C1 controls to 7-bit forms before it measures
-and writes the content. It preserves UTF-8 text inside control strings,
-with terminal-compatible introducers and terminators.
+`insert_above` converts supported UTF-8 C1 style and hyperlink sequences to
+7-bit forms before it measures and writes the content.
+Hyperlink payloads retain their original UTF-8 bytes.
 Run `cargo run -p examples --example ansi_text` to see both input encodings
 produce the same inserted bytes.
 
