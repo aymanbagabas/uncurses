@@ -990,6 +990,78 @@ fn insert_above_after_cursor_move_into_pending_growth_keeps_displayed_rows() {
 }
 
 #[test]
+fn resize_height_from_initial_zero_geometry_claims_blank_rows() {
+    for render_empty in [false, true] {
+        for (height, expected) in [
+            (1, b"\x1b[?25l\r\x1b[?25h".as_slice()),
+            (3, b"\x1b[?25l\r\n\n\x1b[?25h".as_slice()),
+        ] {
+            let mut screen = Screen::new(Vec::new(), (0, 0));
+            let mut display = InlineDisplay::new();
+            if render_empty {
+                screen.render().unwrap();
+                assert!(screen.writer().is_empty());
+            }
+            screen.resize_height(height);
+            screen.render().unwrap();
+            assert_eq!(screen.writer(), expected);
+            display.replay(screen.writer());
+            assert_eq!((display.x, display.y), (0, 4 + usize::from(height - 1)));
+            assert_eq!(screen.size(), Size::new(0, height));
+            assert_eq!(screen.renderer.last_size(), Some((0, height)));
+            assert_eq!(screen.diverge(), None);
+
+            screen.writer_mut().clear();
+            screen.resize_height(height);
+            screen.render().unwrap();
+            assert!(screen.writer().is_empty());
+
+            screen.resize_height(height + 2);
+            screen.render().unwrap();
+            assert_eq!(screen.writer(), b"\x1b[?25l\n\n\x1b[?25h");
+            display.replay(screen.writer());
+            assert_eq!((display.x, display.y), (0, 4 + usize::from(height + 1)));
+        }
+    }
+}
+
+#[test]
+fn resize_height_canceled_before_initial_frame_is_a_no_op() {
+    let mut screen = Screen::new(Vec::new(), (0, 0));
+    screen.resize_height(3);
+    screen.resize_height(0);
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+    assert_eq!(screen.size(), Size::new(0, 0));
+    assert_eq!(screen.renderer.last_size(), None);
+
+    screen.resize_height(3);
+    screen.render().unwrap();
+    assert_eq!(screen.writer(), b"\x1b[?25l\r\n\n\x1b[?25h");
+}
+
+#[test]
+fn resize_height_from_empty_fullscreen_keeps_absolute_geometry() {
+    for width in [0, 10] {
+        let mut screen = Screen::new(Vec::new(), (width, 0));
+        screen.set_fullscreen(true);
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+
+        screen.resize_height(3);
+        screen.render().unwrap();
+        assert_eq!(screen.writer(), b"\x1b[?25l\x1b[?25h");
+        assert_eq!(screen.renderer.last_size(), Some((width, 3)));
+        assert_eq!(screen.diverge(), None);
+        assert!(screen.fullscreen());
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+}
+
+#[test]
 fn resize_height_preserves_retained_rows() {
     for (height, new_text, expected) in [
         (4, Some("dddd"), "\x1b[?25l\ndddd\r\x1b[?25h"),

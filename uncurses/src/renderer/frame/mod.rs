@@ -55,8 +55,8 @@ impl Renderer {
     ///
     /// # Usage notes
     ///
-    /// No output is produced when neither the buffer has touched rows nor
-    /// a force-clear is pending.
+    /// No output is produced when the dimensions match, the buffer has
+    /// no touched rows, and a force-clear is not pending.
     pub fn render(&mut self, out: &mut Vec<u8>, new_buf: &mut RenderBuffer) -> io::Result<()> {
         let width = new_buf.width();
         let height = new_buf.height();

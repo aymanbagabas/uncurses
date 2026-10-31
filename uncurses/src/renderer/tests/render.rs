@@ -106,7 +106,9 @@ fn test_render_empty() {
     let mut rb = RenderBuffer::new(10, 5);
     let mut out = Vec::new();
     r.render(&mut out, &mut rb).unwrap();
-    // No changes → no output
+    assert_eq!(out, b"\r\n\n\n\n");
+    out.clear();
+    r.render(&mut out, &mut rb).unwrap();
     assert!(out.is_empty());
 }
 
