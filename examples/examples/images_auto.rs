@@ -171,21 +171,74 @@ fn dump_placeholders(source: &Image) -> io::Result<()> {
     Ok(())
 }
 
+fn dump_committed(source: &Image) -> io::Result<()> {
+    for placeholders in [false, true] {
+        let protocol = if placeholders {
+            "placeholders"
+        } else {
+            "kitty"
+        };
+        let mut screen = Screen::new(Vec::new(), (40, 12));
+        screen.set_color_profile(uncurses::color::Profile::TrueColor);
+        let mut images = ImageRenderer::new(ImageCapabilities {
+            kitty: true,
+            kitty_placeholders: placeholders,
+            cell_pixels: Some(Size::new(8, 16)),
+            ..Default::default()
+        });
+        images.draw(
+            &mut screen,
+            1,
+            Rect::new(2, 1, 12, 4),
+            source,
+            &ImageOptions::default(),
+        )?;
+        screen.render()?;
+        record(&mut screen, &format!("{protocol} shown"));
+        screen.commit_rows(if placeholders { 3 } else { 5 })?;
+        record(&mut screen, &format!("{protocol} committed"));
+        images.remove(&mut screen, 1);
+        screen.render()?;
+        record(&mut screen, &format!("{protocol} removed"));
+        screen.invalidate();
+        screen.render()?;
+        record(&mut screen, &format!("{protocol} invalidated"));
+        images.draw(
+            &mut screen,
+            2,
+            Rect::new(18, 1, 12, 4),
+            source,
+            &ImageOptions::default(),
+        )?;
+        screen.render()?;
+        record(&mut screen, &format!("{protocol} new image"));
+        images.remove(&mut screen, 2);
+        screen.render()?;
+        record(&mut screen, &format!("{protocol} removed new image"));
+        screen.commit_rows(screen.size().height)?;
+        record(&mut screen, &format!("{protocol} committed rest"));
+    }
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     let mut dump_output = false;
     let mut placeholders = false;
+    let mut committed = false;
     let mut path = None;
     for argument in std::env::args().skip(1) {
         if argument == "--dump" {
             dump_output = true;
         } else if argument == "--dump-placeholders" {
             placeholders = true;
+        } else if argument == "--dump-committed" {
+            committed = true;
         } else if path.is_none() && !argument.starts_with('-') {
             path = Some(argument);
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "usage: images_auto [--dump|--dump-placeholders] [image]",
+                "usage: images_auto [--dump|--dump-placeholders|--dump-committed] [image]",
             ));
         }
     }
@@ -199,6 +252,9 @@ fn main() -> io::Result<()> {
                 .collect(),
         )?,
     };
+    if committed {
+        return dump_committed(&source);
+    }
     if placeholders {
         return dump_placeholders(&source);
     }

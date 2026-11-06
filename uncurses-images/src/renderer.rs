@@ -374,7 +374,8 @@ impl ImageRenderer {
         Ok(protocol)
     }
 
-    /// Stage removal. The next render releases the image's terminal resource.
+    /// Stage removal. The next render releases resources used only by managed rows.
+    /// Resources used by committed rows remain in the terminal.
     pub fn remove<W: Write>(&mut self, screen: &mut Screen<W>, id: PlacementId) {
         screen.remove_placement(id);
         self.cache.remove(&id);
