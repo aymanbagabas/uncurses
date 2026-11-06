@@ -57,6 +57,15 @@ pub(crate) fn encode(pixels: &RgbImage, id: u32) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub(crate) fn wrap_tmux(commands: &[u8]) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    // Generated Kitty commands contain backslashes only in their ST terminators.
+    for command in commands.split_inclusive(|byte| *byte == b'\\') {
+        uncurses::ansi::passthrough::write_tmux_passthrough(&mut bytes, command)?;
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +91,46 @@ mod tests {
         assert_eq!(STANDARD.decode(payload).unwrap(), *pixels.as_raw());
         assert!(!text.contains("a=p"));
         assert!(!text.contains("a=T"));
+    }
+
+    #[test]
+    fn tmux_wraps_each_upload_chunk_and_control_command() {
+        let pixels = RgbImage::from_pixel(73, 53, image::Rgb([42, 128, 255]));
+        let mut commands = encode(&pixels, 123).unwrap();
+        commands.extend_from_slice(
+            b"\x1b_Ga=p,U=1,i=123,p=1,c=4,r=2,C=1,q=2\x1b\\\
+              \x1b_Ga=d,d=I,i=123,q=2\x1b\\",
+        );
+        let wrapped = wrap_tmux(&commands).unwrap();
+        let mut rest = wrapped.as_slice();
+        let mut recovered = Vec::new();
+        let mut count = 0;
+        while !rest.is_empty() {
+            rest = rest.strip_prefix(b"\x1bPtmux;").unwrap();
+            let start = recovered.len();
+            loop {
+                if rest.starts_with(b"\x1b\x1b") {
+                    recovered.push(b'\x1b');
+                    rest = &rest[2..];
+                } else if rest.starts_with(b"\x1b\\") {
+                    rest = &rest[2..];
+                    break;
+                } else {
+                    recovered.push(rest[0]);
+                    rest = &rest[1..];
+                }
+            }
+            let command = &recovered[start..];
+            assert!(command.starts_with(b"\x1b_G"));
+            assert!(command.ends_with(b"\x1b\\"));
+            assert_eq!(
+                command.windows(2).filter(|pair| *pair == b"\x1b\\").count(),
+                1
+            );
+            count += 1;
+        }
+        assert_eq!(recovered, commands);
+        assert!(count > 3);
     }
 
     #[test]
