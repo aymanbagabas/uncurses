@@ -7,6 +7,7 @@ Run after building images_drag:
 import fcntl
 import os
 import pty
+import re
 import select
 import signal
 import struct
@@ -51,8 +52,11 @@ def verify_resize(executable):
         resized = read_until(master, b"\x1b[25H")
         if b"Waiting for cell pixels" in resized or b"a=p," not in resized:
             raise AssertionError(("resize lost known pixel geometry", resized))
-        if b"a=t," in resized:
-            raise AssertionError("unchanged cell geometry uploaded the image again")
+        if b"w=96,h=64," not in resized:
+            raise AssertionError(("unchanged cell geometry changed prepared dimensions", resized))
+        for upload in re.findall(rb"\x1b_Ga=t,[^;]*;", resized):
+            if b"s=96,v=64," not in upload:
+                raise AssertionError(("resize uploaded unexpected pixel dimensions", upload))
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 26, 60, 600, 416))
         process.send_signal(signal.SIGWINCH)
         changed = read_until(master, b"\x1b[26H")
