@@ -80,6 +80,8 @@ use bitflags::bitflags;
 use crate::ansi::{mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
+#[cfg(windows)]
+use crate::event::SourceFlags;
 use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
@@ -794,6 +796,13 @@ where
             // A graphics response is the Kitty protocol's own support test:
             // terminals that do not implement it stay silent.
             Event::KittyGraphics { .. } => self.caps.kitty_graphics = true,
+            Event::DragDrop { ref options, .. }
+                if options
+                    .iter()
+                    .any(|(key, value)| key == "t" && value == "q") =>
+            {
+                self.caps.drag_drop = true;
+            }
             Event::ProgramStatus(ref report) => {
                 self.caps.program_status = Some(report.clone());
             }
@@ -1327,6 +1336,11 @@ where
         // behind the source, so the option is carried there as it is taken.
         self.set_decoder_flags(self.options.legacy_keys);
         self.terminal.make_raw()?;
+        {
+            let mut source = self.source.lock().unwrap();
+            let flags = source.flags() | SourceFlags::VT_INPUT;
+            source.set_flags(flags);
+        }
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
@@ -1424,6 +1438,11 @@ where
     /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
+        {
+            let mut source = self.source.lock().unwrap();
+            let flags = source.flags() | SourceFlags::VT_INPUT;
+            source.set_flags(flags);
+        }
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;

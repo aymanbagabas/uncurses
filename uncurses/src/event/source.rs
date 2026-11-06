@@ -25,7 +25,7 @@
 //!
 //! ## Lifecycle
 //!
-//! Construct with [`EventSource::new`] on the platform-specific impl. Call
+//! Construct with [`EventSource::new`] or [`EventSource::new_with_flags`]. Call
 //! [`EventSource::poll`] to wait up to a timeout, drain queued events with
 //! [`EventSource::try_read`], or call [`EventSource::read`] to block until one
 //! event arrives. [`EventSource::unread`] can put an unrelated event back while
@@ -35,13 +35,15 @@
 //!
 //! [`EventSource::try_read`] is purely non-blocking: it only pops the queue.
 //! [`EventSource::poll`] performs I/O and timeout handling. The effective poll
-//! wait is shortened when a partial `ESC` sequence or open paste has an internal
+//! wait is shortened when a partial sequence, string, or paste has an internal
 //! deadline, so a long caller timeout does not delay disambiguation.
 use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use bitflags::bitflags;
 
 #[cfg(unix)]
 use std::os::fd::AsFd;
@@ -88,9 +90,20 @@ pub trait Input: Read + AsHandle + Send {}
 #[cfg(windows)]
 impl<T: Read + AsHandle + Send> Input for T {}
 
+bitflags! {
+    /// Input source configuration, separate from [`DecoderFlags`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct SourceFlags: u8 {
+        /// On Windows, serialize console key records as VT input.
+        ///
+        /// Set this flag when the console uses `ENABLE_VIRTUAL_TERMINAL_INPUT`.
+        const VT_INPUT = 1 << 0;
+    }
+}
+
 /// Default read buffer capacity. This is the hard cap on any single
 /// sequence; the backing buffer is allocated once at construction.
-pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 4096;
+pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 8192;
 
 /// Readiness slots the platform poller reports, in fixed index order.
 /// Unix watches `[input, wake, winch]`; Windows watches `[input, wake]`
@@ -116,6 +129,11 @@ pub(super) const READY_WINCH: usize = 2;
 /// the decoder to resolve the buffered bytes as best-effort events. This is how
 /// a physical Escape key is distinguished from an Alt-prefixed key or CSI-style
 /// control sequence.
+/// Fresh input resets the deadline while a sequence remains incomplete.
+/// Once bytes follow an OSC, DCS, APC, SOS, or PM introducer, the string waits
+/// for its terminator under [`DEFAULT_STRING_IDLE_TIMEOUT`].
+/// An introducer alone still uses the Escape timeout.
+/// A timed-out two-byte introducer such as `ESC ]` resolves to `Alt+]`.
 ///
 /// Applications that prefer more responsive Escape handling can lower this
 /// value with [`EventSource::with_esc_timeout`]; applications that need to
@@ -130,6 +148,13 @@ pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 /// and clears the decoder's paste state. Guards against terminators
 /// that never arrive (truncated stream, malformed input).
 pub const DEFAULT_PASTE_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Default idle timeout for an OSC, DCS, APC, SOS, or PM body.
+///
+/// Fresh input resets this deadline. On expiry, the source emits the incomplete
+/// sequence, including its introducer, as [`Event::Unknown`] and resumes normal
+/// decoding. Bytes that arrive after recovery count as new input.
+pub const DEFAULT_STRING_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Cloneable handle that interrupts an in-progress [`EventSource::poll`] or
 /// [`EventSource::read`].
@@ -149,6 +174,27 @@ pub struct Waker {
 }
 
 impl Waker {
+    pub(super) fn new() -> io::Result<Self> {
+        #[cfg(unix)]
+        return Ok(Self::from_unix_inner(Arc::new(UnixWakerInner::new()?)));
+        #[cfg(windows)]
+        return Ok(Self::from_windows_inner(
+            Arc::new(WindowsWakerInner::new()?),
+        ));
+    }
+
+    pub(super) fn poll_fd(&self) -> super::poll::PollFd {
+        #[cfg(unix)]
+        return self.inner.read_fd();
+        #[cfg(windows)]
+        return self.inner.raw_handle();
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn clear(&self) -> io::Result<()> {
+        self.inner.clear()
+    }
+
     #[cfg(unix)]
     pub(super) fn from_unix_inner(inner: Arc<UnixWakerInner>) -> Self {
         Self { inner }
@@ -192,7 +238,7 @@ impl Waker {
 ///
 /// `EventSource` is the synchronous owner of terminal input. It stores pending
 /// bytes, a `Decoder`, an event queue, deadline state for ambiguous `ESC`
-/// prefixes and open bracketed pastes, and the platform handles needed for
+/// prefixes, strings, and bracketed pastes, and the platform handles needed for
 /// wakeups and resize notifications.
 ///
 /// Construct it with [`EventSource::new`]. Use [`EventSource::poll`] to perform
@@ -209,6 +255,7 @@ where
     #[cfg_attr(windows, allow(dead_code))]
     pub(super) input: I,
 
+    pub(super) flags: SourceFlags,
     pub(super) parser: Decoder,
     /// Bounded read buffer. The unread slice is `pending.slice()`; new
     /// input is written into `pending.spare_mut()`. `pending.capacity()`
@@ -224,7 +271,12 @@ where
     /// Wall-clock instant at which an open paste should be
     /// force-closed (synthesised `PasteEnd`).
     pub(super) paste_deadline: Option<Instant>,
+    pub(super) string_idle_timeout: Option<Duration>,
+    pub(super) string_deadline: Option<Instant>,
+    #[cfg(feature = "async")]
+    pub(super) deadline_wakers: Vec<std::sync::Weak<super::stream::DeadlineWake>>,
     pub(super) queue: VecDeque<Event>,
+    pub(super) pending_error: Option<io::Error>,
     pub(super) waker: Waker,
     /// Whether the source delivers [`Event::Resize`] from the
     /// out-of-band kernel resize notification (`SIGWINCH` on Unix).
@@ -259,8 +311,6 @@ where
     pub(super) poller: Arc<dyn Poller>,
     #[cfg(windows)]
     pub(super) wake_event: windows_sys::Win32::Foundation::HANDLE,
-    #[cfg(windows)]
-    pub(super) vt_input: bool,
     /// Pending high surrogate per key direction (0 = up, 1 = down).
     /// VT input delivers astral code points as two consecutive
     /// `KEY_EVENT` records, one per UTF-16 unit.
@@ -284,6 +334,29 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
+    /// Build an event source for `input` with empty source flags.
+    ///
+    /// See [`Self::new_with_flags`] for platform requirements and construction errors.
+    pub fn new(input: I) -> io::Result<Self> {
+        Self::new_with_flags(input, SourceFlags::empty())
+    }
+
+    /// Return the input source flags.
+    pub fn flags(&self) -> SourceFlags {
+        self.flags
+    }
+
+    /// Set the input source flags without changing terminal modes or decoder flags.
+    ///
+    /// On Windows, a [`SourceFlags::VT_INPUT`] change discards incomplete UTF-16 pairs.
+    pub fn set_flags(&mut self, flags: SourceFlags) {
+        #[cfg(windows)]
+        if (self.flags ^ flags).contains(SourceFlags::VT_INPUT) {
+            self.pending_high_surrogate = [None, None];
+        }
+        self.flags = flags;
+    }
+
     /// Return the configured escape-sequence timeout.
     ///
     /// This is the duration used to disambiguate a physical Escape key from an
@@ -297,8 +370,13 @@ where
     ///
     /// `timeout` is how long the source waits for a continuation byte before a
     /// buffered partial escape sequence is force-resolved. The default is
-    /// [`DEFAULT_ESC_TIMEOUT`]. A zero duration makes ambiguous prefixes expire
-    /// on the next poll cycle.
+    /// [`DEFAULT_ESC_TIMEOUT`]. Fresh input resets the deadline for incomplete
+    /// sequences. Ready continuation bytes take priority over their expiry.
+    /// A lone Escape expires before the next read once its deadline passes.
+    ///
+    /// A zero duration resolves a lone Escape on the next poll cycle and other
+    /// ambiguous prefixes when a poll finds no continuation input.
+    /// String bodies wait for their terminators regardless of this timeout.
     ///
     /// This is a consuming builder intended to be chained after
     /// [`EventSource::new`]. It does not inspect or clear any already-buffered
@@ -364,11 +442,78 @@ where
     /// safety net and waits indefinitely for a real terminator. The default is
     /// `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
     ///
-    /// This is a consuming builder intended to be chained after
-    /// [`EventSource::new`]. It never panics.
+    /// Changing this setting during a paste restarts its idle wait.
     pub fn with_paste_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.paste_idle_timeout = timeout;
+        self.set_paste_idle_timeout(timeout);
         self
+    }
+
+    /// Set the paste idle timeout on an existing source.
+    ///
+    /// This applies the same policy as
+    /// [`with_paste_idle_timeout`](Self::with_paste_idle_timeout).
+    /// Changing it during a paste restarts the idle wait; `None` disables it.
+    /// Live async streams refresh their readiness waits when the deadline changes.
+    pub fn set_paste_idle_timeout(&mut self, timeout: Option<Duration>) {
+        #[cfg(feature = "async")]
+        let previous = self.paste_deadline;
+        self.paste_idle_timeout = timeout;
+        self.paste_deadline = if self.parser.in_paste() {
+            timeout.map(|t| Instant::now() + t)
+        } else {
+            None
+        };
+        #[cfg(feature = "async")]
+        if self.paste_deadline != previous {
+            self.wake_deadline_waiters();
+        }
+    }
+
+    /// Set the idle timeout for an OSC, DCS, APC, SOS, or PM body.
+    ///
+    /// Fresh input resets the deadline. On expiry, the source emits the whole
+    /// incomplete sequence as [`Event::Unknown`] and resumes normal decoding.
+    /// Later bytes count as new input, even if they belong to the expired string.
+    ///
+    /// The default is `Some(`[`DEFAULT_STRING_IDLE_TIMEOUT`]`)`.
+    /// Passing `None` disables the idle timeout.
+    /// Changing this setting during a string restarts its idle wait.
+    pub fn with_string_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.set_string_idle_timeout(timeout);
+        self
+    }
+
+    /// Set the string idle timeout on an existing source.
+    ///
+    /// This applies the same policy as
+    /// [`with_string_idle_timeout`](Self::with_string_idle_timeout).
+    /// Changing it during a string restarts the idle wait; `None` disables it.
+    /// Live async streams refresh their readiness waits when the deadline changes.
+    pub fn set_string_idle_timeout(&mut self, timeout: Option<Duration>) {
+        #[cfg(feature = "async")]
+        let previous = self.string_deadline;
+        self.string_idle_timeout = timeout;
+        self.string_deadline = if self.parser.waiting_for_terminator() {
+            timeout.map(|t| Instant::now() + t)
+        } else {
+            None
+        };
+        #[cfg(feature = "async")]
+        if self.string_deadline != previous {
+            self.wake_deadline_waiters();
+        }
+    }
+
+    #[cfg(feature = "async")]
+    fn wake_deadline_waiters(&mut self) {
+        self.deadline_wakers.retain(|weak| {
+            if let Some(waker) = weak.upgrade() {
+                waker.notify();
+                true
+            } else {
+                false
+            }
+        });
     }
 
     /// Return a cloneable [`Waker`] bound to this source.
@@ -378,17 +523,6 @@ where
     /// not clone the source or its input handle.
     pub fn waker(&self) -> Waker {
         self.waker.clone()
-    }
-
-    /// Return a clone of the shared [`Poller`] handle.
-    ///
-    /// The poller is `Arc`-wrapped so a waiter thread can block on readiness
-    /// without holding the source mutex. Both the underlying epoll and kqueue
-    /// registrations are level-triggered, so a concurrent poll from a waiter
-    /// and a subsequent drain from the owner both observe the same readiness.
-    #[cfg(feature = "async")]
-    pub(super) fn poller(&self) -> Arc<dyn Poller> {
-        Arc::clone(&self.poller)
     }
 
     /// Return whether out-of-band resize handling is enabled.
@@ -466,18 +600,23 @@ where
         self.queue.pop_front()
     }
 
-    /// One read-decode cycle: resolve any overdue decode deadline, wait up
-    /// to `timeout` for readiness, then service it. Winch surfaces a
+    /// One read-decode cycle: resolve an overdue lone Escape or paste deadline,
+    /// wait up to `timeout` for readiness, then service it. Winch surfaces a
     /// [`Event::Resize`]; a [`Waker`] surfaces `Err(Interrupted)` without
     /// touching decode state; ready input is drained and decoded; a wait
     /// that returns with no input ready resolves the decode deadline it was
     /// tightened to. Fills [`Self::queue`].
     pub(super) fn fill(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        // Resolve an already-overdue deadline before reading, so a late
-        // continuation byte cannot merge with a sequence that has expired.
-        self.expire_elapsed();
+        // A late key must not join an expired lone Escape. Partial sequences
+        // get a readiness check first, since continuation bytes may be queued.
+        if self.pending.slice() == b"\x1b" || self.parser.in_paste() {
+            self.expire_elapsed();
+        }
         if !self.queue.is_empty() {
             return Ok(());
+        }
+        if let Some(error) = self.pending_error.take() {
+            return Err(error);
         }
 
         let effective = self.effective_timeout(timeout);
@@ -495,7 +634,14 @@ where
         }
 
         if ready[READY_INPUT] {
-            self.drain_input()?;
+            if let Err(error) = self.drain_input() {
+                // A failed read supplies no continuation bytes.
+                self.expire_elapsed();
+                if self.queue.is_empty() {
+                    return Err(error);
+                }
+                self.pending_error = Some(error);
+            }
         } else {
             // The wait was tightened to a decode deadline that has elapsed.
             self.expire_elapsed();
@@ -536,15 +682,28 @@ where
         self.queue.push_back(ev);
     }
 
+    /// Feed serialized console bytes in bounded batches.
+    #[cfg(any(windows, test))]
+    pub(super) fn feed_bytes(&mut self, mut bytes: &[u8]) {
+        #[cfg(debug_assertions)]
+        crate::trace::tee_input(bytes);
+        while !bytes.is_empty() {
+            if self.pending.is_full() {
+                self.pending.clear();
+                self.esc_deadline = None;
+            }
+            let count = self.pending.append(bytes);
+            bytes = &bytes[count..];
+            self.drain_parser();
+        }
+    }
+
     /// Drive the parser as far as it will go against the bytes
     /// currently in `pending`, pushing extracted events onto the
     /// queue and arming the appropriate timeout deadline.
     ///
-    /// While the decoder is in bracketed paste, the paste-idle
-    /// deadline governs (and is reset on every drain, since drain is
-    /// only called after fresh input arrived). Otherwise the ESC
-    /// disambiguation deadline arms when a partial sequence sits at
-    /// the head of `pending`.
+    /// Fresh input refreshes the deadline selected by the remaining decoder
+    /// state: paste idle, string idle, or Escape disambiguation.
     pub(super) fn drain_parser(&mut self) {
         loop {
             let (n, ev) = self.parser.parse_one(self.pending.slice());
@@ -563,6 +722,7 @@ where
             // In paste: only the paste-idle timer applies. Reset on
             // every drain (input has just arrived).
             self.esc_deadline = None;
+            self.string_deadline = None;
             self.paste_deadline = self.paste_idle_timeout.map(|t| Instant::now() + t);
             return;
         }
@@ -570,15 +730,19 @@ where
         // Not in paste: clear paste deadline; arm esc deadline if a
         // partial sequence sits at the head.
         self.paste_deadline = None;
+        if self.parser.waiting_for_terminator() {
+            self.esc_deadline = None;
+            self.string_deadline = self.string_idle_timeout.map(|t| Instant::now() + t);
+            return;
+        }
+        self.string_deadline = None;
         let Some(b0) = self.pending.first() else {
             self.esc_deadline = None;
             return;
         };
         let armable = b0 == 0x1b || is_c1_introducer(b0);
         if armable {
-            if self.esc_deadline.is_none() {
-                self.esc_deadline = Some(Instant::now() + self.esc_timeout);
-            }
+            self.esc_deadline = Some(Instant::now() + self.esc_timeout);
         } else {
             self.esc_deadline = None;
         }
@@ -597,7 +761,10 @@ where
         // consume falls back to the single-byte fallback below.
         self.parser.set_expired(true);
         self.drain_parser();
-        while let Some(b0) = self.pending.first() {
+        while !self.parser.waiting_for_terminator() {
+            let Some(b0) = self.pending.first() else {
+                break;
+            };
             let ev = self
                 .parser
                 .expire_leading(b0)
@@ -641,19 +808,25 @@ where
         self.expire_paste();
     }
 
-    /// Resolve any decode deadline that has already elapsed, before more
-    /// bytes are read. A buffered partial `ESC` past its window becomes a
-    /// bare `Esc`; an idle bracketed paste past its window is force-closed.
-    /// Run before draining input so a late continuation byte can't merge
-    /// with a sequence whose deadline already passed, and again after a
-    /// wait that returned no input. A no-op when no deadline is overdue;
-    /// the two cases are mutually exclusive (either mid-paste or holding a
-    /// partial escape, never both).
+    /// Resolve any decode deadline that has already elapsed.
+    /// A buffered partial `ESC` past its window becomes a
+    /// bare `Esc`; idle pastes and strings past their windows are force-closed.
+    /// Run before input for a lone Escape or paste, and after a wait that
+    /// returned no input for other partial sequences.
+    /// A no-op when no deadline is overdue;
+    /// paste, string, and Escape deadlines govern separate decoder states.
     pub(super) fn expire_elapsed(&mut self) {
         let now = Instant::now();
         if self.parser.in_paste() {
             if self.paste_deadline.is_some_and(|d| d <= now) {
                 self.expire_paste();
+            }
+        } else if self.parser.waiting_for_terminator() {
+            if self.string_deadline.is_some_and(|d| d <= now) {
+                let bytes = self.pending.slice().to_vec();
+                self.pending.clear();
+                self.drain_parser();
+                self.emit(Event::Unknown(bytes));
             }
         } else if self.esc_deadline.is_some_and(|d| d <= now) {
             self.expire_partial();
@@ -661,20 +834,70 @@ where
     }
 
     /// Effective wait for the next readiness poll: the caller's `timeout`
-    /// tightened to the nearest decode deadline (ESC or paste-idle,
-    /// whichever is sooner) so a buffered partial sequence resolves
-    /// promptly even when the caller asked to block longer.
+    /// tightened to the nearest decode deadline (Escape, paste, or string)
+    /// so a buffered partial sequence resolves promptly even when the caller
+    /// asked to block longer.
     pub(super) fn effective_timeout(&self, timeout: Option<Duration>) -> Option<Duration> {
         let now = Instant::now();
-        let deadline = match (self.esc_deadline, self.paste_deadline) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let deadline = [self.esc_deadline, self.paste_deadline, self.string_deadline]
+            .into_iter()
+            .flatten()
+            .min();
         let internal = deadline.map(|d| d.saturating_duration_since(now));
         match (timeout, internal) {
             (Some(t), Some(i)) => Some(t.min(i)),
             (None, i) => i,
             (t, None) => t,
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod drag_drop_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn drag_drop_maximum_payload_fits_the_source_buffer() {
+        let (reader, mut writer) = io::pipe().unwrap();
+        let mut source = EventSource::new(reader).unwrap();
+        let payload = vec![b'A'; 4096];
+        let body = [b"72;t=r:x=1;".as_slice(), &payload].concat();
+        writer.write_all(b"\x1b]").unwrap();
+        writer.write_all(&body).unwrap();
+        writer.write_all(b"\x1b\\").unwrap();
+        assert_eq!(
+            source.read().unwrap(),
+            Event::DragDrop {
+                options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
+                payload,
+            }
+        );
+    }
+
+    #[test]
+    fn drag_drop_batches_and_split_terminators_preserve_events() {
+        let (reader, _writer) = io::pipe().unwrap();
+        let mut source = EventSource::new(reader).unwrap();
+        let payload = vec![b'A'; 4096];
+        let frame = [b"\x1b]72;t=r:x=1;".as_slice(), &payload, b"\x1b\\"].concat();
+        source.feed_bytes(&frame[..frame.len() - 1]);
+        assert!(source.queue.is_empty());
+        source.feed_bytes(&[b"\\".as_slice(), &frame, &frame, b"\x1b]72;t=q\x1b\\z"].concat());
+        for _ in 0..3 {
+            assert_eq!(
+                source.queue.pop_front(),
+                Some(Event::DragDrop {
+                    options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
+                    payload: payload.clone(),
+                })
+            );
+        }
+        assert!(matches!(
+            source.queue.pop_front(),
+            Some(Event::DragDrop { .. })
+        ));
+        assert!(matches!(source.queue.pop_front(), Some(Event::KeyPress(_))));
+        assert!(source.queue.is_empty());
     }
 }

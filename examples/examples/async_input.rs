@@ -18,7 +18,7 @@
 
 use tokio_stream::StreamExt;
 
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, SourceFlags};
 use uncurses::terminal::{Stdin, Terminal};
 
 #[tokio::main]
@@ -34,7 +34,7 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn run(input: Stdin) -> std::io::Result<()> {
-    let mut stream = EventSource::new(input)?.into_stream();
+    let mut stream = EventSource::new_with_flags(input, SourceFlags::VT_INPUT)?.into_stream();
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut ticks = 0u64;
     eprint!("async input via EventStream + a 1s timer. press q, Esc, or Ctrl-C to quit.\r\n");

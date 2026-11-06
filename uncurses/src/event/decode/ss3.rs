@@ -19,7 +19,7 @@
 use super::Decoder;
 use super::DecoderFlags;
 use super::result::ParseResult;
-use super::util::{intro_prefix_len, lookup_legacy_key};
+use super::util::{intro_prefix_len, lookup_legacy_key, sequence_fallback};
 use crate::event::{Event, Key, KeyCode, KeyModifiers};
 
 impl Decoder {
@@ -31,6 +31,9 @@ impl Decoder {
 
         let consumed = prefix_len + 1;
         let final_byte = buf[prefix_len];
+        if final_byte == 0x1b {
+            return sequence_fallback(buf, prefix_len);
+        }
         let raw = &buf[..consumed];
         let evt = recognize(final_byte, raw, self.flags)
             .unwrap_or_else(|| Event::UnknownSs3(raw.to_vec()));

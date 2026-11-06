@@ -14,6 +14,7 @@ icu = ["uncurses/icu", "uncurses-ratatui/icu"]
 async = ["uncurses/async"]
 
 [dependencies]
+base64 = "0.22"
 uncurses = { path = "../uncurses", default-features = false }
 uncurses-ratatui = { path = "../uncurses-ratatui", default-features = false }
 ratatui = { version = "0.30", features = ["underline-color"] }

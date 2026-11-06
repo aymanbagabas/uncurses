@@ -401,6 +401,7 @@ dependencies = [
 name = "examples"
 version = "0.0.7"
 dependencies = [
+ "base64",
  "libc",
  "ratatui",
  "tokio",
