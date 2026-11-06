@@ -23,17 +23,30 @@ for index, protocol in enumerate(protocols):
             require((b"a=t," in payload) == (stage == "shown"), (protocol, stage, "upload reuse"))
             require((b"d=I," in payload) == (stage == "removed"), (protocol, stage, "resource deletion"))
             feed(screen, payload)
+            origin = 18 if stage == "moved" else 2
+            if protocol == "Kitty" and stage != "removed":
+                feed(screen, (
+                    f"\x1b7\x1b[5;{origin + 2}H"
+                    "\x1b[38;2;255;255;255;48;2;0;0;0mLabel\x1b8"
+                ).encode())
+                label = "".join(screen.line(4)[x] for x in range(origin + 1, origin + 6))
+                require(label == "Label", (stage, "overlapping text disappeared", label))
+                style = screen.line(4).cursor_from(origin + 1)
+                require(style.fg == 0xffffff02 and style.bg == 0x00000002,
+                        (stage, "overlapping text style changed"))
             screen.update_only_line_graphics_data()
             layers = screen.grman.update_layers(0, -1, 1, 2 / 40, 2 / 12, 40, 12, 8, 16)
             visible = set()
             for layer in layers:
+                if protocol == "Kitty":
+                    require(layer["z_index"] == -1,
+                            (stage, "image must stay below text and above backgrounds", layer["z_index"]))
                 rect = layer["dest_rect"]
                 left = round((rect["left"] + 1) * 20)
                 top = round((1 - rect["top"]) * 6)
                 right = round((rect["right"] + 1) * 20)
                 bottom = round((1 - rect["bottom"]) * 6)
                 visible.update((x, y) for y in range(top, bottom) for x in range(left, right))
-            origin = 18 if stage == "moved" else 2
             expected = set() if stage == "removed" else {
                 (x, y) for y in range(3, 7) for x in range(origin, origin + 12)
             }
