@@ -18,7 +18,7 @@ extern crate test;
 
 use test::{Bencher, black_box};
 
-use crate::ansi::text::{Token, WidthMode, string_width, tokenize};
+use crate::ansi::text::{WidthMode, string_width, tokenize};
 use crate::ansi::wrap::{DEFAULT_BREAKPOINTS, hardwrap, wordwrap, wrap};
 
 /// 250 KB is a scrollback page of tool output, not a stress test.
@@ -90,11 +90,7 @@ fn tokenize_32k_malformed(b: &mut Bencher) {
     b.iter(|| {
         let mut n = 0usize;
         for t in tokenize(black_box(&bytes), WidthMode::Wc, false) {
-            n += match t {
-                Token::Text { text, width } => text.len() + width as usize,
-                Token::Escape(seq) => seq.len(),
-                Token::Control(_) => 1,
-            };
+            n += t.bytes.len() + usize::from(t.width);
         }
         black_box(n)
     });

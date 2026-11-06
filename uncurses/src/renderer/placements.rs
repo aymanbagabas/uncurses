@@ -44,6 +44,7 @@ pub(crate) struct State {
     displayed: Vec<Record>,
     uncertain: Vec<Record>,
     retired: Vec<Resource>,
+    committed: Vec<Resource>,
     epoch: u64,
     failure_epoch: Option<u64>,
     coverage: BTreeMap<u16, Vec<bool>>,
@@ -67,8 +68,81 @@ impl Frame {
 }
 
 impl State {
+    pub(super) fn validate_commit_rows(&self, front: &RenderBuffer, count: u16) -> io::Result<()> {
+        for record in self.desired.values() {
+            if record.options.cells.is_some()
+                || record.area.y >= count
+                || record.area.bottom() <= count
+                || record.area.right() > front.width()
+                || record.area.bottom() > front.height()
+            {
+                continue;
+            }
+            let mut owned = 0;
+            for y in record.area.y..record.area.bottom() {
+                for x in record.area.x..record.area.right() {
+                    owned += usize::from(record.owns(front, x, y)?);
+                }
+            }
+            if owned > 0
+                && (!record.options.erase_on_overwrite
+                    || owned == usize::from(record.area.width) * usize::from(record.area.height))
+            {
+                return Err(invalid("committed rows must not split an opaque placement"));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn commit_rows(&mut self, front: &RenderBuffer, count: u16) {
+        let committed = self.displayed.iter().filter(|record| {
+            (record.area.y..record.area.bottom().min(count)).any(|y| {
+                (record.area.x..record.area.right()).any(|x| {
+                    record
+                        .owns(front, x, y)
+                        .expect("render validated placement references")
+                })
+            })
+        });
+        for resource in resources(committed) {
+            if !self.committed.contains(&resource) {
+                self.committed.push(resource);
+            }
+        }
+        self.desired.retain(|_, record| {
+            if record.area.bottom() <= count {
+                return false;
+            }
+            let removed = count.saturating_sub(record.area.y);
+            if removed > 0 {
+                let options = Arc::make_mut(&mut record.options);
+                let cells =
+                    Arc::make_mut(options.cells.as_mut().expect("opaque splits were rejected"));
+                cells.delete_lines(0, removed, record.area.height, &Cell::BLANK);
+                record.area.height -= removed;
+                cells.resize(record.area.width, record.area.height);
+            }
+            record.area.y = record.area.y.saturating_sub(count);
+            true
+        });
+        self.order.retain(|id| self.desired.contains_key(id));
+        self.displayed = self
+            .order
+            .iter()
+            .map(|id| self.desired[id].clone())
+            .collect();
+        self.coverage = std::mem::take(&mut self.coverage)
+            .into_iter()
+            .filter_map(|(y, row)| y.checked_sub(count).map(|y| (y, row)))
+            .collect();
+    }
+
     pub fn has_work(&self) -> bool {
         !self.desired.is_empty() || self.has_output()
+    }
+
+    pub fn has_pending_output(&self) -> bool {
+        self.frame.is_some() || !self.retired.is_empty()
     }
 
     pub fn has_output(&self) -> bool {
@@ -92,11 +166,11 @@ impl State {
             && !invalidated
             && self.uncertain.is_empty()
             && self.order.len() == self.displayed.len()
-            && self
-                .order
-                .iter()
-                .zip(&self.displayed)
-                .all(|(id, record)| self.desired.get(id) == Some(record))
+            && self.order.iter().zip(&self.displayed).all(|(id, record)| {
+                self.desired.get(id) == Some(record)
+                    && record.area.right() <= front.width()
+                    && record.area.bottom() <= front.height()
+            })
             && !self.displayed.iter().any(|record| {
                 (record.area.y..record.area.bottom()).any(|row| front.touched(row).is_some())
             })
@@ -271,11 +345,17 @@ impl State {
         };
         let erase = previous.filter(|r| damaged(r)).cloned().collect();
         let resources = resources(active.iter());
-        let known = if invalidated || !self.uncertain.is_empty() {
+        let mut known = if invalidated || !self.uncertain.is_empty() {
             Vec::new()
         } else {
             resources_from_records(&self.displayed)
         };
+        let committed = if renderer.fullscreen {
+            &[][..]
+        } else {
+            self.committed.as_slice()
+        };
+        known.extend_from_slice(committed);
         let uploads = resources
             .iter()
             .filter(|r| !known.contains(r))
@@ -290,7 +370,7 @@ impl State {
                 retired.push(resource);
             }
         }
-        retired.retain(|r| !resources.contains(r));
+        retired.retain(|r| !resources.contains(r) && !committed.contains(r));
         let frame = Frame {
             active,
             erase,

@@ -11,7 +11,7 @@
 
 use std::io::{self, Write};
 
-use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers};
+use uncurses::event::{Event, EventSource, Key, KeyCode, KeyModifiers, SourceFlags};
 use uncurses::terminal::Terminal;
 
 fn main() -> io::Result<()> {
@@ -20,7 +20,7 @@ fn main() -> io::Result<()> {
     let mut term = Terminal::stdio();
     term.make_raw()?;
 
-    let mut events = EventSource::new(term.input())?;
+    let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
     let mut out = term.output();
 
     // In raw mode the terminal does not translate `\n` into a carriage

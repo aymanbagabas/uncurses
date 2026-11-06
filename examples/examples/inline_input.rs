@@ -216,10 +216,9 @@ impl App {
     }
 
     fn run(&mut self) -> std::io::Result<()> {
-        let w = self.program.screen().width();
         self.program
             .screen_mut()
-            .resize((w, self.buffer.lines.len() as u16));
+            .resize_height(self.buffer.lines.len() as u16);
         self.render()?;
 
         while let Ok(ev) = self.program.read_event() {
@@ -274,14 +273,8 @@ impl App {
                 _ => {}
             }
 
-            // The prompt grows and shrinks with the buffer. Resizing
-            // re-establishes the region, so do it when the line count actually
-            // changes rather than on every keystroke.
             let height = self.buffer.lines.len() as u16;
-            if self.program.screen().height() != height {
-                let width = self.program.screen().width();
-                self.program.screen_mut().resize((width, height));
-            }
+            self.program.screen_mut().resize_height(height);
             self.render()?;
         }
         Ok(())
