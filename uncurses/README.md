@@ -100,6 +100,21 @@ assert!(!screen.writer().is_empty());
 That's the shape of it; the full API and guides live at
 [uncurses.org](https://uncurses.org).
 
+## ANSI placements
+
+`Screen::set_placement(id, area, &options)` stages opaque output with ordinary cells.
+`PlacementOptions` holds encoded output, optional cells, and shared image resources.
+The renderer tracks geometry and repaints text above changed placements.
+The screen uploads attached resources and releases them after removal.
+Implementers can use `Write` for explicit protocol output.
+
+`Screen::set_sized_text(id, position, text, sizing, style)` stages styled Kitty text sizing.
+`Program::set_sized_text` stages the same content on its managed screen.
+Call the screen's `render()` to emit the frame.
+
+Run `cargo run -p examples --example placements` for a portable ANSI example.
+See the [placement guide](https://uncurses.org/docs/guides/placements/) for images and sized text.
+
 ## Install
 
 Not on crates.io yet, so depend on it straight from git:
