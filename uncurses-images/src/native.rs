@@ -94,7 +94,10 @@ impl PreparedImage {
 
     /// Encode a nonzero protocol placement ID.
     ///
-    /// Kitty uses separate placement and image identifiers. Raster protocols
+    /// Kitty uses separate placement and image identifiers. Its placements use
+    /// z-index -1, below text foregrounds and above cell backgrounds.
+    /// Crop placements around overlays that need an opaque background.
+    /// Raster protocols
     /// draw their complete encoded image. Reserve one spare row below raster
     /// placements to prevent terminal scrolling at the bottom edge.
     /// The returned options share resource bytes across clones and crops.
@@ -110,7 +113,7 @@ impl PreparedImage {
             let (x, y, width, height) = self.pixels;
             write!(
                 options.draw,
-                "\x1b_Ga=p,i={},p={id},c={},r={},x={x},y={y},w={width},h={height},C=1,q=2\x1b\\",
+                "\x1b_Ga=p,i={},p={id},c={},r={},x={x},y={y},w={width},h={height},z=-1,C=1,q=2\x1b\\",
                 resource.id, self.size.width, self.size.height
             )?;
             write!(
@@ -204,6 +207,27 @@ mod tests {
     use uncurses::screen::Screen;
 
     #[test]
+    fn kitty_placements_stay_below_text_and_above_cell_backgrounds() {
+        let image = Image::from_rgb(1, 1, vec![255, 0, 0])
+            .unwrap()
+            .prepare(
+                Backend::Kitty,
+                (4, 2).into(),
+                (8, 16).into(),
+                &ImageOptions::default(),
+            )
+            .unwrap();
+        for prepared in [&image, &image.crop(Rect::new(1, 0, 2, 1)).unwrap()] {
+            let placement = prepared.placement(1).unwrap();
+            assert!(
+                std::str::from_utf8(&placement.draw)
+                    .unwrap()
+                    .contains(",z=-1,")
+            );
+        }
+    }
+
+    #[test]
     fn screen_placements_share_uploads_and_release_the_last_copy() {
         let image = Image::from_rgb(1, 1, vec![255, 0, 0])
             .unwrap()
@@ -271,7 +295,7 @@ mod tests {
                 assert_eq!(crop.size(), (2, 1).into());
                 match backend {
                     Backend::Kitty => {
-                        assert!(output.contains("c=2,r=1,x=2,y=3,w=4,h=3,C=1"));
+                        assert!(output.contains("c=2,r=1,x=2,y=3,w=4,h=3,z=-1,C=1"));
                         assert_eq!(crop.resource_id(), full.resource_id());
                         let original = full.placement(1).unwrap();
                         assert!(Arc::ptr_eq(&placement.upload, &original.upload));
