@@ -195,6 +195,31 @@ For Kitty placeholders, pass `CellImage::placement(screen)?` to `set_placement`.
 This checks the screen's color profile and includes the shared cells and resources.
 For manual output, use the raw upload, cell, and deletion accessors with an explicit resource lifetime.
 
+## Commit inline output
+
+Use `screen.commit_rows(count)` to release completed inline rows as permanent output.
+Retained placements receive coordinates relative to the new origin.
+Cell-backed placements can cross the boundary; their retained rows keep the same placement ID.
+Commit whole opaque placements, including native images and sized text.
+A boundary inside an opaque placement returns `InvalidInput` before any output.
+
+Resources used by committed rows remain in the terminal after managed removal and program teardown.
+Use fresh automatic image IDs for new images after a commit.
+For explicit native placements, use distinct protocol placement IDs for copies that remain visible.
+Terminal reset or eviction can discard committed resources.
+
+Run the portable placement example:
+
+```sh
+cargo run -p examples --example placements -- --commit
+```
+
+Inspect native-image and placeholder output:
+
+```sh
+cargo run -p examples --example images_auto -- --dump-committed
+```
+
 ## Handle changes and errors
 
 Resize removes placements whose complete rectangle no longer fits.

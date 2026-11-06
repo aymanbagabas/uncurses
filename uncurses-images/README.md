@@ -101,6 +101,14 @@ Remove placements with `Screen::remove_placement`, then render the frame.
 The screen releases managed resources after their final placement disappears.
 Dropping prepared data performs no terminal I/O.
 
+`Screen::commit_rows` releases inline output while preserving its visible images.
+Resources used by committed rows stay in the terminal after program teardown.
+Cell-backed images can cross the commit boundary; their retained rows keep the same placement ID.
+Commit whole opaque images and sized-text blocks. A boundary inside an opaque block returns an error before output.
+Use a fresh image ID for each new automatic image after a commit.
+For explicit native placements, use distinct protocol placement IDs for copies that remain visible.
+Terminal reset or eviction can discard committed resources.
+
 For manual protocol output, use the raw `upload()` and `delete()` bytes.
 Upload before drawing. Clear all visible copies before deleting the resource.
 `CellImage::cells()` supports independent copies through `Surface::draw`.
@@ -122,6 +130,7 @@ Select a backend that the terminal supports.
 cargo run -p examples --example images_auto
 cargo run -p examples --example images_auto -- --dump
 cargo run -p examples --example images_auto -- --dump-placeholders
+cargo run -p examples --example images_auto -- --dump-committed
 cargo run -p examples --example images_drag -- --symbols
 cargo run -p examples --example images_drag -- --kitty
 cargo run -p examples --example images_drag -- --kitty --overlay
@@ -134,6 +143,7 @@ cargo run -p examples --example images_drag -- --sixel --overlay
 Space moves or removes its image. Its dump exercises all five output paths.
 The screen manages uploads and deletion.
 Use `--dump-placeholders` to inspect compressed output across overlays, movement, resize, and cleanup.
+Use `--dump-committed` to inspect permanent native images and split placeholder rows.
 
 Supply an image path to use PNG or JPEG input. Add `--dump` for named frames
 with hexadecimal output. Visible native output uses reported pixel geometry.
