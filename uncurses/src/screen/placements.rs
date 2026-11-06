@@ -255,6 +255,41 @@ mod tests {
     }
 
     #[test]
+    fn wide_cell_placements_retire_after_the_last_primary_is_overwritten() {
+        let mut screen = Screen::new(Vec::new(), (10, 4));
+        let mut cells = Buffer::new(4, 1);
+        cells.set((0, 0), &Cell::new("界", 2));
+        cells.set((2, 0), &Cell::new("界", 2));
+        let options = PlacementOptions {
+            cells: Some(Arc::new(cells)),
+            upload: Arc::from(b"<UPLOAD>".as_slice()),
+            delete: Arc::from(b"<DELETE>".as_slice()),
+            ..Default::default()
+        };
+        screen
+            .set_placement(1, Rect::new(1, 1, 4, 1), &options)
+            .unwrap();
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+
+        screen.set_cell((1, 1), &Cell::new("語", 2));
+        screen.render().unwrap();
+        assert!(!screen.writer().ends_with(b"<DELETE>"));
+        screen.writer_mut().clear();
+
+        screen.set_cell((3, 1), &Cell::new("語", 2));
+        screen.render().unwrap();
+        assert!(screen.writer().ends_with(b"<DELETE>"));
+        for x in [1, 3] {
+            assert_eq!(screen.cell((x, 1).into()).unwrap().content(), "語");
+            assert!(screen.cell((x + 1, 1).into()).unwrap().is_continuation());
+        }
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+
+    #[test]
     fn handoff_and_invalidation_restore_managed_uploads() {
         for cells in [false, true] {
             let mut screen = Screen::new(Vec::new(), (10, 4));
