@@ -11,6 +11,15 @@ impl<W: Write> Screen<W> {
     /// Counts are clamped to the managed height. Fullscreen screens and zero
     /// counts leave pending cells and output unchanged.
     ///
+    /// Cell-backed placements may cross the boundary; their retained rows keep
+    /// the same placement ID. Opaque placements, including sized text, must fit
+    /// entirely on one side. A split returns `InvalidInput` before any output.
+    ///
+    /// Resources used by committed rows remain in the terminal after removal
+    /// of retained placements and after program teardown. Terminal reset or
+    /// eviction determines their lifetime. Use distinct protocol placement IDs
+    /// for new native copies so they do not replace committed output.
+    ///
     /// A render error leaves the rows managed. The rows are released before
     /// the final flush, even if it fails. Use [`Write::flush`] to retry output
     /// without releasing more rows.
@@ -19,6 +28,7 @@ impl<W: Write> Screen<W> {
         if self.fullscreen || count == 0 {
             return Ok(());
         }
+        self.renderer.validate_commit_rows(&self.front_buf, count)?;
         self.render()?;
         if count == self.height {
             self.stage_move_cursor_to(Position::new(0, self.height - 1));
