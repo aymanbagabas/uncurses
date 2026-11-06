@@ -8,8 +8,8 @@ use crate::{Crop, Fit, ImageOptions, invalid};
 
 pub(crate) struct Geometry {
     pub source: Crop,
-    pub x: u32,
-    pub y: u32,
+    pub x: i64,
+    pub y: i64,
     pub width: u32,
     pub height: u32,
 }
@@ -45,7 +45,7 @@ pub(crate) fn resolve_with_canvas(
             "image dimensions, ratio, cell dimensions, and scale must be positive",
         ));
     }
-    let mut crop = options.crop.unwrap_or(Crop {
+    let crop = options.crop.unwrap_or(Crop {
         x: 0,
         y: 0,
         width: source.0,
@@ -84,30 +84,12 @@ pub(crate) fn resolve_with_canvas(
             "scaled image dimensions exceed the supported range",
         ));
     }
-    if width > canvas_w {
-        let kept = (f64::from(crop.width) * canvas_w / width)
-            .round()
-            .clamp(1.0, f64::from(crop.width)) as u32;
-        crop.x += (crop.width - kept) / 2;
-        crop.width = kept;
-    }
-    if height > canvas_h {
-        let kept = (f64::from(crop.height) * canvas_h / height)
-            .round()
-            .clamp(1.0, f64::from(crop.height)) as u32;
-        crop.y += (crop.height - kept) / 2;
-        crop.height = kept;
-    }
-    let width = (width.min(canvas_w) / canvas_w * f64::from(samples.0))
-        .round()
-        .clamp(1.0, f64::from(samples.0)) as u32;
-    let height = (height.min(canvas_h) / canvas_h * f64::from(samples.1))
-        .round()
-        .clamp(1.0, f64::from(samples.1)) as u32;
+    let width = (width / canvas_w * f64::from(samples.0)).round().max(1.0) as u32;
+    let height = (height / canvas_h * f64::from(samples.1)).round().max(1.0) as u32;
     Ok(Geometry {
         source: crop,
-        x: (samples.0 - width) / 2,
-        y: (samples.1 - height) / 2,
+        x: (i64::from(samples.0) - i64::from(width)) / 2,
+        y: (i64::from(samples.1) - i64::from(height)) / 2,
         width,
         height,
     })
@@ -128,8 +110,9 @@ mod tests {
             assert_eq!((g.source.width, g.source.height), (100, 100));
             options.fit = Fit::Cover;
             let g = resolve((100, 100), size, samples, &options).unwrap();
-            assert_eq!((g.width, g.height), samples);
-            assert_eq!((g.source.x, g.source.width), (25, 50));
+            assert_eq!((g.width, g.height), (samples.1, samples.1));
+            assert_eq!((g.x, g.y), (-i64::from(samples.0) / 2, 0));
+            assert_eq!((g.source.x, g.source.width), (0, 100));
             options.fit = Fit::Stretch;
             let g = resolve((100, 100), size, samples, &options).unwrap();
             assert_eq!((g.width, g.height), samples);
