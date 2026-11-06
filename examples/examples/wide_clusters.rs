@@ -22,7 +22,7 @@ use std::io::{self, Write};
 
 use uncurses::cell::Cell;
 use uncurses::screen::{Optimizations, Screen};
-use uncurses::text::WidthMode;
+use uncurses::text::{TextSurface, WidthMode};
 
 /// A four-person family: seven code points, four faces joined by three
 /// zero-width joiners.
@@ -47,6 +47,16 @@ const COLS: u16 = 24;
 
 fn main() -> io::Result<()> {
     let mut out = io::stdout().lock();
+
+    for wide in [false, true] {
+        let mut screen = row_screen(false)?;
+        screen.set_ambiguous_wide(wide);
+        writeln!(
+            out,
+            "ambiguous-wide={wide}: an ellipsis claims {} columns",
+            screen.str_width("\u{2026}")
+        )?;
+    }
 
     for (label, text) in [
         ("family emoji", FAMILY),

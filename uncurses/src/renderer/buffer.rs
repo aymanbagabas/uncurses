@@ -339,6 +339,16 @@ impl RenderBuffer {
         self.touch_all();
     }
 
+    /// Change height, retaining dirty spans and marking only added rows.
+    pub(crate) fn resize_height(&mut self, height: u16) {
+        let old_height = self.height();
+        self.buffer.resize(self.width(), height);
+        self.touched.resize(height as usize, None);
+        for y in old_height..height {
+            self.touch_line(y, 0, self.width().saturating_sub(1));
+        }
+    }
+
     /// Borrow one row.
     ///
     /// # Returns
@@ -542,6 +552,25 @@ impl SurfaceMut for RenderBuffer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resize_height_preserves_marks_and_reuses_storage() {
+        let mut buffer = super::RenderBuffer::new(4, 5);
+        buffer.set_cell((1, 1), &crate::cell::Cell::new("a", 1));
+        let storage = buffer.touched.as_ptr();
+        buffer.resize_height(3);
+        buffer.resize_height(5);
+        assert_eq!(buffer.touched.as_ptr(), storage);
+        for (row, touched) in [false, true, false, true, true].into_iter().enumerate() {
+            assert_eq!(buffer.touched(row as u16).is_some(), touched);
+        }
+        let span = buffer.touched(1).unwrap();
+        assert_eq!((span.first, span.last), (1, 1));
+        buffer.resize_height(2);
+        buffer.resize_height(3);
+        assert!(buffer.touched(2).is_some());
+        assert_eq!(buffer.line(2).unwrap(), &[crate::cell::Cell::BLANK; 4]);
+    }
+
     use super::*;
 
     /// Assert that every column the operation rewrote lies inside `span`.
