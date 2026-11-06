@@ -87,8 +87,8 @@ Pass `placement(screen)?` to `Screen::set_placement`.
 The method checks the screen's true-color profile and shares cells and resources.
 Render the screen to upload and display the image.
 
-Native Kitty requires protocol-aware placement geometry around text overlays.
-The image example uses `crop()` to prepare those visible rectangles.
+Native Kitty placements use z-index -1, below text foregrounds and above cell backgrounds.
+Use `crop()` around dialogs that need an opaque background, as the image example demonstrates.
 Sixel and iTerm2 emit a complete image before the dialog text in that example.
 Their native visual behavior still requires confirmation in Rio and iTerm2.
 The application redraws the underlying content after movement or when a dialog closes.
@@ -108,6 +108,9 @@ Manual copies require true color and caller-managed resource lifetime.
 
 The loader uses the enabled `image` formats and applies EXIF orientation.
 Rustdoc lists the input and allocation limits.
+Cover and zoom resize the selected source crop before clipping it to the destination.
+The canvas and resized image each accept at most 4,194,304 pixels and 16,384 pixels per axis.
+Preparation rejects requests that exceed these limits or the shared buffer budget.
 
 Sixel and iTerm2 need one spare row below the image. Sixel also requires
 cursor-relative placement and graphics erasure through character operations.

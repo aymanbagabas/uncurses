@@ -175,8 +175,8 @@ Use the terminal's actual cell dimensions instead of the sample dimensions.
 Prepare the image again when those dimensions change.
 Keep one spare row below Sixel and iTerm2 images.
 
-Kitty native images use protocol z-order rather than stream order.
-The image example crops native Kitty placements around the dialog.
+Native Kitty placements use z-index -1, below text foregrounds and above cell backgrounds.
+The image example crops native Kitty placements around the dialog to preserve its opaque background.
 The image implementation computes these crops and supplies each fragment to the screen.
 
 Sixel and iTerm2 use one complete image followed by dialog text in this example.
