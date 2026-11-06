@@ -318,7 +318,8 @@ impl Record {
             return Ok(false);
         };
         if let Some(cells) = &self.options.cells {
-            Ok(cells.cell((x - self.area.x, y - self.area.y).into()) == Some(cell))
+            Ok(!cell.is_continuation()
+                && cells.cell((x - self.area.x, y - self.area.y).into()) == Some(cell))
         } else {
             Ok(cell.placement_ref()? == Some(self.reference))
         }
