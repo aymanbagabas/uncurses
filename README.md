@@ -41,6 +41,7 @@ reads the reply, and uses only what is actually there.
 - [Clickable hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) (OSC 8)
 - [Unicode core](https://contour-terminal.org/vt-extensions/unicode-core/) (Mode 2027): width by grapheme cluster
 - Unambiguous keys, with release: [kitty keyboard](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) or [`modifyOtherKeys`](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Alt-and-Meta-Keys)
+- [Win32 input mode](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md#win32-input-mode-sequences) (Mode 9001): key presses, releases, and repeats
 - [Mouse](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking) clicks, motion, wheel, and [pixel positions](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Extended-coordinates)
 - [Pointer shapes](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 22)
 - [Bracketed paste](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-ordered-by-the-final-character_s_) (Mode 2004)
@@ -51,6 +52,7 @@ reads the reply, and uses only what is actually there.
 - Terminal colors: read, set, reset (OSC 4/10/11/12)
 - [Color scheme updates](https://contour-terminal.org/vt-extensions/color-palette-update-notifications/) (Mode 2031): follow light and dark
 - [Clipboard](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 52), system and primary
+- [Drag and drop](https://sw.kovidgoyal.net/kitty/dnd-protocol/) (OSC 72): raw messages and support detection
 - Window title and icon name (OSC 0/1/2)
 - [Taskbar progress](https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC) (OSC 9;4)
 - [Program status](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501): task states, messages, and child records
@@ -104,6 +106,10 @@ Per-crate guides and more examples:
 ### Examples
 
 A curated few, each `cargo run -p examples --example <name>`:
+
+**`drag_drop`**
+
+Receive text drops and offer text drags with a thumbnail in Kitty.
 
 **`tour`**
 

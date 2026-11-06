@@ -100,6 +100,22 @@ and never hold the whole paste at once. The `paste_to_file` example implements
 exactly this sink and reports whether the paste stayed in memory or landed in a
 file.
 
+## Idle recovery
+
+The source ends an unfinished paste after two seconds without new input.
+It emits any held bytes as a final `Event::PasteChunk`, then emits
+`Event::PasteEnd`. Later bytes count as ordinary input.
+
+Use `EventSource::with_paste_idle_timeout` to choose another timeout.
+Pass `None` to wait for the real paste terminator.
+For an existing `Program`, use
+`program.event_source().lock().unwrap().set_paste_idle_timeout(timeout)`.
+The setter restarts the idle wait during a paste.
+An active async stream also refreshes its wait to use the new deadline.
+
+The `paste` example uses this setter. Press F2 between pastes to toggle
+the idle timeout.
+
 ## Turning it on and off
 
 Bracketed paste is enabled by default. To start without it, pass

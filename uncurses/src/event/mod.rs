@@ -28,13 +28,13 @@
 //! chord, so matching a shortcut is plain equality.
 //!
 //! ```no_run
-//! use uncurses::event::{Event, EventSource, Key};
+//! use uncurses::event::{Event, EventSource, Key, SourceFlags};
 //! use uncurses::terminal::Terminal;
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut term = Terminal::stdio();
 //! term.make_raw()?;
-//! let mut events = EventSource::new(term.input())?;
+//! let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
 //!
 //! let quit: Key = "ctrl+c".parse().unwrap();
 //! loop {
@@ -86,7 +86,10 @@ mod stream;
 pub use decode::DecoderFlags;
 pub use key::{Key, KeyCode, KeyModifiers, ParseKeyError};
 pub use mouse::{Mouse, MouseButton, mouse_pixel_to_cell};
-pub use source::{DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, Waker};
+pub use source::{
+    DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DEFAULT_STRING_IDLE_TIMEOUT, EventSource,
+    Input, SourceFlags, Waker,
+};
 #[cfg(feature = "async")]
 pub use stream::EventStream;
 
@@ -399,6 +402,17 @@ pub enum Event {
         /// Response payload bytes.
         payload: Vec<u8>,
     },
+    /// One Kitty OSC 72 drag and drop message.
+    ///
+    /// Metadata and payload are wire values. Callers retain the first chunk's
+    /// metadata, decode base64 when applicable, and manage transfer lifetime.
+    /// An empty final data response ends a transfer; `m=0` alone ends a message.
+    DragDrop {
+        /// Colon-separated metadata pairs, including extension and routing keys.
+        options: Vec<(String, String)>,
+        /// Unchanged payload bytes, including base64 for binary data.
+        payload: Vec<u8>,
+    },
 
     // -- Group / unknown -----------------------------------------------------
     /// Multiple events emitted by a single sequence.
@@ -417,7 +431,9 @@ pub enum Event {
     UnknownPm(Vec<u8>),
     /// Unknown APC sequence (payload).
     UnknownApc(Vec<u8>),
-    /// Catch-all for unrecognized byte sequences.
+    /// Catch-all for unrecognized byte sequences, including incomplete control
+    /// strings whose idle deadline expired or which another Escape sequence
+    /// interrupted. These incomplete strings include their introducer bytes.
     Unknown(Vec<u8>),
 }
 

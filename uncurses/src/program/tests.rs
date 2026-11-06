@@ -169,6 +169,84 @@ fn decoder_flags_delegate_without_changing_options_or_terminal_modes() {
 
 #[cfg(unix)]
 #[test]
+fn shared_source_string_timeout_can_change_during_a_reply() {
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    let source = program.event_source();
+    source
+        .lock()
+        .unwrap()
+        .set_string_idle_timeout(Some(Duration::ZERO));
+    writer.write_all(b"\x1b]52;c;qqqq").unwrap();
+    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+
+    source.lock().unwrap().set_string_idle_timeout(None);
+    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+    source
+        .lock()
+        .unwrap()
+        .set_string_idle_timeout(Some(Duration::ZERO));
+    assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::Unknown(b"\x1b]52;c;qqqq".to_vec()),
+    );
+    writer.write_all(b"\x1b]52;c;Zm9v\x1b\\").unwrap();
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::Clipboard {
+            selection: crate::event::ClipboardSelection::System,
+            content: "Zm9v".into(),
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_source_paste_timeout_can_change_during_a_paste() {
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    let source = program.event_source();
+    source
+        .lock()
+        .unwrap()
+        .set_paste_idle_timeout(Some(Duration::ZERO));
+    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+    writer.write_all(b"\x1b[200~hello\x1b[20").unwrap();
+    assert_eq!(program.read_event().unwrap(), Event::PasteStart);
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::PasteChunk(b"hello".to_vec()),
+    );
+
+    source.lock().unwrap().set_paste_idle_timeout(None);
+    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+    source
+        .lock()
+        .unwrap()
+        .set_paste_idle_timeout(Some(Duration::from_secs(60)));
+    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+    source
+        .lock()
+        .unwrap()
+        .set_paste_idle_timeout(Some(Duration::ZERO));
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::PasteChunk(b"\x1b[20".to_vec()),
+    );
+    assert_eq!(program.read_event().unwrap(), Event::PasteEnd);
+
+    writer.write_all(b"x").unwrap();
+    assert!(matches!(
+        program.read_event().unwrap(),
+        Event::KeyPress(key) if key.code == crate::event::KeyCode::Char('x')
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn runtime_decoder_flags_apply_only_to_future_decoding() {
     use crate::event::KeyCode;
 
@@ -2012,6 +2090,30 @@ fn enter_and_exit_alt_screen_emit_1049_and_retarget_the_screen() {
 }
 
 #[test]
+fn teardown_preserves_resources_used_by_committed_rows() {
+    use crate::{layout::Rect, screen::PlacementOptions};
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (40, 4));
+    let options = PlacementOptions {
+        draw: b"DRAW".to_vec(),
+        erase: b"ERASE".to_vec(),
+        upload: Arc::from(b"<UPLOAD>".as_slice()),
+        delete: Arc::from(b"<DELETE>".as_slice()),
+        ..Default::default()
+    };
+    program
+        .screen_mut()
+        .set_placement(1, Rect::new(0, 0, 4, 1), &options)
+        .unwrap();
+    program.screen_mut().commit_rows(1).unwrap();
+    buf.borrow_mut().clear();
+    program.teardown().unwrap();
+    let output = written(&buf);
+    assert!(!output.contains("ERASE"));
+    assert!(!output.contains("<DELETE>"));
+}
+
+#[test]
 fn placement_handoffs_erase_before_switch_and_preserve_pending_content() {
     use crate::{layout::Rect, screen::PlacementOptions};
     let buf = RefCell::new(Vec::new());
@@ -2723,6 +2825,37 @@ fn a_kitty_graphics_response_records_graphics_support() {
         })
         .unwrap();
     assert!(program.capabilities().kitty_graphics());
+}
+
+#[test]
+#[cfg(unix)]
+fn drag_drop_support_is_observed_without_consuming_the_reply() {
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let terminal = Terminal::from_parts(&reader, TestOut(&buf), crate::terminal::EnvList::new());
+    let mut program = Program::with_render(terminal, (10, 3)).unwrap();
+    assert!(!program.capabilities().drag_drop());
+    writer.write_all(b"\x1b]72;t=m;x\x1b\\").unwrap();
+    assert!(matches!(
+        program.read_event().unwrap(),
+        Event::DragDrop { .. }
+    ));
+    assert!(!program.capabilities().drag_drop());
+    program
+        .query_capabilities(crate::ansi::drag_drop::REQUEST_DRAG_DROP)
+        .unwrap();
+    assert!(buf.borrow().ends_with(b"\x1b]72;t=q\x1b\\\x1b[c"));
+    writer
+        .write_all(b"\x1b]72;t=q:i=42;future=1\x1b\\")
+        .unwrap();
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::DragDrop {
+            options: vec![("t".into(), "q".into()), ("i".into(), "42".into())],
+            payload: b"future=1".to_vec(),
+        }
+    );
+    assert!(program.capabilities().drag_drop());
 }
 
 #[test]

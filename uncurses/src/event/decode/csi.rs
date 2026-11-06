@@ -34,7 +34,8 @@ use super::kitty;
 use super::result::ParseResult;
 use super::util::{
     ControlSequence, Params, csi_kitty_phase, csi_modifiers, intro_prefix_len, key_event_for_phase,
-    key_with_mods, lookup_legacy_key, remap_tilde, tilde_code_to_keycode, xterm_modifiers,
+    key_with_mods, lookup_legacy_key, remap_tilde, sequence_fallback, tilde_code_to_keycode,
+    xterm_modifiers,
 };
 use crate::event::mouse::{
     decode_sgr_mouse, decode_urxvt_mouse, decode_utf8_mouse, decode_x10_mouse,
@@ -59,6 +60,9 @@ impl Decoder {
 
         while i < buf.len() {
             let b = buf[i];
+            if b == 0x1b {
+                return sequence_fallback(buf, i);
+            }
             if (0x40..=0x7e).contains(&b) {
                 // Found final byte
                 let seq = &buf[prefix_len..=i];

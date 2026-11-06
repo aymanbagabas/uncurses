@@ -44,6 +44,11 @@ use crate::ansi::params::Params;
 /// [`MouseButton::None`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
+    /// No button was reported.
+    ///
+    /// This appears for legacy release records and hover-style motion where the
+    /// protocol does not attach a specific held button.
+    None,
     /// Primary (left) mouse button.
     Left,
     /// Middle mouse button, often the wheel button.
@@ -74,11 +79,6 @@ pub enum MouseButton {
     Button10,
     /// Additional mouse button 11 when encoded by a terminal extension.
     Button11,
-    /// No button was reported.
-    ///
-    /// This appears for legacy release records and hover-style motion where the
-    /// protocol does not attach a specific held button.
-    None,
 }
 
 /// Mouse-event payload with position, button, and modifier state.
@@ -370,6 +370,11 @@ fn decode_mouse_modifiers(cb: u16) -> KeyModifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_none_discriminant_is_zero() {
+        assert_eq!(MouseButton::None as u8, 0);
+    }
 
     #[test]
     fn test_decode_sgr_left_click() {

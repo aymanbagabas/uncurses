@@ -7,7 +7,10 @@
 //! chunks into a `Vec<u8>`. This app shows the last thing you pasted.
 //!
 //! Run with `cargo run --example paste`. Paste some text (try a few
-//! lines); press `q` or `Ctrl-C` to quit.
+//! lines). Press F2 between pastes to toggle the two-second idle timeout.
+//! Press `q` or `Ctrl-C` to quit.
+
+use std::time::Duration;
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
@@ -32,14 +35,24 @@ fn main() -> std::io::Result<()> {
 fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
     let mut last: Option<String> = None;
+    let mut timeout_enabled = true;
     // Holds chunk bytes between PasteStart and PasteEnd.
     let mut pending: Option<Vec<u8>> = None;
-    render(program.screen_mut(), last.as_deref());
+    render(program.screen_mut(), last.as_deref(), timeout_enabled);
 
     loop {
         let ev = program.read_event()?;
         match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
+            Event::KeyPress(key) if key.matches("f2") => {
+                timeout_enabled = !timeout_enabled;
+                program
+                    .event_source()
+                    .lock()
+                    .unwrap()
+                    .set_paste_idle_timeout(timeout_enabled.then_some(Duration::from_secs(2)));
+                render(program.screen_mut(), last.as_deref(), timeout_enabled);
+            }
             Event::PasteStart => pending = Some(Vec::new()),
             Event::PasteChunk(bytes) => {
                 if let Some(buf) = pending.as_mut() {
@@ -49,12 +62,12 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
             Event::PasteEnd => {
                 if let Some(buf) = pending.take() {
                     last = Some(String::from_utf8_lossy(&buf).into_owned());
-                    render(program.screen_mut(), last.as_deref());
+                    render(program.screen_mut(), last.as_deref(), timeout_enabled);
                 }
             }
             Event::Resize(_) => {
                 program.autoresize()?;
-                render(program.screen_mut(), last.as_deref());
+                render(program.screen_mut(), last.as_deref(), timeout_enabled);
             }
             _ => {}
         }
@@ -62,10 +75,24 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdout>, last: Option<&str>) {
+fn render(screen: &mut Screen<Stdout>, last: Option<&str>, timeout_enabled: bool) {
     screen.clear();
     let dim = Style::default().fg(Color::BrightBlack);
-    screen.set_str((0, 0), "Paste some text. q quits.", dim.clone());
+    screen.set_str(
+        (0, 0),
+        "Paste some text. F2: idle timeout. q quits.",
+        dim.clone(),
+    );
+    let setting = if timeout_enabled {
+        "2 seconds"
+    } else {
+        "disabled"
+    };
+    screen.set_str(
+        (0, 1),
+        &format!("Paste idle timeout: {setting}"),
+        dim.clone(),
+    );
 
     match last {
         None => {
