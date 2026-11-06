@@ -578,3 +578,30 @@ fn a_cell_that_stores_nothing_still_reserves_the_columns_it_claims() {
         );
     }
 }
+#[test]
+fn height_resize_reuses_storage_and_blanks_returned_rows() {
+    let mut buffer = Buffer::new(4, 5);
+    buffer.set((0, 0), &Cell::new("kept", 1));
+    buffer.set((0, 4), &Cell::new("discarded heap content", 1));
+    let storage = buffer.cells.as_ptr();
+    let capacity = buffer.cells.capacity();
+    buffer.resize(4, 1);
+    buffer.resize(4, 5);
+    assert_eq!(buffer.cells.as_ptr(), storage);
+    assert_eq!(buffer.cells.capacity(), capacity);
+    assert_eq!(buffer.cell((0, 0).into()).unwrap().content(), "kept");
+    for y in 1..5 {
+        assert!(
+            buffer
+                .line(y)
+                .unwrap()
+                .iter()
+                .all(|cell| cell == &Cell::BLANK)
+        );
+    }
+    buffer.resize(4, 20);
+    assert_eq!(buffer.cell((0, 0).into()).unwrap().content(), "kept");
+    buffer.resize(0, 5);
+    buffer.resize(0, 2);
+    assert_eq!(buffer.height(), 2);
+}

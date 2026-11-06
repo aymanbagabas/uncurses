@@ -17,23 +17,14 @@
 //! split into key/value strings and the payload bytes are delivered unchanged.
 use super::Decoder;
 use super::result::ParseResult;
-use super::util::{find_string_terminator, intro_prefix_len, parse_kitty_options};
+use super::util::{parse_kitty_options, parse_string};
 use crate::event::Event;
 
 impl Decoder {
     pub(super) fn parse_apc(&self, buf: &[u8]) -> ParseResult {
-        let prefix_len = intro_prefix_len(buf[0]);
-        if buf.len() < prefix_len + 1 {
-            return ParseResult::Incomplete;
-        }
-        let (payload_end, st_len) = match find_string_terminator(&buf[prefix_len..]) {
-            Some(p) => p,
-            None => return ParseResult::Incomplete,
-        };
-        let payload = &buf[prefix_len..prefix_len + payload_end];
-        let consumed = prefix_len + payload_end + st_len;
-        let evt = recognize(payload).unwrap_or_else(|| Event::UnknownApc(payload.to_vec()));
-        ParseResult::Event(evt, consumed)
+        parse_string(buf, false, |payload| {
+            recognize(payload).unwrap_or_else(|| Event::UnknownApc(payload.to_vec()))
+        })
     }
 }
 

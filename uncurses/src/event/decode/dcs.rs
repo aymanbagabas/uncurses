@@ -20,27 +20,15 @@
 //! making the whole reply fail.
 use super::Decoder;
 use super::result::ParseResult;
-use super::util::{
-    ControlSequence, decode_termcap_payload, find_string_terminator, hex_decode, intro_prefix_len,
-};
+use super::util::{ControlSequence, decode_termcap_payload, hex_decode, parse_string};
 use crate::ansi::cursor::CursorStyle;
 use crate::event::{Event, SettingReport};
 
 impl Decoder {
     pub(super) fn parse_dcs(&self, buf: &[u8]) -> ParseResult {
-        let prefix_len = intro_prefix_len(buf[0]);
-        if buf.len() < prefix_len + 1 {
-            return ParseResult::Incomplete;
-        }
-        let (payload_end, st_len) = match find_string_terminator(&buf[prefix_len..]) {
-            Some(p) => p,
-            None => return ParseResult::Incomplete,
-        };
-        let payload = &buf[prefix_len..prefix_len + payload_end];
-        let consumed = prefix_len + payload_end + st_len;
-
-        let evt = recognize(payload).unwrap_or_else(|| Event::UnknownDcs(payload.to_vec()));
-        ParseResult::Event(evt, consumed)
+        parse_string(buf, false, |payload| {
+            recognize(payload).unwrap_or_else(|| Event::UnknownDcs(payload.to_vec()))
+        })
     }
 }
 

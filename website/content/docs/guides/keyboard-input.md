@@ -127,6 +127,52 @@ Already-decoded events keep their values, including events returned through
 Run `cargo run --example legacy_keys` and press F2 to switch the LF mapping.
 Press Ctrl+J after each switch to see the decoded key.
 
+## Legacy Escape timing
+
+Legacy terminals use the same bytes for some Alt keys and control sequence
+prefixes. For example, `\x1b[` can mean Alt+[ or the start of CSI.
+An idle two-byte introducer resolves to one Alt-modified key.
+A new Escape sequence also resolves a bare two-byte introducer as an Alt key,
+then decodes normally. For example, `\x1b[\x1ba` yields Alt+[ followed by Alt+a.
+A lone Escape resolves when its own deadline expires, before another read.
+
+`EventSource::with_esc_timeout` sets the wait, with a default of 50 milliseconds.
+New bytes reset the deadline while a key sequence remains incomplete.
+The source checks for ready continuation bytes before it expires that sequence.
+
+Once bytes follow an OSC, DCS, APC, SOS, or PM introducer, the decoder treats
+them as a string body. It waits for the terminator instead of applying the
+Escape timeout. The existing input buffer limit still applies.
+
+`EventSource::with_string_idle_timeout` sets a separate idle timeout.
+The default is two seconds, and each read resets the deadline.
+On expiry, the source emits the incomplete sequence as `Event::Unknown`,
+including its introducer, then resumes normal input decoding.
+Pass `None` to disable the idle timeout.
+
+For an existing `Program`, configure its shared source with
+`program.event_source().lock().unwrap().set_string_idle_timeout(timeout)`.
+The setter restarts the idle wait if a string is in progress.
+An active async stream also refreshes its wait to use the new deadline.
+
+A new Escape sequence also interrupts an unfinished CSI or control string.
+If the sequence already has a body, the source reports the interrupted bytes
+as `Event::Unknown`, then decodes the new sequence.
+A trailing Escape in a string waits for another byte, so a split
+`ESC \` still terminates the string normally, including an empty string.
+
+Bytes that arrive after recovery count as new input.
+Late payload bytes can therefore become keys after the idle timeout.
+Choose a longer timeout for transports with long pauses.
+
+This rule reflects a limit of legacy input: Alt+] followed quickly by text
+can have the same bytes as an OSC string. The Kitty keyboard protocol provides
+distinct key encodings.
+
+Run `cargo run --example legacy_keys` and press Alt+[ or Alt+].
+The example displays the decoded key and its Alt modifier.
+Press F3 to enable or disable the string idle timeout.
+
 ## Presses, repeats, and releases
 
 By default a terminal reports each key once, as a press, and that is all most

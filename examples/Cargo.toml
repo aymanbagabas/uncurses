@@ -14,6 +14,7 @@ icu = ["uncurses/icu", "uncurses-ratatui/icu", "uncurses-images/icu"]
 async = ["uncurses/async"]
 
 [dependencies]
+base64 = "0.22"
 uncurses = { path = "../uncurses", default-features = false }
 uncurses-ratatui = { path = "../uncurses-ratatui", default-features = false }
 uncurses-images = { path = "../uncurses-images", default-features = false, features = ["jpeg"] }
