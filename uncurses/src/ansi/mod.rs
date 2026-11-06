@@ -111,13 +111,11 @@ mod utf8_boundaries {
     /// Sequences whose payload contains a character with a C1 continuation
     /// byte, followed by visible text.
     ///
-    /// `\u{2705}` is `E2 9C 85` and carries 8-bit ST; `\u{9c}` is `C2 9C` and
-    /// *is* that byte, encoded; `\u{9d}` is `C2 9D`, the OSC introducer
-    /// encoded. Each appears in a terminated sequence, so what follows is
-    /// text a caller can see.
+    /// `\u{2705}` is `E2 9C 85` and `\u{dc}` is `C3 9C`.
+    /// Both contain a continuation byte that has the same value as raw ST.
     const INPUTS: &[&str] = &[
         "\x1b]0;\u{2705}\x07visible",
-        "\x1b]0;a\u{9c}b\x07visible",
+        "\x1b]0;a\u{dc}b\x07visible",
         "\x1b]0;a\u{9d}b\x07visible",
         "\x1b]8;;https://example.com/\u{2705}\x07visible\x1b]8;;\x07",
         "\x1bP1$r\u{2705}\x1b\\visible",
@@ -128,6 +126,8 @@ mod utf8_boundaries {
         // `scan_esc_intermediate`'s half of the same bug.
         "\x1b#\u{2705}visible",
         "\x1b\u{2705}visible",
+        "\u{9b}31mvisible\u{9b}m",
+        "\u{9d}0;title\u{9c}visible",
         // A payload that is not terminated at all: the whole tail is one
         // escape token, and it still must not stop mid-character.
         "\x1b]0;caf\u{e9} \u{2705} \u{4e00} \u{1f600}",
@@ -228,11 +228,8 @@ mod fuzz {
         "e\u{301}",
         "a\u{200d}b",
         "\u{2705}",
-        // C1 code points as characters. In UTF-8 the lead byte is `C2`, so
-        // these are text, not controls - the distinction the tokenizer exists
-        // to make.
-        "\u{9c}",
-        "\u{9d}",
+        "\u{dc}",
+        "\u{dd}",
     ];
 
     /// Sequences that terminate and sequences that do not, with payloads that
@@ -242,6 +239,16 @@ mod fuzz {
         "\x1b[31m",
         "\x1b[0m",
         "\x1b[1;2;3m",
+        "\u{9b}31m",
+        "\u{9b}m",
+        "\u{80}",
+        "\u{9c}",
+        "\u{9d}",
+        "\u{90}",
+        "\u{98}",
+        "\u{9e}",
+        "\u{9f}",
+        "\u{9d}0;title\u{9c}",
         "\x1b]8;;https://example.com/\u{2705}\x1b\\",
         "\x1b]0;title\x07",
         "\x1bP1$r\u{2705}\x1b\\",

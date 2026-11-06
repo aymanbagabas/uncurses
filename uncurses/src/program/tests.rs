@@ -2012,6 +2012,30 @@ fn enter_and_exit_alt_screen_emit_1049_and_retarget_the_screen() {
 }
 
 #[test]
+fn teardown_preserves_resources_used_by_committed_rows() {
+    use crate::{layout::Rect, screen::PlacementOptions};
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (40, 4));
+    let options = PlacementOptions {
+        draw: b"DRAW".to_vec(),
+        erase: b"ERASE".to_vec(),
+        upload: Arc::from(b"<UPLOAD>".as_slice()),
+        delete: Arc::from(b"<DELETE>".as_slice()),
+        ..Default::default()
+    };
+    program
+        .screen_mut()
+        .set_placement(1, Rect::new(0, 0, 4, 1), &options)
+        .unwrap();
+    program.screen_mut().commit_rows(1).unwrap();
+    buf.borrow_mut().clear();
+    program.teardown().unwrap();
+    let output = written(&buf);
+    assert!(!output.contains("ERASE"));
+    assert!(!output.contains("<DELETE>"));
+}
+
+#[test]
 fn placement_handoffs_erase_before_switch_and_preserve_pending_content() {
     use crate::{layout::Rect, screen::PlacementOptions};
     let buf = RefCell::new(Vec::new());

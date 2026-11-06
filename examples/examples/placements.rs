@@ -49,6 +49,33 @@ fn paint<W: Write>(screen: &mut Screen<W>, step: usize) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
+    if std::env::args().any(|argument| argument == "--commit" || argument == "--dump-commit") {
+        let mut screen = Screen::new(Vec::new(), (40, 4));
+        screen.set_placement(
+            1,
+            Rect::new(0, 0, 19, 1),
+            &PlacementOptions {
+                draw: b"\x1b[1;31mCommitted placement".to_vec(),
+                ..Default::default()
+            },
+        )?;
+        screen.commit_rows(1)?;
+        screen.set_str((0, 0), "Retained frame", Style::EMPTY);
+        screen.render()?;
+        screen.commit_rows(screen.size().height)?;
+        if std::env::args().any(|argument| argument == "--dump-commit") {
+            print!("committed\t");
+            for byte in screen.writer() {
+                print!("{byte:02x}");
+            }
+            println!();
+        } else {
+            let mut out = io::stdout().lock();
+            out.write_all(screen.writer())?;
+            out.flush()?;
+        }
+        return Ok(());
+    }
     if std::env::args().any(|argument| argument == "--dump") {
         let mut screen = Screen::new(Vec::new(), (40, 10));
         screen.set_fullscreen(true);
