@@ -57,22 +57,28 @@ yourself.
 
 ## Growing the region
 
-Inline regions are not fixed. Call `resize` again whenever your content changes
-height, and the renderer reflows the block in place. A prompt that grows as the
-user types resizes as the line count changes: keep the width at
-`program.screen().width()` and vary only the height.
-
-`resize` re-establishes the region, so the next render repaints it. Call it when
-the height actually changes rather than on every keystroke:
+Use `resize_height` when your content changes height.
+The next render preserves unchanged rows, draws added content, and erases
+removed inline rows. Added blank rows also extend the region.
+The same height leaves the frame unchanged.
 
 ```rust
-let screen = program.screen_mut();
-let height = lines.len() as u16;
-if screen.height() != height {
-    let width = screen.width();
-    screen.resize((width, height));
+use uncurses::{screen::Screen, style::Style, text::TextSurface};
+
+fn main() -> std::io::Result<()> {
+    let mut screen = Screen::new(Vec::new(), (40, 1));
+    screen.set_str((0, 0), "First row", Style::default());
+    screen.render()?;
+    screen.resize_height(2);
+    screen.set_str((0, 1), "Second row", Style::default());
+    screen.render()
 }
 ```
+
+Use `resize` after a terminal resize. It re-establishes the region and requests
+a full repaint, including when its dimensions stay the same.
+
+Run `cargo run -p examples --example inline_height` to inspect the emitted bytes.
 
 To follow the terminal instead of your own content, use
 [`autoresize`](https://docs.rs/uncurses/latest/uncurses/program/struct.Program.html#method.autoresize):
@@ -110,7 +116,26 @@ The terminal places the cursor, so `tracked_cursor()` then returns `None`.
 After a resize or screen switch, render the content before you place the caret
 relative to that content.
 
-## Committing to scrollback
+## Releasing completed rows
+
+Use `screen.commit_rows(count)?` when the top rows of your inline region are complete.
+It renders pending edits and releases those rows as permanent output.
+The retained rows stay on the terminal and start at row zero in the smaller region.
+Releasing every row starts an empty region on the next line.
+
+For streamed text, keep the unfinished line in the region.
+Use `resize_height` to add new lines, then commit the completed lines.
+Run `cargo run -p examples --example streaming -- --dump` to inspect this process.
+
+The method clamps the count to the height.
+Fullscreen screens and zero counts preserve pending edits and output.
+If the initial render fails, the screen retains its rows.
+If the final flush fails, the rows stay released.
+Retry with `std::io::Write::flush(screen)` to send pending bytes without releasing more rows.
+The screen retains unsent bytes after a write error and removes bytes that the writer accepts.
+If the writer's flush fails, the next retry flushes the writer without repeating accepted bytes.
+
+## Inserting separate output
 
 Sometimes you want a line to leave the live region and become permanent history,
 the way a shell prints a command's output above the next prompt. That is
@@ -121,8 +146,32 @@ inline block, then keeps drawing the block below it.
 program.screen_mut().insert_above("compiled in 1.2s")?;
 ```
 
-It flushes immediately and leaves your live block untouched, so the committed
-line lands in scrollback and the block keeps drawing right below it.
+Use styled text: text, newlines, tabs, complete SGR style sequences, and
+OSC 8 hyperlinks. The caller must ensure that the content satisfies this
+input requirement.
+
+**Warning:** Keep other controls and escapes out of the input.
+Cursor movement, erasure, scrolling, and mode changes can overwrite the live
+block or preceding output. This includes NEL, IND, and RI controls and their
+equivalent escape sequences.
+
+With styled text, it flushes immediately and leaves your live block untouched.
+The committed line lands in scrollback, and the block stays below it.
+
+Wrapped lines follow the screen's width policy, including wide characters.
+ANSI style sequences contribute no columns.
+Tabs keep their bytes and follow stops every eight columns, with a clamp at
+the right edge. `Program` establishes these stops during session setup.
+If you drive `Screen` directly, establish the same terminal stops first.
+
+`insert_above` converts supported UTF-8 C1 style and hyperlink sequences to
+7-bit forms before it measures and writes the content.
+Hyperlink payloads retain their original UTF-8 bytes.
+Run `cargo run -p examples --example ansi_text` to see both input encodings
+produce the same inserted bytes.
+
+Use `screen.set_ambiguous_wide(true)` when the terminal displays ambiguous
+characters as two columns. Rewrite existing text after changing that policy.
 
 A multiline prompt that commits its buffer on `Ctrl-D` does exactly this: render
 the editable block inline, and on commit push the finished text up with

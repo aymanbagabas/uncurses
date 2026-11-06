@@ -20,7 +20,7 @@
 //! which byte ends a control string, and when a byte in `0x80..=0x9F`
 //! is a C1 control rather than part of a character, are documented there.
 
-use super::text::{Token, WidthMode, string_width, tokenize};
+use super::text::{TokenKind, WidthMode, string_width, tokenize};
 
 #[inline]
 fn bs(b: &[u8]) -> &str {
@@ -65,15 +65,16 @@ pub fn hardwrap_mode(
     let mut out = String::with_capacity(s.len());
     let mut col = 0usize;
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
-        match tok {
-            Token::Escape(e) => out.push_str(bs(e)),
-            Token::Control(b'\n') => {
+        match tok.kind {
+            TokenKind::Escape => out.push_str(bs(tok.bytes)),
+            TokenKind::Control if tok.control == b'\n' => {
                 out.push('\n');
                 col = 0;
             }
-            Token::Control(b) => out.push(b as char),
-            Token::Text { text, width } => {
-                let w = width as usize;
+            TokenKind::Control => out.push_str(bs(tok.bytes)),
+            TokenKind::Text => {
+                let text = tok.bytes;
+                let w = usize::from(tok.width);
                 if w == 0 {
                     out.push_str(bs(text));
                     continue;
@@ -193,18 +194,18 @@ fn wordwrap_inner(
     };
 
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
-        match tok {
-            Token::Escape(e) => {
+        match tok.kind {
+            TokenKind::Escape => {
                 // Attach escapes to whatever segment is currently being built.
                 if !word.is_empty() {
-                    word.push_str(bs(e));
+                    word.push_str(bs(tok.bytes));
                 } else if !space.is_empty() {
-                    space.push_str(bs(e));
+                    space.push_str(bs(tok.bytes));
                 } else {
-                    line.push_str(bs(e));
+                    line.push_str(bs(tok.bytes));
                 }
             }
-            Token::Control(b'\n') => {
+            TokenKind::Control if tok.control == b'\n' => {
                 // Flush current word and emit the line.
                 flush_word_to_line(
                     &mut line,
@@ -221,12 +222,13 @@ fn wordwrap_inner(
                 space.clear();
                 space_w = 0;
             }
-            Token::Control(b) => {
+            TokenKind::Control => {
                 // Treat as part of the current word.
-                word.push(b as char);
+                word.push_str(bs(tok.bytes));
             }
-            Token::Text { text, width } => {
-                let w = width as usize;
+            TokenKind::Text => {
+                let text = tok.bytes;
+                let w = usize::from(tok.width);
                 let is_break = bs(text).chars().all(&is_bp);
                 let is_space = text == b" " || text == b"\t";
 
