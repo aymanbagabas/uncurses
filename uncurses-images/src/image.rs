@@ -192,7 +192,8 @@ impl Image {
     /// Rasterize at the supplied physical cell resolution.
     ///
     /// Transparent pixels and unused space use `options.background`.
-    /// The raster accepts at most [`Self::MAX_RASTER_PIXELS`] pixels.
+    /// The canvas and resized image each accept at most [`Self::MAX_RASTER_PIXELS`] pixels.
+    /// Cover and zoom resize the source crop before clipping it to the canvas.
     /// The buffer budget includes retained source pixels, the opaque crop,
     /// the destination, the resize result, the float intermediate, and filter weights.
     /// Options remain unchanged.
@@ -247,12 +248,7 @@ impl Image {
             }))
         });
         let pixels = imageops::resize(&opaque, geometry.width, geometry.height, options.filter);
-        imageops::replace(
-            &mut result,
-            &pixels,
-            i64::from(geometry.x),
-            i64::from(geometry.y),
-        );
+        imageops::replace(&mut result, &pixels, geometry.x, geometry.y);
         Ok(result)
     }
 
@@ -312,6 +308,7 @@ fn check_raster_budget(
     canvas_pixels: u64,
     geometry: &geometry::Geometry,
 ) -> io::Result<()> {
+    let resized_count = pixel_count(geometry.width, geometry.height, Image::MAX_RASTER_PIXELS)?;
     let source = geometry.source;
     let source_count = u64::from(source.width) * u64::from(source.height);
     let filter_bytes = u64::from(source.width.max(source.height).next_power_of_two().max(4)) * 4;
@@ -319,7 +316,8 @@ fn check_raster_budget(
     check_budget(
         retained_bytes
             + source_count * 3
-            + canvas_pixels * 6
+            + canvas_pixels * 3
+            + resized_count * 3
             + u64::from(source.width) * u64::from(geometry.height) * 16
             + filter_bytes,
     )
@@ -882,6 +880,46 @@ mod tests {
     }
 
     #[test]
+    fn cover_and_zoom_preserve_centered_pixel_boundaries() {
+        for (width, height, fit, scale) in [
+            (2, 1, Fit::Cover, 1.0),
+            (1, 2, Fit::Cover, 1.0),
+            (2, 2, Fit::Stretch, 1.5),
+            (2, 2, Fit::Stretch, 2.0),
+            (2, 2, Fit::Stretch, 4.0),
+        ] {
+            let pixels = RgbImage::from_fn(width, height, |x, y| {
+                Rgb([
+                    if x == 0 { 255 } else { 0 },
+                    if y == 0 { 255 } else { 0 },
+                    0,
+                ])
+            });
+            let image = Image::new(DynamicImage::ImageRgb8(pixels)).unwrap();
+            let options = ImageOptions {
+                fit,
+                scale,
+                filter: imageops::FilterType::Nearest,
+                ..Default::default()
+            };
+            let raster = image
+                .rasterize((100, 100).into(), (1, 1).into(), &options)
+                .unwrap();
+            for (x, y, pixel) in raster.enumerate_pixels() {
+                let expected = [
+                    if width == 1 || x < 50 { 255 } else { 0 },
+                    if height == 1 || y < 50 { 255 } else { 0 },
+                    0,
+                ];
+                assert_eq!(
+                    pixel.0, expected,
+                    "{width}x{height}, {fit:?}, {scale}, {x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn invalid_raster_requests_return_errors() {
         let image = Image::from_rgba(1, 1, vec![255; 4]).unwrap();
         for size in [
@@ -922,6 +960,14 @@ mod tests {
             },
             ImageOptions {
                 scale: f64::INFINITY,
+                ..Default::default()
+            },
+            ImageOptions {
+                scale: f64::MAX,
+                ..Default::default()
+            },
+            ImageOptions {
+                scale: 2049.0,
                 ..Default::default()
             },
             ImageOptions {
