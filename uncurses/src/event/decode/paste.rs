@@ -60,7 +60,7 @@ impl Decoder {
                         Some(Event::PasteChunk(data[..scan].to_vec())),
                     );
                 }
-                ParseResult::Incomplete => {
+                ParseResult::Incomplete | ParseResult::IncompleteString => {
                     if scan == 0 {
                         return (0, None);
                     }

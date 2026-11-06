@@ -25,6 +25,16 @@ def feed(screen, pending):
 
 if __name__ == "__main__":
     records = [record.rstrip("\n").split("\t") for record in sys.stdin]
+    if "--commit" in sys.argv:
+        require([name for name, _ in records] == ["committed"], "unexpected committed stages")
+        screen = Screen(None, 10, 40, 100, 8, 16)
+        feed(screen, bytes.fromhex(records[0][1]))
+        for row, text in [(0, "Committed placement"), (1, "Retained frame")]:
+            actual = "".join(screen.line(row)[x] for x in range(len(text)))
+            require(actual == text, (row, actual, text))
+        require((screen.cursor.x, screen.cursor.y) == (0, 4), "incorrect committed cursor")
+        print("Verified committed placement preservation and retained-row coordinates.")
+        sys.exit(0)
     require([name for name, _ in records] == ["0", "1", "2", "3"], "unexpected stages")
     screen = Screen(None, 10, 40, 100, 8, 16)
     for index, (_, encoded) in enumerate(records):

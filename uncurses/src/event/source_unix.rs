@@ -33,6 +33,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(feature = "async")]
 use std::sync::Arc;
 
 use super::decode::{Decoder, DecoderFlags};
@@ -40,8 +41,8 @@ use super::pending::Pending;
 use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
-    Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT,
+    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
 };
 use crate::event::Event;
 use crate::terminal::get_window_size;
@@ -61,6 +62,17 @@ pub(super) struct UnixWakerInner {
 }
 
 impl UnixWakerInner {
+    pub(super) fn new() -> io::Result<Self> {
+        let (rx, tx) = make_self_pipe()?;
+        Ok(Self { tx, rx })
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn clear(&self) -> io::Result<()> {
+        drain_pipe(self.read_fd());
+        Ok(())
+    }
+
     pub(super) fn read_fd(&self) -> std::os::fd::RawFd {
         self.rx.as_raw_fd()
     }
@@ -100,24 +112,23 @@ where
     /// subscribes to the shared SIGWINCH fan-out, and registers the input, wake,
     /// and resize fds with the selected poll backend.
     ///
-    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and
-    /// [`DEFAULT_PASTE_IDLE_TIMEOUT`]; override them with
-    /// [`EventSource::with_esc_timeout`] and
-    /// [`EventSource::with_paste_idle_timeout`].
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`], [`DEFAULT_PASTE_IDLE_TIMEOUT`],
+    /// and [`DEFAULT_STRING_IDLE_TIMEOUT`]. Override them with
+    /// [`EventSource::with_esc_timeout`],
+    /// [`EventSource::with_paste_idle_timeout`], and
+    /// [`EventSource::with_string_idle_timeout`].
     ///
     /// Resize deduplication starts from the size `input` reports here, so a
     /// `SIGWINCH` that does not actually change the size produces no
     /// [`Event::Resize`].
     ///
+    /// `flags` selects the input source behavior.
+    ///
     /// Returns any OS error from pipe creation, fd configuration, SIGWINCH
     /// subscription, or poller construction. It does not read from `input`.
-    pub fn new(input: I) -> io::Result<Self> {
-        let (pipe_rx, pipe_tx) = make_self_pipe()?;
+    pub fn new_with_flags(input: I, flags: SourceFlags) -> io::Result<Self> {
         let winch_sub = winch::subscribe()?;
-        let waker = Waker::from_unix_inner(Arc::new(UnixWakerInner {
-            tx: pipe_tx,
-            rx: pipe_rx,
-        }));
+        let waker = Waker::new()?;
 
         // Watch input, wake pipe, and winch pipe — in the fixed index
         // order the pump/ingest path relies on. Detect a tty input fd up
@@ -131,24 +142,45 @@ where
         // landed in this slot's pooled pipe just after it was leased to us.
         // `None` on a non-tty, where there is no size to compare against.
         let last_size = get_window_size(input.as_fd()).ok();
-        let fds: [PollFd; 3] = [input_fd, waker.pipe_read_fd(), winch_sub.read_fd()];
+        let fds: [PollFd; 3] = [input_fd, waker.poll_fd(), winch_sub.read_fd()];
         let poller = super::poll::new_poller(&fds, input_is_tty)?;
 
         Ok(Self {
             input,
+            flags,
             parser: Decoder::new(DecoderFlags::empty()),
             pending: Pending::with_capacity(DEFAULT_BUFFER_CAPACITY),
             esc_timeout: DEFAULT_ESC_TIMEOUT,
             esc_deadline: None,
             paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
+            string_idle_timeout: Some(DEFAULT_STRING_IDLE_TIMEOUT),
+            string_deadline: None,
+            #[cfg(feature = "async")]
+            deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
+            pending_error: None,
             waker,
             handle_resize: true,
             poller,
             winch_sub,
             last_size,
         })
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn waiter_poller(
+        &self,
+        notification: &Waker,
+    ) -> io::Result<Arc<dyn super::poll::Poller>> {
+        let input_fd = self.input.as_fd().as_raw_fd();
+        let fds = [
+            input_fd,
+            self.waker.poll_fd(),
+            self.winch_sub.read_fd(),
+            notification.poll_fd(),
+        ];
+        super::poll::new_poller(&fds, unsafe { libc::isatty(input_fd) } == 1)
     }
 
     /// Drain pending wake bytes after a [`Waker`] fired.
@@ -300,6 +332,19 @@ mod tests {
     }
 
     #[test]
+    fn source_flags_are_separate_from_decoder_flags() {
+        let (rx, _tx) = make_pipe();
+        assert_eq!(EventSource::new(rx).unwrap().flags(), SourceFlags::empty());
+        let (rx, _tx) = make_pipe();
+        let mut src = EventSource::new_with_flags(rx, SourceFlags::VT_INPUT).unwrap();
+        assert_eq!(src.flags(), SourceFlags::VT_INPUT);
+        src.set_decoder_flags(DecoderFlags::LF_IS_ENTER);
+        src.set_flags(SourceFlags::empty());
+        assert_eq!(src.flags(), SourceFlags::empty());
+        assert_eq!(src.decoder_flags(), DecoderFlags::LF_IS_ENTER);
+    }
+
+    #[test]
     fn reads_event_from_input_fd() {
         let (rx, tx) = make_pipe();
         let mut src = new_reader(rx);
@@ -413,10 +458,365 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_introducers_expire_as_alt_keys() {
+        use crate::event::{Key, KeyModifiers};
+
+        for flags in [DecoderFlags::empty(), DecoderFlags::CTRL_OPEN_BRACKET] {
+            for byte in b"[O]P_X^" {
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx)
+                    .with_esc_timeout(Duration::ZERO)
+                    .with_decoder_flags(flags);
+                write_bytes(&tx, &[0x1b, *byte]);
+                src.fill(Some(Duration::ZERO)).unwrap();
+                assert!(src.try_read().is_none());
+                src.fill(Some(Duration::ZERO)).unwrap();
+                assert_eq!(
+                    src.try_read(),
+                    Some(Event::KeyPress(
+                        Key::new(KeyCode::Char(*byte as char), KeyModifiers::ALT).normalized()
+                    )),
+                );
+                assert!(src.try_read().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn expired_input_is_delivered_before_eof() {
+        use crate::event::{Key, KeyModifiers};
+
+        for (input, expected) in [
+            (
+                b"\x1b[".as_slice(),
+                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+            ),
+            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+        ] {
+            for expired in [false, true] {
+                let (rx, tx) = make_pipe();
+                let timeout = if expired {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs(60)
+                };
+                let mut src = new_reader(rx)
+                    .with_esc_timeout(timeout)
+                    .with_string_idle_timeout(Some(timeout));
+                write_bytes(&tx, input);
+                assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+                drop(tx);
+
+                if expired {
+                    assert_eq!(src.read().unwrap(), expected);
+                }
+                assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+            }
+        }
+    }
+
+    #[test]
+    fn expired_input_is_delivered_before_other_read_errors() {
+        use crate::event::{Key, KeyModifiers};
+
+        struct ErrorAfterRead {
+            input: File,
+            fail: bool,
+        }
+
+        impl std::os::fd::AsFd for ErrorAfterRead {
+            fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+                self.input.as_fd()
+            }
+        }
+
+        impl std::io::Read for ErrorAfterRead {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.fail {
+                    return Err(io::Error::from_raw_os_error(libc::EIO));
+                }
+                self.fail = true;
+                self.input.read(buf)
+            }
+        }
+
+        for (input, expected) in [
+            (
+                b"\x1b[".as_slice(),
+                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+            ),
+            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+        ] {
+            let (rx, tx) = make_pipe();
+            let mut src = EventSource::new(ErrorAfterRead {
+                input: rx,
+                fail: false,
+            })
+            .unwrap()
+            .with_esc_timeout(Duration::ZERO)
+            .with_string_idle_timeout(Some(Duration::ZERO));
+            write_bytes(&tx, input);
+            assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+            write_byte(&tx, b'x');
+
+            assert_eq!(src.read().unwrap(), expected);
+            assert_eq!(src.read().unwrap_err().raw_os_error(), Some(libc::EIO));
+        }
+    }
+
+    #[test]
+    fn expired_introducers_preserve_following_keys() {
+        use crate::event::{Key, KeyModifiers};
+
+        for intro in b"[]OP_X^" {
+            for (next, key) in [
+                (
+                    b"\x1b[A".as_slice(),
+                    Key::new(KeyCode::Up, KeyModifiers::empty()),
+                ),
+                (
+                    b"\x1ba".as_slice(),
+                    Key::new(KeyCode::Char('a'), KeyModifiers::ALT),
+                ),
+            ] {
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx);
+                write_bytes(&tx, &[0x1b, *intro]);
+                src.fill(Some(Duration::ZERO)).unwrap();
+                src.esc_deadline = Some(Instant::now() - Duration::from_secs(1));
+                write_bytes(&tx, next);
+                assert_eq!(
+                    src.read().unwrap(),
+                    Event::KeyPress(
+                        Key::new(KeyCode::Char(*intro as char), KeyModifiers::ALT).normalized()
+                    ),
+                    "intro={intro:#x}, next={next:?}",
+                );
+                assert_eq!(src.read().unwrap(), Event::KeyPress(key.normalized()));
+                assert!(src.try_read().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn ready_continuations_refresh_sequence_deadlines() {
+        use crate::event::{Key, KeyModifiers};
+
+        for prefix in [b"\x1b[".as_slice(), b"\x9b"] {
+            for overdue in [false, true] {
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx);
+                write_bytes(&tx, prefix);
+                src.fill(Some(Duration::ZERO)).unwrap();
+                for fragment in [b"1".as_slice(), b";", b"2"] {
+                    let old = if overdue {
+                        Instant::now() - Duration::from_secs(1)
+                    } else {
+                        Instant::now() + Duration::from_secs(1)
+                    };
+                    src.esc_deadline = Some(old);
+                    write_bytes(&tx, fragment);
+                    src.fill(Some(Duration::ZERO)).unwrap();
+                    assert!(src.try_read().is_none(), "{fragment:?}");
+                    let new = src.esc_deadline.unwrap();
+                    assert!(if overdue { new > old } else { new < old });
+                }
+                write_bytes(&tx, b"A");
+                src.fill(Some(Duration::ZERO)).unwrap();
+                assert_eq!(
+                    src.try_read(),
+                    Some(Event::KeyPress(Key::new(KeyCode::Up, KeyModifiers::SHIFT))),
+                );
+                assert!(src.try_read().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn control_string_bodies_wait_across_reads_and_timeouts() {
+        for (introducer, c1, expected) in [
+            (b']', 0x9d, Event::UnknownOsc(b"qqqq".to_vec())),
+            (b'P', 0x90, Event::UnknownDcs(b"qqqq".to_vec())),
+            (b'_', 0x9f, Event::UnknownApc(b"qqqq".to_vec())),
+            (b'X', 0x98, Event::UnknownSos(b"qqqq".to_vec())),
+            (b'^', 0x9e, Event::UnknownPm(b"qqqq".to_vec())),
+        ] {
+            for prefix in [vec![0x1b, introducer], vec![c1]] {
+                for ending in [b"\x1b\\".as_slice(), b"\x9c"] {
+                    let (rx, tx) = make_pipe();
+                    let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+                    write_bytes(&tx, &[prefix.as_slice(), b"q"].concat());
+                    src.fill(Some(Duration::ZERO)).unwrap();
+                    src.fill(Some(Duration::ZERO)).unwrap();
+                    assert!(src.try_read().is_none(), "{prefix:?}");
+                    for fragment in [b"qqq".as_slice(), &ending[..ending.len() - 1]] {
+                        if !fragment.is_empty() {
+                            write_bytes(&tx, fragment);
+                        }
+                        src.fill(Some(Duration::ZERO)).unwrap();
+                        src.fill(Some(Duration::ZERO)).unwrap();
+                        assert!(src.try_read().is_none(), "{prefix:?}");
+                    }
+                    write_bytes(&tx, &ending[ending.len() - 1..]);
+                    assert_eq!(src.read().unwrap(), expected);
+                    write_bytes(&tx, b"\x1b");
+                    assert_eq!(
+                        src.read().unwrap(),
+                        Event::KeyPress(crate::event::Key::new(
+                            KeyCode::Escape,
+                            crate::event::KeyModifiers::empty()
+                        )),
+                    );
+                    assert!(src.try_read().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn osc_payloads_wait_for_terminator_after_escape_timeout() {
+        for prefix in [b"\x1b]".as_slice(), b"\x9d"] {
+            for ending in [b"\x1b\\".as_slice(), b"\x07", b"\x9c"] {
+                for (body, expected) in [
+                    (
+                        b"52;c;qqqq".as_slice(),
+                        Event::Clipboard {
+                            selection: crate::event::ClipboardSelection::System,
+                            content: "qqqq".into(),
+                        },
+                    ),
+                    (
+                        b"72;t=r:x=1;qqqq",
+                        Event::DragDrop {
+                            options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
+                            payload: b"qqqq".to_vec(),
+                        },
+                    ),
+                    (b"999;qqqq", Event::UnknownOsc(b"999;qqqq".to_vec())),
+                ] {
+                    let (rx, tx) = make_pipe();
+                    let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+                    write_bytes(&tx, &[prefix, body].concat());
+                    src.fill(Some(Duration::ZERO)).unwrap();
+                    src.fill(Some(Duration::ZERO)).unwrap();
+                    let events: Vec<_> = std::iter::from_fn(|| src.try_read()).collect();
+                    assert!(
+                        events.is_empty(),
+                        "partial OSC payload escaped as input: {events:?}"
+                    );
+                    write_bytes(&tx, ending);
+                    assert_eq!(src.read().unwrap(), expected);
+                    assert!(src.try_read().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn escape_sequence_interrupts_a_string_without_an_idle_timeout() {
+        use crate::event::{Key, KeyModifiers};
+
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx)
+            .with_esc_timeout(Duration::ZERO)
+            .with_string_idle_timeout(None);
+        write_bytes(&tx, b"\x1b]qqqq\x1b");
+        src.fill(Some(Duration::ZERO)).unwrap();
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert!(src.try_read().is_none());
+        write_bytes(&tx, b"[A");
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert_eq!(src.try_read(), Some(Event::Unknown(b"\x1b]qqqq".to_vec())));
+        assert_eq!(
+            src.try_read(),
+            Some(Event::KeyPress(Key::new(
+                KeyCode::Up,
+                KeyModifiers::empty()
+            ))),
+        );
+        assert!(src.try_read().is_none());
+        assert_eq!(src.effective_timeout(None), None);
+    }
+
+    #[test]
+    fn string_idle_timeout_reports_whole_sequence_and_recovers() {
+        use crate::event::{Key, KeyModifiers};
+
+        for (introducer, c1) in [
+            (b']', 0x9d),
+            (b'P', 0x90),
+            (b'_', 0x9f),
+            (b'X', 0x98),
+            (b'^', 0x9e),
+        ] {
+            for prefix in [vec![0x1b, introducer], vec![c1]] {
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx)
+                    .with_string_idle_timeout(Some(Duration::ZERO))
+                    .with_paste_idle_timeout(None);
+                let wire = [prefix.as_slice(), b"qqqq"].concat();
+                write_bytes(&tx, &wire);
+                src.fill(Some(Duration::ZERO)).unwrap();
+                assert!(src.try_read().is_none());
+                assert_eq!(src.effective_timeout(None), Some(Duration::ZERO));
+                assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+                assert_eq!(src.try_read(), Some(Event::Unknown(wire)));
+                assert!(src.try_read().is_none());
+                assert_eq!(src.effective_timeout(None), None);
+                write_byte(&tx, b'q');
+                assert_eq!(
+                    src.read().unwrap(),
+                    Event::KeyPress(Key::new(KeyCode::Char('q'), KeyModifiers::empty())),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ready_string_data_refreshes_idle_deadline() {
+        for overdue in [false, true] {
+            let (rx, tx) = make_pipe();
+            let mut src = new_reader(rx);
+            write_bytes(&tx, b"\x1b]q");
+            src.fill(Some(Duration::ZERO)).unwrap();
+            for _ in 0..3 {
+                let old = if overdue {
+                    Instant::now() - Duration::from_secs(1)
+                } else {
+                    Instant::now() + Duration::from_secs(60)
+                };
+                src.string_deadline = Some(old);
+                write_byte(&tx, b'q');
+                src.fill(Some(Duration::ZERO)).unwrap();
+                assert!(src.try_read().is_none());
+                let new = src.string_deadline.unwrap();
+                assert!(if overdue { new > old } else { new < old });
+            }
+            write_bytes(&tx, b"\x1b\\");
+            assert_eq!(src.read().unwrap(), Event::UnknownOsc(b"qqqq".to_vec()));
+            assert_eq!(src.effective_timeout(None), None);
+        }
+    }
+
+    #[test]
+    fn string_idle_timeout_can_be_disabled_during_a_string() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx).with_string_idle_timeout(Some(Duration::ZERO));
+        write_bytes(&tx, b"\x1b]q");
+        src.fill(Some(Duration::ZERO)).unwrap();
+        src.set_string_idle_timeout(None);
+        assert_eq!(src.effective_timeout(None), None);
+        assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+        write_bytes(&tx, b"\x1b\\");
+        assert_eq!(src.read().unwrap(), Event::UnknownOsc(b"q".to_vec()));
+    }
+
+    #[test]
     fn paste_idle_timeout_synthesizes_paste_end() {
         let (rx, tx) = make_pipe();
         let mut src = EventSource::new(rx)
             .unwrap()
+            .with_string_idle_timeout(Some(Duration::ZERO))
             .with_paste_idle_timeout(Some(Duration::from_millis(40)));
         write_bytes(&tx, b"\x1b[200~hello");
         // Drain PasteStart + initial chunk.

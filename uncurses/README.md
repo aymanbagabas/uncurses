@@ -77,11 +77,8 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`init()` sets up the session and sends no capability query, so discovery is
-yours to start: call `program.query_capabilities(&[])?` and keep reading events
-until the Primary DA reply arrives; ordinary `read_event` and `try_read_event`
-calls observe those replies automatically. `observe_event` is only needed when
-events come from outside the program, such as `event_stream()`.
+For capability discovery, see
+[Querying the terminal](https://uncurses.org/docs/guides/querying-the-terminal/).
 
 Only need output? A `Screen` stands alone over any `Write`, independent of any
 terminal session:
