@@ -67,10 +67,14 @@ def pump_until(condition):
     while not condition():
         remaining = deadline - time.monotonic()
         require(remaining > 0, f"Timed out:\n{visible()}\n{bytes(output[-2000:])!r}")
-        require(process.poll() is None, f"Example exited: {process.returncode}\n{bytes(output)!r}")
-        ready, _, _ = select.select([master], [], [], remaining)
+        ready, _, _ = select.select(
+            [master], [], [], remaining if process.poll() is None else 0
+        )
+        if not ready:
+            require(process.poll() is None, f"Example exited: {process.returncode}\n{bytes(output)!r}")
         require(ready, f"No output:\n{visible()}")
         data = os.read(master, 65536)
+        require(data, f"PTY closed:\n{visible()}")
         output.extend(data)
         # Feed only OSC 72 to the fake window. Other queries need a real
         # Kitty child and window callbacks, which this protocol test omits.
@@ -138,8 +142,9 @@ try:
     kitty.dnd_test_fake_drop_event(window, True, ["text/plain"], 5, 3, 2)
     pump_until(lambda: probe("drop_getting_data_for_mime") == "text/plain")
     reply(window, b"q")
-    pump_until(lambda: b"\x1b]72;t=o:x=2\x1b\\" in output)
+    # Leave cleanup output unread until exit to exercise buffered PTY output.
     require(process.wait(timeout=5) == 0, "Example failed")
+    pump_until(lambda: b"\x1b]72;t=o:x=2\x1b\\" in output)
     require(not probe("drop_wanted") and not probe("drag_can_offer"), "Registration leaked")
     require(probe("last_drop_action") == 0, "Pending drop was not canceled")
     restored = termios.tcgetattr(slave)
