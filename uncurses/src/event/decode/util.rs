@@ -93,19 +93,35 @@ pub(crate) fn is_c1_introducer(b: u8) -> bool {
 
 /// Search `data` for a string terminator and return `(payload_end, st_len)`.
 ///
-/// Recognises both the 7-bit form `ESC \` (2 bytes) and the 8-bit form
-/// `0x9C` (1 byte). BEL is intentionally NOT accepted here — it is a
-/// terminator for OSC sequences only and is handled separately in
-/// [`Decoder::parse_osc`].
-pub(super) fn find_string_terminator(data: &[u8]) -> Option<(usize, usize)> {
+/// Recognizes `ESC \` and standalone `0x9C`. Only OSC enables BEL.
+/// Complete UTF-8 characters stay in the payload; incomplete characters wait
+/// for more input. Invalid bytes advance one byte at a time.
+pub(super) fn find_string_terminator(data: &[u8], allow_bel: bool) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < data.len() {
         let b = data[i];
-        if b == 0x9c {
+        if b == 0x9c || (allow_bel && b == 0x07) {
             return Some((i, 1));
         }
         if b == 0x1b && i + 1 < data.len() && data[i + 1] == b'\\' {
             return Some((i, 2));
+        }
+        let width = match b {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 1,
+        };
+        if width > 1 {
+            let end = (i + width).min(data.len());
+            match std::str::from_utf8(&data[i..end]) {
+                Ok(_) => {
+                    i = end;
+                    continue;
+                }
+                Err(err) if err.error_len().is_none() => return None,
+                Err(_) => {}
+            }
         }
         i += 1;
     }

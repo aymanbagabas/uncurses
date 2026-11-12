@@ -26,7 +26,7 @@ impl Decoder {
         if buf.len() < prefix_len + 1 {
             return ParseResult::Incomplete;
         }
-        let (payload_end, st_len) = match find_string_terminator(&buf[prefix_len..]) {
+        let (payload_end, st_len) = match find_string_terminator(&buf[prefix_len..], false) {
             Some(p) => p,
             None => return ParseResult::Incomplete,
         };

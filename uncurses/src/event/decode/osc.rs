@@ -19,25 +19,19 @@
 //! digits are scaled down to 8-bit RGB.
 use super::Decoder;
 use super::result::ParseResult;
-use super::util::intro_prefix_len;
+use super::util::{find_string_terminator, intro_prefix_len};
 use crate::color::Color;
 use crate::event::{ClipboardSelection, Event, ProgramStatusCapabilities};
 
 impl Decoder {
     pub(super) fn parse_osc(&self, buf: &[u8]) -> ParseResult {
         let prefix_len = intro_prefix_len(buf[0]);
-        // Find a terminator: BEL (OSC-only), 8-bit ST (0x9C), or 7-bit ST (ESC \).
-        for i in prefix_len..buf.len() {
-            if buf[i] == 0x07 || buf[i] == 0x9c {
-                let payload = &buf[prefix_len..i];
-                return ParseResult::Event(finalize_osc(payload), i + 1);
-            }
-            if buf[i] == 0x1b && i + 1 < buf.len() && buf[i + 1] == b'\\' {
-                let payload = &buf[prefix_len..i];
-                return ParseResult::Event(finalize_osc(payload), i + 2);
-            }
-        }
-        ParseResult::Incomplete
+        let (payload_end, st_len) = match find_string_terminator(&buf[prefix_len..], true) {
+            Some(p) => p,
+            None => return ParseResult::Incomplete,
+        };
+        let payload = &buf[prefix_len..prefix_len + payload_end];
+        ParseResult::Event(finalize_osc(payload), prefix_len + payload_end + st_len)
     }
 }
 
