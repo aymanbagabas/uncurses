@@ -8,6 +8,7 @@ Kitty 0.47 or newer supports the protocol.
 ## Usage
 
 Probe support through `Program` before registration.
+Wait for `Event::PrimaryDeviceAttributes` in the normal event loop, then check support and enable the desired roles.
 Feed terminal events to `DragDrop::handle_event`.
 Handle the returned events in your application.
 

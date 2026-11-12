@@ -54,6 +54,7 @@ output = bytearray()
 replies = bytearray()
 protocol_pending = bytearray()
 replied_da = False
+hold_da_reply = True
 hold_start_reply = False
 held_replies = bytearray()
 
@@ -124,18 +125,28 @@ def pump_until(condition):
                 screen.test_parse_written_data()
         # A fake screen has no child writer for ordinary terminal queries.
         if not replied_da and b"\x1b[c" in output:
-            reply(window, b"\x1b[?62c")
+            if not hold_da_reply:
+                reply(window, b"\x1b[?62c")
             replied_da = True
 
 
 kitty.dnd_set_test_write_func(reply)
 try:
+    initial_drop_wanted = probe("drop_wanted")
+    pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
+    require(probe("drop_wanted") == initial_drop_wanted
+            and not probe("drag_can_offer") and b"\x1b]72;t=a" not in output,
+            f"Drag and drop was enabled before DA1:\n{bytes(output)!r}\n"
+            f"Replies: {bytes(replies)!r}")
+    hold_da_reply = False
+    reply(window, b"\x1b[?62c")
     pump_until(lambda: probe("drag_can_offer") and "Ready for text" in visible())
     kitty.dnd_test_set_mouse_pos(window, 5, 3, 40, 48)
     # GLFW uses 2 for copy; OSC 72 uses 1.
-    kitty.dnd_test_fake_drop_event(window, False, ["text/html", "text/plain"], 5, 3, 2)
+    formats = ["UTF8_STRING", "text/html", "text/plain"]
+    kitty.dnd_test_fake_drop_event(window, False, formats, 5, 3, 2)
     pump_until(lambda: probe("drop_action") == 2)
-    kitty.dnd_test_fake_drop_event(window, True, ["text/html", "text/plain"], 5, 3, 2)
+    kitty.dnd_test_fake_drop_event(window, True, formats, 5, 3, 2)
     pump_until(lambda: probe("drop_getting_data_for_mime") == "text/plain")
     incoming = b"Incoming text!\n" * 700
     kitty.dnd_test_fake_drop_data(window, "text/plain", incoming)
@@ -143,7 +154,8 @@ try:
     require(f"{len(incoming)} bytes; copy complete" in visible(), ascii(visible()))
     require(probe("last_drop_action") == 2, "The drop must complete as a copy")
 
-    kitty.dnd_test_start_drag_offer(window, 5, 3, 40, 48)
+    # Native pixel offsets can be negative even when the cell is in the window.
+    kitty.dnd_test_start_drag_offer(window, 5, 3, 40, -1)
     pump_until(lambda: b"\x1b]72;t=P:x=-1\x1b\\" in output)
     require(probe("drag_operations") == 1,
             f"Drag offer failed: {probe('drag_operations')}, {bytes(replies[-1000:])!r}")
@@ -200,6 +212,20 @@ try:
                 "The drag must be canceled before unregistration")
         check_restored()
         print("Verified cancellation before delivery of the native drag startup reply.")
+    output.clear()
+    replies.clear()
+    protocol_pending.clear()
+    replied_da = False
+    hold_da_reply = True
+    hold_start_reply = False
+    process = start_example()
+    pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
+    reply(window, b"q")
+    require(process.wait(timeout=5) == 0, "Example did not quit before DA1")
+    require(not probe("drop_wanted") and not probe("drag_can_offer"),
+            "Registration leaked before DA1")
+    check_restored()
+    print("Verified rendering and keyboard input before DA1.")
     print("Verified native drops, chunked offers, cancellation, registration cleanup, and PTY restoration.")
 finally:
     if process.poll() is None:

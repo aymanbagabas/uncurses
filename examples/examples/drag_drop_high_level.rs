@@ -5,7 +5,6 @@
 //! text out. Press q or Ctrl-C to quit.
 
 use std::io::{self, Cursor, Write};
-use std::time::{Duration, Instant};
 
 use uncurses::ansi::drag_drop::REQUEST_DRAG_DROP;
 use uncurses::buffer::SurfaceMut;
@@ -126,32 +125,11 @@ fn run(
     demo: &mut Demo,
 ) -> Result<(), Box<dyn std::error::Error>> {
     program.init()?;
-    program.query_capabilities(REQUEST_DRAG_DROP)?;
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-        if !program.poll_event(Some(remaining))? {
-            break;
-        }
-        if matches!(
-            program.read_event()?,
-            TerminalEvent::PrimaryDeviceAttributes(_)
-        ) {
-            break;
-        }
-    }
-    if !program.capabilities().drag_drop() {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "OSC 72 support was not confirmed",
-        )
-        .into());
-    }
     program.enter_alt_screen()?;
     program.hide_cursor()?;
-    controller.enable_drops(program.screen_mut(), &[MIME, "text/plain;charset=utf-8"])?;
-    controller.enable_drags(program.screen_mut())?;
-    program.screen_mut().flush()?;
-    demo.status = "Ready for text drops and drag gestures".into();
+    program.query_capabilities(REQUEST_DRAG_DROP)?;
+    let mut awaiting_capabilities = true;
+    demo.status = "Checking drag and drop support".into();
     let quit: [Key; 2] = ["q", "ctrl+c"].map(|key| key.parse().unwrap());
     loop {
         let screen = program.screen_mut();
@@ -168,6 +146,20 @@ fn run(
         match &event {
             TerminalEvent::KeyPress(key) if quit.contains(key) => return Ok(()),
             TerminalEvent::Resize(_) => program.autoresize()?,
+            TerminalEvent::PrimaryDeviceAttributes(_) if awaiting_capabilities => {
+                if !program.capabilities().drag_drop() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "OSC 72 support was not confirmed",
+                    )
+                    .into());
+                }
+                controller
+                    .enable_drops(program.screen_mut(), &[MIME, "text/plain;charset=utf-8"])?;
+                controller.enable_drags(program.screen_mut())?;
+                awaiting_capabilities = false;
+                demo.status = "Ready for text drops and drag gestures".into();
+            }
             _ => {}
         }
         for event in controller.handle_event(&event)? {

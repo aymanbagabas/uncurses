@@ -6,7 +6,6 @@
 //! short escaped preview. It performs no filesystem operations.
 
 use std::io::{self, Write};
-use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
@@ -232,29 +231,10 @@ impl Demo {
 
 fn run(program: &mut Program<Stdin, Stdout>, demo: &mut Demo) -> io::Result<()> {
     program.init()?;
-    program.query_capabilities(REQUEST_DRAG_DROP)?;
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-        if !program.poll_event(Some(remaining))? {
-            break;
-        }
-        if matches!(program.read_event()?, Event::PrimaryDeviceAttributes(_)) {
-            break;
-        }
-    }
-    if !program.capabilities().drag_drop() {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "OSC 72 support was not confirmed",
-        ));
-    }
     program.enter_alt_screen()?;
     program.hide_cursor()?;
-    demo.registered = true;
-    write_drag_drop(program.screen_mut(), &["t=a"], MIME.as_bytes())?;
-    write_drag_drop(program.screen_mut(), &["t=o", "x=1"], b"")?;
-    program.screen_mut().flush()?;
-    demo.status = "Ready for text drops and drag gestures".into();
+    program.query_capabilities(REQUEST_DRAG_DROP)?;
+    demo.status = "Checking drag and drop support".into();
     let quit: [Key; 2] = ["q", "ctrl+c"].map(|key| key.parse().unwrap());
     loop {
         let screen = program.screen_mut();
@@ -272,7 +252,20 @@ fn run(program: &mut Program<Stdin, Stdout>, demo: &mut Demo) -> io::Result<()> 
             Event::Resize(_) => {
                 program.autoresize()?;
             }
-            Event::DragDrop { options, payload } => {
+            Event::PrimaryDeviceAttributes(_) if !demo.registered => {
+                if !program.capabilities().drag_drop() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "OSC 72 support was not confirmed",
+                    ));
+                }
+                demo.registered = true;
+                write_drag_drop(program.screen_mut(), &["t=a"], MIME.as_bytes())?;
+                write_drag_drop(program.screen_mut(), &["t=o", "x=1"], b"")?;
+                program.screen_mut().flush()?;
+                demo.status = "Ready for text drops and drag gestures".into();
+            }
+            Event::DragDrop { options, payload } if demo.registered => {
                 demo.message(program.screen_mut(), options, payload)?;
                 program.screen_mut().flush()?;
             }

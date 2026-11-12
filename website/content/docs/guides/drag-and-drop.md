@@ -25,19 +25,20 @@ fn request_support(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> 
 }
 ```
 
-Read replies with a bounded wait, as shown in
-[Querying the terminal]({{< relref "querying-the-terminal.md" >}}).
+Process replies in the normal event loop.
 The trailing primary device attributes reply marks the end of the query batch.
 `program.capabilities().drag_drop()` becomes `true` after a support reply.
-Until then, support remains unconfirmed.
+On `Event::PrimaryDeviceAttributes`, check that value and enable the desired roles once.
+Continue handling keyboard input, resize events, and rendering while the query is pending.
+See [Querying the terminal]({{< relref "querying-the-terminal.md" >}}) for query details.
 
 Synchronous program reads observe replies automatically.
 For async reads, call `program.observe_event(&event)?`.
 
 ## Use the controller
 
-Create `DragDrop` after the capability probe confirms support.
-Register the roles your application needs:
+When the primary device attributes event confirms the end of the query batch,
+register the roles your application needs if support was confirmed:
 
 ```rust
 use std::io::Write;
