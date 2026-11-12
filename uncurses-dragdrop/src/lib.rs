@@ -213,8 +213,7 @@ impl DragDrop {
     fn clear_drop(&mut self) {
         self.dropped = None;
         self.request = None;
-        // Keep an incoming chunk chain until its terminator. Late data is
-        // drained without becoming a new message or contaminating another body.
+        self.discard_continuation(&["m", "M", "r", "R"]);
     }
 
     /// Prepare a drag in response to [`Event::DragRequested`].
@@ -391,6 +390,7 @@ impl DragDrop {
             DragPhase::Idle | DragPhase::Requested => {}
         }
         self.drag = Drag::default();
+        self.discard_continuation(&["o", "e", "E", "k"]);
         Ok(())
     }
 
@@ -404,6 +404,7 @@ impl DragDrop {
         if unregister.is_ok() {
             self.drops_enabled = false;
             self.hover = None;
+            self.clear_drop();
         }
         cancel.and(unregister)
     }
@@ -422,6 +423,7 @@ impl DragDrop {
         if unregister.is_ok() {
             self.drags_enabled = false;
             self.drag = Drag::default();
+            self.discard_continuation(&["o", "e", "E", "k"]);
         }
         cancel.and(unregister)
     }
@@ -441,6 +443,17 @@ impl DragDrop {
             return Err(Error::InvalidInput("operation is not permitted"));
         }
         Ok(())
+    }
+
+    fn discard_continuation(&mut self, kinds: &[&str]) {
+        if let Some(message) = &mut self.continuation
+            && message.value("t").is_some_and(|kind| kinds.contains(&kind))
+        {
+            // Drain the remaining frames without reviving an old exchange
+            // if the application registers the role again before they arrive.
+            message.discarded = true;
+            message.payload.clear();
+        }
     }
 
     fn check_output(&self) -> Result<(), Error> {
@@ -526,9 +539,18 @@ impl DragDrop {
         let mut message = self.continuation.take().unwrap_or_else(|| Message {
             metadata: metadata.clone(),
             payload: Vec::new(),
+            discarded: match value(metadata, "t") {
+                Some("m" | "M" | "r" | "R") => !self.drops_enabled,
+                Some("o" | "e" | "E" | "k") => !self.drags_enabled,
+                _ => false,
+            },
         });
-        message.payload.extend_from_slice(payload);
-        let events = if message.value("t") == Some("r") {
+        if !message.discarded {
+            message.payload.extend_from_slice(payload);
+        }
+        let events = if message.discarded {
+            Vec::new()
+        } else if message.value("t") == Some("r") {
             self.incoming_data(&mut message, !more, payload.is_empty())?
         } else if more {
             Vec::new()

@@ -16,6 +16,7 @@ pub(crate) const BASE64: GeneralPurpose = GeneralPurpose::new(
 pub(crate) struct Message {
     pub metadata: Vec<(String, String)>,
     pub payload: Vec<u8>,
+    pub discarded: bool,
 }
 
 impl Message {
@@ -36,12 +37,17 @@ impl Message {
             .map_err(|_| Error::Protocol(format!("negative {key} value")))
     }
 
+    pub fn signed(&self, key: &str) -> Result<i32, Error> {
+        i32::try_from(self.number(key)?)
+            .map_err(|_| Error::Protocol(format!("invalid signed {key} value")))
+    }
+
     pub fn position(&self) -> Result<Position, Error> {
         Ok(Position {
             column: self.unsigned("x")?,
             row: self.unsigned("y")?,
-            pixel_x: self.unsigned("X")?,
-            pixel_y: self.unsigned("Y")?,
+            pixel_x: self.signed("X")?,
+            pixel_y: self.signed("Y")?,
         })
     }
 
@@ -105,7 +111,7 @@ pub(crate) fn mime_list(payload: &[u8]) -> Result<Vec<String>, Error> {
 }
 
 pub(crate) fn valid_mime(mime: &str) -> bool {
-    mime.contains('/') && mime.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+    !mime.is_empty() && mime.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
 }
 
 pub(crate) fn join_mimes(mimes: &[&str], allow_empty: bool) -> Result<String, Error> {

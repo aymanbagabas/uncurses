@@ -589,3 +589,76 @@ fn close_after_start_request_cancels_before_unregistering() {
     assert_eq!(out, b"\x1b]72;t=E:y=-1\x1b\\\x1b]72;t=o:x=2\x1b\\");
     assert!(handle(&mut controller, "t=E", b"OK").is_empty());
 }
+
+#[test]
+fn positions_preserve_negative_pixel_offsets() {
+    for (kind, pixel_x, pixel_y) in [("m", 0, -1), ("M", -2, -1), ("o", 0, -1)] {
+        let mut controller = DragDrop::default();
+        let mut out = Vec::new();
+        controller.enable_drops(&mut out, &[MIME]).unwrap();
+        controller.enable_drags(&mut out).unwrap();
+        let events = handle(
+            &mut controller,
+            &format!("t={kind}:x=3:y=4:X={pixel_x}:Y={pixel_y}:o=1"),
+            if kind == "o" { b"" } else { MIME.as_bytes() },
+        );
+        let position = match &events[0] {
+            Event::Hover(offer) | Event::Drop(offer) => offer.position,
+            Event::DragRequested(position) => *position,
+            other => panic!("unexpected event {other:?}"),
+        };
+        assert_eq!(position.column, 3);
+        assert_eq!(position.row, 4);
+        assert_eq!(i64::from(position.pixel_x), i64::from(pixel_x));
+        assert_eq!(i64::from(position.pixel_y), i64::from(pixel_y));
+    }
+}
+
+#[test]
+fn native_format_aliases_preserve_request_indices() {
+    let mut controller = DragDrop::default();
+    let mut out = Vec::new();
+    controller.enable_drops(&mut out, &[MIME]).unwrap();
+    let events = handle(&mut controller, "t=m:o=1", b"UTF8_STRING text/plain");
+    assert!(matches!(
+        &events[0], Event::Hover(offer) if offer.mime_types == ["UTF8_STRING", MIME]
+    ));
+    controller
+        .accept(&mut out, &["UTF8_STRING"], Operation::Copy)
+        .unwrap();
+    handle(&mut controller, "t=M:o=1", b"UTF8_STRING text/plain");
+    out.clear();
+    controller.request(&mut out, MIME).unwrap();
+    assert_eq!(out, b"\x1b]72;t=r:x=2\x1b\\");
+}
+
+#[test]
+fn reregistration_does_not_revive_a_disabled_drop_chunk_chain() {
+    for initially_enabled in [false, true] {
+        let mut controller = DragDrop::default();
+        let mut out = Vec::new();
+        if initially_enabled {
+            controller.enable_drops(&mut out, &[MIME]).unwrap();
+        }
+        assert!(handle(&mut controller, "t=M:o=1:m=1", b"text/").is_empty());
+        controller.disable_drops(&mut out).unwrap();
+        controller.enable_drops(&mut out, &[MIME]).unwrap();
+        assert!(handle(&mut controller, "m=0", b"plain").is_empty());
+        assert!(controller.dropped.is_none());
+        assert!(matches!(
+            handle(&mut controller, "t=m:o=1", MIME.as_bytes())[0],
+            Event::Hover(_)
+        ));
+    }
+}
+
+#[test]
+fn disabling_drops_preserves_the_outgoing_message_chain() {
+    let mut controller = preparing();
+    let mut out = Vec::new();
+    controller.enable_drops(&mut out, &[MIME]).unwrap();
+    controller.start_drag(&mut out).unwrap();
+    assert!(handle(&mut controller, "t=E:m=1", b"O").is_empty());
+    controller.disable_drops(&mut out).unwrap();
+    assert_eq!(handle(&mut controller, "m=0", b"K"), [Event::DragStarted]);
+}

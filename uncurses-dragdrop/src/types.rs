@@ -36,10 +36,10 @@ pub struct Position {
     pub column: u32,
     /// Zero-based row.
     pub row: u32,
-    /// Horizontal pixel offset within the cell.
-    pub pixel_x: u32,
-    /// Vertical pixel offset within the cell.
-    pub pixel_y: u32,
+    /// Signed horizontal pixel offset within the cell, as reported by the terminal.
+    pub pixel_x: i32,
+    /// Signed vertical pixel offset within the cell, as reported by the terminal.
+    pub pixel_y: i32,
 }
 
 /// Content currently over the window or actually dropped into it.
@@ -131,6 +131,7 @@ pub enum Event {
     /// The user released the content. Data can now be requested.
     Drop(DropOffer),
     /// Decoded bytes of the current incoming request.
+    /// Boundaries can split UTF-8 characters and application records.
     Data(Vec<u8>),
     /// The current incoming body ended. Complete the drop or request more data.
     DataEnd,
