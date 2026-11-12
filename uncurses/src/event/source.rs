@@ -129,6 +129,8 @@ pub(super) const READY_WINCH: usize = 2;
 /// the decoder to resolve the buffered bytes as best-effort events. This is how
 /// a physical Escape key is distinguished from an Alt-prefixed key or CSI-style
 /// control sequence.
+/// Once an OSC command and its `;` delimiter arrive, its payload waits for the
+/// string terminator instead. Payload bytes must not become keyboard events.
 ///
 /// Applications that prefer more responsive Escape handling can lower this
 /// value with [`EventSource::with_esc_timeout`]; applications that need to
@@ -595,7 +597,7 @@ where
     /// deadline governs (and is reset on every drain, since drain is
     /// only called after fresh input arrived). Otherwise the ESC
     /// disambiguation deadline arms when a partial sequence sits at
-    /// the head of `pending`.
+    /// the head of `pending`, except inside a recognized OSC payload.
     pub(super) fn drain_parser(&mut self) {
         loop {
             let (n, ev) = self.parser.parse_one(self.pending.slice());
@@ -621,6 +623,20 @@ where
         // Not in paste: clear paste deadline; arm esc deadline if a
         // partial sequence sits at the head.
         self.paste_deadline = None;
+        let pending = self.pending.slice();
+        let osc = pending
+            .strip_prefix(b"\x1b]")
+            .or_else(|| pending.strip_prefix(b"\x9d"));
+        if osc.is_some_and(|body| {
+            body.iter()
+                .position(|&byte| byte == b';')
+                .is_some_and(|end| end > 0 && body[..end].iter().all(u8::is_ascii_digit))
+        }) {
+            // Framed data is unambiguous. Expiration would reinterpret payload
+            // bytes as keys, including application shortcuts such as q.
+            self.esc_deadline = None;
+            return;
+        }
         let Some(b0) = self.pending.first() else {
             self.esc_deadline = None;
             return;

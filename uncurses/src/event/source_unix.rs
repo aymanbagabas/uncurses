@@ -429,6 +429,45 @@ mod tests {
     }
 
     #[test]
+    fn osc_payloads_wait_for_terminator_after_escape_timeout() {
+        for prefix in [b"\x1b]".as_slice(), b"\x9d"] {
+            for ending in [b"\x1b\\".as_slice(), b"\x07", b"\x9c"] {
+                for (body, expected) in [
+                    (
+                        b"52;c;qqqq".as_slice(),
+                        Event::Clipboard {
+                            selection: crate::event::ClipboardSelection::System,
+                            content: "qqqq".into(),
+                        },
+                    ),
+                    (
+                        b"72;t=r:x=1;qqqq",
+                        Event::DragDrop {
+                            options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
+                            payload: b"qqqq".to_vec(),
+                        },
+                    ),
+                    (b"999;qqqq", Event::UnknownOsc(b"999;qqqq".to_vec())),
+                ] {
+                    let (rx, tx) = make_pipe();
+                    let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+                    write_bytes(&tx, &[prefix, body].concat());
+                    src.fill(Some(Duration::ZERO)).unwrap();
+                    src.fill(Some(Duration::ZERO)).unwrap();
+                    let events: Vec<_> = std::iter::from_fn(|| src.try_read()).collect();
+                    assert!(
+                        events.is_empty(),
+                        "partial OSC payload escaped as input: {events:?}"
+                    );
+                    write_bytes(&tx, ending);
+                    assert_eq!(src.read().unwrap(), expected);
+                    assert!(src.try_read().is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn paste_idle_timeout_synthesizes_paste_end() {
         let (rx, tx) = make_pipe();
         let mut src = EventSource::new(rx)
