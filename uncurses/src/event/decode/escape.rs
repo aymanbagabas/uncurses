@@ -44,6 +44,18 @@ impl Decoder {
             };
         }
 
+        if self.expired
+            && buf.len() == 2
+            && matches!(buf[1], b'[' | b'O' | b']' | b'P' | b'_' | b'X' | b'^')
+        {
+            return ParseResult::Event(
+                Event::KeyPress(
+                    Key::new(KeyCode::Char(buf[1] as char), KeyModifiers::ALT).normalized(),
+                ),
+                2,
+            );
+        }
+
         // `ESC` followed by a non-`ESC` byte: route to the appropriate
         // per-class decoder, fall back to `Alt+<printable>` for plain
         // ASCII, or treat the `ESC` as a standalone keypress.
@@ -105,7 +117,7 @@ impl Decoder {
                     };
                     ParseResult::Event(Event::KeyPress(key.normalized()), n + 1)
                 }
-                ParseResult::Event(_, _) | ParseResult::None(_) => {
+                ParseResult::Event(_, _) | ParseResult::None(_) | ParseResult::IncompleteString => {
                     ParseResult::Event(Event::KeyPress(self.lone_escape()), 1)
                 }
                 ParseResult::Incomplete => ParseResult::Incomplete,

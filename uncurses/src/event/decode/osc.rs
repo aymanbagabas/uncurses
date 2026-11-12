@@ -26,9 +26,12 @@ use crate::event::{ClipboardSelection, Event, ProgramStatusCapabilities};
 impl Decoder {
     pub(super) fn parse_osc(&self, buf: &[u8]) -> ParseResult {
         let prefix_len = intro_prefix_len(buf[0]);
+        if buf.len() == prefix_len {
+            return ParseResult::Incomplete;
+        }
         let (payload_end, st_len) = match find_string_terminator(&buf[prefix_len..], true) {
             Some(p) => p,
-            None => return ParseResult::Incomplete,
+            None => return ParseResult::IncompleteString,
         };
         let payload = &buf[prefix_len..prefix_len + payload_end];
         ParseResult::Event(finalize_osc(payload), prefix_len + payload_end + st_len)

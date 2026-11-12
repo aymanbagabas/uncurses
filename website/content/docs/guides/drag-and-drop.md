@@ -114,7 +114,11 @@ Keep only incomplete base64 groups between chunks.
 Stream large contents to the destination instead of collecting the whole transfer.
 
 The event source uses a bounded 8 KiB buffer for individual sequences.
-The existing source timeout and overflow rules apply to OSC messages.
+OSC bodies wait for their terminator across input reads and pauses.
+The separate string idle timeout defaults to two seconds and resets on input.
+On expiry, the source reports the incomplete sequence as `Event::Unknown`
+and resumes normal input decoding.
+The existing input buffer limit and overflow rules apply.
 
 ## Offer a drag
 

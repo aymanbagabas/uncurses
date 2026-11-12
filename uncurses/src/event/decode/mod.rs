@@ -39,6 +39,8 @@
 //! the deadline has expired, then calls [`Decoder::drain`] or the source-internal
 //! expiry path. During bracketed paste, timeout disambiguation is suspended and
 //! bytes are streamed as raw [`Event::PasteChunk`] payloads.
+//! Once bytes follow a string introducer, the decoder waits for its terminator
+//! and keeps the body out of Escape-timeout fallback.
 use super::key::{Key, KeyCode, KeyModifiers};
 mod apc;
 // Benches need the test harness `#[bench]` runs under; without it the
@@ -85,6 +87,7 @@ pub struct Decoder {
     backspace_mode: bool,
     /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
     pub(super) in_paste: bool,
+    waiting_for_terminator: bool,
     /// When `true`, raw mouse coordinates after `CSI M` are decoded as UTF-8
     /// codepoints (mode 1005) instead of single bytes.
     utf8_mouse: bool,
@@ -124,6 +127,7 @@ impl Decoder {
             flags,
             backspace_mode: false,
             in_paste: false,
+            waiting_for_terminator: false,
             utf8_mouse: false,
             expired: false,
             pending: RefCell::new(VecDeque::new()),
@@ -135,14 +139,14 @@ impl Decoder {
     /// Returns `true` when the parser holds an unfinished escape sequence
     /// (a buffered partial input that begins with `ESC` or with one of the
     /// 8-bit C1 sequence introducers, and is not part of an active bracketed
-    /// paste).
+    /// paste or a string body).
     ///
     /// Callers can use this to drive an escape-sequence timeout: if no
     /// further bytes arrive before the timeout elapses, call
     /// [`Decoder::drain`] to resolve the partial sequence.
     #[cfg(test)]
     pub(crate) fn has_pending(&self) -> bool {
-        if self.buf.is_empty() || self.in_paste {
+        if self.buf.is_empty() || self.in_paste || self.waiting_for_terminator {
             return false;
         }
         let b0 = self.buf[0];
@@ -154,11 +158,10 @@ impl Decoder {
     /// A leading `ESC` byte resolves to whichever key
     /// [`DecoderFlags::CTRL_OPEN_BRACKET`] says it is, the same answer the
     /// source's timeout path gives; the remaining bytes are then re-parsed
-    /// normally, so e.g. `ESC '['` becomes that keypress followed by a
-    /// `Char('[')` keypress.
+    /// normally. An ambiguous two-byte introducer such as `ESC '['` resolves
+    /// to an Alt-modified key.
     ///
-    /// While a bracketed paste is in progress this is a no-op — paste content
-    /// is allowed to span arbitrary time.
+    /// Bracketed paste and string bodies wait for their terminators.
     #[cfg(test)]
     pub(crate) fn drain(&mut self) -> Vec<Event> {
         if self.in_paste || self.buf.is_empty() {
@@ -225,6 +228,7 @@ impl Decoder {
     /// must apply its own timeout policy and synthesise a bare
     /// [`KeyCode::Escape`] when desired.
     pub fn parse_one(&mut self, data: &[u8]) -> (usize, Option<Event>) {
+        self.waiting_for_terminator = false;
         if let Some(evt) = self.pending.borrow_mut().pop_front() {
             return (0, Some(evt));
         }
@@ -254,6 +258,10 @@ impl Decoder {
                 }
             }
             ParseResult::Incomplete => (0, None),
+            ParseResult::IncompleteString => {
+                self.waiting_for_terminator = true;
+                (0, None)
+            }
             ParseResult::None(consumed) => {
                 if consumed > 0 {
                     (consumed, None)
@@ -270,6 +278,10 @@ impl Decoder {
     /// idle-timeout policy on top of `EventSource`.
     pub fn in_paste(&self) -> bool {
         self.in_paste
+    }
+
+    pub(crate) fn waiting_for_terminator(&self) -> bool {
+        self.waiting_for_terminator
     }
 
     /// Force-exit bracketed paste mode. If the decoder was inside a
@@ -353,6 +365,7 @@ impl Decoder {
         let mut events = Vec::new();
 
         loop {
+            self.waiting_for_terminator = false;
             // Drain any events queued by previously-parsed sequences (e.g. a
             // win32-input-mode key with a repeat count greater than one)
             // before consuming new bytes.
@@ -386,7 +399,7 @@ impl Decoder {
                             terminated = true;
                             break;
                         }
-                        ParseResult::Incomplete => {
+                        ParseResult::Incomplete | ParseResult::IncompleteString => {
                             hold_from = Some(scan);
                             break;
                         }
@@ -444,6 +457,10 @@ impl Decoder {
                         events.push(Event::Unknown(self.buf.clone()));
                         self.buf.clear();
                     }
+                    break;
+                }
+                ParseResult::IncompleteString => {
+                    self.waiting_for_terminator = true;
                     break;
                 }
                 ParseResult::None(consumed) => {
@@ -2695,6 +2712,21 @@ mod tests {
     }
 
     #[test]
+    fn escape_before_string_body_keeps_payload_out_of_timeout_fallback() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        assert_eq!(
+            p.parse(b"\x1b\x1b]q"),
+            vec![Event::KeyPress(Key::new(
+                KeyCode::Escape,
+                KeyModifiers::empty()
+            ))],
+        );
+        assert!(!p.has_pending());
+        assert!(p.drain().is_empty());
+        assert_eq!(p.parse(b"\x1b\\"), vec![Event::UnknownOsc(b"q".to_vec())]);
+    }
+
+    #[test]
     fn esc_esc_alone_waits_for_timeout_then_alt_esc() {
         let mut p = Decoder::new(DecoderFlags::empty());
         // Before expiry, holding ESC ESC produces no event.
@@ -2780,16 +2812,22 @@ mod tests {
         // And the one at the head of a sequence that never finished, which
         // resolves as its own key with the rest re-parsed after it.
         let mut p = Decoder::new(DecoderFlags::CTRL_OPEN_BRACKET);
-        assert!(p.parse(b"\x1b[").is_empty(), "a partial CSI waits");
+        assert!(p.parse(b"\x1b[1").is_empty(), "a partial CSI waits");
         let events = p.drain();
         match events.as_slice() {
-            [Event::KeyPress(esc), Event::KeyPress(bracket)] => {
+            [
+                Event::KeyPress(esc),
+                Event::KeyPress(bracket),
+                Event::KeyPress(digit),
+            ] => {
                 assert_eq!(esc.code, KeyCode::Char('['));
                 assert_eq!(esc.modifiers, KeyModifiers::CTRL);
                 assert_eq!(bracket.code, KeyCode::Char('['));
                 assert_eq!(bracket.modifiers, KeyModifiers::empty());
+                assert_eq!(digit.code, KeyCode::Char('1'));
+                assert_eq!(digit.modifiers, KeyModifiers::empty());
             }
-            other => panic!("expected [ctrl+[, '['], got {other:?}"),
+            other => panic!("expected [ctrl+[, '[', '1'], got {other:?}"),
         }
     }
 

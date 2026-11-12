@@ -6,6 +6,8 @@
 //! valid-but-incomplete prefix, and an unrecognized prefix that should be
 //! consumed. The outer [`Decoder`](super::Decoder) uses that distinction to
 //! buffer partial sequences without dropping bytes.
+//! `IncompleteString` also identifies bodies that must wait for a terminator
+//! instead of an Escape-key timeout.
 //!
 //! ## Gotchas
 //!
@@ -23,6 +25,9 @@ pub(super) enum ParseResult {
     /// sequence hasn't arrived yet. The driver should hand more bytes
     /// to the decoder before retrying.
     Incomplete,
+    /// A string body has started. Keep its bytes until the string terminator
+    /// arrives, even if an Escape-key timeout elapses.
+    IncompleteString,
     /// The prefix didn't match any known sequence; `usize` is the
     /// number of bytes that should be discarded (typically the single
     /// stray byte at the head of the buffer).

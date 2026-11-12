@@ -2,6 +2,8 @@
 //!
 //! Run with `cargo run --example legacy_keys`. Press F2 to switch legacy LF
 //! between Ctrl+J and Enter, then press Ctrl+J to see the decoded key.
+//! Press Alt+[ or Alt+] to see an ambiguous legacy prefix resolve after idle.
+//! An unterminated control string appears as unknown input after two seconds idle.
 //! Press q or Ctrl-C to quit.
 
 use std::io;
@@ -32,6 +34,12 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
     program
         .screen_mut()
         .insert_above("Legacy LF reads as Ctrl+J")?;
+    program
+        .screen_mut()
+        .insert_above("Try Alt+[ and Alt+]: legacy prefixes resolve after idle.")?;
+    program
+        .screen_mut()
+        .insert_above("Unterminated strings appear as unknown input after 2 seconds idle.")?;
     program.screen_mut().render()?;
 
     loop {
@@ -54,6 +62,11 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
                 program
                     .screen_mut()
                     .insert_above(&format!("Key: {key:?}"))?;
+            }
+            Event::Unknown(bytes) => {
+                program
+                    .screen_mut()
+                    .insert_above(&format!("Unknown input: {bytes:?}"))?;
             }
             Event::Resize(_) => program.autoresize()?,
             _ => {}
