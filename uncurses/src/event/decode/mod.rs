@@ -1194,6 +1194,66 @@ mod tests {
     }
 
     #[test]
+    fn string_controls_preserve_utf8() {
+        let text = ["\u{dc}\u{271c}\u{1f71c}\u{9c}".as_bytes(), b"\xff\xc3x\xe0"].concat();
+        let with_bel = [text.as_slice(), b"\x07"].concat();
+        for (intros, body, expected, allow_bel) in [
+            (
+                [b"\x1b]".as_slice(), b"\x9d"],
+                [b"999;", text.as_slice()].concat(),
+                Event::UnknownOsc([b"999;", text.as_slice()].concat()),
+                true,
+            ),
+            (
+                [b"\x1bP".as_slice(), b"\x90"],
+                [b"q", with_bel.as_slice()].concat(),
+                Event::UnknownDcs([b"q", with_bel.as_slice()].concat()),
+                false,
+            ),
+            (
+                [b"\x1b_".as_slice(), b"\x9f"],
+                [b"Gi=1;", with_bel.as_slice()].concat(),
+                Event::KittyGraphics {
+                    options: vec![("i".into(), "1".into())],
+                    payload: with_bel.clone(),
+                },
+                false,
+            ),
+            (
+                [b"\x1bX".as_slice(), b"\x98"],
+                with_bel.clone(),
+                Event::UnknownSos(with_bel.clone()),
+                false,
+            ),
+            (
+                [b"\x1b^".as_slice(), b"\x9e"],
+                with_bel.clone(),
+                Event::UnknownPm(with_bel.clone()),
+                false,
+            ),
+        ] {
+            for intro in intros {
+                for ending in [b"\x1b\\".as_slice(), b"\x9c", b"\x07"] {
+                    if ending == b"\x07" && !allow_bel {
+                        continue;
+                    }
+                    let wire = [intro, &body, ending].concat();
+                    for split in 0..=wire.len() {
+                        let mut decoder = Decoder::default();
+                        let mut events = decoder.parse(&wire[..split]);
+                        events.extend(decoder.parse(&wire[split..]));
+                        assert_eq!(
+                            events,
+                            std::slice::from_ref(&expected),
+                            "wire={wire:?}, split={split}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_parse_dcs_xtgettcap() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         // DCS 1+r 626f3d31 ST -> bo=1 (hex-encoded)
