@@ -75,7 +75,7 @@ impl Demo {
         options: Vec<(String, String)>,
         payload: Vec<u8>,
     ) -> io::Result<()> {
-        if value(&options, "t") == Some("q") {
+        if matches!(value(&options, "t"), Some("q" | "Q")) {
             return Ok(());
         }
         let more = value(&options, "m") == Some("1");
@@ -324,6 +324,7 @@ mod tests {
             b"YW",
         );
         message(&mut demo, &mut out, &[("t", "q")], b"");
+        message(&mut demo, &mut out, &[("t", "Q")], b"");
         message(&mut demo, &mut out, &[("m", "0")], b"JjZA");
         assert_eq!(demo.preview, "abcd");
         assert!(demo.dropping);
