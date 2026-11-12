@@ -103,7 +103,7 @@ bitflags! {
 
 /// Default read buffer capacity. This is the hard cap on any single
 /// sequence; the backing buffer is allocated once at construction.
-pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 4096;
+pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 8192;
 
 /// Readiness slots the platform poller reports, in fixed index order.
 /// Unix watches `[input, wake, winch]`; Windows watches `[input, wake]`
@@ -571,6 +571,22 @@ where
         self.queue.push_back(ev);
     }
 
+    /// Feed serialized console bytes in bounded batches.
+    #[cfg(any(windows, test))]
+    pub(super) fn feed_bytes(&mut self, mut bytes: &[u8]) {
+        #[cfg(debug_assertions)]
+        crate::trace::tee_input(bytes);
+        while !bytes.is_empty() {
+            if self.pending.is_full() {
+                self.pending.clear();
+                self.esc_deadline = None;
+            }
+            let count = self.pending.append(bytes);
+            bytes = &bytes[count..];
+            self.drain_parser();
+        }
+    }
+
     /// Drive the parser as far as it will go against the bytes
     /// currently in `pending`, pushing extracted events onto the
     /// queue and arming the appropriate timeout deadline.
@@ -711,5 +727,55 @@ where
             (None, i) => i,
             (t, None) => t,
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod drag_drop_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn drag_drop_maximum_payload_fits_the_source_buffer() {
+        let (reader, mut writer) = io::pipe().unwrap();
+        let mut source = EventSource::new(reader).unwrap();
+        let payload = vec![b'A'; 4096];
+        let body = [b"72;t=r:x=1;".as_slice(), &payload].concat();
+        writer.write_all(b"\x1b]").unwrap();
+        writer.write_all(&body).unwrap();
+        writer.write_all(b"\x1b\\").unwrap();
+        assert_eq!(
+            source.read().unwrap(),
+            Event::DragDrop {
+                options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
+                payload,
+            }
+        );
+    }
+
+    #[test]
+    fn drag_drop_batches_and_split_terminators_preserve_events() {
+        let (reader, _writer) = io::pipe().unwrap();
+        let mut source = EventSource::new(reader).unwrap();
+        let payload = vec![b'A'; 4096];
+        let frame = [b"\x1b]72;t=r:x=1;".as_slice(), &payload, b"\x1b\\"].concat();
+        source.feed_bytes(&frame[..frame.len() - 1]);
+        assert!(source.queue.is_empty());
+        source.feed_bytes(&[b"\\".as_slice(), &frame, &frame, b"\x1b]72;t=q\x1b\\z"].concat());
+        for _ in 0..3 {
+            assert_eq!(
+                source.queue.pop_front(),
+                Some(Event::DragDrop {
+                    options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
+                    payload: payload.clone(),
+                })
+            );
+        }
+        assert!(matches!(
+            source.queue.pop_front(),
+            Some(Event::DragDrop { .. })
+        ));
+        assert!(matches!(source.queue.pop_front(), Some(Event::KeyPress(_))));
+        assert!(source.queue.is_empty());
     }
 }

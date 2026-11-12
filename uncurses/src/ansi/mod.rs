@@ -60,6 +60,7 @@ pub mod cost;
 pub mod ctrl;
 pub mod cursor;
 pub mod cwd;
+pub mod drag_drop;
 pub mod finalterm;
 pub mod focus;
 pub mod graphics;

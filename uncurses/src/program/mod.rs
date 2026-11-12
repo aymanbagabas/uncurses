@@ -764,6 +764,13 @@ where
             // A graphics response is the Kitty protocol's own support test:
             // terminals that do not implement it stay silent.
             Event::KittyGraphics { .. } => self.caps.kitty_graphics = true,
+            Event::DragDrop { ref options, .. }
+                if options
+                    .iter()
+                    .any(|(key, value)| key == "t" && value == "q") =>
+            {
+                self.caps.drag_drop = true;
+            }
             Event::ProgramStatus(ref report) => {
                 self.caps.program_status = Some(report.clone());
             }

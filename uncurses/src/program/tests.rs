@@ -2655,6 +2655,37 @@ fn a_kitty_graphics_response_records_graphics_support() {
 }
 
 #[test]
+#[cfg(unix)]
+fn drag_drop_support_is_observed_without_consuming_the_reply() {
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let terminal = Terminal::from_parts(&reader, TestOut(&buf), crate::terminal::EnvList::new());
+    let mut program = Program::with_render(terminal, (10, 3)).unwrap();
+    assert!(!program.capabilities().drag_drop());
+    writer.write_all(b"\x1b]72;t=m;x\x1b\\").unwrap();
+    assert!(matches!(
+        program.read_event().unwrap(),
+        Event::DragDrop { .. }
+    ));
+    assert!(!program.capabilities().drag_drop());
+    program
+        .query_capabilities(crate::ansi::drag_drop::REQUEST_DRAG_DROP)
+        .unwrap();
+    assert!(buf.borrow().ends_with(b"\x1b]72;t=q\x1b\\\x1b[c"));
+    writer
+        .write_all(b"\x1b]72;t=q:i=42;future=1\x1b\\")
+        .unwrap();
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::DragDrop {
+            options: vec![("t".into(), "q".into()), ("i".into(), "42".into())],
+            payload: b"future=1".to_vec(),
+        }
+    );
+    assert!(program.capabilities().drag_drop());
+}
+
+#[test]
 fn a_reported_cell_size_beats_dividing_the_window_sizes() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (10, 3));
