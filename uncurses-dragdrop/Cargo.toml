@@ -1,0 +1,21 @@
+[package]
+name = "uncurses-dragdrop"
+description = "Event-driven Kitty drag and drop for uncurses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["terminal", "tui", "kitty", "drag-and-drop"]
+categories = ["command-line-interface"]
+
+[features]
+default = ["unicode-rs"]
+unicode-rs = ["uncurses/unicode-rs"]
+icu = ["uncurses/icu"]
+
+[dependencies]
+uncurses = { path = "../uncurses", version = "0.0.7", default-features = false }
+base64 = "0.22"
+bitflags.workspace = true

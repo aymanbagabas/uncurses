@@ -3,6 +3,10 @@
 Run after cargo build -p examples --example drag_drop:
 kitty +runpy 'import runpy; runpy.run_path("examples/tests/drag_drop_native.py", run_name="__main__")'
 
+For the controller example, build drag_drop_high_level instead and run the
+same command with UNCURSES_DND_HIGH_LEVEL=1.
+The controller run also checks exit before delivery of the drag startup reply.
+
 Desktop gestures are simulated through Kitty's test hooks. This checks native
 protocol state and PTY input, not operating-system drag visuals.
 """
@@ -28,24 +32,37 @@ def require(condition, message):
 
 
 kitty.set_options(defaults)
+high_level = os.environ.get("UNCURSES_DND_HIGH_LEVEL") == "1"
+example = "drag_drop_high_level" if high_level else "drag_drop"
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 640, 384))
 original = termios.tcgetattr(slave)
-process = subprocess.Popen(
-    ["target/debug/examples/drag_drop"],
-    stdin=slave, stdout=slave, stderr=slave,
-    env={**os.environ, "TERM": "xterm-kitty"},
-)
+
+
+def start_example():
+    return subprocess.Popen(
+        [f"target/debug/examples/{example}"],
+        stdin=slave, stdout=slave, stderr=slave,
+        env={**os.environ, "TERM": "xterm-kitty"},
+    )
+
+
+process = start_example()
 os_window, window = kitty.dnd_test_create_fake_window()
 screen = kitty.Screen(None, 24, 80, 100, 8, 16, window)
 output = bytearray()
 replies = bytearray()
 protocol_pending = bytearray()
 replied_da = False
+hold_start_reply = False
+held_replies = bytearray()
 
 
 def reply(_window, data):
     replies.extend(data)
+    if hold_start_reply and data.startswith(b"\x1b]72;t=E"):
+        held_replies.extend(data)
+        return
     view = memoryview(data)
     while view:
         view = view[os.write(master, view):]
@@ -61,6 +78,14 @@ def visible():
     return text.decode("utf-8", "replace")
 
 
+def check_restored():
+    restored = termios.tcgetattr(slave)
+    # PENDIN is kernel-maintained pending-input state, not an application mode.
+    original[3] &= ~termios.PENDIN
+    restored[3] &= ~termios.PENDIN
+    require(restored == original, f"Terminal attributes changed: {original!r} -> {restored!r}")
+
+
 def pump_until(condition):
     global replied_da
     deadline = time.monotonic() + 5
@@ -71,7 +96,9 @@ def pump_until(condition):
             [master], [], [], remaining if process.poll() is None else 0
         )
         if not ready:
-            require(process.poll() is None, f"Example exited: {process.returncode}\n{bytes(output)!r}")
+            require(process.poll() is None,
+                    f"Example exited: {process.returncode}\n{bytes(output)!r}\n"
+                    f"Replies: {bytes(replies[-2000:])!r}")
         require(ready, f"No output:\n{visible()}")
         data = os.read(master, 65536)
         require(data, f"PTY closed:\n{visible()}")
@@ -120,7 +147,10 @@ try:
     pump_until(lambda: b"\x1b]72;t=P:x=-1\x1b\\" in output)
     require(probe("drag_operations") == 1,
             f"Drag offer failed: {probe('drag_operations')}, {bytes(replies[-1000:])!r}")
-    require(probe("drag_thumbnail_size") == 16 * 16 * 4, "Thumbnail dimensions changed")
+    if high_level:
+        require(probe("drag_thumbnail_size") == 0, "Unexpected thumbnail")
+    else:
+        require(probe("drag_thumbnail_size") == 16 * 16 * 4, "Thumbnail dimensions changed")
     kitty.dnd_test_force_drag_dropped(window)
     try:
         kitty.dnd_test_drag_get_data(window, "text/plain")
@@ -147,11 +177,29 @@ try:
     pump_until(lambda: b"\x1b]72;t=o:x=2\x1b\\" in output)
     require(not probe("drop_wanted") and not probe("drag_can_offer"), "Registration leaked")
     require(probe("last_drop_action") == 0, "Pending drop was not canceled")
-    restored = termios.tcgetattr(slave)
-    # PENDIN is kernel-maintained pending-input state, not an application mode.
-    original[3] &= ~termios.PENDIN
-    restored[3] &= ~termios.PENDIN
-    require(restored == original, f"Terminal attributes changed: {original!r} -> {restored!r}")
+    check_restored()
+    if high_level:
+        output.clear()
+        replies.clear()
+        protocol_pending.clear()
+        replied_da = False
+        hold_start_reply = True
+        process = start_example()
+        pump_until(lambda: probe("drag_can_offer") and "Ready for text" in visible())
+        kitty.dnd_test_start_drag_offer(window, 5, 3, 40, 48)
+        pump_until(lambda: b"\x1b]72;t=P:x=-1\x1b\\" in output)
+        require(b";OK\x1b\\" in held_replies, "Native drag startup reply was not withheld")
+        require(probe("drag_operations") == 1, "Native drag did not start")
+        reply(window, b"q")
+        require(process.wait(timeout=5) == 0, "Example failed during drag startup")
+        pump_until(lambda: not probe("drop_wanted") and not probe("drag_can_offer"))
+        cancel = b"\x1b]72;t=E:y=-1\x1b\\"
+        unregister = b"\x1b]72;t=o:x=2\x1b\\"
+        require(cancel in output, "Pending drag startup was not canceled")
+        require(output.index(cancel) < output.index(unregister),
+                "The drag must be canceled before unregistration")
+        check_restored()
+        print("Verified cancellation before delivery of the native drag startup reply.")
     print("Verified native drops, chunked offers, cancellation, registration cleanup, and PTY restoration.")
 finally:
     if process.poll() is None:

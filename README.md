@@ -101,6 +101,7 @@ assert!(!screen.writer().is_empty());
 Per-crate guides and more examples:
 
 - [`uncurses`](uncurses/): program, screen, rendering, input, and the event loop.
+- [`uncurses-dragdrop`](uncurses-dragdrop/): typed drag and drop with streamed data.
 - [`uncurses-ratatui`](uncurses-ratatui/): drive ratatui widgets through uncurses.
 
 ### Examples
@@ -110,6 +111,10 @@ A curated few, each `cargo run -p examples --example <name>`:
 **`drag_drop`**
 
 Receive text drops and offer text drags with a thumbnail in Kitty.
+
+**[`drag_drop_high_level`](examples/examples/drag_drop_high_level.rs)**
+
+Receive text copies and offer text drags through the `uncurses-dragdrop` controller.
 
 **`tour`**
 
@@ -163,6 +168,7 @@ For more, browse the [`examples/`](examples/examples) directory.
 ## Crates
 
 - [`uncurses`](uncurses/): the core library: screen, renderer, input, ANSI, terminal.
+- [`uncurses-dragdrop`](uncurses-dragdrop/): a typed controller for Kitty drag and drop.
 - [`uncurses-ratatui`](uncurses-ratatui/): a [ratatui](https://ratatui.rs) `Backend` built on the `Program` facade.
 
 ## Install

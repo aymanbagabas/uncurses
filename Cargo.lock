@@ -348,6 +348,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uncurses",
+ "uncurses-dragdrop",
  "uncurses-ratatui",
 ]
 
@@ -1660,6 +1661,15 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "windows-sys",
+]
+
+[[package]]
+name = "uncurses-dragdrop"
+version = "0.0.7"
+dependencies = [
+ "base64",
+ "bitflags 2.11.1",
+ "uncurses",
 ]
 
 [[package]]
