@@ -4,8 +4,9 @@
 //! wire-ready payload, manage registration, and complete or cancel transfers.
 //! Unregister before a shell handoff or exit.
 //!
-//! Binary payloads use standard base64. Each encoded payload is at most 4096
-//! bytes. For a chunked message, use `m=1` until the last chunk (`m=0`).
+//! Binary payloads use standard base64. Callers split encoded payloads to meet
+//! the protocol's 4096-byte limit. For a chunked message, use `m=1` until the
+//! last chunk (`m=0`).
 //! Only the first chunk must contain the full metadata. An empty data response
 //! with `m=0` ends a transfer; a nonempty response with `m=0` only ends a message.
 //!
@@ -24,11 +25,10 @@ pub const REQUEST_DRAG_DROP: &[u8] = b"\x1b]72;t=q\x1b\\";
 ///
 /// Options are joined with `:`. The payload separator is omitted when the
 /// payload is empty. Options and payload are written verbatim: callers must
-/// supply escape-safe metadata and encode binary data as base64.
+/// supply escape-safe metadata, encode binary data as base64, and split payloads
+/// to meet the protocol's 4096-byte limit.
 ///
-/// A payload larger than 4096 bytes returns [`io::ErrorKind::InvalidInput`]
-/// before output. This function performs framing, not transfer assembly or
-/// base64 conversion. It propagates output errors.
+/// This function frames the supplied bytes and propagates output errors.
 ///
 /// ```
 /// use uncurses::ansi::drag_drop::write_drag_drop;
@@ -39,12 +39,6 @@ pub const REQUEST_DRAG_DROP: &[u8] = b"\x1b]72;t=q\x1b\\";
 /// # Ok::<(), std::io::Error>(())
 /// ```
 pub fn write_drag_drop<W: Write>(w: &mut W, options: &[&str], payload: &[u8]) -> io::Result<()> {
-    if payload.len() > 4096 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "OSC 72 payload exceeds 4096 bytes",
-        ));
-    }
     w.write_all(b"\x1b]72;")?;
     for (index, option) in options.iter().enumerate() {
         if index != 0 {
@@ -79,17 +73,14 @@ mod tests {
     }
 
     #[test]
-    fn payload_limit_and_output_errors() {
+    fn verbatim_payload_and_output_errors() {
         let mut bytes = Vec::new();
-        write_drag_drop(&mut bytes, &["t=p", "x=0"], &[b'A'; 4096]).unwrap();
-        let before = bytes.clone();
+        let payload = [b'A'; 4097];
+        write_drag_drop(&mut bytes, &["t=p", "x=0"], &payload).unwrap();
         assert_eq!(
-            write_drag_drop(&mut bytes, &["t=p"], &[b'A'; 4097])
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::InvalidInput
+            bytes,
+            [b"\x1b]72;t=p:x=0;".as_slice(), &payload, b"\x1b\\"].concat()
         );
-        assert_eq!(bytes, before);
         assert_eq!(
             write_drag_drop(&mut [].as_mut_slice(), &["t=q"], b"")
                 .unwrap_err()

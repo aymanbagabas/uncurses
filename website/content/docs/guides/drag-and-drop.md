@@ -38,7 +38,7 @@ For async reads, call `program.observe_event(&event)?`.
 
 `write_drag_drop` writes one message without flushing.
 Options use `:` separators. Supply wire-ready payloads, including base64 for binary data.
-The writer rejects payloads larger than 4,096 bytes before output.
+Chunk encoded payloads to keep each message within the protocol's 4,096-byte limit.
 
 ```rust
 use std::io::{self, Write};
