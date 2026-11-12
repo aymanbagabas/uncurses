@@ -34,6 +34,10 @@ See the
 [program status guide]({{< relref "program-status.md" >}}) for reports,
 feature detection, and record lifetime.
 
+Pass `ansi::drag_drop::REQUEST_DRAG_DROP` as extra bytes to query Kitty drag
+and drop support. Read the result through `capabilities().drag_drop()`.
+See [Drag and drop]({{< relref "drag-and-drop.md" >}}) for the protocol workflow.
+
 Call `program.query_capabilities(&extra_bytes)?` when you want uncurses to ask
 for its standard capability set. It writes the default queries, then your extra
 bytes, then Primary Device Attributes last, and flushes. The Primary DA reply is

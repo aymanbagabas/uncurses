@@ -401,6 +401,17 @@ pub enum Event {
         /// Response payload bytes.
         payload: Vec<u8>,
     },
+    /// One Kitty OSC 72 drag and drop message.
+    ///
+    /// Metadata and payload are wire values. Callers retain the first chunk's
+    /// metadata, decode base64 when applicable, and manage transfer lifetime.
+    /// An empty final data response ends a transfer; `m=0` alone ends a message.
+    DragDrop {
+        /// Colon-separated metadata pairs, including extension and routing keys.
+        options: Vec<(String, String)>,
+        /// Unchanged payload bytes, including base64 for binary data.
+        payload: Vec<u8>,
+    },
 
     // -- Group / unknown -----------------------------------------------------
     /// Multiple events emitted by a single sequence.

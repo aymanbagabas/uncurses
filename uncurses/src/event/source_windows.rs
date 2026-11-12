@@ -211,21 +211,6 @@ where
         Ok(())
     }
 
-    fn feed_bytes(&mut self, bytes: &[u8]) {
-        #[cfg(debug_assertions)]
-        crate::trace::tee_input(bytes);
-        let cap = self.pending.capacity();
-        if self.pending.len().saturating_add(bytes.len()) > cap {
-            self.pending.clear();
-            self.esc_deadline = None;
-            if bytes.len() > cap {
-                return;
-            }
-        }
-        self.pending.append(bytes);
-        self.drain_parser();
-    }
-
     fn serialize_record(&mut self, record: &INPUT_RECORD, buf: &mut Vec<u8>) {
         match record.EventType as u32 {
             KEY_EVENT => {

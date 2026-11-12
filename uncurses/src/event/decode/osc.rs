@@ -56,9 +56,36 @@ fn recognize(payload: &[u8]) -> Option<Event> {
         11 => parse_osc_color(rest).map(Event::BackgroundColor),
         12 => parse_osc_color(rest).map(Event::CursorColor),
         52 => parse_osc_clipboard(rest),
+        72 => parse_drag_drop(rest),
         7501 => parse_osc_program_status(rest),
         _ => None,
     }
+}
+
+fn parse_drag_drop(rest: &[u8]) -> Option<Event> {
+    let (metadata, payload) = match rest.iter().position(|&b| b == b';') {
+        Some(index) => (&rest[..index], &rest[index + 1..]),
+        None => (rest, &[][..]),
+    };
+    if payload.len() > 4096 {
+        return None;
+    }
+    let metadata = std::str::from_utf8(metadata).ok()?;
+    let options = metadata
+        .split(':')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            if key.is_empty() || pair.chars().any(char::is_control) {
+                return None;
+            }
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Event::DragDrop {
+        options,
+        payload: payload.to_vec(),
+    })
 }
 
 fn parse_osc_program_status(s: &[u8]) -> Option<Event> {
@@ -153,6 +180,62 @@ fn parse_osc_clipboard(s: &[u8]) -> Option<Event> {
 mod tests {
     use super::*;
     use crate::event::DecoderFlags;
+
+    #[test]
+    fn drag_drop_messages_preserve_metadata_and_wire_payloads() {
+        for intro in [b"\x1b]".as_slice(), b"\x9d"] {
+            for ending in [b"\x07".as_slice(), b"\x1b\\", b"\x9c"] {
+                for (body, options, payload) in [
+                    (b"t=q".as_slice(), vec![("t", "q")], b"".as_slice()),
+                    (
+                        b"t=r:x=1:i=42:m=1:future=value;YW",
+                        vec![
+                            ("t", "r"),
+                            ("x", "1"),
+                            ("i", "42"),
+                            ("m", "1"),
+                            ("future", "value"),
+                        ],
+                        b"YW",
+                    ),
+                    (b"m=0;Jj", vec![("m", "0")], b"Jj"),
+                    (b"t=r:x=1;", vec![("t", "r"), ("x", "1")], b""),
+                    (b"t=R;EIO:unavailable", vec![("t", "R")], b"EIO:unavailable"),
+                ] {
+                    let wire = [intro, b"72;", body, ending].concat();
+                    let expected = Event::DragDrop {
+                        options: options
+                            .iter()
+                            .map(|(k, v)| ((*k).into(), (*v).into()))
+                            .collect(),
+                        payload: payload.to_vec(),
+                    };
+                    for split in 0..=wire.len() {
+                        let mut decoder = Decoder::default();
+                        let mut events = decoder.parse(&wire[..split]);
+                        events.extend(decoder.parse(&wire[split..]));
+                        assert_eq!(events, std::slice::from_ref(&expected), "split {split}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn drag_drop_invalid_messages_remain_unknown() {
+        for body in [b"72;t".as_slice(), b"72;=r;", b"72;t=\xff;", b"72;t=r\n;"] {
+            let mut decoder = Decoder::default();
+            assert_eq!(
+                decoder.parse(&[b"\x1b]".as_slice(), body, b"\x1b\\"].concat()),
+                [Event::UnknownOsc(body.to_vec())]
+            );
+        }
+        let body = [b"72;t=r;".as_slice(), &[b'A'; 4097]].concat();
+        assert_eq!(
+            Decoder::default().parse(&[b"\x1b]".as_slice(), &body, b"\x1b\\"].concat()),
+            [Event::UnknownOsc(body)]
+        );
+    }
 
     #[test]
     fn program_status_support_reply_accepts_extensions_and_split_input() {
