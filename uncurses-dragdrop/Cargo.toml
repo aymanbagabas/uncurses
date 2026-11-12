@@ -19,3 +19,12 @@ icu = ["uncurses/icu"]
 uncurses = { path = "../uncurses", version = "0.0.7", default-features = false }
 base64 = "0.22"
 bitflags.workspace = true
+hmac = "0.12"
+sha2 = "0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6.1"
+windows-sys = { workspace = true, features = ["Win32_System_Registry"] }

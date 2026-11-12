@@ -57,6 +57,34 @@ Default options leave `routing_id` and `machine_id` unset.
 Configure these identities only when your environment needs them.
 See the [API reference](/api/uncurses_dragdrop/) for their formats and routing rules.
 
+### Identify the application host
+
+Use `MachineId::current()` to derive the identity from the operating system:
+
+```rust
+use uncurses_dragdrop::{DragDrop, DragDropOptions, MachineId};
+
+fn controller_with_identity() -> std::io::Result<DragDrop> {
+    Ok(DragDrop::new(DragDropOptions {
+        machine_id: Some(MachineId::current()?),
+        ..DragDropOptions::default()
+    }))
+}
+```
+
+The method applies the protocol's HMAC-SHA256 hash before it returns the identity.
+Over SSH, it identifies the remote application host.
+The terminal compares this identity with its own to determine whether files require remote transfer.
+The method returns an error if the operating system's source is unavailable or empty.
+See [`MachineId::current`](/api/uncurses_dragdrop/struct.MachineId.html#method.current) for each platform's source.
+The controller reports remote file requests and responses with `Error::UnsupportedRemoteFiles`.
+
+Print the identity with:
+
+```sh
+cargo run -p examples --example machine_id
+```
+
 ### Receive text copies
 
 Pass terminal events to `handle_event`.

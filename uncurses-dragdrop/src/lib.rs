@@ -24,6 +24,7 @@
 //! # Ok::<(), uncurses_dragdrop::Error>(())
 //! ```
 
+mod machine_id;
 mod protocol;
 mod types;
 

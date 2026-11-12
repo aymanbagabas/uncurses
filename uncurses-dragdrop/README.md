@@ -42,6 +42,10 @@ Attempt terminal restoration even when controller cleanup fails.
 
 The application owns file access, previews, and copy or move policy.
 Default options leave the machine and routing identities unset.
+Use `MachineId::current()?` to derive the application host's identity.
+Assign the result to `DragDropOptions::machine_id` as `Some(id)`.
+The method reads the operating system's machine ID and applies the protocol's HMAC-SHA256 hash.
+It returns an error if the source is unavailable or empty.
 Remote file requests and remote URI responses return `Error::UnsupportedRemoteFiles`.
 Cancel the exchange and clean up when this error occurs.
 
@@ -60,6 +64,12 @@ cargo run -p examples --example drag_drop_high_level
 Drop text onto the window, or use Kitty's drag gesture to copy text out.
 Press q or Ctrl-C to exit.
 The [raw example](../examples/examples/drag_drop.rs) demonstrates protocol messages and a thumbnail.
+
+Print the current host's hashed identity with the [machine ID example](../examples/examples/machine_id.rs):
+
+```sh
+cargo run -p examples --example machine_id
+```
 
 ## Install
 
