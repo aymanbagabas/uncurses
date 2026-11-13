@@ -132,6 +132,41 @@ fn decoder_flags_delegate_without_changing_options_or_terminal_modes() {
 
 #[cfg(unix)]
 #[test]
+fn shared_source_string_timeout_can_change_during_a_reply() {
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    let source = program.event_source();
+    source
+        .lock()
+        .unwrap()
+        .set_string_idle_timeout(Some(Duration::ZERO));
+    writer.write_all(b"\x1b]52;c;qqqq").unwrap();
+    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+
+    source.lock().unwrap().set_string_idle_timeout(None);
+    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+    source
+        .lock()
+        .unwrap()
+        .set_string_idle_timeout(Some(Duration::ZERO));
+    assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::Unknown(b"\x1b]52;c;qqqq".to_vec()),
+    );
+    writer.write_all(b"\x1b]52;c;Zm9v\x1b\\").unwrap();
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::Clipboard {
+            selection: crate::event::ClipboardSelection::System,
+            content: "Zm9v".into(),
+        },
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn runtime_decoder_flags_apply_only_to_future_decoding() {
     use crate::event::KeyCode;
 

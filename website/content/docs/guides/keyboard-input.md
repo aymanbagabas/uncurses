@@ -146,7 +146,11 @@ Escape timeout. The existing input buffer limit still applies.
 The default is two seconds, and each read resets the deadline.
 On expiry, the source emits the incomplete sequence as `Event::Unknown`,
 including its introducer, then resumes normal input decoding.
-Pass `None` to wait indefinitely for the terminator.
+Pass `None` to disable the idle timeout.
+
+For an existing `Program`, configure its shared source with
+`program.event_source().lock().unwrap().set_string_idle_timeout(timeout)`.
+The setter restarts the idle wait if a string is in progress.
 
 A new Escape sequence also interrupts an unfinished string.
 The source reports the interrupted bytes as `Event::Unknown`, then decodes
@@ -163,6 +167,7 @@ distinct key encodings.
 
 Run `cargo run --example legacy_keys` and press Alt+[ or Alt+].
 The example displays the decoded key and its Alt modifier.
+Press F3 to enable or disable the string idle timeout.
 
 ## Presses, repeats, and releases
 

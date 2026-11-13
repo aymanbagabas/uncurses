@@ -4,9 +4,11 @@
 //! between Ctrl+J and Enter, then press Ctrl+J to see the decoded key.
 //! Press Alt+[ or Alt+] to see an ambiguous legacy prefix resolve after idle.
 //! An unterminated control string appears as unknown input after two seconds idle.
+//! Press F3 to enable or disable that timeout through the shared event source.
 //! Press q or Ctrl-C to quit.
 
 use std::io;
+use std::time::Duration;
 
 use uncurses::buffer::Bounded;
 use uncurses::event::{DecoderFlags, Event};
@@ -24,11 +26,12 @@ fn main() -> io::Result<()> {
 }
 
 fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
+    let mut string_timeout_enabled = true;
     let cols = program.screen().width();
     program.screen_mut().resize((cols, 1));
     program.screen_mut().set_str(
         (0, 0),
-        "F2: toggle LF; Ctrl+J: test it; q/Ctrl-C: quit.",
+        "F2: LF mapping; F3: string timeout; Ctrl+J: test LF; q/Ctrl-C: quit.",
         Style::default(),
     );
     program
@@ -57,6 +60,23 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
                 program
                     .screen_mut()
                     .insert_above(&format!("Legacy LF reads as {meaning}"))?;
+            }
+            Event::KeyPress(key) if key.matches("f3") => {
+                string_timeout_enabled = !string_timeout_enabled;
+                let timeout = string_timeout_enabled.then_some(Duration::from_secs(2));
+                program
+                    .event_source()
+                    .lock()
+                    .unwrap()
+                    .set_string_idle_timeout(timeout);
+                let setting = if string_timeout_enabled {
+                    "2 seconds"
+                } else {
+                    "disabled"
+                };
+                program
+                    .screen_mut()
+                    .insert_above(&format!("String idle timeout: {setting}"))?;
             }
             Event::KeyPress(key) => {
                 program

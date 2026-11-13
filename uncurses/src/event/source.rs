@@ -432,16 +432,25 @@ where
     /// Later bytes count as new input, even if they belong to the expired string.
     ///
     /// The default is `Some(`[`DEFAULT_STRING_IDLE_TIMEOUT`]`)`.
-    /// Passing `None` waits indefinitely for the terminator.
+    /// Passing `None` disables the idle timeout.
     /// Changing this setting during a string restarts its idle wait.
     pub fn with_string_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.set_string_idle_timeout(timeout);
+        self
+    }
+
+    /// Set the string idle timeout on an existing source.
+    ///
+    /// This applies the same policy as
+    /// [`with_string_idle_timeout`](Self::with_string_idle_timeout).
+    /// Changing it during a string restarts the idle wait; `None` disables it.
+    pub fn set_string_idle_timeout(&mut self, timeout: Option<Duration>) {
         self.string_idle_timeout = timeout;
         self.string_deadline = if self.parser.waiting_for_terminator() {
             timeout.map(|t| Instant::now() + t)
         } else {
             None
         };
-        self
     }
 
     /// Return a cloneable [`Waker`] bound to this source.

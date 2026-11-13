@@ -662,7 +662,7 @@ mod tests {
         let mut src = new_reader(rx).with_string_idle_timeout(Some(Duration::ZERO));
         write_bytes(&tx, b"\x1b]q");
         src.fill(Some(Duration::ZERO)).unwrap();
-        src = src.with_string_idle_timeout(None);
+        src.set_string_idle_timeout(None);
         assert_eq!(src.effective_timeout(None), None);
         assert!(!src.poll(Some(Duration::ZERO)).unwrap());
         write_bytes(&tx, b"\x1b\\");
