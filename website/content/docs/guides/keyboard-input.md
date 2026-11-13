@@ -132,6 +132,8 @@ Press Ctrl+J after each switch to see the decoded key.
 Legacy terminals use the same bytes for some Alt keys and control sequence
 prefixes. For example, `\x1b[` can mean Alt+[ or the start of CSI.
 An idle two-byte introducer resolves to one Alt-modified key.
+A new Escape sequence also resolves a bare two-byte introducer as an Alt key,
+then decodes normally. For example, `\x1b[\x1ba` yields Alt+[ followed by Alt+a.
 A lone Escape resolves when its own deadline expires, before another read.
 
 `EventSource::with_esc_timeout` sets the wait, with a default of 50 milliseconds.
@@ -153,10 +155,11 @@ For an existing `Program`, configure its shared source with
 The setter restarts the idle wait if a string is in progress.
 An active async stream also refreshes its wait to use the new deadline.
 
-A new Escape sequence also interrupts an unfinished string.
-The source reports the interrupted bytes as `Event::Unknown`, then decodes
-the new sequence. A trailing Escape waits for another byte, so a split
-`ESC \` still terminates the string normally.
+A new Escape sequence also interrupts an unfinished CSI or control string.
+If the sequence already has a body, the source reports the interrupted bytes
+as `Event::Unknown`, then decodes the new sequence.
+A trailing Escape in a string waits for another byte, so a split
+`ESC \` still terminates the string normally, including an empty string.
 
 Bytes that arrive after recovery count as new input.
 Late payload bytes can therefore become keys after the idle timeout.

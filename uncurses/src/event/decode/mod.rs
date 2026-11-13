@@ -1212,6 +1212,60 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_prefixes_preserve_following_keys_across_splits() {
+        let mut prefixes: Vec<_> = b"[]OP_X^"
+            .iter()
+            .map(|&intro| {
+                (
+                    vec![0x1b, intro],
+                    Event::KeyPress(
+                        Key::new(KeyCode::Char(intro as char), KeyModifiers::ALT).normalized(),
+                    ),
+                )
+            })
+            .collect();
+        for prefix in [b"\x1b[1;".as_slice(), b"\x9b1;"] {
+            prefixes.push((prefix.to_vec(), Event::Unknown(prefix.to_vec())));
+        }
+        for (prefix, recovered) in prefixes {
+            for next in [b"\x1b[A".as_slice(), b"\x1ba", b"\x1b\x1b[A"] {
+                let mut expected = vec![recovered.clone()];
+                expected.extend(Decoder::default().parse(next));
+                let wire = [prefix.as_slice(), next].concat();
+                for split in 0..=wire.len() {
+                    let mut decoder = Decoder::default();
+                    let mut events = decoder.parse(&wire[..split]);
+                    events.extend(decoder.parse(&wire[split..]));
+                    assert_eq!(events, expected, "wire={wire:?}, split={split}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_strings_preserve_split_terminators() {
+        for (intro, expected) in [
+            (b']', Event::UnknownOsc(Vec::new())),
+            (b'P', Event::UnknownDcs(Vec::new())),
+            (b'_', Event::UnknownApc(Vec::new())),
+            (b'X', Event::UnknownSos(Vec::new())),
+            (b'^', Event::UnknownPm(Vec::new())),
+        ] {
+            let wire = [0x1b, intro, 0x1b, b'\\'];
+            for split in 0..=wire.len() {
+                let mut decoder = Decoder::default();
+                let mut events = decoder.parse(&wire[..split]);
+                events.extend(decoder.parse(&wire[split..]));
+                assert_eq!(
+                    events,
+                    vec![expected.clone()],
+                    "wire={wire:?}, split={split}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn interrupted_strings_preserve_following_escape_sequences() {
         for intro in [
             b"\x1b]".as_slice(),

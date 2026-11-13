@@ -92,6 +92,17 @@ pub(crate) fn is_c1_introducer(b: u8) -> bool {
     matches!(b, 0x8f | 0x90 | 0x98 | 0x9b | 0x9d | 0x9e | 0x9f)
 }
 
+/// Recover a sequence prefix without consuming the next Escape.
+/// A bare two-byte introducer also represents an Alt-modified key.
+pub(super) fn sequence_fallback(data: &[u8], consumed: usize) -> ParseResult {
+    let event = if data[0] == 0x1b && consumed == 2 {
+        Event::KeyPress(Key::new(KeyCode::Char(data[1] as char), KeyModifiers::ALT).normalized())
+    } else {
+        Event::Unknown(data[..consumed].to_vec())
+    };
+    ParseResult::Event(event, consumed)
+}
+
 /// Frame a control string and pass its complete body to `finalize`.
 ///
 /// Recognizes `ESC \` and standalone `0x9C`. Only OSC enables BEL.
@@ -117,7 +128,7 @@ pub(super) fn parse_string(
         if b == 0x1b {
             return match data.get(i + 1) {
                 Some(b'\\') => ParseResult::Event(finalize(&data[prefix_len..i]), i + 2),
-                Some(_) => ParseResult::Event(Event::Unknown(data[..i].to_vec()), i),
+                Some(_) => sequence_fallback(data, i),
                 None => ParseResult::IncompleteString,
             };
         }

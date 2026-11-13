@@ -29,6 +29,7 @@
 //! emitted as a standalone Escape key and the rest of the buffer is retried.
 use super::Decoder;
 use super::result::ParseResult;
+use super::util::sequence_fallback;
 use crate::event::{Event, Key, KeyCode, KeyModifiers};
 
 impl Decoder {
@@ -48,12 +49,7 @@ impl Decoder {
             && buf.len() == 2
             && matches!(buf[1], b'[' | b'O' | b']' | b'P' | b'_' | b'X' | b'^')
         {
-            return ParseResult::Event(
-                Event::KeyPress(
-                    Key::new(KeyCode::Char(buf[1] as char), KeyModifiers::ALT).normalized(),
-                ),
-                2,
-            );
+            return sequence_fallback(buf, 2);
         }
 
         // `ESC` followed by a non-`ESC` byte: route to the appropriate

@@ -565,6 +565,40 @@ mod tests {
     }
 
     #[test]
+    fn expired_introducers_preserve_following_keys() {
+        use crate::event::{Key, KeyModifiers};
+
+        for intro in b"[]OP_X^" {
+            for (next, key) in [
+                (
+                    b"\x1b[A".as_slice(),
+                    Key::new(KeyCode::Up, KeyModifiers::empty()),
+                ),
+                (
+                    b"\x1ba".as_slice(),
+                    Key::new(KeyCode::Char('a'), KeyModifiers::ALT),
+                ),
+            ] {
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx);
+                write_bytes(&tx, &[0x1b, *intro]);
+                src.fill(Some(Duration::ZERO)).unwrap();
+                src.esc_deadline = Some(Instant::now() - Duration::from_secs(1));
+                write_bytes(&tx, next);
+                assert_eq!(
+                    src.read().unwrap(),
+                    Event::KeyPress(
+                        Key::new(KeyCode::Char(*intro as char), KeyModifiers::ALT).normalized()
+                    ),
+                    "intro={intro:#x}, next={next:?}",
+                );
+                assert_eq!(src.read().unwrap(), Event::KeyPress(key.normalized()));
+                assert!(src.try_read().is_none());
+            }
+        }
+    }
+
+    #[test]
     fn ready_continuations_refresh_sequence_deadlines() {
         use crate::event::{Key, KeyModifiers};
 
