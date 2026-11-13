@@ -465,7 +465,7 @@ fn assert_replay_matches_labelled(
     for rows in frames {
         for (y, row) in rows.iter().enumerate() {
             for (x, ch) in row.chars().enumerate() {
-                buf.set_cell((x as u16, y as u16), &Cell::narrow(ch.to_string()));
+                buf.set_cell((x as u16, y as u16), &Cell::new(ch.to_string(), 1));
             }
         }
         let mut out = Vec::new();
