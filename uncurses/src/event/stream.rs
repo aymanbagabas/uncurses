@@ -438,6 +438,35 @@ mod tests {
     }
 
     #[test]
+    fn expired_input_is_delivered_before_eof() {
+        use crate::event::{Key, KeyModifiers};
+
+        for (input, expected) in [
+            (
+                b"\x1b[".as_slice(),
+                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+            ),
+            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+        ] {
+            let (rx, tx) = make_pipe();
+            let mut source = EventSource::new(rx)
+                .unwrap()
+                .with_esc_timeout(Duration::ZERO)
+                .with_string_idle_timeout(Some(Duration::ZERO));
+            source.feed_bytes(input);
+            let mut stream = source.into_stream();
+            drop(tx);
+
+            assert_eq!(next_blocking(&mut stream).unwrap().unwrap(), expected);
+            assert_eq!(
+                next_blocking(&mut stream).unwrap().unwrap_err().kind(),
+                io::ErrorKind::UnexpectedEof
+            );
+            assert!(next_blocking(&mut stream).is_none());
+        }
+    }
+
+    #[test]
     fn sync_reads_coexist_with_a_live_stream() {
         // A second handle to the same shared source can read synchronously
         // while a stream is live; neither path deadlocks.

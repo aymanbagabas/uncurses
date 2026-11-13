@@ -166,6 +166,7 @@ where
             #[cfg(feature = "async")]
             deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
+            pending_error: None,
             waker,
             handle_resize: true,
             poller,

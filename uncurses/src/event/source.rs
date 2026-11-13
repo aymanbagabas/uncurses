@@ -276,6 +276,7 @@ where
     #[cfg(feature = "async")]
     pub(super) deadline_wakers: Vec<std::sync::Weak<super::stream::DeadlineWake>>,
     pub(super) queue: VecDeque<Event>,
+    pub(super) pending_error: Option<io::Error>,
     pub(super) waker: Waker,
     /// Whether the source delivers [`Event::Resize`] from the
     /// out-of-band kernel resize notification (`SIGWINCH` on Unix).
@@ -614,6 +615,9 @@ where
         if !self.queue.is_empty() {
             return Ok(());
         }
+        if let Some(error) = self.pending_error.take() {
+            return Err(error);
+        }
 
         let effective = self.effective_timeout(timeout);
         let mut ready = [false; READY_SLOTS];
@@ -630,7 +634,14 @@ where
         }
 
         if ready[READY_INPUT] {
-            self.drain_input()?;
+            if let Err(error) = self.drain_input() {
+                // A failed read supplies no continuation bytes.
+                self.expire_elapsed();
+                if self.queue.is_empty() {
+                    return Err(error);
+                }
+                self.pending_error = Some(error);
+            }
         } else {
             // The wait was tightened to a decode deadline that has elapsed.
             self.expire_elapsed();

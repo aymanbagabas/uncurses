@@ -159,6 +159,7 @@ where
             #[cfg(feature = "async")]
             deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
+            pending_error: None,
             waker,
             handle_resize: true,
             poller,
@@ -478,6 +479,88 @@ mod tests {
                 );
                 assert!(src.try_read().is_none());
             }
+        }
+    }
+
+    #[test]
+    fn expired_input_is_delivered_before_eof() {
+        use crate::event::{Key, KeyModifiers};
+
+        for (input, expected) in [
+            (
+                b"\x1b[".as_slice(),
+                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+            ),
+            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+        ] {
+            for expired in [false, true] {
+                let (rx, tx) = make_pipe();
+                let timeout = if expired {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs(60)
+                };
+                let mut src = new_reader(rx)
+                    .with_esc_timeout(timeout)
+                    .with_string_idle_timeout(Some(timeout));
+                write_bytes(&tx, input);
+                assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+                drop(tx);
+
+                if expired {
+                    assert_eq!(src.read().unwrap(), expected);
+                }
+                assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+            }
+        }
+    }
+
+    #[test]
+    fn expired_input_is_delivered_before_other_read_errors() {
+        use crate::event::{Key, KeyModifiers};
+
+        struct ErrorAfterRead {
+            input: File,
+            fail: bool,
+        }
+
+        impl std::os::fd::AsFd for ErrorAfterRead {
+            fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+                self.input.as_fd()
+            }
+        }
+
+        impl std::io::Read for ErrorAfterRead {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.fail {
+                    return Err(io::Error::from_raw_os_error(libc::EIO));
+                }
+                self.fail = true;
+                self.input.read(buf)
+            }
+        }
+
+        for (input, expected) in [
+            (
+                b"\x1b[".as_slice(),
+                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+            ),
+            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+        ] {
+            let (rx, tx) = make_pipe();
+            let mut src = EventSource::new(ErrorAfterRead {
+                input: rx,
+                fail: false,
+            })
+            .unwrap()
+            .with_esc_timeout(Duration::ZERO)
+            .with_string_idle_timeout(Some(Duration::ZERO));
+            write_bytes(&tx, input);
+            assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+            write_byte(&tx, b'x');
+
+            assert_eq!(src.read().unwrap(), expected);
+            assert_eq!(src.read().unwrap_err().raw_os_error(), Some(libc::EIO));
         }
     }
 
