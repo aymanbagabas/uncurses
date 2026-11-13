@@ -148,6 +148,11 @@ On expiry, the source emits the incomplete sequence as `Event::Unknown`,
 including its introducer, then resumes normal input decoding.
 Pass `None` to wait indefinitely for the terminator.
 
+A new Escape sequence also interrupts an unfinished string.
+The source reports the interrupted bytes as `Event::Unknown`, then decodes
+the new sequence. A trailing Escape waits for another byte, so a split
+`ESC \` still terminates the string normally.
+
 Bytes that arrive after recovery count as new input.
 Late payload bytes can therefore become keys after the idle timeout.
 Choose a longer timeout for transports with long pauses.

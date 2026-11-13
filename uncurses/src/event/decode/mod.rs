@@ -39,8 +39,9 @@
 //! the deadline has expired, then calls [`Decoder::drain`] or the source-internal
 //! expiry path. During bracketed paste, timeout disambiguation is suspended and
 //! bytes are streamed as raw [`Event::PasteChunk`] payloads.
-//! Once bytes follow a string introducer, the decoder waits for its terminator
-//! and keeps the body out of Escape-timeout fallback.
+//! Once bytes follow a string introducer, the decoder keeps the body out of
+//! Escape-timeout fallback. Another Escape sequence interrupts it, while a
+//! trailing Escape waits for the next byte to distinguish a terminator.
 use super::key::{Key, KeyCode, KeyModifiers};
 mod apc;
 // Benches need the test harness `#[bench]` runs under; without it the
@@ -1207,6 +1208,41 @@ mod tests {
                 assert!(k.modifiers.contains(KeyModifiers::CTRL));
             }
             _ => panic!("expected key"),
+        }
+    }
+
+    #[test]
+    fn interrupted_strings_preserve_following_escape_sequences() {
+        for intro in [
+            b"\x1b]".as_slice(),
+            b"\x9d",
+            b"\x1bP",
+            b"\x90",
+            b"\x1b_",
+            b"\x9f",
+            b"\x1bX",
+            b"\x98",
+            b"\x1b^",
+            b"\x9e",
+        ] {
+            let interrupted = [intro, b"qqqq"].concat();
+            for next in [
+                b"\x1b[A".as_slice(),
+                b"\x1b[<0;10;20M",
+                b"\x1ba",
+                b"\x1b]52;c;Zm9v\x1b\\",
+            ] {
+                let mut expected = vec![Event::Unknown(interrupted.clone())];
+                expected.extend(Decoder::default().parse(next));
+                assert_eq!(expected.len(), 2);
+                let wire = [interrupted.as_slice(), next].concat();
+                for split in 0..=wire.len() {
+                    let mut decoder = Decoder::default();
+                    let mut events = decoder.parse(&wire[..split]);
+                    events.extend(decoder.parse(&wire[split..]));
+                    assert_eq!(events, expected, "wire={wire:?}, split={split}");
+                }
+            }
         }
     }
 

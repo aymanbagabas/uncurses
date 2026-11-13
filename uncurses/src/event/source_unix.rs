@@ -571,6 +571,32 @@ mod tests {
     }
 
     #[test]
+    fn escape_sequence_interrupts_a_string_without_an_idle_timeout() {
+        use crate::event::{Key, KeyModifiers};
+
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx)
+            .with_esc_timeout(Duration::ZERO)
+            .with_string_idle_timeout(None);
+        write_bytes(&tx, b"\x1b]qqqq\x1b");
+        src.fill(Some(Duration::ZERO)).unwrap();
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert!(src.try_read().is_none());
+        write_bytes(&tx, b"[A");
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert_eq!(src.try_read(), Some(Event::Unknown(b"\x1b]qqqq".to_vec())));
+        assert_eq!(
+            src.try_read(),
+            Some(Event::KeyPress(Key::new(
+                KeyCode::Up,
+                KeyModifiers::empty()
+            ))),
+        );
+        assert!(src.try_read().is_none());
+        assert_eq!(src.effective_timeout(None), None);
+    }
+
+    #[test]
     fn string_idle_timeout_reports_whole_sequence_and_recovers() {
         use crate::event::{Key, KeyModifiers};
 

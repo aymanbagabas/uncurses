@@ -432,8 +432,8 @@ pub enum Event {
     /// Unknown APC sequence (payload).
     UnknownApc(Vec<u8>),
     /// Catch-all for unrecognized byte sequences, including incomplete control
-    /// strings whose idle deadline expired. Expired strings include their
-    /// introducer bytes.
+    /// strings whose idle deadline expired or which another Escape sequence
+    /// interrupted. These incomplete strings include their introducer bytes.
     Unknown(Vec<u8>),
 }
 

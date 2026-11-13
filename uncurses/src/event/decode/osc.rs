@@ -19,22 +19,13 @@
 //! digits are scaled down to 8-bit RGB.
 use super::Decoder;
 use super::result::ParseResult;
-use super::util::{find_string_terminator, intro_prefix_len};
+use super::util::parse_string;
 use crate::color::Color;
 use crate::event::{ClipboardSelection, Event, ProgramStatusCapabilities};
 
 impl Decoder {
     pub(super) fn parse_osc(&self, buf: &[u8]) -> ParseResult {
-        let prefix_len = intro_prefix_len(buf[0]);
-        if buf.len() == prefix_len {
-            return ParseResult::Incomplete;
-        }
-        let (payload_end, st_len) = match find_string_terminator(&buf[prefix_len..], true) {
-            Some(p) => p,
-            None => return ParseResult::IncompleteString,
-        };
-        let payload = &buf[prefix_len..prefix_len + payload_end];
-        ParseResult::Event(finalize_osc(payload), prefix_len + payload_end + st_len)
+        parse_string(buf, true, finalize_osc)
     }
 }
 
