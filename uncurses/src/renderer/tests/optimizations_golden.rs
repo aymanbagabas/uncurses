@@ -595,7 +595,7 @@ fn styled_run_stops_before_a_repeat_so_rep_keeps_its_cells() {
     let mut buf = RenderBuffer::new(20, 1);
     set_text(&mut buf, 0, "abcde");
     for x in 5..15u16 {
-        buf.set_cell((x, 0), &Cell::narrow("Z"));
+        buf.set_cell((x, 0), &Cell::new("Z", 1));
     }
     let actual = render_to_vec(&mut r, &mut buf);
     // The batch ends before the equal-run, so REP still starts at the
@@ -614,7 +614,7 @@ fn styled_run_stops_at_a_style_change() {
     for (i, ch) in "cd".chars().enumerate() {
         buf.set_cell(
             (2 + i as u16, 0),
-            &Cell::narrow(ch.to_string()).style(red.clone()),
+            &Cell::new(ch.to_string(), 1).style(red.clone()),
         );
     }
     let actual = render_to_vec(&mut r, &mut buf);

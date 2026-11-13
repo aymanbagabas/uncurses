@@ -160,7 +160,7 @@ fn starfield_buffer(shift: usize) -> RenderBuffer {
             let sx = (x as usize + shift) % WIDTH as usize;
             let f = shade(sx, py);
             let g = shade(sx, py + 1);
-            let cell = Cell::narrow("\u{2580}").style(
+            let cell = Cell::new("\u{2580}", 1).style(
                 Style::default()
                     .fg(Color::Rgb(f, f, f))
                     .bg(Color::Rgb(g, g, g)),
