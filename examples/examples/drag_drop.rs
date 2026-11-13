@@ -1,361 +1,439 @@
-//! Receive text drops and offer text drags through Kitty OSC 72.
+//! Bidirectional text, HTML, image, and file transfers in Kitty 0.47 or newer.
 //!
-//! Run with `cargo run -p examples --example drag_drop` in Kitty 0.47 or newer.
-//! Drop text onto the window, or use Kitty's drag gesture to copy text out.
-//! Press q or Ctrl-C to quit. The example accepts copies and keeps only a
-//! short escaped preview. It performs no filesystem operations.
+//! Run `cargo run -p examples --example drag_drop -- --help` for usage.
 
-use std::io::{self, Write};
-use std::time::{Duration, Instant};
+#[path = "support/capability_query.rs"]
+mod capability_query;
+#[path = "support/drag_source.rs"]
+mod drag_source;
+#[path = "support/drop_receiver.rs"]
+mod drop_receiver;
+#[path = "support/drag_drop.rs"]
+mod support;
 
-use base64::Engine;
-use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
-use uncurses::ansi::drag_drop::{REQUEST_DRAG_DROP, write_drag_drop};
-use uncurses::buffer::SurfaceMut;
-use uncurses::event::{Event, Key};
-use uncurses::program::Program;
-use uncurses::style::Style;
-use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::TextSurface;
+use std::{
+    collections::{HashMap, VecDeque},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-const MIME: &str = "text/plain";
-const TEXT: &str = "Hello from uncurses!\n";
-const BASE64: GeneralPurpose = GeneralPurpose::new(
-    &base64::alphabet::STANDARD,
-    GeneralPurposeConfig::new()
-        .with_encode_padding(false)
-        .with_decode_padding_mode(DecodePaddingMode::Indifferent),
-);
+use uncurses::{
+    ansi::drag_drop::REQUEST_DRAG_DROP,
+    buffer::SurfaceMut,
+    event::{Event as TerminalEvent, Key},
+    program::Program,
+    style::Style,
+    terminal::{Stdin, Stdout},
+    text::TextSurface,
+};
+use uncurses_dragdrop::{
+    DragDrop, DragDropOptions, DropOffer, Entry, Error, Event, MachineId, Operation, Operations,
+    path_to_uri,
+};
 
-#[derive(Default)]
-struct Demo {
-    registered: bool,
-    dropping: bool,
-    dragging: bool,
-    offered: Vec<String>,
-    request: String,
-    continuation: Option<Vec<(String, String)>>,
-    control: Vec<u8>,
-    base64: Vec<u8>,
-    received: usize,
-    preview: String,
-    status: String,
+use drag_source::{Data, Source};
+use drop_receiver::Receiver;
+
+const MIMES: &[&str] = &[
+    "text/uri-list",
+    "text/plain",
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "image/png",
+    "image/jpeg",
+    "text/html",
+];
+const TEXT: &[u8] = b"Hello from uncurses!\n";
+const HTML: &[u8] = b"<!doctype html><meta charset=\"utf-8\"><p>Hello from uncurses!</p>\n";
+const PNG: &[u8] = include_bytes!("support/drag_drop.png");
+const JPEG: &[u8] = include_bytes!("support/drag_drop.jpg");
+const HELP: &str = "\
+drag_drop [--receive-dir DIR] [--] [PATH ...]
+
+Drop files, text, HTML, PNG, or JPEG onto this window.
+Preview by default. --receive-dir saves each drop in a new directory.
+Drag supplied paths or generated content out of the window.
+
+f: files   t: text   h: HTML   p: PNG   j: JPEG
+1: image thumbnail   2: text thumbnail   0: none
+q or Ctrl-C: quit
+
+Over SSH, run this program on the host that owns PATH.
+The receive directory also belongs to that host.";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Content {
+    Files,
+    Text,
+    Html,
+    Png,
+    Jpeg,
 }
 
-fn value<'a>(options: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    options
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-}
-
-fn invalid(message: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
-}
-
-fn send_data(out: &mut impl Write, options: &[&str], data: &[u8]) -> io::Result<()> {
-    // Optional padding can break thumbnail completion in older Kitty versions.
-    let encoded = BASE64.encode(data);
-    for (index, chunk) in encoded.as_bytes().chunks(4096).enumerate() {
-        let mut metadata = if index == 0 {
-            options.to_vec()
-        } else {
-            Vec::new()
-        };
-        metadata.push("m=1");
-        write_drag_drop(out, &metadata, chunk)?;
+impl Content {
+    fn mimes(self) -> &'static [&'static str] {
+        match self {
+            Self::Files => &["text/uri-list"],
+            Self::Text => &["text/plain", "text/plain;charset=utf-8", "UTF8_STRING"],
+            Self::Html => &["text/html", "text/plain"],
+            Self::Png => &["image/png"],
+            Self::Jpeg => &["image/jpeg"],
+        }
     }
-    write_drag_drop(out, options, b"")
+
+    fn body(self, mime: &str, roots: &[PathBuf]) -> Result<Vec<u8>, Error> {
+        if !self.mimes().contains(&mime) {
+            return Err(Error::InvalidInput("requested MIME type was not offered"));
+        }
+        Ok(match self {
+            Self::Files => {
+                let uris = roots
+                    .iter()
+                    .map(path_to_uri)
+                    .collect::<io::Result<Vec<_>>>()?;
+                format!("{}\r\n", uris.join("\r\n")).into_bytes()
+            }
+            Self::Text => TEXT.repeat(512),
+            Self::Html if mime == "text/plain" => TEXT.to_vec(),
+            Self::Html => HTML.to_vec(),
+            Self::Png => PNG.to_vec(),
+            Self::Jpeg => JPEG.to_vec(),
+        })
+    }
+}
+
+fn copy_type(offer: &DropOffer) -> Option<&'static str> {
+    if !offer.operations.contains(Operations::COPY) {
+        return None;
+    }
+    MIMES
+        .iter()
+        .copied()
+        .find(|mime| offer.mime_types.iter().any(|offered| offered == mime))
+}
+
+struct Demo {
+    roots: Vec<PathBuf>,
+    destination: Option<PathBuf>,
+    selected: Content,
+    active: Option<Content>,
+    sources: HashMap<Entry, Source>,
+    receiver: Receiver,
+    thumbnail: support::Thumbnail,
+    log: VecDeque<String>,
 }
 
 impl Demo {
-    fn message(
-        &mut self,
-        out: &mut impl Write,
-        options: Vec<(String, String)>,
-        payload: Vec<u8>,
-    ) -> io::Result<()> {
-        if matches!(value(&options, "t"), Some("q" | "Q")) {
-            return Ok(());
-        }
-        let more = value(&options, "m") == Some("1");
-        let metadata = self.continuation.take().unwrap_or(options);
-        if more {
-            self.continuation = Some(metadata.clone());
-        }
-        if value(&metadata, "t") == Some("r") {
-            if !self.dropping || value(&metadata, "x") != Some(self.request.as_str()) {
-                return Err(invalid("unexpected drop data"));
-            }
-            self.base64.extend_from_slice(&payload);
-            let count = if more {
-                self.base64.len() / 4 * 4
+    fn new(roots: Vec<PathBuf>, destination: Option<PathBuf>) -> Self {
+        Self {
+            selected: if roots.is_empty() {
+                Content::Text
             } else {
-                self.base64.len()
-            };
-            let decoded = BASE64.decode(&self.base64[..count]).map_err(invalid)?;
-            self.base64.drain(..count);
-            self.received += decoded.len();
-            for byte in decoded
-                .iter()
-                .take(256_usize.saturating_sub(self.preview.len()))
-            {
-                self.preview.extend(byte.escape_ascii().map(char::from));
-            }
-            self.status = format!("Received {} bytes", self.received);
-            if payload.is_empty() && !more {
-                write_drag_drop(out, &["t=r", "o=1"], b"")?;
-                self.dropping = false;
-                self.status.push_str("; copy complete");
-            }
-            return Ok(());
+                Content::Files
+            },
+            roots,
+            destination,
+            active: None,
+            sources: HashMap::new(),
+            receiver: Receiver::default(),
+            thumbnail: support::Thumbnail::default(),
+            log: VecDeque::new(),
         }
+    }
 
-        // Bound control-message assembly; file data above stays streamed.
-        if self.control.len() + payload.len() > 64 * 1024 {
-            return Err(invalid(
-                "control message exceeds the example's 64 KiB limit",
-            ));
+    fn log(&mut self, message: impl Into<String>) {
+        self.log.push_back(message.into());
+        if self.log.len() > 8 {
+            self.log.pop_front();
         }
-        self.control.extend(payload);
-        if more {
-            return Ok(());
+    }
+
+    fn key(&mut self, key: &Key) {
+        if self.thumbnail.select(key) {
+            return;
         }
-        let payload = std::mem::take(&mut self.control);
-        match value(&metadata, "t") {
-            Some("m") if value(&metadata, "x") == Some("-1") => {
-                self.offered.clear();
-                self.status = "Drag left the window".into();
-            }
-            Some("m" | "M") => {
-                let dropped = value(&metadata, "t") == Some("M");
-                if dropped || !payload.is_empty() {
-                    self.offered = std::str::from_utf8(&payload)
-                        .map_err(invalid)?
-                        .split_ascii_whitespace()
-                        .map(str::to_owned)
-                        .collect();
+        for (binding, content) in [
+            ("f", Content::Files),
+            ("t", Content::Text),
+            ("h", Content::Html),
+            ("p", Content::Png),
+            ("j", Content::Jpeg),
+        ] {
+            if *key == binding.parse().unwrap() {
+                if content == Content::Files && self.roots.is_empty() {
+                    self.log("Supply source paths to offer files");
+                } else {
+                    self.selected = content;
                 }
-                let selected = self
-                    .offered
+                return;
+            }
+        }
+    }
+
+    fn event(
+        &mut self,
+        controller: &mut DragDrop,
+        out: &mut impl Write,
+        event: Event,
+    ) -> Result<(), Error> {
+        match event {
+            Event::Hover(offer) => {
+                if let Some(mime) = copy_type(&offer) {
+                    controller.accept(out, &[mime], Operation::Copy)?;
+                } else {
+                    controller.reject(out)?;
+                    self.log("Drop rejected: no supported copy format");
+                }
+            }
+            Event::Drop(offer) => {
+                let Some(mime) = copy_type(&offer) else {
+                    controller.cancel_drop(out)?;
+                    self.log("Drop canceled: no supported copy format");
+                    return Ok(());
+                };
+                self.receiver.begin(mime, self.destination.as_deref())?;
+                self.log(format!("Receiving {mime}"));
+                if mime == "text/uri-list" {
+                    controller.list(out)?;
+                } else {
+                    controller.request(out, mime)?;
+                }
+            }
+            Event::UriList { remote } => self.log(format!("URI list: remote={remote}")),
+            Event::Listed { entry, name } => {
+                let preview: String = name
                     .iter()
-                    .position(|mime| mime == MIME || mime == "text/plain;charset=utf-8")
-                    .filter(|_| matches!(value(&metadata, "o"), Some("1" | "3")));
-                if dropped {
-                    if let Some(index) = selected {
-                        self.dropping = true;
-                        self.request = (index + 1).to_string();
-                        self.received = 0;
-                        self.preview.clear();
-                        self.base64.clear();
-                        write_drag_drop(out, &["t=r", &format!("x={}", self.request)], b"")?;
-                        self.status = "Requested dropped text".into();
-                    } else {
-                        write_drag_drop(out, &["t=r", "o=0"], b"")?;
-                        self.status = "Drop canceled: plain text is unavailable".into();
+                    .flat_map(|byte| byte.escape_ascii())
+                    .map(char::from)
+                    .collect();
+                self.log(format!("Listed {preview}"));
+                self.receiver.listed(entry, name)?;
+            }
+            Event::Entry(kind) => self.receiver.kind(kind)?,
+            Event::Data(bytes) => self.receiver.data(&bytes)?,
+            Event::DataEnd => {
+                self.receiver.end_body()?;
+                for directory in self.receiver.closed.drain(..) {
+                    controller.close_directory(out, directory)?;
+                }
+                if let Some(entry) = self.receiver.next() {
+                    controller.request(out, entry)?;
+                } else {
+                    let saved = self.receiver.finish();
+                    controller.complete_drop(out, Operation::Copy)?;
+                    self.log(format!(
+                        "Drop complete: {} bytes, {} entries, checksum={:016x}",
+                        self.receiver.bytes, self.receiver.listed, self.receiver.checksum,
+                    ));
+                    self.log(format!("{} bytes; copy complete", self.receiver.bytes));
+                    if let Some(path) = saved {
+                        self.log(format!("Saved {path:?}"));
                     }
-                } else if let Some(index) = selected {
-                    write_drag_drop(out, &["t=m", "o=1"], self.offered[index].as_bytes())?;
-                    self.status = "Copy accepted; release to drop text".into();
-                } else {
-                    write_drag_drop(out, &["t=m", "o=0"], b"")?;
-                    self.status = "Drop rejected: plain text copy is unavailable".into();
                 }
             }
-            Some("o") => {
-                self.dragging = true;
-                write_drag_drop(out, &["t=o", "o=1"], MIME.as_bytes())?;
-                send_data(out, &["t=p", "x=0"], TEXT.repeat(512).as_bytes())?;
-                let thumbnail = [0x40, 0x80, 0xff, 0xff].repeat(16 * 16);
-                send_data(out, &["t=p", "x=-1", "y=32", "X=16", "Y=16"], &thumbnail)?;
-                write_drag_drop(out, &["t=P", "x=-1"], b"")?;
-                self.status = "Drag offered with text and a thumbnail".into();
+            Event::DropCanceled => {
+                self.receiver.abort()?;
+                self.log("Drop canceled by a new drag");
             }
-            Some("e") if value(&metadata, "x") == Some("5") => {
-                let index: u32 = value(&metadata, "y")
-                    .unwrap_or("0")
-                    .parse()
-                    .map_err(invalid)?;
-                let index_option = format!("y={index}");
-                if index == 0 {
-                    send_data(out, &["t=e", &index_option], TEXT.repeat(512).as_bytes())?;
+            Event::DropFailed(error) => {
+                self.receiver.abort()?;
+                self.log(format!("Drop failed: {error}"));
+            }
+            Event::DragRequested(_) => {
+                let content = self.selected;
+                if content == Content::Files {
+                    let sources = self
+                        .roots
+                        .iter()
+                        .map(|path| Source::new(path))
+                        .collect::<io::Result<Vec<_>>>()?;
+                    let entries = controller.offer_paths(out, &self.roots, Operations::COPY)?;
+                    self.sources = entries.into_iter().zip(sources).collect();
                 } else {
-                    write_drag_drop(out, &["t=E", &index_option], b"ENOENT")?;
+                    controller.offer(out, content.mimes(), Operations::COPY)?;
+                    for mime in content.mimes() {
+                        controller.send(out, *mime, &content.body(mime, &self.roots)?)?;
+                    }
                 }
+                self.active = Some(content);
+                self.thumbnail.upload(controller, out)?;
+                controller.start_drag(out)?;
             }
-            Some("e") if value(&metadata, "x") == Some("4") => {
-                self.dragging = false;
-                self.status = if value(&metadata, "y") == Some("1") {
-                    "Drag canceled"
-                } else {
-                    "Drag complete"
-                }
-                .into();
+            Event::DragStarted => self.log("Drag started"),
+            Event::DataRequested { mime_type } => {
+                let content = self.active.ok_or(Error::InvalidState("no active offer"))?;
+                controller.send(out, &mime_type, &content.body(&mime_type, &self.roots)?)?;
             }
-            Some("E") => {
-                if payload == b"OK" {
-                    self.status = "Drag started".into();
-                } else {
-                    self.dragging = false;
-                    self.status = format!("Drag error: {}", payload.escape_ascii());
-                }
+            Event::DragFinished { canceled } => {
+                self.sources.clear();
+                self.active = None;
+                self.log(format!("Drag finished: canceled={canceled}"));
             }
-            Some("R") => {
-                self.dropping = false;
-                self.status = format!("Drop error: {}", payload.escape_ascii());
+            Event::DragFailed(error) => {
+                self.sources.clear();
+                self.active = None;
+                self.log(format!("Drag failed: {error}"));
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn cleanup(&mut self, out: &mut impl Write) -> io::Result<()> {
-        if !self.registered {
+    fn send_next(&mut self, controller: &mut DragDrop, out: &mut impl Write) -> Result<(), Error> {
+        let Some(entry) = controller.next_send()? else {
             return Ok(());
+        };
+        let source = self
+            .sources
+            .get(&entry)
+            .ok_or(Error::InvalidInput("unknown source entry"))?
+            .clone();
+        match source.read()? {
+            Data::Symlink(target) => controller.send_symlink(out, &entry, target)?,
+            Data::Directory(children) => {
+                let entries = controller.send_directory(
+                    out,
+                    &entry,
+                    children.iter().map(|child| &child.name),
+                )?;
+                self.sources.extend(entries.into_iter().zip(children));
+            }
+            Data::File(mut file) => controller.send_from(out, &entry, &mut file)?,
         }
-        let drop = if self.dropping {
-            write_drag_drop(out, &["t=r", "o=0"], b"")
-        } else {
-            Ok(())
-        };
-        let drag = if self.dragging {
-            write_drag_drop(out, &["t=E", "y=-1"], b"")
-        } else {
-            Ok(())
-        };
-        let receiver = write_drag_drop(out, &["t=A"], b"");
-        let sender = write_drag_drop(out, &["t=o", "x=2"], b"");
-        let flush = out.flush();
-        drop.and(drag).and(receiver).and(sender).and(flush)
+        if matches!(&entry, Entry::File(file) if file.root_index().is_none()) {
+            self.sources.remove(&entry);
+        }
+        self.log(format!("Sent {:?}", source.name));
+        Ok(())
     }
 }
 
-fn run(program: &mut Program<Stdin, Stdout>, demo: &mut Demo) -> io::Result<()> {
+fn run(
+    program: &mut Program<Stdin, Stdout>,
+    controller: &mut DragDrop,
+    demo: &mut Demo,
+) -> Result<(), Box<dyn std::error::Error>> {
     program.init()?;
-    program.query_capabilities(REQUEST_DRAG_DROP)?;
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-        if !program.poll_event(Some(remaining))? {
-            break;
-        }
-        if matches!(program.read_event()?, Event::PrimaryDeviceAttributes(_)) {
-            break;
-        }
-    }
-    if !program.capabilities().drag_drop() {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "OSC 72 support was not confirmed",
-        ));
-    }
     program.enter_alt_screen()?;
     program.hide_cursor()?;
-    demo.registered = true;
-    write_drag_drop(program.screen_mut(), &["t=a"], MIME.as_bytes())?;
-    write_drag_drop(program.screen_mut(), &["t=o", "x=1"], b"")?;
-    program.screen_mut().flush()?;
-    demo.status = "Ready for text drops and drag gestures".into();
+    program.query_capabilities(REQUEST_DRAG_DROP)?;
+    let mut query = capability_query::CapabilityQuery::new();
+    let mut awaiting_capabilities = true;
+    demo.log("Checking drag and drop support");
     let quit: [Key; 2] = ["q", "ctrl+c"].map(|key| key.parse().unwrap());
     loop {
         let screen = program.screen_mut();
         screen.clear();
         screen.set_str(
             (0, 0),
-            "OSC 72: drop text here, or drag text out. q quits.",
+            "Drop content here or drag it out. q quits.",
             Style::new(),
         );
-        screen.set_str((0, 2), &demo.status, Style::new());
-        screen.set_str((0, 4), &demo.preview, Style::new());
+        screen.set_str(
+            (0, 1),
+            &format!(
+                "Next drag: {}. f files / t text / h HTML / p PNG / j JPEG",
+                demo.selected.mimes()[0]
+            ),
+            Style::new(),
+        );
+        screen.set_str(
+            (0, 2),
+            &format!(
+                "Thumbnail: {}. 1 image / 2 text / 0 none",
+                demo.thumbnail.label()
+            ),
+            Style::new(),
+        );
+        let destination = demo.destination.as_deref().map_or_else(
+            || "Preview only".into(),
+            |path| format!("Save each drop under {path:?}"),
+        );
+        screen.set_str((0, 3), &destination, Style::new());
+        screen.set_str((0, 5), &demo.receiver.preview, Style::new());
+        for (row, message) in demo.log.iter().enumerate() {
+            screen.set_str((0, row as u16 + 7), message, Style::new());
+        }
         screen.render()?;
-        match program.read_event()? {
-            Event::KeyPress(key) if quit.contains(&key) => return Ok(()),
-            Event::Resize(_) => {
-                program.autoresize()?;
+        if controller.next_send()?.is_some() && !program.poll_event(Some(Duration::ZERO))? {
+            let screen = program.screen_mut();
+            screen.flush()?;
+            demo.send_next(controller, screen.writer_mut())?;
+            screen.writer_mut().flush()?;
+            continue;
+        }
+        let Some(event) = query.read_event(program)? else {
+            return Ok(());
+        };
+        match &event {
+            TerminalEvent::KeyPress(key) if quit.contains(key) => {
+                if query.request_quit() {
+                    return Ok(());
+                }
             }
-            Event::DragDrop { options, payload } => {
-                demo.message(program.screen_mut(), options, payload)?;
-                program.screen_mut().flush()?;
-            }
-            Event::UnknownOsc(bytes) if bytes.starts_with(b"72;") => {
-                return Err(invalid("malformed or incomplete OSC 72 message"));
+            TerminalEvent::KeyPress(key) => demo.key(key),
+            TerminalEvent::Resize(_) => program.autoresize()?,
+            TerminalEvent::PrimaryDeviceAttributes(_) if awaiting_capabilities => {
+                if !program.capabilities().drag_drop() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "OSC 72 support was not confirmed",
+                    )
+                    .into());
+                }
+                controller.enable_drops(program.screen_mut(), MIMES)?;
+                controller.enable_drags(program.screen_mut())?;
+                awaiting_capabilities = false;
+                demo.log("Ready for text, images, HTML, and file drops");
             }
             _ => {}
         }
+        let events = controller.handle_event(&event)?;
+        let screen = program.screen_mut();
+        screen.flush()?;
+        for event in events {
+            demo.event(controller, screen.writer_mut(), event)?;
+        }
+        screen.writer_mut().flush()?;
     }
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args_os().skip(1);
+    let mut roots = Vec::new();
+    let mut destination = None;
+    let mut options = true;
+    while let Some(arg) = args.next() {
+        if options && arg == "--help" {
+            println!("{HELP}");
+            return Ok(());
+        } else if options && arg == "--" {
+            options = false;
+        } else if options && arg == "--receive-dir" {
+            destination = Some(std::path::absolute(
+                args.next().ok_or("--receive-dir requires a directory")?,
+            )?);
+        } else if options && arg.as_encoded_bytes().starts_with(b"-") {
+            return Err(format!("unknown option: {arg:?}").into());
+        } else {
+            roots.push(std::path::absolute(Path::new(&arg))?);
+        }
+    }
+    let mut demo = Demo::new(roots, destination);
+    let mut controller = DragDrop::new(DragDropOptions {
+        machine_id: Some(MachineId::current()?),
+        ..DragDropOptions::default()
+    });
     let mut program = Program::stdio()?;
-    let mut demo = Demo::default();
-    let result = run(&mut program, &mut demo);
-    let cleanup = demo.cleanup(program.screen_mut());
-    let finish = program.finish();
-    result.and(cleanup).and(finish)
+    let result = run(&mut program, &mut controller, &mut demo);
+    let partial = demo.receiver.abort().map_err(Into::into);
+    let cleanup = controller.close(program.screen_mut()).map_err(Into::into);
+    let flush = program.screen_mut().flush().map_err(Into::into);
+    let finish = program.finish().map_err(Into::into);
+    result.and(partial).and(cleanup).and(flush).and(finish)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn message(demo: &mut Demo, out: &mut Vec<u8>, metadata: &[(&str, &str)], payload: &[u8]) {
-        demo.message(
-            out,
-            metadata
-                .iter()
-                .map(|(k, v)| ((*k).into(), (*v).into()))
-                .collect(),
-            payload.to_vec(),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn chunks_inherit_metadata_and_finish_only_on_empty_data() {
-        let mut demo = Demo {
-            dropping: true,
-            request: "2".into(),
-            ..Demo::default()
-        };
-        let mut out = Vec::new();
-        message(
-            &mut demo,
-            &mut out,
-            &[("t", "r"), ("x", "2"), ("m", "1")],
-            b"YW",
-        );
-        message(&mut demo, &mut out, &[("t", "q")], b"");
-        message(&mut demo, &mut out, &[("t", "Q")], b"");
-        message(&mut demo, &mut out, &[("m", "0")], b"JjZA");
-        assert_eq!(demo.preview, "abcd");
-        assert!(demo.dropping);
-        assert!(out.is_empty());
-        message(&mut demo, &mut out, &[("t", "r"), ("x", "2")], b"");
-        assert!(!demo.dropping);
-        assert_eq!(demo.received, 4);
-        assert_eq!(out, b"\x1b]72;t=r:o=1\x1b\\");
-    }
-
-    #[test]
-    fn omitted_mimes_retain_the_offer_but_move_only_drops_are_rejected() {
-        let mut demo = Demo::default();
-        let mut out = Vec::new();
-        message(
-            &mut demo,
-            &mut out,
-            &[("t", "m"), ("o", "1")],
-            b"text/plain",
-        );
-        out.clear();
-        message(&mut demo, &mut out, &[("t", "m"), ("o", "1")], b"");
-        assert_eq!(out, b"\x1b]72;t=m:o=1;text/plain\x1b\\");
-        out.clear();
-        message(
-            &mut demo,
-            &mut out,
-            &[("t", "M"), ("o", "2")],
-            b"text/plain",
-        );
-        assert_eq!(out, b"\x1b]72;t=r:o=0\x1b\\");
-        assert!(!demo.dropping);
-    }
-}
+#[path = "support/drag_drop_tests.rs"]
+mod tests;
