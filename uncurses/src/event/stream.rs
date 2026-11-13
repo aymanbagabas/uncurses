@@ -352,6 +352,14 @@ mod tests {
         assert_eq!(n, bytes.len() as isize);
     }
 
+    struct Notify(SyncSender<()>);
+
+    impl Wake for Notify {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.try_send(());
+        }
+    }
+
     /// Minimal waker that flips a flag when woken, so a parked test thread
     /// can re-poll the stream without an async runtime.
     struct FlagWaker(AtomicBool);
@@ -482,13 +490,6 @@ mod tests {
 
     #[test]
     fn changing_a_parked_string_deadline_wakes_the_stream() {
-        struct Notify(SyncSender<()>);
-        impl Wake for Notify {
-            fn wake(self: Arc<Self>) {
-                let _ = self.0.try_send(());
-            }
-        }
-
         for timeout in [None, Some(Duration::from_secs(60))] {
             let (rx, _tx) = make_pipe();
             let mut source = EventSource::new(rx)
@@ -522,6 +523,57 @@ mod tests {
                 }
                 other => panic!("expected expired string, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn changing_a_parked_paste_deadline_wakes_the_stream() {
+        for (timeout, disable_first) in [
+            (None, false),
+            (Some(Duration::from_secs(60)), false),
+            (Some(Duration::from_secs(60)), true),
+        ] {
+            let (rx, _tx) = make_pipe();
+            let mut source = EventSource::new(rx)
+                .unwrap()
+                .with_paste_idle_timeout(timeout);
+            source.feed_bytes(b"\x1b[200~");
+            assert_eq!(source.try_read(), Some(Event::PasteStart));
+            let shared = Arc::new(Mutex::new(source));
+            let mut stream = EventStream::from_shared(Arc::clone(&shared));
+            let (started_tx, started_rx) = mpsc::sync_channel(1);
+            stream.wait_started = Some(started_tx);
+            let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+            let waker = Waker::from(Arc::new(Notify(wake_tx)));
+            let mut cx = Context::from_waker(&waker);
+            assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+            let captured = started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            match timeout {
+                None => assert_eq!(captured, None),
+                Some(_) => assert!(captured.unwrap() > Duration::from_secs(30)),
+            }
+
+            if disable_first {
+                shared.lock().unwrap().set_paste_idle_timeout(None);
+                wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+                assert_eq!(
+                    started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                    None
+                );
+            }
+
+            shared
+                .lock()
+                .unwrap()
+                .set_paste_idle_timeout(Some(Duration::ZERO));
+            wake_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("deadline change must wake the parked stream without more input");
+            assert!(matches!(
+                Pin::new(&mut stream).poll_next(&mut cx),
+                Poll::Ready(Some(Ok(Event::PasteEnd)))
+            ));
         }
     }
 

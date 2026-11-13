@@ -441,11 +441,31 @@ where
     /// safety net and waits indefinitely for a real terminator. The default is
     /// `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
     ///
-    /// This is a consuming builder intended to be chained after
-    /// [`EventSource::new`]. It never panics.
+    /// Changing this setting during a paste restarts its idle wait.
     pub fn with_paste_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.paste_idle_timeout = timeout;
+        self.set_paste_idle_timeout(timeout);
         self
+    }
+
+    /// Set the paste idle timeout on an existing source.
+    ///
+    /// This applies the same policy as
+    /// [`with_paste_idle_timeout`](Self::with_paste_idle_timeout).
+    /// Changing it during a paste restarts the idle wait; `None` disables it.
+    /// Live async streams refresh their readiness waits when the deadline changes.
+    pub fn set_paste_idle_timeout(&mut self, timeout: Option<Duration>) {
+        #[cfg(feature = "async")]
+        let previous = self.paste_deadline;
+        self.paste_idle_timeout = timeout;
+        self.paste_deadline = if self.parser.in_paste() {
+            timeout.map(|t| Instant::now() + t)
+        } else {
+            None
+        };
+        #[cfg(feature = "async")]
+        if self.paste_deadline != previous {
+            self.wake_deadline_waiters();
+        }
     }
 
     /// Set the idle timeout for an OSC, DCS, APC, SOS, or PM body.
@@ -479,15 +499,20 @@ where
         };
         #[cfg(feature = "async")]
         if self.string_deadline != previous {
-            self.deadline_wakers.retain(|weak| {
-                if let Some(waker) = weak.upgrade() {
-                    waker.notify();
-                    true
-                } else {
-                    false
-                }
-            });
+            self.wake_deadline_waiters();
         }
+    }
+
+    #[cfg(feature = "async")]
+    fn wake_deadline_waiters(&mut self) {
+        self.deadline_wakers.retain(|weak| {
+            if let Some(waker) = weak.upgrade() {
+                waker.notify();
+                true
+            } else {
+                false
+            }
+        });
     }
 
     /// Return a cloneable [`Waker`] bound to this source.
