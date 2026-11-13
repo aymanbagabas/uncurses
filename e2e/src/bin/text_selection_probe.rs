@@ -45,23 +45,20 @@ impl Row {
         let mut cells: Vec<Cell> = Vec::new();
         for (cluster, width) in grapheme_cells(text, mode, eaw) {
             match width {
-                0 => match cells.last_mut() {
-                    Some(last) => {
+                0 => match cells.iter().rposition(|cell| !cell.is_continuation()) {
+                    Some(index) => {
+                        let last = &mut cells[index];
                         let mut joined = last.content().to_string();
                         joined.push_str(cluster);
-                        *last = if last.is_wide() {
-                            Cell::wide(joined)
-                        } else {
-                            Cell::narrow(joined)
-                        };
+                        *last = Cell::new(joined, last.width());
                     }
-                    None => cells.push(Cell::narrow(cluster)),
+                    None => cells.push(Cell::new(cluster, 1)),
                 },
-                1 => cells.push(Cell::narrow(cluster)),
+                1 => cells.push(Cell::new(cluster, 1)),
                 w => {
-                    cells.push(Cell::wide(cluster));
+                    cells.push(Cell::new(cluster, w));
                     for _ in 1..w {
-                        cells.push(Cell::continuation());
+                        cells.push(Cell::CONTINUATION);
                     }
                 }
             }
