@@ -10,14 +10,14 @@
 //! ```text
 //! async task poll_next ─┬─ try lock + drain ready events ──▶ Poll::Ready
 //!                       └─ arm helper thread ─┬─ brief lock: read decode deadline
-//!                                             └─ block lock-free on cloned poller ──▶ wake task
-//! drop stream ──▶ source Waker ──▶ helper exits
+//!                                             └─ block lock-free on private poller ──▶ wake task
+//! deadline change / drop stream ──▶ private Waker ──▶ helper wakes
 //! ```
 //!
 //! ## Key types
 //!
-//! * [`EventStream`] owns or shares an `Arc<Mutex<EventSource<_>>>`, a cloned
-//!   `Arc<dyn Poller>`, a source [`Waker`], and a helper thread channel.
+//! * [`EventStream`] owns or shares an `Arc<Mutex<EventSource<_>>>` and gives
+//!   its helper a private poller, notification [`Waker`], and request channel.
 //! * A private `Wait` value tells the helper whether a wait is in flight and
 //!   whether stream drop requested shutdown.
 //!
@@ -31,7 +31,7 @@
 //! ## Coexistence caveats
 //!
 //! Sharing one source between a live stream and synchronous readers is
-//! supported but best-effort. The helper waits **lock-free** on a cloned poller
+//! supported but best-effort. The helper waits **lock-free** on its own poller
 //! (it locks the source only briefly to read the decode deadline, then releases
 //! it), so a synchronous reader, [`Screen::render`], or teardown can take the
 //! source lock while the stream is parked. Events go to whichever consumer
@@ -53,6 +53,32 @@ use super::Event;
 use super::poll::Poller;
 use super::source::{EventSource, Input, READY_SLOTS, Waker};
 
+/// A private wake handle watched only by this stream's helper.
+pub(super) struct DeadlineWake {
+    waker: Waker,
+    task_waker: Mutex<Option<TaskWaker>>,
+    error: Mutex<Option<io::Error>>,
+}
+
+impl DeadlineWake {
+    pub(super) fn notify(&self) {
+        if let Err(error) = self.waker.wake() {
+            self.fail(error);
+        }
+    }
+
+    fn fail(&self, error: io::Error) {
+        self.error.lock().unwrap().get_or_insert(error);
+        self.wake_task();
+    }
+
+    fn wake_task(&self) {
+        if let Some(waker) = self.task_waker.lock().unwrap().as_ref() {
+            waker.wake_by_ref();
+        }
+    }
+}
+
 /// A readiness wait requested by the polling task: block until the source
 /// signals input (or a decode deadline elapses), then wake the task's
 /// latest registered waker.
@@ -64,6 +90,8 @@ struct Wait {
     /// Set on drop to break the helper out of its blocking wait and end the
     /// thread instead of re-arming.
     shutdown: Arc<AtomicBool>,
+    #[cfg(test)]
+    started: Option<SyncSender<Option<Duration>>>,
 }
 
 /// A thread-backed [`futures_core::Stream`] of `io::Result<Event>` over a
@@ -71,30 +99,26 @@ struct Wait {
 ///
 /// Build one with [`EventSource::into_stream`] (sole owner) or
 /// [`EventStream::from_shared`] (sharing a source kept elsewhere). A helper
-/// thread blocks in [`EventSource::poll`], which reads and decodes input
-/// into the source's queue, then wakes the polling task; the task drains
-/// queued events (and may itself decode via a non-blocking poll). The stream
-/// yields `Some(Ok(event))` per decoded event and, once, `Some(Err(_))` on a
-/// read error or end-of-input, then fuses to `None`. Dropping it ends the
+/// thread waits for readiness or a decode deadline, then wakes the polling
+/// task. The task drains queued events and decodes through a non-blocking poll.
+/// A private notification handle refreshes waits after deadline changes.
+/// The stream yields `Some(Ok(event))` for each event. It reports an input or
+/// readiness error once as `Some(Err(_))`, then fuses to `None`. Dropping it ends the
 /// helper thread; the shared source is left intact for any other holder.
 pub struct EventStream<I: Input> {
     source: Arc<Mutex<EventSource<I>>>,
-    /// Cloned source waker, used on drop to break the helper's blocking
-    /// wait.
-    waker: Waker,
+    notification: Arc<DeadlineWake>,
     /// Set while a readiness wait is queued, so only one is in flight.
     dispatched: Arc<AtomicBool>,
     /// Set on drop to tell the in-flight wait (if any) to end the helper.
     shutdown: Arc<AtomicBool>,
-    /// Latest task waker, refreshed on every pending poll so the helper
-    /// always wakes the current one even if a wait is already in flight
-    /// (the task's waker may change between polls).
-    task_waker: Arc<Mutex<Option<TaskWaker>>>,
     /// Hands a readiness wait to the helper thread.
     waits: SyncSender<Wait>,
     /// Latched once a read error or end-of-input has been surfaced, after
     /// which the stream yields `None`.
     done: bool,
+    #[cfg(test)]
+    wait_started: Option<SyncSender<Option<Duration>>>,
 }
 
 impl<I> EventSource<I>
@@ -121,26 +145,36 @@ where
     /// synchronously while the stream is live (see the coexistence caveats
     /// on this module).
     pub fn from_shared(source: Arc<Mutex<EventSource<I>>>) -> Self {
-        let (waker, poller) = {
-            let src = source.lock().unwrap();
-            (src.waker(), src.poller())
+        let notification = Arc::new(DeadlineWake {
+            waker: Waker::new().expect("create event waiter notification"),
+            task_waker: Mutex::new(None),
+            error: Mutex::new(None),
+        });
+        let poller = {
+            let mut src = source.lock().unwrap();
+            let poller = src
+                .waiter_poller(&notification.waker)
+                .expect("create event waiter poller");
+            src.deadline_wakers.retain(|weak| weak.strong_count() > 0);
+            src.deadline_wakers.push(Arc::downgrade(&notification));
+            poller
         };
         let (waits, rx) = mpsc::sync_channel::<Wait>(1);
-        let task_waker: Arc<Mutex<Option<TaskWaker>>> = Arc::new(Mutex::new(None));
         let wait_source = Arc::clone(&source);
-        let wait_waker = Arc::clone(&task_waker);
+        let wait_notification = Arc::clone(&notification);
         std::thread::Builder::new()
             .name("uncurses-event-waiter".to_string())
-            .spawn(move || waiter_loop(wait_source, poller, wait_waker, rx))
+            .spawn(move || waiter_loop(wait_source, poller, wait_notification, rx))
             .expect("spawn event waiter thread");
         Self {
             source,
-            waker,
+            notification,
             dispatched: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(AtomicBool::new(false)),
-            task_waker,
             waits,
             done: false,
+            #[cfg(test)]
+            wait_started: None,
         }
     }
 }
@@ -156,7 +190,7 @@ where
         // Always refresh the waker, even when a wait is already in flight:
         // the helper wakes whatever is latest, so a changed waker is never
         // lost.
-        *self.task_waker.lock().unwrap() = Some(cx.waker().clone());
+        *self.notification.task_waker.lock().unwrap() = Some(cx.waker().clone());
         if !self
             .dispatched
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -166,6 +200,8 @@ where
             let _ = self.waits.send(Wait {
                 dispatched: Arc::clone(&self.dispatched),
                 shutdown: Arc::clone(&self.shutdown),
+                #[cfg(test)]
+                started: self.wait_started.clone(),
             });
         }
     }
@@ -178,7 +214,7 @@ impl<I: Input> Drop for EventStream<I> {
         // value drops, so the helper's `recv` then returns and the thread
         // exits. The shared source itself is untouched.
         self.shutdown.store(true, Ordering::SeqCst);
-        let _ = self.waker.wake();
+        self.notification.notify();
     }
 }
 
@@ -189,6 +225,10 @@ impl<I: Input> futures_core::Stream for EventStream<I> {
         let this = self.get_mut();
         if this.done {
             return Poll::Ready(None);
+        }
+        if let Some(error) = this.notification.error.lock().unwrap().take() {
+            this.done = true;
+            return Poll::Ready(Some(Err(error)));
         }
         // Try to decode on this task without blocking. If the helper holds
         // the lock (parked in its brief deadline peek), fall through to arm a
@@ -238,7 +278,7 @@ impl<I: Input> futures_core::Stream for EventStream<I> {
 fn waiter_loop<I: Input>(
     source: Arc<Mutex<EventSource<I>>>,
     poller: Arc<dyn Poller>,
-    task_waker: Arc<Mutex<Option<TaskWaker>>>,
+    notification: Arc<DeadlineWake>,
     waits: Receiver<Wait>,
 ) {
     while let Ok(wait) = waits.recv() {
@@ -257,17 +297,27 @@ fn waiter_loop<I: Input>(
             // hang. On a poisoned lock, skip the wait and let the task surface
             // the poison on its next poll.
             if let Ok(timeout) = source.lock().map(|src| src.effective_timeout(None)) {
-                let mut ready = [false; READY_SLOTS];
+                #[cfg(test)]
+                if let Some(started) = &wait.started {
+                    let _ = started.try_send(timeout);
+                }
+                let mut ready = [false; READY_SLOTS + 1];
                 // Any return (readiness, elapsed deadline, wake, or error)
                 // hands back to the task, which drains and decodes under its
                 // own `try_lock`; stray wakes are harmless.
-                let _ = poller.poll(&mut ready, timeout);
+                match poller.poll(&mut ready, timeout) {
+                    Ok(_) if ready[READY_SLOTS] => {
+                        if let Err(error) = notification.waker.clear() {
+                            notification.fail(error);
+                        }
+                    }
+                    Err(error) => notification.fail(error),
+                    Ok(_) => {}
+                }
             }
         }
         wait.dispatched.store(false, Ordering::SeqCst);
-        if let Some(waker) = task_waker.lock().unwrap().as_ref() {
-            waker.wake_by_ref();
-        }
+        notification.wake_task();
     }
 }
 
@@ -428,6 +478,88 @@ mod tests {
         write_bytes(&tx, b"q");
         let q = next_blocking(&mut stream).unwrap().unwrap();
         assert!(matches!(q, Event::KeyPress(k) if k.code == KeyCode::Char('q')));
+    }
+
+    #[test]
+    fn changing_a_parked_string_deadline_wakes_the_stream() {
+        struct Notify(SyncSender<()>);
+        impl Wake for Notify {
+            fn wake(self: Arc<Self>) {
+                let _ = self.0.try_send(());
+            }
+        }
+
+        for timeout in [None, Some(Duration::from_secs(60))] {
+            let (rx, _tx) = make_pipe();
+            let mut source = EventSource::new(rx)
+                .unwrap()
+                .with_string_idle_timeout(timeout);
+            source.feed_bytes(b"\x1b]qqqq");
+            let shared = Arc::new(Mutex::new(source));
+            let mut stream = EventStream::from_shared(Arc::clone(&shared));
+            let (started_tx, started_rx) = mpsc::sync_channel(1);
+            stream.wait_started = Some(started_tx);
+            let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+            let waker = Waker::from(Arc::new(Notify(wake_tx)));
+            let mut cx = Context::from_waker(&waker);
+            assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+            let captured = started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            match timeout {
+                None => assert_eq!(captured, None),
+                Some(_) => assert!(captured.unwrap() > Duration::from_secs(30)),
+            }
+
+            shared
+                .lock()
+                .unwrap()
+                .set_string_idle_timeout(Some(Duration::ZERO));
+            wake_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("deadline change must wake the parked stream without more input");
+            match Pin::new(&mut stream).poll_next(&mut cx) {
+                Poll::Ready(Some(Ok(event))) => {
+                    assert_eq!(event, Event::Unknown(b"\x1b]qqqq".to_vec()))
+                }
+                other => panic!("expected expired string, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn deadline_notifications_leave_sync_wake_behavior_intact() {
+        let (rx, tx) = make_pipe();
+        let mut source = EventSource::new(rx).unwrap().with_string_idle_timeout(None);
+        source.feed_bytes(b"\x1b]qqqq");
+        let shared = Arc::new(Mutex::new(source));
+        let mut stream = EventStream::from_shared(Arc::clone(&shared));
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        stream.wait_started = Some(started_tx);
+        let waker = Waker::from(Arc::new(FlagWaker(AtomicBool::new(false))));
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            None
+        );
+
+        {
+            let mut source = shared.lock().unwrap();
+            source.set_string_idle_timeout(Some(Duration::ZERO));
+            assert_eq!(
+                source.read().unwrap(),
+                Event::Unknown(b"\x1b]qqqq".to_vec())
+            );
+            source.waker().wake().unwrap();
+            assert_eq!(
+                source.read().unwrap_err().kind(),
+                io::ErrorKind::Interrupted
+            );
+        }
+
+        drop(stream);
+        write_bytes(&tx, b"x");
+        assert!(matches!(shared.lock().unwrap().read().unwrap(),
+            Event::KeyPress(k) if k.code == KeyCode::Char('x')));
     }
 
     #[test]

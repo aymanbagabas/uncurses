@@ -151,6 +151,7 @@ Pass `None` to disable the idle timeout.
 For an existing `Program`, configure its shared source with
 `program.event_source().lock().unwrap().set_string_idle_timeout(timeout)`.
 The setter restarts the idle wait if a string is in progress.
+An active async stream also refreshes its wait to use the new deadline.
 
 A new Escape sequence also interrupts an unfinished string.
 The source reports the interrupted bytes as `Event::Unknown`, then decodes

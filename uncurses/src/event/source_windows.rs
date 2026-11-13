@@ -34,6 +34,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
+#[cfg(feature = "async")]
 use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -63,6 +64,26 @@ pub(super) struct WindowsWakerInner {
 }
 
 impl WindowsWakerInner {
+    pub(super) fn new() -> io::Result<Self> {
+        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if event.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { event })
+    }
+
+    pub(super) fn raw_handle(&self) -> HANDLE {
+        self.event
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn clear(&self) -> io::Result<()> {
+        if unsafe { ResetEvent(self.event) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     pub(super) fn wake(&self) -> io::Result<()> {
         if unsafe { SetEvent(self.event) } == 0 {
             return Err(io::Error::last_os_error());
@@ -118,11 +139,8 @@ where
             input.as_handle().as_raw_handle() as HANDLE
         };
 
-        let wake_event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
-        if wake_event.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let waker = Waker::from_windows_inner(Arc::new(WindowsWakerInner { event: wake_event }));
+        let waker = Waker::new()?;
+        let wake_event = waker.poll_fd();
 
         // Watch input and wake handles — in the fixed index order the
         // wait path relies on. `input_is_tty` is meaningless on Windows
@@ -145,6 +163,8 @@ where
             paste_deadline: None,
             string_idle_timeout: Some(DEFAULT_STRING_IDLE_TIMEOUT),
             string_deadline: None,
+            #[cfg(feature = "async")]
+            deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
             waker,
             handle_resize: true,
@@ -154,6 +174,22 @@ where
             last_size: None,
             last_mouse_buttons: 0,
         })
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn waiter_poller(
+        &self,
+        notification: &Waker,
+    ) -> io::Result<Arc<dyn super::poll::Poller>> {
+        use std::os::windows::io::AsRawHandle;
+        super::poll::new_poller(
+            &[
+                self.input.as_handle().as_raw_handle(),
+                self.waker.poll_fd(),
+                notification.poll_fd(),
+            ],
+            false,
+        )
     }
 
     /// Reset the wake event after a [`Waker`] fired.

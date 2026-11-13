@@ -174,6 +174,27 @@ pub struct Waker {
 }
 
 impl Waker {
+    pub(super) fn new() -> io::Result<Self> {
+        #[cfg(unix)]
+        return Ok(Self::from_unix_inner(Arc::new(UnixWakerInner::new()?)));
+        #[cfg(windows)]
+        return Ok(Self::from_windows_inner(
+            Arc::new(WindowsWakerInner::new()?),
+        ));
+    }
+
+    pub(super) fn poll_fd(&self) -> super::poll::PollFd {
+        #[cfg(unix)]
+        return self.inner.read_fd();
+        #[cfg(windows)]
+        return self.inner.raw_handle();
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn clear(&self) -> io::Result<()> {
+        self.inner.clear()
+    }
+
     #[cfg(unix)]
     pub(super) fn from_unix_inner(inner: Arc<UnixWakerInner>) -> Self {
         Self { inner }
@@ -252,6 +273,8 @@ where
     pub(super) paste_deadline: Option<Instant>,
     pub(super) string_idle_timeout: Option<Duration>,
     pub(super) string_deadline: Option<Instant>,
+    #[cfg(feature = "async")]
+    pub(super) deadline_wakers: Vec<std::sync::Weak<super::stream::DeadlineWake>>,
     pub(super) queue: VecDeque<Event>,
     pub(super) waker: Waker,
     /// Whether the source delivers [`Event::Resize`] from the
@@ -444,13 +467,27 @@ where
     /// This applies the same policy as
     /// [`with_string_idle_timeout`](Self::with_string_idle_timeout).
     /// Changing it during a string restarts the idle wait; `None` disables it.
+    /// Live async streams refresh their readiness waits when the deadline changes.
     pub fn set_string_idle_timeout(&mut self, timeout: Option<Duration>) {
+        #[cfg(feature = "async")]
+        let previous = self.string_deadline;
         self.string_idle_timeout = timeout;
         self.string_deadline = if self.parser.waiting_for_terminator() {
             timeout.map(|t| Instant::now() + t)
         } else {
             None
         };
+        #[cfg(feature = "async")]
+        if self.string_deadline != previous {
+            self.deadline_wakers.retain(|weak| {
+                if let Some(waker) = weak.upgrade() {
+                    waker.notify();
+                    true
+                } else {
+                    false
+                }
+            });
+        }
     }
 
     /// Return a cloneable [`Waker`] bound to this source.
@@ -460,17 +497,6 @@ where
     /// not clone the source or its input handle.
     pub fn waker(&self) -> Waker {
         self.waker.clone()
-    }
-
-    /// Return a clone of the shared [`Poller`] handle.
-    ///
-    /// The poller is `Arc`-wrapped so a waiter thread can block on readiness
-    /// without holding the source mutex. Both the underlying epoll and kqueue
-    /// registrations are level-triggered, so a concurrent poll from a waiter
-    /// and a subsequent drain from the owner both observe the same readiness.
-    #[cfg(feature = "async")]
-    pub(super) fn poller(&self) -> Arc<dyn Poller> {
-        Arc::clone(&self.poller)
     }
 
     /// Return whether out-of-band resize handling is enabled.

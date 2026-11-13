@@ -33,6 +33,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(feature = "async")]
 use std::sync::Arc;
 
 use super::decode::{Decoder, DecoderFlags};
@@ -61,6 +62,17 @@ pub(super) struct UnixWakerInner {
 }
 
 impl UnixWakerInner {
+    pub(super) fn new() -> io::Result<Self> {
+        let (rx, tx) = make_self_pipe()?;
+        Ok(Self { tx, rx })
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn clear(&self) -> io::Result<()> {
+        drain_pipe(self.read_fd());
+        Ok(())
+    }
+
     pub(super) fn read_fd(&self) -> std::os::fd::RawFd {
         self.rx.as_raw_fd()
     }
@@ -115,12 +127,8 @@ where
     /// Returns any OS error from pipe creation, fd configuration, SIGWINCH
     /// subscription, or poller construction. It does not read from `input`.
     pub fn new_with_flags(input: I, flags: SourceFlags) -> io::Result<Self> {
-        let (pipe_rx, pipe_tx) = make_self_pipe()?;
         let winch_sub = winch::subscribe()?;
-        let waker = Waker::from_unix_inner(Arc::new(UnixWakerInner {
-            tx: pipe_tx,
-            rx: pipe_rx,
-        }));
+        let waker = Waker::new()?;
 
         // Watch input, wake pipe, and winch pipe — in the fixed index
         // order the pump/ingest path relies on. Detect a tty input fd up
@@ -134,7 +142,7 @@ where
         // landed in this slot's pooled pipe just after it was leased to us.
         // `None` on a non-tty, where there is no size to compare against.
         let last_size = get_window_size(input.as_fd()).ok();
-        let fds: [PollFd; 3] = [input_fd, waker.pipe_read_fd(), winch_sub.read_fd()];
+        let fds: [PollFd; 3] = [input_fd, waker.poll_fd(), winch_sub.read_fd()];
         let poller = super::poll::new_poller(&fds, input_is_tty)?;
 
         Ok(Self {
@@ -148,6 +156,8 @@ where
             paste_deadline: None,
             string_idle_timeout: Some(DEFAULT_STRING_IDLE_TIMEOUT),
             string_deadline: None,
+            #[cfg(feature = "async")]
+            deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
             waker,
             handle_resize: true,
@@ -155,6 +165,21 @@ where
             winch_sub,
             last_size,
         })
+    }
+
+    #[cfg(feature = "async")]
+    pub(super) fn waiter_poller(
+        &self,
+        notification: &Waker,
+    ) -> io::Result<Arc<dyn super::poll::Poller>> {
+        let input_fd = self.input.as_fd().as_raw_fd();
+        let fds = [
+            input_fd,
+            self.waker.poll_fd(),
+            self.winch_sub.read_fd(),
+            notification.poll_fd(),
+        ];
+        super::poll::new_poller(&fds, unsafe { libc::isatty(input_fd) } == 1)
     }
 
     /// Drain pending wake bytes after a [`Waker`] fired.
