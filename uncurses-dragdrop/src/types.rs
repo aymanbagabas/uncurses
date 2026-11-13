@@ -1,5 +1,6 @@
 #[cfg(doc)]
 use crate::DragDrop;
+use crate::machine_id::current_machine_id;
 use std::{
     fmt, io,
     str::FromStr,
@@ -228,12 +229,34 @@ pub struct DropOffer {
 
 /// A version 1 protocol machine identity.
 ///
+/// Use [`Self::current`] to derive the identity of the application host.
 /// To supply an existing digest, parse `1:` followed by its 64 hexadecimal digits.
 /// Machine identity lets the terminal distinguish local and remote file URLs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineId(String);
 
 impl MachineId {
+    /// Derive the identity of the machine that runs this application.
+    ///
+    /// The source follows the [Kitty specification]:
+    /// - macOS: `IOPlatformUUID`, obtained through `gethostuuid`.
+    /// - Windows: `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\MachineGuid`.
+    /// - Other platforms: `/etc/machine-id`, with trailing whitespace removed.
+    ///
+    /// Hash the source with HMAC-SHA256 and the key `tty-dnd-protocol-machine-id`.
+    /// The result is `1:` followed by 64 lowercase hexadecimal digits.
+    /// Over SSH, this identifies the remote application host, not the terminal host.
+    ///
+    /// # Errors
+    ///
+    /// Return an error if the source cannot be read or is empty.
+    /// An absent `/etc/machine-id` returns [`io::ErrorKind::NotFound`].
+    ///
+    /// [Kitty specification]: https://sw.kovidgoyal.net/kitty/dnd-protocol/#machine-id
+    pub fn current() -> io::Result<Self> {
+        current_machine_id().map(Self)
+    }
+
     /// Return the identity in its wire format.
     pub fn as_str(&self) -> &str {
         &self.0
