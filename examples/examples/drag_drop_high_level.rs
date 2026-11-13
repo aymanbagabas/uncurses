@@ -2,9 +2,13 @@
 //!
 //! Run with `cargo run -p examples --example drag_drop_high_level` in Kitty 0.47
 //! or newer. Drop text onto the window, or use Kitty's drag gesture to copy
-//! text out. Press q or Ctrl-C to quit.
+//! text out. Select the next drag's thumbnail with 1 (image), 2 (text), or
+//! 0 (none). Press q or Ctrl-C to quit.
 
-use std::io::{self, Cursor, Write};
+#[path = "support/drag_drop.rs"]
+mod support;
+
+use std::io::{self, Read, Write};
 
 use uncurses::ansi::drag_drop::REQUEST_DRAG_DROP;
 use uncurses::buffer::SurfaceMut;
@@ -22,10 +26,27 @@ const TEXT: &str = "Hello from uncurses!\n";
 const PREVIEW_LIMIT: usize = 256;
 
 #[derive(Default)]
+struct TextReader {
+    position: usize,
+}
+
+impl Read for TextReader {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let count = output.len().min(TEXT.len() * 512 - self.position);
+        for byte in &mut output[..count] {
+            *byte = TEXT.as_bytes()[self.position % TEXT.len()];
+            self.position += 1;
+        }
+        Ok(count)
+    }
+}
+
+#[derive(Default)]
 struct Demo {
     received: usize,
     preview: String,
     status: String,
+    thumbnail: support::Thumbnail,
 }
 
 fn copy_type(offer: &DropOffer) -> Option<&str> {
@@ -85,10 +106,16 @@ impl Demo {
                 controller.complete_drop(out, Operation::Copy)?;
                 self.status = format!("Received {} bytes; copy complete", self.received);
             }
+            Event::DropCanceled => {
+                self.received = 0;
+                self.preview.clear();
+                self.status = "Drop canceled by a new drag".into();
+            }
             Event::DropFailed(error) => self.status = format!("Drop error: {error}"),
             Event::DragRequested(_) => {
                 controller.offer(out, &[MIME], Operations::COPY)?;
-                controller.send(out, MIME, TEXT.repeat(512).as_bytes())?;
+                controller.send_from(out, MIME, &mut TextReader::default())?;
+                self.thumbnail.upload(controller, out)?;
                 controller.start_drag(out)?;
                 self.status = "Drag offered with text".into();
             }
@@ -101,8 +128,7 @@ impl Demo {
             }
             Event::DragDropped => self.status = "Text dropped; waiting for completion".into(),
             Event::DataRequested { mime_type } => {
-                let mut text = Cursor::new(TEXT.repeat(512));
-                controller.send_from(out, &mime_type, &mut text)?;
+                controller.send_from(out, &mime_type, &mut TextReader::default())?;
             }
             Event::DragFinished { canceled } => {
                 self.status = if canceled {
@@ -140,11 +166,20 @@ fn run(
             Style::new(),
         );
         screen.set_str((0, 2), &demo.status, Style::new());
+        screen.set_str(
+            (0, 1),
+            &format!(
+                "Next drag thumbnail: {}. 1 image / 2 text / 0 none",
+                demo.thumbnail.label()
+            ),
+            Style::new(),
+        );
         screen.set_str((0, 4), &demo.preview, Style::new());
         screen.render()?;
         let event = program.read_event()?;
         match &event {
             TerminalEvent::KeyPress(key) if quit.contains(key) => return Ok(()),
+            TerminalEvent::KeyPress(key) if demo.thumbnail.select(key) => {}
             TerminalEvent::Resize(_) => program.autoresize()?,
             TerminalEvent::PrimaryDeviceAttributes(_) if awaiting_capabilities => {
                 if !program.capabilities().drag_drop() {
@@ -162,10 +197,14 @@ fn run(
             }
             _ => {}
         }
-        for event in controller.handle_event(&event)? {
-            demo.event(controller, program.screen_mut(), event)?;
+        let events = controller.handle_event(&event)?;
+        let screen = program.screen_mut();
+        // Drain staged screen output before bypassing its buffer for data.
+        screen.flush()?;
+        for event in events {
+            demo.event(controller, screen.writer_mut(), event)?;
         }
-        program.screen_mut().flush()?;
+        screen.writer_mut().flush()?;
     }
 }
 
@@ -191,5 +230,45 @@ mod tests {
         demo.receive(&[0xff; 1024]);
         assert_eq!(demo.preview, "a".repeat(PREVIEW_LIMIT - 1));
         assert_eq!(demo.received, PREVIEW_LIMIT - 1 + 1024);
+    }
+
+    #[test]
+    fn generated_text_matches_across_short_reads() {
+        let mut reader = TextReader::default();
+        let mut result = Vec::new();
+        let mut buffer = [0; 7];
+        loop {
+            let count = reader.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            result.extend_from_slice(&buffer[..count]);
+        }
+        assert_eq!(result, TEXT.repeat(512).as_bytes());
+    }
+
+    #[test]
+    fn selected_thumbnail_controls_the_next_offer() {
+        for (key, expected) in [("1", Some("y=32")), ("2", Some("y=0")), ("0", None)] {
+            let mut controller = DragDrop::new(DragDropOptions::default());
+            let mut out = Vec::new();
+            controller.enable_drags(&mut out).unwrap();
+            let mut demo = Demo::default();
+            assert!(demo.thumbnail.select(&key.parse().unwrap()));
+            let request = TerminalEvent::DragDrop {
+                options: vec![("t".into(), "o".into())],
+                payload: Vec::new(),
+            };
+            for event in controller.handle_event(&request).unwrap() {
+                demo.event(&mut controller, &mut out, event).unwrap();
+            }
+            let wire = String::from_utf8(out).unwrap();
+            if let Some(format) = expected {
+                assert!(wire.contains(&format!("t=p:x=-1:{format}:")));
+            } else {
+                assert!(!wire.contains("t=p:x=-1"));
+            }
+            assert!(wire.contains("t=P:x=-1"));
+        }
     }
 }

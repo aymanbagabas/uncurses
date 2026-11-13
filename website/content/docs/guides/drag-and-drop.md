@@ -77,7 +77,8 @@ Over SSH, it identifies the remote application host.
 The terminal compares this identity with its own to determine whether files require remote transfer.
 The method returns an error if the operating system's source is unavailable or empty.
 See [`MachineId::current`](/api/uncurses_dragdrop/struct.MachineId.html#method.current) for each platform's source.
-The controller reports remote file requests and responses with `Error::UnsupportedRemoteFiles`.
+Set this option explicitly for programs that transfer files across hosts.
+The same code works over SSH and with a local terminal.
 
 Print the identity with:
 
@@ -138,6 +139,12 @@ Send each `Data` chunk to a destination or a bounded preview.
 Call `complete_drop` only after the destination accepts the data.
 Call `cancel_drop` if your application cannot finish the copy.
 
+A new drag can replace an unfinished drop.
+`handle_event` emits `Event::DropCanceled` before the new hover or drop notification.
+Discard partial destination data, queued entries, and stored directory handles before processing the next notification.
+The terminal releases the replaced drop's resources.
+Keep this cleanup local because the controller already tracks the new offer.
+
 ### Offer text
 
 On `DragRequested`, offer the MIME types and supply initial data.
@@ -176,6 +183,150 @@ Both `send` and `send_from` send a complete body and its end marker.
 Output methods do not flush, so flush responses before the next input wait.
 Dispatch the events from each `handle_event` call to both roles if your application supports both.
 
+For large transfers, write directly to the screen's underlying writer.
+Flush staged screen output first to preserve output order:
+
+```rust
+use std::io::{Read, Write};
+use uncurses::program::Program;
+use uncurses::terminal::{Stdin, Stdout};
+use uncurses_dragdrop::{DragDrop, Entry};
+
+fn send_text(
+    program: &mut Program<Stdin, Stdout>,
+    controller: &mut DragDrop,
+    source: &mut impl Read,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let screen = program.screen_mut();
+    screen.flush()?;
+    controller.send_from(screen.writer_mut(), Entry::Text, source)?;
+    screen.writer_mut().flush()?;
+    Ok(())
+}
+```
+
+The caller supplies a source after an offer or data request permits the send.
+This avoids retaining the complete body in the screen's output buffer.
+It remains a synchronous transfer.
+
+### Receive files and directories
+
+Register `text/uri-list` to receive file drops.
+Accept a supported operation during hover, then call `list(out)` after `Drop`.
+An empty MIME slice in `accept` preserves the current MIME selection.
+
+`UriList { remote }` identifies whether the terminal considers the files remote.
+Each `Listed { entry, name }` supplies a requestable entry and the original URI bytes.
+The controller skips URI comments and empty lines.
+Use `request(out, Entry::UriList)` instead when your application needs the raw URI list.
+
+Keep a queue of listed entries.
+After `DataEnd`, request one entry from that queue.
+The response starts with `Entry(kind)`:
+
+| Kind | Response |
+| --- | --- |
+| `EntryKind::File` | `Data` chunks contain file bytes |
+| `EntryKind::Symlink` | `Data` chunks contain the link target |
+| `EntryKind::Directory { handle }` | `Listed` events contain child names and entries |
+
+Preserve directory names as bytes until your application chooses a filesystem policy.
+Append directory children to the queue and request them one at a time.
+Release each directory handle with `close_directory` after its children finish.
+Call `complete_drop` after all required data reaches its destination.
+Cancel the drop if a request or destination fails.
+
+`Entry::UriEntry(index)` selects a root URI.
+`Entry::DirectoryEntry { handle, index }` selects a listed child.
+Both indices start at one.
+Prefer the `Entry` supplied by `Listed` over constructing indices yourself.
+`Entry::Text` and `Entry::Custom(mime)` select other MIME bodies.
+Existing MIME strings also work with `request`, `send`, and `send_from`.
+
+Your application controls storage, byte limits, and path validation.
+Treat incoming names, URIs, and symlink targets as untrusted data.
+Keep writes inside the chosen destination and decide whether to create symlinks.
+The controller transfers bytes; your application performs filesystem operations.
+
+### Offer files and directory trees
+
+On `DragRequested`, call `offer_files(out, uris, operations)`.
+Supply file URIs and end directory URIs with `/`.
+This method offers `text/uri-list` and supplies its initial data.
+You can also use `offer` followed by `send(out, Entry::UriList, bytes)`.
+Add any thumbnails, then call `start_drag`.
+
+For files on another host, `EntryRequested { entry }` selects a root URI.
+Answer with `send` or `send_from` for a file.
+Use `send_symlink` for the link target instead of following the link.
+Use `send_directory` for a directory's child names.
+Its returned handle identifies that directory in subsequent child sends.
+
+Send children in breadth-first order.
+Complete the entire tree before answering the next root request.
+The terminal requests roots; the application sends every descendant.
+For example, after a directory root request:
+
+```rust
+use std::io::Write;
+use uncurses_dragdrop::{DragDrop, Entry};
+
+fn send_tree(
+    controller: &mut DragDrop,
+    out: &mut impl Write,
+    root: Entry,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let handle = controller.send_directory(out, root, &[b"hello.txt", b"link"])?;
+    controller.send(
+        out,
+        Entry::DirectoryEntry { handle, index: 1 },
+        b"Hello!\n",
+    )?;
+    controller.send_symlink(
+        out,
+        Entry::DirectoryEntry { handle, index: 2 },
+        b"hello.txt",
+    )?;
+    out.flush()?;
+    Ok(())
+}
+```
+
+Use `fail_drag(out, error)` for a fatal remote file error.
+Use `fail_data` for a failed MIME request.
+If a source read fails, report failure or cancel the drag before further sends.
+If protocol output fails, restore the terminal and discard the controller.
+
+### Add drag thumbnails
+
+Call `add_thumbnail` with bytes, or `add_thumbnail_from` with a reader, before `start_drag`.
+Both methods return a zero-based image index.
+The first image is the initial thumbnail.
+Use `select_thumbnail(out, Some(index))` to change it.
+Use `select_thumbnail(out, None)` to remove it while the drag continues.
+
+```rust
+use std::io::Write;
+use uncurses_dragdrop::{DragDrop, ThumbnailFormat};
+
+fn add_preview(
+    controller: &mut DragDrop,
+    out: &mut impl Write,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    let index = controller.add_thumbnail(
+        out,
+        ThumbnailFormat::Rgba { width: 16, height: 16 },
+        &[0x88; 16 * 16 * 4],
+    )?;
+    Ok(index)
+}
+```
+
+`ThumbnailFormat` supports RGB, RGBA, PNG, and text.
+Supply image dimensions, or a text scale and opacity.
+Raw RGB and RGBA byte counts must match their dimensions.
+See the [thumbnail reference](/api/uncurses_dragdrop/enum.ThumbnailFormat.html) for format details.
+
 ### Close the controller
 
 Call `close`, then flush before `Program::pause` or `Program::finish`.
@@ -200,14 +351,53 @@ fn finish(
 ```
 
 Your application owns file access and copy or move policy.
-Remote file requests and remote URI responses return `Error::UnsupportedRemoteFiles`.
-Cancel the exchange and clean up when this error occurs.
+Report a move only after the destination accepts all data and your application completes the required source handling.
 
-Run the complete example for both roles, a bounded preview, and exit cleanup:
+### Run the interactive examples
+
+Run the text example for both roles, a bounded preview, and exit cleanup:
 
 ```sh
 cargo run -p examples --example drag_drop_high_level
 ```
+
+Press 1 for an image thumbnail, 2 for text, or 0 for none.
+The selection applies to the next drag.
+Press q or Ctrl-C to exit.
+
+Run the file example with source files or directories:
+
+```sh
+cargo run -p examples --example drag_drop_files -- Cargo.toml uncurses-dragdrop/src
+```
+
+Drop files onto its window to inspect listings and count received bytes.
+The example consumes incoming data without saving files.
+Use Kitty's drag gesture to copy the supplied paths out.
+The example sends complete directory trees and preserves symlink targets.
+It uses the same thumbnail keys as the text example.
+Run without source arguments to receive drops only.
+
+For SSH, start the example on the application host from a local Kitty terminal:
+
+```sh
+ssh -t user@host 'cd /path/to/uncurses && cargo run -p examples --example drag_drop_files -- Cargo.toml uncurses-dragdrop/src'
+```
+
+Replace the host and checkout path with your own.
+The checkout and source paths must exist on the application host.
+The file example configures `MachineId::current()` explicitly.
+Kitty compares host identities and requests file contents when they differ.
+Use a terminal connection that passes OSC 72 messages in both directions.
+Multiplexers can require additional passthrough configuration.
+
+Run the scripted file exchange without a terminal:
+
+```sh
+cargo run -p examples --example drag_drop_files -- --scripted
+```
+
+This mode uses in-memory sources to demonstrate protocol events and all four thumbnail formats.
 
 See the [controller reference](/api/uncurses_dragdrop/) for all events, methods, and errors.
 

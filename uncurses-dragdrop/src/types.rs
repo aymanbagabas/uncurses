@@ -1,5 +1,121 @@
 use std::{fmt, io, str::FromStr};
 
+/// A MIME body or a one-based entry in a received or offered list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    /// The `text/plain` MIME body.
+    Text,
+    /// The `text/uri-list` MIME body.
+    UriList,
+    /// A one-based, non-comment URI list entry.
+    UriEntry(u32),
+    /// A one-based entry in an open directory.
+    DirectoryEntry {
+        /// A signed or unsigned 32-bit wire handle, other than zero or one.
+        handle: i64,
+        /// One-based index in the directory listing.
+        index: u32,
+    },
+    /// A MIME type or native format alias.
+    Custom(String),
+}
+
+impl Entry {
+    pub(crate) fn mime(&self) -> Option<&str> {
+        match self {
+            Self::Text => Some("text/plain"),
+            Self::UriList => Some("text/uri-list"),
+            Self::Custom(mime) => Some(mime),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_uri_list(&self) -> bool {
+        self.mime() == Some("text/uri-list")
+    }
+}
+
+impl From<&str> for Entry {
+    fn from(value: &str) -> Self {
+        match value {
+            "text/plain" => Self::Text,
+            "text/uri-list" => Self::UriList,
+            _ => Self::Custom(value.to_owned()),
+        }
+    }
+}
+
+impl From<String> for Entry {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "text/plain" => Self::Text,
+            "text/uri-list" => Self::UriList,
+            _ => Self::Custom(value),
+        }
+    }
+}
+
+impl From<&String> for Entry {
+    fn from(value: &String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl From<&Entry> for Entry {
+    fn from(value: &Entry) -> Self {
+        value.clone()
+    }
+}
+
+/// The content type of a requested file entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Regular file bytes.
+    File,
+    /// Symbolic link target bytes.
+    Symlink,
+    /// A listing with an open directory handle.
+    Directory {
+        /// A signed or unsigned 32-bit wire handle, other than zero or one.
+        handle: i64,
+    },
+}
+
+/// The representation and dimensions of a drag thumbnail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailFormat {
+    /// Packed sRGB pixels, with three bytes per pixel.
+    Rgb {
+        /// Width in pixels.
+        width: u32,
+        /// Height in pixels.
+        height: u32,
+    },
+    /// Packed sRGB pixels with alpha, with four bytes per pixel.
+    Rgba {
+        /// Width in pixels.
+        width: u32,
+        /// Height in pixels.
+        height: u32,
+    },
+    /// PNG bytes with the declared image dimensions.
+    Png {
+        /// Width in pixels.
+        width: u32,
+        /// Height in pixels.
+        height: u32,
+    },
+    /// UTF-8 text rendered at the terminal font size times the given ratio.
+    Text {
+        /// Positive font size multiplier.
+        numerator: u32,
+        /// Positive font size divisor.
+        denominator: u32,
+        /// Background opacity from zero (transparent) through 1024 (opaque).
+        opacity: u16,
+    },
+}
+
 bitflags::bitflags! {
     /// Operations an offer permits.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,11 +266,32 @@ pub enum Event {
     Leave,
     /// The user released the content. Data can now be requested.
     Drop(DropOffer),
+    /// A new drag replaced the unfinished drop.
+    ///
+    /// Emitted before the new [`Self::Hover`], [`Self::Drop`], or [`Self::Leave`].
+    /// Discard application-owned partial data before the next notification.
+    /// The controller has released the old exchange; cleanup needs no protocol
+    /// output for the replaced drop.
+    DropCanceled,
     /// Decoded bytes of the current incoming request.
     /// Boundaries can split UTF-8 characters and application records.
     Data(Vec<u8>),
     /// The current incoming body ended. Complete the drop or request more data.
     DataEnd,
+    /// Metadata for a URI list, emitted before its bytes or listed entries.
+    UriList {
+        /// Whether the terminal reports a different source machine.
+        remote: bool,
+    },
+    /// The type of a requested file entry, emitted before its content.
+    Entry(EntryKind),
+    /// One complete URI or binary directory name.
+    Listed {
+        /// The target to pass to [`crate::DragDrop::request`].
+        entry: Entry,
+        /// Original URI bytes, or a directory name without its NUL separator.
+        name: Vec<u8>,
+    },
     /// The terminal reported an incoming error.
     DropFailed(RemoteError),
     /// The user performed a drag gesture.
@@ -177,6 +314,12 @@ pub enum Event {
     DataRequested {
         /// The requested MIME type.
         mime_type: String,
+    },
+    /// The terminal requested a root URI entry. Answer requests in FIFO order.
+    /// Send all directory descendants before the next root entry.
+    EntryRequested {
+        /// A one-based [`Entry::UriEntry`] target.
+        entry: Entry,
     },
     /// The outgoing exchange ended.
     ///
@@ -202,9 +345,6 @@ pub enum Error {
     InvalidInput(&'static str),
     /// An incoming message is malformed or inconsistent.
     Protocol(String),
-    /// Remote file traversal or a remote URI response needs application support.
-    /// Cancel the exchange or close the controller.
-    UnsupportedRemoteFiles,
     /// A previous output failure left terminal state uncertain.
     /// Restore the terminal before constructing another controller.
     OutputFailed,
@@ -216,7 +356,6 @@ impl fmt::Display for Error {
             Self::Io(error) => error.fmt(f),
             Self::InvalidState(message) | Self::InvalidInput(message) => f.write_str(message),
             Self::Protocol(message) => write!(f, "invalid drag and drop message: {message}"),
-            Self::UnsupportedRemoteFiles => f.write_str("remote file transfer is unsupported"),
             Self::OutputFailed => f.write_str("previous terminal output failed"),
         }
     }

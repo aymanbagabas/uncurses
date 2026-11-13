@@ -1,5 +1,10 @@
 use super::*;
+use crate::protocol::BASE64;
+use base64::Engine;
 use uncurses::event::Event as RawEvent;
+
+#[path = "file_tests.rs"]
+mod files;
 
 const MIME: &str = "text/plain";
 
@@ -99,6 +104,73 @@ fn drop_uses_actual_mimes_and_requires_explicit_completion() {
     controller.complete_drop(&mut out, Operation::Copy).unwrap();
     assert_eq!(out, b"\x1b]72;t=r:o=1\x1b\\");
     assert!(controller.dropped.is_none());
+}
+
+#[test]
+fn new_drag_cancels_the_unfinished_drop_before_its_offer() {
+    for actual in [false, true] {
+        for data_ended in [false, true] {
+            let mut controller = dropping();
+            handle(&mut controller, "t=r:x=1", b"b2xk");
+            if data_ended {
+                handle(&mut controller, "t=r:x=1", b"");
+            }
+            let metadata = if actual { "t=M:o=1" } else { "t=m:o=1" };
+            let events = handle(&mut controller, metadata, b"text/html text/plain");
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0], Event::DropCanceled);
+            assert!(
+                matches!(
+                    &events[1],
+                    Event::Drop(_) if actual
+                ) || matches!(&events[1], Event::Hover(_) if !actual)
+            );
+
+            assert!(handle(&mut controller, "t=r:x=1", b"b2xk").is_empty());
+            assert!(handle(&mut controller, "t=r:x=1", b"").is_empty());
+            let mut out = Vec::new();
+            if !actual {
+                assert!(controller.complete_drop(&mut out, Operation::Copy).is_err());
+                controller.cancel_drop(&mut out).unwrap();
+                assert!(out.is_empty());
+                controller
+                    .accept(&mut out, &[MIME], Operation::Copy)
+                    .unwrap();
+                handle(&mut controller, "t=M:o=1", b"text/html text/plain");
+            }
+            out.clear();
+            controller.request(&mut out, MIME).unwrap();
+            assert_eq!(out, b"\x1b]72;t=r:x=2\x1b\\");
+            assert_eq!(
+                handle(&mut controller, "t=r:x=2", b"bmV3"),
+                [Event::Data(b"new".to_vec())]
+            );
+            assert_eq!(handle(&mut controller, "t=r:x=2", b""), [Event::DataEnd]);
+            controller.complete_drop(&mut out, Operation::Copy).unwrap();
+            assert!(matches!(
+                handle(&mut controller, "t=m:o=1", MIME.as_bytes()).as_slice(),
+                [Event::Hover(_)]
+            ));
+        }
+    }
+}
+
+#[test]
+fn leave_after_an_unfinished_drop_clears_the_exchange() {
+    let mut controller = dropping();
+    assert_eq!(
+        handle(&mut controller, "t=m:x=-1:y=-1", b""),
+        [Event::DropCanceled, Event::Leave]
+    );
+    let mut out = Vec::new();
+    assert!(controller.request(&mut out, MIME).is_err());
+    assert!(
+        controller
+            .accept(&mut out, &[MIME], Operation::Copy)
+            .is_err()
+    );
+    controller.cancel_drop(&mut out).unwrap();
+    assert!(out.is_empty());
 }
 
 #[test]
@@ -388,7 +460,7 @@ fn cancel_preparation_and_pending_start_use_distinct_cleanup() {
 }
 
 #[test]
-fn remote_errors_and_unsupported_files_are_explicit() {
+fn remote_errors_and_invalid_file_metadata_are_explicit() {
     let mut controller = dropping();
     assert_eq!(
         handle(&mut controller, "t=R:x=1", b"EIO:failed"),
@@ -401,12 +473,12 @@ fn remote_errors_and_unsupported_files_are_explicit() {
     let mut controller = dropping();
     assert!(matches!(
         controller.handle_event(&raw("t=r:x=1:X=1", b"")),
-        Err(Error::UnsupportedRemoteFiles)
+        Err(Error::Protocol(_))
     ));
     let mut controller = dragging();
     assert!(matches!(
         controller.handle_event(&raw("t=k:x=1", b"")),
-        Err(Error::UnsupportedRemoteFiles)
+        Err(Error::Protocol(_))
     ));
     controller.cancel_drag(&mut Vec::new()).unwrap();
 }

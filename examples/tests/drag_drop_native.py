@@ -6,6 +6,9 @@ kitty +runpy 'import runpy; runpy.run_path("examples/tests/drag_drop_native.py",
 For the controller example, build drag_drop_high_level instead and run the
 same command with UNCURSES_DND_HIGH_LEVEL=1.
 The controller run also checks exit before delivery of the drag startup reply.
+Set UNCURSES_DND_COMMAND to an SSH command with forced PTY allocation that runs
+the selected example to check raw OSC 72 over SSH. Shell-style quoting is
+supported; the command runs without a shell.
 
 Desktop gestures are simulated through Kitty's test hooks. This checks native
 protocol state and PTY input, not operating-system drag visuals.
@@ -16,6 +19,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import struct
 import subprocess
 import termios
@@ -41,7 +45,9 @@ original = termios.tcgetattr(slave)
 
 def start_example():
     return subprocess.Popen(
-        [f"target/debug/examples/{example}"],
+        shlex.split(os.environ.get(
+            "UNCURSES_DND_COMMAND", f"target/debug/examples/{example}"
+        )),
         stdin=slave, stdout=slave, stderr=slave,
         env={**os.environ, "TERM": "xterm-kitty"},
     )
@@ -131,6 +137,15 @@ def pump_until(condition):
 
 
 kitty.dnd_set_test_write_func(reply)
+
+
+def wait_for_exit(message):
+    if "UNCURSES_DND_COMMAND" in os.environ:
+        # SSH must drain the remote PTY before its session can close.
+        pump_until(lambda: b"\x1b[?1049l" in output)
+    require(process.wait(timeout=5) == 0, message)
+
+
 try:
     initial_drop_wanted = probe("drop_wanted")
     pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
@@ -159,10 +174,7 @@ try:
     pump_until(lambda: b"\x1b]72;t=P:x=-1\x1b\\" in output)
     require(probe("drag_operations") == 1,
             f"Drag offer failed: {probe('drag_operations')}, {bytes(replies[-1000:])!r}")
-    if high_level:
-        require(probe("drag_thumbnail_size") == 0, "Unexpected thumbnail")
-    else:
-        require(probe("drag_thumbnail_size") == 16 * 16 * 4, "Thumbnail dimensions changed")
+    require(probe("drag_thumbnail_size") == 16 * 16 * 4, "Thumbnail dimensions changed")
     kitty.dnd_test_force_drag_dropped(window)
     try:
         kitty.dnd_test_drag_get_data(window, "text/plain")
@@ -185,7 +197,7 @@ try:
     pump_until(lambda: probe("drop_getting_data_for_mime") == "text/plain")
     reply(window, b"q")
     # Leave cleanup output unread until exit to exercise buffered PTY output.
-    require(process.wait(timeout=5) == 0, "Example failed")
+    wait_for_exit("Example failed")
     pump_until(lambda: b"\x1b]72;t=o:x=2\x1b\\" in output)
     require(not probe("drop_wanted") and not probe("drag_can_offer"), "Registration leaked")
     require(probe("last_drop_action") == 0, "Pending drop was not canceled")
@@ -203,7 +215,7 @@ try:
         require(b";OK\x1b\\" in held_replies, "Native drag startup reply was not withheld")
         require(probe("drag_operations") == 1, "Native drag did not start")
         reply(window, b"q")
-        require(process.wait(timeout=5) == 0, "Example failed during drag startup")
+        wait_for_exit("Example failed during drag startup")
         pump_until(lambda: not probe("drop_wanted") and not probe("drag_can_offer"))
         cancel = b"\x1b]72;t=E:y=-1\x1b\\"
         unregister = b"\x1b]72;t=o:x=2\x1b\\"
@@ -221,7 +233,7 @@ try:
     process = start_example()
     pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
     reply(window, b"q")
-    require(process.wait(timeout=5) == 0, "Example did not quit before DA1")
+    wait_for_exit("Example did not quit before DA1")
     require(not probe("drop_wanted") and not probe("drag_can_offer"),
             "Registration leaked before DA1")
     check_restored()
@@ -230,7 +242,11 @@ try:
 finally:
     if process.poll() is None:
         process.terminate()
-        process.wait(timeout=5)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
     kitty.dnd_set_test_write_func(None)
     kitty.dnd_test_cleanup_fake_window(os_window)
     os.close(master)

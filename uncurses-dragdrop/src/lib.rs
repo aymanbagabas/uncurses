@@ -24,19 +24,23 @@
 //! # Ok::<(), uncurses_dragdrop::Error>(())
 //! ```
 
+mod incoming;
 mod machine_id;
+mod outgoing;
 mod protocol;
+mod stream;
 mod types;
 
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 
-use base64::Engine;
-use protocol::{BASE64, Message, error_payload, join_mimes, mime_list, value};
+use incoming::{Incoming, Received};
+use protocol::{Message, error_payload, join_mimes, mime_list, value};
 use uncurses::ansi::drag_drop::write_drag_drop;
 
 pub use types::{
-    DragDropOptions, DropOffer, Error, Event, MachineId, Operation, Operations, Position,
-    RemoteError,
+    DragDropOptions, DropOffer, Entry, EntryKind, Error, Event, MachineId, Operation, Operations,
+    Position, RemoteError, ThumbnailFormat,
 };
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -54,7 +58,19 @@ struct Drag {
     phase: DragPhase,
     mimes: Vec<String>,
     requests: Vec<usize>,
-    failed_body: Option<usize>,
+    failed_body: Option<FailedBody>,
+    uri_count: Option<u32>,
+    file_requests: VecDeque<u32>,
+    children: VecDeque<Entry>,
+    directories: HashMap<i64, u32>,
+    next_handle: u32,
+    thumbnails: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FailedBody {
+    Mime(usize),
+    Global,
 }
 
 /// A reusable controller for one logical terminal endpoint.
@@ -69,7 +85,8 @@ pub struct DragDrop {
     drags_enabled: bool,
     hover: Option<DropOffer>,
     dropped: Option<DropOffer>,
-    request: Option<usize>,
+    request: Option<Incoming>,
+    received: Received,
     drag: Drag,
     continuation: Option<Message>,
     output_failed: bool,
@@ -128,7 +145,7 @@ impl DragDrop {
         mimes: &[&str],
         operation: Operation,
     ) -> Result<(), Error> {
-        let payload = join_mimes(mimes, false)?;
+        let payload = join_mimes(mimes, true)?;
         let offer = self
             .hover
             .as_ref()
@@ -150,30 +167,6 @@ impl DragDrop {
             return Err(Error::InvalidState("reject requires a hover offer"));
         }
         self.write(out, &["t=m", "o=0"], b"")
-    }
-
-    /// Request a MIME body after an actual drop.
-    ///
-    /// Only one incoming body is active at a time. After [`Event::DataEnd`],
-    /// request another type or complete the drop.
-    pub fn request(&mut self, out: &mut impl Write, mime: &str) -> Result<(), Error> {
-        let offer = self
-            .dropped
-            .as_ref()
-            .ok_or(Error::InvalidState("request requires an actual drop"))?;
-        if self.request.is_some() {
-            return Err(Error::InvalidState("an incoming request is still active"));
-        }
-        let index = offer
-            .mime_types
-            .iter()
-            .position(|offered| offered == mime)
-            .ok_or(Error::InvalidInput("MIME type is not offered"))?;
-        let wire_index =
-            u32::try_from(index + 1).map_err(|_| Error::InvalidInput("too many MIME types"))?;
-        self.write(out, &["t=r", &format!("x={wire_index}")], b"")?;
-        self.request = Some(index);
-        Ok(())
     }
 
     /// Report application success after consuming the desired content.
@@ -214,6 +207,7 @@ impl DragDrop {
     fn clear_drop(&mut self) {
         self.dropped = None;
         self.request = None;
+        self.received = Received::default();
         self.discard_continuation(&["m", "M", "r", "R"]);
     }
 
@@ -245,75 +239,6 @@ impl DragDrop {
         Ok(())
     }
 
-    /// Send a complete MIME body, including its protocol end marker.
-    ///
-    /// Before startup this supplies initial data. During an active drag it
-    /// answers a [`Event::DataRequested`] notification.
-    pub fn send(
-        &mut self,
-        out: &mut impl Write,
-        mime: &str,
-        mut bytes: &[u8],
-    ) -> Result<(), Error> {
-        self.send_from(out, mime, &mut bytes)
-    }
-
-    /// Stream a complete body from a reader with bounded data buffers.
-    ///
-    /// This synchronous call reads until EOF. Slow reads or writes block the
-    /// caller. An interrupted read is retried. Other read errors leave the body
-    /// unfinished; call [`Self::fail_data`] or [`Self::cancel_drag`].
-    /// Output errors poison the controller because terminal state is uncertain.
-    pub fn send_from(
-        &mut self,
-        out: &mut impl Write,
-        mime: &str,
-        source: &mut impl Read,
-    ) -> Result<(), Error> {
-        self.check_output()?;
-        if self.drag.failed_body.is_some() {
-            return Err(Error::InvalidState("report or cancel the failed data body"));
-        }
-        let (index, initial) = self.data_target(mime)?;
-        let kind = if initial { "t=p" } else { "t=e" };
-        let index_key = if initial { "x" } else { "y" };
-        let index_option = format!("{index_key}={index}");
-        let mut bytes = [0; 3072];
-        let mut used = 0;
-        loop {
-            let count = match source.read(&mut bytes[used..]) {
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => {
-                    self.drag.failed_body = Some(index);
-                    return Err(error.into());
-                }
-                Ok(count) => count,
-            };
-            used += count;
-            if used == bytes.len() || count == 0 {
-                if used != 0 {
-                    let encoded = BASE64.encode(&bytes[..used]);
-                    self.write(out, &[kind, &index_option], encoded.as_bytes())?;
-                    used = 0;
-                }
-                if count == 0 {
-                    break;
-                }
-            }
-        }
-        self.write(out, &[kind, &index_option], b"")?;
-        if !initial {
-            let pending = self
-                .drag
-                .requests
-                .iter()
-                .position(|requested| *requested == index)
-                .expect("data_target verified the pending request");
-            self.drag.requests.remove(pending);
-        }
-        Ok(())
-    }
-
     fn data_target(&self, mime: &str) -> Result<(usize, bool), Error> {
         let initial = match self.drag.phase {
             DragPhase::Preparing => true,
@@ -334,6 +259,7 @@ impl DragDrop {
     }
 
     /// Request startup after preparing the offer and any initial data.
+    /// An offer with `text/uri-list` requires its complete initial body.
     /// Wait for [`Event::DragStarted`] before answering later data requests.
     pub fn start_drag(&mut self, out: &mut impl Write) -> Result<(), Error> {
         if self.drag.phase != DragPhase::Preparing {
@@ -341,6 +267,13 @@ impl DragDrop {
         }
         if self.drag.failed_body.is_some() {
             return Err(Error::InvalidState("cancel the failed initial data body"));
+        }
+        if self.drag.mimes.iter().any(|mime| mime == "text/uri-list")
+            && self.drag.uri_count.is_none()
+        {
+            return Err(Error::InvalidState(
+                "pre-send the URI list before starting the drag",
+            ));
         }
         self.write(out, &["t=P", "x=-1"], b"")?;
         self.drag.phase = DragPhase::Starting;
@@ -361,7 +294,12 @@ impl DragDrop {
         if initial {
             return Err(Error::InvalidState("cancel an incomplete initial offer"));
         }
-        if self.drag.failed_body.is_some_and(|failed| failed != index) {
+        if self
+            .drag
+            .failed_body
+            .as_ref()
+            .is_some_and(|failed| *failed != FailedBody::Mime(index))
+        {
             return Err(Error::InvalidState("report the failed MIME body first"));
         }
         self.write(out, &["t=E", &format!("y={index}")], payload.as_bytes())?;
@@ -510,10 +448,8 @@ impl DragDrop {
     /// ignored. Queries can interleave with a chunk chain. Incoming bytes are
     /// decoded incrementally; one input can produce final data and `DataEnd`.
     ///
-    /// Protocol and unsupported-feature errors require application cleanup.
-    /// Remote URI responses and remote file requests return
-    /// [`Error::UnsupportedRemoteFiles`], rather than treating remote paths as
-    /// local files.
+    /// Protocol errors require application cleanup. File content and names
+    /// remain bytes; the controller does not access the filesystem.
     pub fn handle_event(&mut self, event: &uncurses::event::Event) -> Result<Vec<Event>, Error> {
         let (metadata, payload) = match event {
             uncurses::event::Event::DragDrop { options, payload } => (options, payload),
@@ -549,62 +485,42 @@ impl DragDrop {
         if !message.discarded {
             message.payload.extend_from_slice(payload);
         }
-        let events = if message.discarded {
-            Vec::new()
+        let result = if message.discarded {
+            Ok(Vec::new())
         } else if message.value("t") == Some("r") {
-            self.incoming_data(&mut message, !more, payload.is_empty())?
+            self.incoming_data(&mut message, !more, payload.is_empty())
         } else if more {
-            Vec::new()
+            Ok(Vec::new())
         } else {
-            self.message(&message)?
+            self.message(&message)
         };
+        if result.is_err() {
+            if matches!(message.value("t"), Some("r" | "R")) {
+                self.request = None;
+                self.received = Received::default();
+            }
+            message.discarded = true;
+            message.payload.clear();
+        }
         if more {
             self.continuation = Some(message);
         }
-        Ok(events)
-    }
-
-    fn incoming_data(
-        &mut self,
-        message: &mut Message,
-        final_chunk: bool,
-        empty: bool,
-    ) -> Result<Vec<Event>, Error> {
-        let Some(request) = self.request else {
-            // Data can already be in flight when the application cancels.
-            message.payload.clear();
-            return Ok(Vec::new());
-        };
-        if message.number("x")? != (request + 1) as i64 {
-            return Err(Error::Protocol(
-                "response MIME index differs from request".into(),
-            ));
-        }
-        if message.number("y")? != 0 || message.number("Y")? != 0 || message.number("X")? != 0 {
-            return Err(Error::UnsupportedRemoteFiles);
-        }
-        let bytes = message.decode_data(final_chunk)?;
-        let mut events = Vec::new();
-        if !bytes.is_empty() {
-            events.push(Event::Data(bytes));
-        }
-        if final_chunk && empty {
-            self.request = None;
-            events.push(Event::DataEnd);
-        }
-        Ok(events)
+        result
     }
 
     fn message(&mut self, message: &Message) -> Result<Vec<Event>, Error> {
+        let mut events = Vec::new();
         let event = match message.value("t") {
             Some("m" | "M") if self.drops_enabled => {
                 if self.dropped.is_some() {
-                    return Err(Error::Protocol("another drop is still active".into()));
+                    self.clear_drop();
+                    events.push(Event::DropCanceled);
                 }
                 let actual = message.value("t") == Some("M");
                 if !actual && message.number("x")? == -1 && message.number("y")? == -1 {
                     self.hover = None;
-                    return Ok(vec![Event::Leave]);
+                    events.push(Event::Leave);
+                    return Ok(events);
                 }
                 let mimes = if !actual && message.payload.is_empty() {
                     self.hover
@@ -630,12 +546,8 @@ impl DragDrop {
             }
             Some("R") if self.drops_enabled => {
                 let error = message.remote_error()?;
-                if let Some(request) = self.request
-                    && message.number("x")? != (request + 1) as i64
-                {
-                    return Err(Error::Protocol(
-                        "error MIME index differs from request".into(),
-                    ));
+                if let Some(request) = &self.request {
+                    request.matches(message)?;
                 }
                 self.clear_drop();
                 Event::DropFailed(error)
@@ -699,10 +611,25 @@ impl DragDrop {
                     _ => return Ok(Vec::new()),
                 }
             }
-            Some("k") if self.drags_enabled => return Err(Error::UnsupportedRemoteFiles),
+            Some("k") if self.drags_enabled && self.drag.phase == DragPhase::Active => {
+                let index = message.unsigned("x")?;
+                if index == 0
+                    || self.drag.uri_count.is_none_or(|count| index > count)
+                    || message.number("y")? != 0
+                    || message.number("Y")? != 0
+                    || !message.payload.is_empty()
+                {
+                    return Err(Error::Protocol("invalid URI entry request".into()));
+                }
+                self.drag.file_requests.push_back(index);
+                Event::EntryRequested {
+                    entry: Entry::UriEntry(index),
+                }
+            }
             _ => return Ok(Vec::new()),
         };
-        Ok(vec![event])
+        events.push(event);
+        Ok(events)
     }
 }
 

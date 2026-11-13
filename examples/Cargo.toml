@@ -15,6 +15,7 @@ async = ["uncurses/async"]
 
 [dependencies]
 base64 = "0.22"
+url = "2"
 uncurses = { path = "../uncurses", default-features = false }
 uncurses-dragdrop = { path = "../uncurses-dragdrop", default-features = false }
 uncurses-ratatui = { path = "../uncurses-ratatui", default-features = false }
