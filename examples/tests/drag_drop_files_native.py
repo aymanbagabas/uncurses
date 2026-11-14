@@ -180,6 +180,10 @@ with tempfile.TemporaryDirectory(prefix="dnd-native-", dir="target") as director
         for extension, data in images.items():
             (incoming / "nested" / f"photo.{extension}").write_bytes(data)
         (incoming / "line\nbreak").write_bytes(b"arbitrary filename")
+        for index in range(130):
+            folder = incoming / f"wide-{index:03}"
+            folder.mkdir()
+            (folder / "leaf").write_bytes(b"x")
         kitty.dnd_test_set_mouse_pos(window, 5, 3, 40, 48)
         kitty.dnd_test_fake_drop_event(window, False, ["text/uri-list"], 5, 3, 2)
         pump(lambda: probe("drop_action") == 2)
@@ -197,7 +201,7 @@ with tempfile.TemporaryDirectory(prefix="dnd-native-", dir="target") as director
         require(probe("drop_num_dir_handles") == 0, "Directory handles leaked")
         require(probe("drop_file_fd_plus_one") == 0, "File descriptor leaked")
         require(f"URI list: remote={str(not local).lower()}" in diagnostics(), diagnostics())
-        expected = len(content) + len(b"binaryarbitrary filename") + sum(map(len, images.values()))
+        expected = len(content) + len(b"binaryarbitrary filename") + sum(map(len, images.values())) + 130
         require(len(received) == expected, f"Received {len(received)}, expected {expected}")
         if preview:
             require(not destination.exists(), "Preview mode created destination files")

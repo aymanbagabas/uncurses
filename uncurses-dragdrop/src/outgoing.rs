@@ -1,4 +1,4 @@
-use crate::controller::{Drag, DragPhase, FailedBody};
+use crate::controller::{DragPhase, FailedBody};
 use crate::path::os_bytes;
 use crate::protocol::{BASE64, UriCounter, error_payload};
 use crate::{DragDrop, Entry, Error, Operations, RemoteError, ThumbnailFormat, path_to_uri};
@@ -318,9 +318,8 @@ impl DragDrop {
             ));
         }
         self.write(out, &["t=E"], payload.as_bytes())?;
-        self.drag = Drag::default();
-        self.discard_continuation(&["o", "e", "E", "k"]);
-        Ok(())
+        // Some terminals interpret a bare error as a failure for MIME index zero.
+        self.cancel_drag(out)
     }
 
     /// Add a thumbnail during preparation and return its zero-based index.

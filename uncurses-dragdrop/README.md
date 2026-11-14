@@ -13,6 +13,10 @@ Set a deadline and limit each `Program::poll_event` wait to the time that remain
 If the deadline expires, report unconfirmed support, keep both roles disabled, and restore the terminal with `Program::finish`.
 Feed terminal events to `DragDrop::handle_event`.
 Handle the returned events in your application.
+If `handle_event` returns an error, discard partial destination data and queued entries.
+Cancel the affected exchange and flush the output.
+When the error does not identify a role, call both `cancel_drop` and `cancel_drag`.
+Decode errors can occur without a `DropFailed` event.
 
 Construct the controller in the caller and pass it to the registration helper:
 
@@ -50,8 +54,12 @@ For outgoing drags, wait for the terminal gesture notification, `Event::DragRequ
 Then offer MIME types and supply initial data with `send`.
 Call `start_drag` and wait for `Event::DragStarted` to confirm startup.
 Answer later `Event::DataRequested` notifications with `send` or `send_from`.
-Both methods send the complete body and its end marker.
+On success, both methods send the complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
+If a source read fails, use `fail_data` to end a MIME response with an error.
+For file responses, abort the exchange with `fail_drag` or `cancel_drag`.
+Cancel a failed initial offer before startup.
+Terminal output errors require terminal recovery instead of another response.
 Use `Entry::Text`, `Entry::UriList`, or a MIME string to select the content.
 
 For file drops, call `list` after the drop.
@@ -108,6 +116,8 @@ The application owns destination paths, filename validation, and cleanup.
 
 `DragDropOptions::default()` sets control and record bounds of 64 KiB, 10,000 entries per drop, and 128 open directories.
 It also supplies a 4 KiB destination path limit for filesystem adapters.
+`max_pending_requests` limits unanswered outgoing MIME and root requests to 128 combined.
+Application-supplied directory children are separate from this request limit.
 The bidirectional example enforces the path limit and uses the directory limit for local handles.
 Set any limit field to `None` to disable that limit.
 Fields omitted with `..DragDropOptions::default()` retain their default values.
@@ -145,6 +155,9 @@ Raw MIME bodies use `text.txt`, `content.html`, `image.png`, or `image.jpg`.
 HTML stays inert, and previews escape control bytes.
 Canceled or failed drops remove partial destination data.
 Completed drops remain on disk.
+The receiver processes directory children before pending siblings, in their listed order.
+It skips root URIs that cannot supply a valid local filename, including HTTPS links.
+Completion confirms the selected file copies, not a copy of every listed URI.
 
 The example rejects duplicate destination names and unsafe child paths.
 On Unix, it saves relative symlinks without following them and rejects targets that lexically escape the drop directory.
@@ -153,7 +166,7 @@ Other platforms report an error for saved symlinks.
 Treat saved links and HTML as untrusted content when opening them in another application.
 File access and validation errors cancel the affected transfer, remove partial output, and leave the example available.
 Terminal output failures and other protocol errors stop the example after cleanup.
-Incoming control limits cancel both roles because the error does not identify the affected exchange.
+Controller limits cancel both roles because the error does not identify the affected exchange.
 
 Run on an SSH host from a local Kitty terminal:
 
@@ -180,12 +193,21 @@ Print the current host's hashed identity with the [machine ID example](../exampl
 cargo run -p examples --example machine_id
 ```
 
+The [limits example](../examples/examples/drag_drop_limits.rs) simulates repeated terminal requests with a one-request limit:
+
+```sh
+cargo run -p examples --example drag_drop_limits
+```
+
+Its output shows the second request's error and successful drag cancellation.
+
 ## Install
 
 Depend on the crate directly from git:
 
 ```toml
 [dependencies]
+uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 uncurses-dragdrop = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
 
