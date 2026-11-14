@@ -116,6 +116,61 @@ fn incomplete_osc72_is_a_protocol_error() {
     }
 }
 
+#[test]
+fn malformed_routed_messages_preserve_other_endpoints() {
+    let mut controller = DragDrop::new(DragDropOptions {
+        routing_id: Some(17),
+        ..DragDropOptions::default()
+    });
+    controller.enable_drops(&mut Vec::new(), &[MIME]).unwrap();
+    handle(&mut controller, "t=M:i=17:o=1", MIME.as_bytes());
+    controller.request(&mut Vec::new(), MIME).unwrap();
+    for event in [
+        RawEvent::UnknownOsc(b"72;t=r:i=99;invalid".to_vec()),
+        RawEvent::UnknownOsc(b"72;i=99".to_vec()),
+        RawEvent::Unknown(b"\x1b]72;t=r:i=99;partial".to_vec()),
+        RawEvent::Unknown(b"\x9d72;i=99:t=r".to_vec()),
+        RawEvent::Unknown(b"\xc2\x9d72;i=99;partial".to_vec()),
+    ] {
+        assert!(controller.handle_event(&event).unwrap().is_empty());
+        assert!(controller.request.is_some());
+    }
+    for event in [
+        RawEvent::UnknownOsc(b"72;t=r:i=17;invalid".to_vec()),
+        RawEvent::Unknown(b"\x1b]72;i=17;partial".to_vec()),
+        RawEvent::Unknown(b"\x1b]72;i=99".to_vec()),
+        RawEvent::UnknownOsc(b"72;t=r;payload:i=99;".to_vec()),
+    ] {
+        assert!(matches!(
+            controller.handle_event(&event),
+            Err(Error::Protocol(_))
+        ));
+    }
+}
+
+#[test]
+fn bare_malformed_drag_commands_are_not_ignored() {
+    for event in [
+        RawEvent::UnknownOsc(b"72".to_vec()),
+        RawEvent::Unknown(b"\x1b]72".to_vec()),
+        RawEvent::Unknown(b"\x9d72".to_vec()),
+        RawEvent::Unknown(b"\xc2\x9d72".to_vec()),
+    ] {
+        assert!(matches!(
+            dropping().handle_event(&event),
+            Err(Error::Protocol(_))
+        ));
+    }
+    for event in [
+        RawEvent::UnknownOsc(b"720".to_vec()),
+        RawEvent::Unknown(b"\x1b]720".to_vec()),
+        RawEvent::Unknown(b"\x9d720;other".to_vec()),
+        RawEvent::Unknown(b"\xc2\x9d720;other".to_vec()),
+    ] {
+        assert!(dropping().handle_event(&event).unwrap().is_empty());
+    }
+}
+
 fn raw(metadata: &str, payload: &[u8]) -> RawEvent {
     RawEvent::DragDrop {
         options: metadata
