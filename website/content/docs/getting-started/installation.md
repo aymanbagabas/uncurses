@@ -76,3 +76,6 @@ normal `cargo build` is all it takes.
 
 With the crate added, the next page writes the smallest complete interactive
 program: [Hello, terminal]({{< relref "hello-world.md" >}}).
+
+The [uncurses skill](https://github.com/aymanbagabas/uncurses/blob/main/skills/README.md)
+helps coding assistants write uncurses applications and find relevant examples.

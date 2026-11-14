@@ -28,6 +28,9 @@ Linux, macOS, and Windows.
 
 Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
 
+The [uncurses skill](skills/README.md) helps coding assistants write uncurses
+applications and find relevant examples.
+
 For repository development, read the [contributor guide](CONTRIBUTING.md).
 
 ## Features
