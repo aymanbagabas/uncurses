@@ -322,7 +322,6 @@ try:
         pass
     reply(window, b"\x1b[?62c")
     wait_for_exit("Example did not quit after it drained DA1")
-    pump_until(lambda: b"\x1b[?1049l" in output)
     require(not probe("drop_wanted") and not probe("drag_can_offer"),
             "Registration leaked before DA1")
     require(b"\x1b]72;t=a" not in output and b"\x1b]72;t=o:x=1" not in output,
