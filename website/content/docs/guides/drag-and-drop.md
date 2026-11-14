@@ -30,6 +30,8 @@ The trailing primary device attributes reply marks the end of the query batch.
 `program.capabilities().drag_drop()` becomes `true` after a support reply.
 On `Event::PrimaryDeviceAttributes`, check that value and enable the desired roles once.
 Continue handling keyboard input, resize events, and rendering while the query is pending.
+Use a deadline and limit each `Program::poll_event` wait to the time that remains.
+If the deadline expires, report unconfirmed support, keep both roles disabled, and restore the terminal with `Program::finish`.
 See [Querying the terminal]({{< relref "querying-the-terminal.md" >}}) for query details.
 
 Synchronous program reads observe replies automatically.
@@ -38,23 +40,26 @@ For async reads, call `program.observe_event(&event)?`.
 ## Use the controller
 
 When the primary device attributes event confirms the end of the query batch,
-register the roles your application needs if support was confirmed:
+register the roles your application needs if support was confirmed.
+Construct the controller in the caller so it remains available after registration errors:
 
 ```rust
 use std::io::Write;
-use uncurses_dragdrop::{DragDrop, DragDropOptions};
+use uncurses_dragdrop::DragDrop;
 
-fn register(out: &mut impl Write) -> Result<DragDrop, Box<dyn std::error::Error>> {
-    let mut controller = DragDrop::new(DragDropOptions {
-        max_entries: Some(2_000),
-        ..DragDropOptions::default()
-    });
+fn register(
+    controller: &mut DragDrop,
+    out: &mut impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
     controller.enable_drops(out, &["text/plain"])?;
     controller.enable_drags(out)?;
     out.flush()?;
-    Ok(controller)
+    Ok(())
 }
 ```
+
+On every exit path, attempt `close`, flush the cleanup output, and restore the terminal.
+This includes failures from registration and its final flush.
 
 Default options leave `routing_id` and `machine_id` unset.
 Configure these identities only when your environment needs them.
@@ -67,7 +72,8 @@ The [options reference](/api/uncurses_dragdrop/struct.DragDropOptions.html) list
 
 The bidirectional example also uses these options for filesystem resources.
 It bounds queued destination paths with `max_path_bytes` and retained local handles with `max_directories`.
-Exceeding a limit cancels the affected transfer, removes partial output, and keeps the example available.
+Exceeding a filesystem limit cancels the affected transfer, removes partial output, and keeps the example available.
+Incoming controller limits cancel both roles because the error does not identify the affected exchange.
 
 ### Identify the application host
 
@@ -159,7 +165,8 @@ fn receive_text(
 Keep one receive request active at a time.
 This helper collects up to 1 MiB and clears partial bytes when a drop is canceled or fails.
 For larger content, stream into a temporary file and remove it on cancellation or failure.
-`DataEnd` marks transfer completion, but your application must still confirm the result.
+`DataEnd` ends one request, including a URI or directory listing.
+Finish every desired request and copy promised files before confirming the drop.
 Call `complete_drop` only after the destination accepts the data.
 Call `cancel_drop` if your application cannot finish the copy.
 
@@ -204,7 +211,7 @@ fn offer_text(
 Both `send` and `send_from` send a complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
 Output methods do not flush, so flush responses before the next input wait.
-This dispatcher calls both helpers and clears partial receive data on decode errors:
+This dispatcher calls both helpers and cancels the incoming drop on decode errors:
 
 ```rust
 use std::io::Write;
@@ -221,6 +228,8 @@ fn dispatch_terminal_event(
         Ok(events) => events,
         Err(error) => {
             destination.clear();
+            controller.cancel_drop(out)?;
+            out.flush()?;
             return Err(error.into());
         }
     };
@@ -502,7 +511,8 @@ Other platforms report an error for saved symlinks.
 Treat saved links and HTML as untrusted content when opening them elsewhere.
 The example copies file URIs that name a file or directory.
 Root URIs without a safe file name remain in the escaped log and are skipped.
-Local filesystem and protocol errors stop the example after cleanup.
+File access and validation errors cancel the affected transfer and leave the example available.
+Terminal output failures and other protocol errors stop the example after cleanup.
 Outgoing traversal retains open directory handles and opens children without following symbolic links.
 Directory listings include regular files, directories, and symlinks.
 Each opened file must be a regular file before transmission.
