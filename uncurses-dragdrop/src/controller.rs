@@ -426,15 +426,16 @@ impl DragDrop {
     pub fn handle_event(&mut self, event: &uncurses::event::Event) -> Result<Vec<Event>, Error> {
         let (metadata, payload) = match event {
             uncurses::event::Event::DragDrop { options, payload } => (options, payload),
-            uncurses::event::Event::UnknownOsc(bytes) if bytes.starts_with(b"72;") => {
-                return Err(Error::Protocol("malformed OSC 72 message".into()));
+            uncurses::event::Event::UnknownOsc(bytes) => {
+                return self.malformed_message(bytes, true);
             }
-            uncurses::event::Event::Unknown(bytes)
-                if [b"\x1b]72;".as_slice(), b"\x9d72;", b"\xc2\x9d72;"]
-                    .iter()
-                    .any(|prefix| bytes.starts_with(prefix)) =>
-            {
-                return Err(Error::Protocol("incomplete OSC 72 message".into()));
+            uncurses::event::Event::Unknown(bytes) => {
+                for prefix in [b"\x1b]".as_slice(), b"\x9d", b"\xc2\x9d"] {
+                    if let Some(bytes) = bytes.strip_prefix(prefix) {
+                        return self.malformed_message(bytes, false);
+                    }
+                }
+                return Ok(Vec::new());
             }
             _ => return Ok(Vec::new()),
         };
@@ -494,6 +495,52 @@ impl DragDrop {
             self.continuation = Some(message);
         }
         result
+    }
+
+    fn malformed_message(&self, bytes: &[u8], terminated: bool) -> Result<Vec<Event>, Error> {
+        let metadata = match bytes.strip_prefix(b"72;") {
+            Some(metadata) => metadata,
+            None if bytes == b"72" => b"",
+            None => return Ok(Vec::new()),
+        };
+        let end = metadata.iter().position(|byte| *byte == b';');
+        let fields = metadata[..end.unwrap_or(metadata.len())].split(|byte| *byte == b':');
+        let mut fields = fields.peekable();
+        while let Some(field) = fields.next() {
+            if let Some(id) = field.strip_prefix(b"i=") {
+                // A timed-out final field can still be an unfinished number.
+                if (terminated || end.is_some() || fields.peek().is_some())
+                    && let Some(id) = std::str::from_utf8(id)
+                        .ok()
+                        .and_then(|id| id.parse::<u32>().ok())
+                    && id != self.options.routing_id.unwrap_or(0)
+                {
+                    return Ok(Vec::new());
+                }
+                break;
+            }
+        }
+        Err(Error::Protocol(
+            if terminated {
+                "malformed OSC 72 message"
+            } else {
+                "incomplete OSC 72 message"
+            }
+            .into(),
+        ))
+    }
+
+    fn check_pending_requests(&self) -> Result<(), Error> {
+        if self.options.max_pending_requests.is_some_and(|limit| {
+            self.drag
+                .requests
+                .len()
+                .saturating_add(self.drag.file_requests.len())
+                >= limit
+        }) {
+            return Err(Error::LimitExceeded("pending request limit exceeded"));
+        }
+        Ok(())
     }
 
     fn message(&mut self, message: &Message) -> Result<Vec<Event>, Error> {
@@ -584,6 +631,7 @@ impl DragDrop {
                         })?;
                         let mime_type = mime.clone();
                         if message.number("x")? == 5 {
+                            self.check_pending_requests()?;
                             self.drag.requests.push(index);
                             Event::DataRequested { mime_type }
                         } else {
@@ -621,6 +669,7 @@ impl DragDrop {
                 {
                     return Err(Error::Protocol("invalid URI entry request".into()));
                 }
+                self.check_pending_requests()?;
                 self.drag.file_requests.push_back(index);
                 Event::EntryRequested {
                     entry: Entry::file(self.drag.scope, 0, index),
