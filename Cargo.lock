@@ -407,6 +407,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uncurses",
+ "uncurses-images",
  "uncurses-ratatui",
 ]
 
