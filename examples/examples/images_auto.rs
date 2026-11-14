@@ -197,6 +197,15 @@ fn dump_committed(source: &Image) -> io::Result<()> {
         record(&mut screen, &format!("{protocol} shown"));
         screen.commit_rows(if placeholders { 3 } else { 5 })?;
         record(&mut screen, &format!("{protocol} committed"));
+        images.draw(
+            &mut screen,
+            1,
+            Rect::new(18, 1, 12, 4),
+            source,
+            &ImageOptions::default(),
+        )?;
+        screen.render()?;
+        record(&mut screen, &format!("{protocol} reused ID"));
         images.remove(&mut screen, 1);
         screen.render()?;
         record(&mut screen, &format!("{protocol} removed"));
@@ -221,10 +230,91 @@ fn dump_committed(source: &Image) -> io::Result<()> {
     Ok(())
 }
 
+fn dump_shared(source: &Image) -> io::Result<()> {
+    let blue = Image::from_rgb(1, 1, vec![0, 0, 255])?;
+    let green = Image::from_rgb(1, 1, vec![0, 255, 0])?;
+    for placeholders in [false, true] {
+        let protocol = if placeholders {
+            "placeholders"
+        } else {
+            "kitty"
+        };
+        let mut screen = Screen::new(Vec::new(), (40, 12));
+        screen.set_fullscreen(true);
+        screen.set_color_profile(uncurses::color::Profile::TrueColor);
+        let mut images = ImageRenderer::new(ImageCapabilities {
+            kitty: true,
+            kitty_placeholders: placeholders,
+            cell_pixels: Some(Size::new(8, 16)),
+            ..Default::default()
+        });
+        for (stage, name) in [
+            "shared",
+            "unchanged",
+            "overlap",
+            "reordered",
+            "dialog",
+            "removed first",
+            "replaced",
+            "removed all",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            screen.clear();
+            if stage >= 5 {
+                images.remove(&mut screen, 1);
+            }
+            if stage == 7 {
+                images.remove(&mut screen, 2);
+            } else {
+                let second = if stage < 2 {
+                    source
+                } else if stage < 6 {
+                    &blue
+                } else {
+                    &green
+                };
+                let second_area = if stage < 2 {
+                    Rect::new(14, 2, 8, 4)
+                } else {
+                    Rect::new(6, 3, 8, 4)
+                };
+                let order = if stage >= 3 { [2, 1] } else { [1, 2] };
+                for id in order {
+                    if id == 1 && stage >= 5 {
+                        continue;
+                    }
+                    let (area, source) = if id == 1 {
+                        (Rect::new(2, 2, 8, 4), source)
+                    } else {
+                        (second_area, second)
+                    };
+                    images.draw(&mut screen, id, area, source, &ImageOptions::default())?;
+                }
+                if stage == 4 {
+                    let style = Style::new()
+                        .fg(uncurses::color::Color::White)
+                        .bg(uncurses::color::Color::Black);
+                    screen.fill_rect(
+                        Rect::new(4, 3, 6, 2),
+                        &uncurses::cell::Cell::BLANK.style(&style),
+                    );
+                    screen.set_str((4, 3), "Dialog", style);
+                }
+            }
+            screen.render()?;
+            record(&mut screen, &format!("{protocol} {name}"));
+        }
+    }
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     let mut dump_output = false;
     let mut placeholders = false;
     let mut committed = false;
+    let mut shared = false;
     let mut path = None;
     for argument in std::env::args().skip(1) {
         if argument == "--dump" {
@@ -233,12 +323,14 @@ fn main() -> io::Result<()> {
             placeholders = true;
         } else if argument == "--dump-committed" {
             committed = true;
+        } else if argument == "--dump-shared" {
+            shared = true;
         } else if path.is_none() && !argument.starts_with('-') {
             path = Some(argument);
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "usage: images_auto [--dump|--dump-placeholders|--dump-committed] [image]",
+                "usage: images_auto [--dump|--dump-placeholders|--dump-committed|--dump-shared] [image]",
             ));
         }
     }
@@ -252,6 +344,9 @@ fn main() -> io::Result<()> {
                 .collect(),
         )?,
     };
+    if shared {
+        return dump_shared(&source);
+    }
     if committed {
         return dump_committed(&source);
     }

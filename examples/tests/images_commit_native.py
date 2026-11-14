@@ -6,7 +6,7 @@ import sys
 helpers = runpy.run_path("examples/tests/placements_native.py")
 Screen, feed, require = (helpers[name] for name in ("Screen", "feed", "require"))
 records = [record.rstrip("\n").split("\t") for record in sys.stdin]
-stages = ["shown", "committed", "removed", "invalidated", "new image",
+stages = ["shown", "committed", "reused ID", "removed", "invalidated", "new image",
           "removed new image", "committed rest"]
 require([name for name, _ in records] == [
     f"{protocol} {stage}" for protocol in ("kitty", "placeholders") for stage in stages
@@ -14,7 +14,7 @@ require([name for name, _ in records] == [
 
 for index, protocol in enumerate(("kitty", "placeholders")):
     screen = Screen(None, 24, 40, 100, 8, 16)
-    for stage, (_, encoded) in zip(stages, records[index * 7:index * 7 + 7]):
+    for stage, (_, encoded) in zip(stages, records[index * 8:index * 8 + 8]):
         payload = bytes.fromhex(encoded)
         require((b"a=t," in payload) == (stage in ("shown", "new image")),
                 (protocol, stage, "unexpected resource upload"))
@@ -33,7 +33,7 @@ for index, protocol in enumerate(("kitty", "placeholders")):
             visible.update((x, y) for y in range(top, bottom) for x in range(left, right))
         bottom = 5 if protocol == "kitty" or stage in ("shown", "committed") else 3
         expected = {(x, y) for y in range(1, bottom) for x in range(2, 14)}
-        if stage == "new image":
+        if stage in ("reused ID", "new image"):
             top = 6 if protocol == "kitty" else 4
             expected.update((x, y) for y in range(top, top + 4) for x in range(18, 30))
         require(visible == expected, (protocol, stage, visible ^ expected))
@@ -42,4 +42,4 @@ for index, protocol in enumerate(("kitty", "placeholders")):
         if stage == "committed rest":
             require((screen.cursor.x, screen.cursor.y) == (0, 12),
                     (protocol, "incorrect final cursor", screen.cursor.x, screen.cursor.y))
-    print(f"Verified seven committed-image frames: {protocol}.")
+    print(f"Verified eight committed-image frames, including reused application IDs: {protocol}.")

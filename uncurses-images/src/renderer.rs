@@ -11,7 +11,7 @@ use uncurses::{
     event::Input,
     layout::{Rect, Size},
     program::Program,
-    screen::{PlacementId, PlacementOptions, Screen},
+    screen::{PlacementId, PlacementOptions, PlacementResource, Screen},
     text::{TextSurface, WidthMode},
 };
 
@@ -194,9 +194,8 @@ struct CachedImage {
 /// content after image movement or removal. Cell removal clears cells that
 /// still match the last draw to default-style blanks; changed overlay cells remain.
 ///
-/// Native Kitty uses protocol z-order. For text cutouts, use the explicit
-/// [`PreparedImage::crop`](crate::PreparedImage::crop) API. Placeholder and symbol cells support ordinary
-/// text overlays.
+/// Native images, placeholders, and symbols follow ordinary cell ownership.
+/// Later cell writes cover the image cells they replace.
 ///
 /// ```
 /// use uncurses::{layout::Rect, screen::Screen};
@@ -218,7 +217,7 @@ pub struct ImageRenderer {
     /// Glyph families used by subsequent symbol preparations.
     pub symbols: SymbolSet,
     tmux_passthrough: bool,
-    cache: BTreeMap<PlacementId, CachedImage>,
+    cache: BTreeMap<PlacementId, Arc<CachedImage>>,
 }
 
 impl ImageRenderer {
@@ -302,7 +301,7 @@ impl ImageRenderer {
         let policy = Policy::of(screen);
         let pixels = self.capabilities.pixels();
         let size = Size::new(area.width, area.height);
-        let reuse = self.cache.get(&id).is_some_and(|entry| {
+        let matches = |entry: &&Arc<CachedImage>| {
             entry.source.same_source(source)
                 && entry.options == *options
                 && entry.size == size
@@ -310,19 +309,25 @@ impl ImageRenderer {
                 && entry.pixels == pixels
                 && entry.protocol == protocol
                 && entry.symbols == self.symbols
-        });
-        let replacement = if reuse {
-            None
+        };
+        let cached = self
+            .cache
+            .get(&id)
+            .filter(matches)
+            .or_else(|| self.cache.values().find(matches));
+        let entry = if let Some(entry) = cached {
+            entry.clone()
         } else {
             let placement = match protocol {
                 ImageProtocol::KittyPlaceholders => {
                     let image = source.kitty_placeholders(size, pixels.unwrap(), options)?;
                     let mut placement = image.placement(screen)?;
                     if self.tmux_passthrough {
-                        placement.upload =
-                            crate::protocols::kitty::wrap_tmux(&placement.upload)?.into();
-                        placement.delete =
-                            crate::protocols::kitty::wrap_tmux(&placement.delete)?.into();
+                        let resource = placement.resource.as_ref().unwrap();
+                        placement.resource = Some(PlacementResource::new(
+                            crate::protocols::kitty::wrap_tmux(resource.upload())?,
+                            crate::protocols::kitty::wrap_tmux(resource.delete())?,
+                        ));
                     }
                     placement
                 }
@@ -349,10 +354,10 @@ impl ImageRenderer {
                         _ => unreachable!(),
                     };
                     let image = source.prepare(backend, size, pixels.unwrap(), options)?;
-                    image.placement(1)?
+                    image.placement()
                 }
             };
-            Some(CachedImage {
+            Arc::new(CachedImage {
                 source: source.clone(),
                 options: options.clone(),
                 symbols: self.symbols.clone(),
@@ -363,14 +368,8 @@ impl ImageRenderer {
                 placement,
             })
         };
-        let entry = replacement
-            .as_ref()
-            .or_else(|| self.cache.get(&id))
-            .unwrap();
         screen.set_placement(id, area, &entry.placement)?;
-        if let Some(entry) = replacement {
-            self.cache.insert(id, entry);
-        }
+        self.cache.insert(id, entry);
         Ok(protocol)
     }
 

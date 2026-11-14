@@ -8,7 +8,10 @@ use std::{
 };
 
 use crate::layout::Rect;
-use crate::screen::{PlacementId, PlacementOptions};
+use crate::screen::{
+    PlacementContext, PlacementId, PlacementOptions, PlacementOutput, PlacementResource,
+    ResourceKey,
+};
 use crate::{buffer::Surface, cell::Cell};
 
 use super::rows::{FrameCheckpoint, invalid};
@@ -20,6 +23,14 @@ pub(super) struct Record {
     pub reference: u64,
     pub area: Rect,
     pub options: Arc<PlacementOptions>,
+    output_area: Rect,
+    output: Arc<[Fragment]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Fragment {
+    area: Rect,
+    output: PlacementOutput,
 }
 
 static NEXT_REFERENCE: AtomicU64 = AtomicU64::new(1);
@@ -43,8 +54,8 @@ pub(crate) struct State {
     order: Vec<PlacementId>,
     displayed: Vec<Record>,
     uncertain: Vec<Record>,
-    retired: Vec<Resource>,
-    committed: Vec<Resource>,
+    retired: Vec<PlacementResource>,
+    committed: Vec<ResourceKey>,
     epoch: u64,
     failure_epoch: Option<u64>,
     coverage: BTreeMap<u16, Vec<bool>>,
@@ -56,8 +67,8 @@ pub(super) struct Frame {
     pub erase: Vec<Record>,
     pub rows: BTreeMap<u16, Vec<Cell>>,
     pub coverage: BTreeMap<u16, Vec<bool>>,
-    uploads: Vec<Resource>,
-    retired: Vec<Resource>,
+    uploads: Vec<PlacementResource>,
+    retired: Vec<PlacementResource>,
     checkpoint: FrameCheckpoint,
 }
 
@@ -95,18 +106,24 @@ impl State {
     }
 
     pub(super) fn commit_rows(&mut self, front: &RenderBuffer, count: u16) {
-        let committed = self.displayed.iter().filter(|record| {
-            (record.area.y..record.area.bottom().min(count)).any(|y| {
-                (record.area.x..record.area.right()).any(|x| {
-                    record
-                        .owns(front, x, y)
-                        .expect("render validated placement references")
+        let committed = self
+            .displayed
+            .iter()
+            .enumerate()
+            .filter(|(index, record)| {
+                (record.area.y..record.area.bottom().min(count)).any(|y| {
+                    (record.area.x..record.area.right()).any(|x| {
+                        record
+                            .owns_visible(front, &self.displayed[index + 1..], x, y)
+                            .expect("render validated placement references")
+                    })
                 })
             })
-        });
+            .map(|(_, record)| record);
         for resource in resources(committed) {
-            if !self.committed.contains(&resource) {
-                self.committed.push(resource);
+            let key = resource.key();
+            if !self.committed.contains(&key) {
+                self.committed.push(key);
             }
         }
         self.desired.retain(|_, record| {
@@ -147,6 +164,16 @@ impl State {
 
     pub fn has_output(&self) -> bool {
         !self.displayed.is_empty() || !self.uncertain.is_empty() || !self.retired.is_empty()
+    }
+
+    fn above(&self, id: PlacementId) -> Vec<Record> {
+        self.order
+            .iter()
+            .skip_while(|&&other| other != id)
+            .skip(1)
+            .filter_map(|other| self.desired.get(other))
+            .cloned()
+            .collect()
     }
 
     fn prepare(
@@ -210,13 +237,18 @@ impl State {
 
         let mut active = Vec::new();
         if !release {
-            for record in self.order.iter().filter_map(|id| self.desired.get(id)) {
+            for record in self
+                .order
+                .iter()
+                .rev()
+                .filter_map(|id| self.desired.get(id))
+            {
                 let fits = record.area.right() <= width && record.area.bottom() <= height;
                 let mut count = 0usize;
                 if fits {
                     for y in record.area.y..record.area.bottom() {
                         for x in record.area.x..record.area.right() {
-                            if record.owns(front, x, y)? {
+                            if record.owns_visible(front, &active, x, y)? {
                                 count += 1;
                             }
                         }
@@ -227,11 +259,12 @@ impl State {
                         && count
                             != usize::from(record.area.width) * usize::from(record.area.height))
                 {
-                    clear_record(front, record);
+                    clear_record(front, record, &active);
                 } else if count > 0 {
                     active.push(record.clone());
                 }
             }
+            active.reverse();
             self.desired
                 .retain(|id, _| active.iter().any(|record| record.id == *id));
             self.order.retain(|id| self.desired.contains_key(id));
@@ -344,11 +377,54 @@ impl State {
                 || record.area.y >= height
         };
         let erase = previous.filter(|r| damaged(r)).cloned().collect();
+        for record in &mut active {
+            if !rows.contains_key(&record.area.y) || record.options.cells.is_some() {
+                continue;
+            }
+            record.output = if let Some(encoder) = &record.options.encoder {
+                let regions = record.visible_regions(front)?;
+                let previous = self.displayed.iter().find(|previous| {
+                    previous.reference == record.reference
+                        && previous.area == record.area
+                        && previous.output_area == record.area
+                        && previous.options == record.options
+                        && previous
+                            .output
+                            .iter()
+                            .map(|fragment| fragment.area)
+                            .eq(regions.iter().copied())
+                });
+                if let Some(previous) = previous {
+                    previous.output.clone()
+                } else {
+                    regions
+                        .into_iter()
+                        .map(|clip| {
+                            Ok(Fragment {
+                                area: clip,
+                                output: encoder.prepare(PlacementContext {
+                                    area: record.area,
+                                    clip,
+                                    instance: record.reference,
+                                })?,
+                            })
+                        })
+                        .collect::<io::Result<Vec<_>>>()?
+                        .into()
+                }
+            } else {
+                Arc::from([])
+            };
+            record.output_area = record.area;
+        }
         let resources = resources(active.iter());
         let mut known = if invalidated || !self.uncertain.is_empty() {
             Vec::new()
         } else {
             resources_from_records(&self.displayed)
+                .iter()
+                .map(PlacementResource::key)
+                .collect()
         };
         let committed = if renderer.fullscreen {
             &[][..]
@@ -358,7 +434,7 @@ impl State {
         known.extend_from_slice(committed);
         let uploads = resources
             .iter()
-            .filter(|r| !known.contains(r))
+            .filter(|r| !known.contains(&r.key()))
             .cloned()
             .collect();
         let mut retired = self.retired.clone();
@@ -370,7 +446,7 @@ impl State {
                 retired.push(resource);
             }
         }
-        retired.retain(|r| !resources.contains(r) && !committed.contains(r));
+        retired.retain(|r| !resources.contains(r) && !committed.contains(&r.key()));
         let frame = Frame {
             active,
             erase,
@@ -393,47 +469,89 @@ impl State {
 }
 
 impl Record {
+    fn owns_cell(&self, front: &RenderBuffer, x: u16, y: u16) -> bool {
+        let Some(cells) = &self.options.cells else {
+            return false;
+        };
+        self.area.contains((x, y))
+            && front.cell((x, y).into()).is_some_and(|cell| {
+                !cell.is_continuation()
+                    && cells.cell((x - self.area.x, y - self.area.y).into()) == Some(cell)
+            })
+    }
+
     fn owns(&self, front: &RenderBuffer, x: u16, y: u16) -> io::Result<bool> {
         let Some(cell) = front.cell((x, y).into()) else {
             return Ok(false);
         };
-        if let Some(cells) = &self.options.cells {
-            Ok(!cell.is_continuation()
-                && cells.cell((x - self.area.x, y - self.area.y).into()) == Some(cell))
+        if self.options.cells.is_some() {
+            Ok(self.owns_cell(front, x, y))
         } else {
             Ok(cell.placement_ref()? == Some(self.reference))
         }
     }
+
+    fn owns_visible(
+        &self,
+        front: &RenderBuffer,
+        above: &[Record],
+        x: u16,
+        y: u16,
+    ) -> io::Result<bool> {
+        Ok(self.owns(front, x, y)?
+            && (self.options.cells.is_none()
+                || !above.iter().any(|record| record.owns_cell(front, x, y))))
+    }
+
+    fn visible_regions(&self, front: &RenderBuffer) -> io::Result<Vec<Rect>> {
+        let mut regions: Vec<Rect> = Vec::new();
+        let mut previous = BTreeMap::<(u16, u16), usize>::new();
+        for y in 0..self.area.height {
+            let mut current = BTreeMap::new();
+            let mut x = 0;
+            while x < self.area.width {
+                if !self.owns(front, self.area.x + x, self.area.y + y)? {
+                    x += 1;
+                    continue;
+                }
+                let start = x;
+                while x < self.area.width && self.owns(front, self.area.x + x, self.area.y + y)? {
+                    x += 1;
+                }
+                let key = (start, x - start);
+                let index = if let Some(&index) = previous.get(&key) {
+                    regions[index].height += 1;
+                    index
+                } else {
+                    regions.push(Rect::new(start, y, x - start, 1));
+                    regions.len() - 1
+                };
+                current.insert(key, index);
+            }
+            previous = current;
+        }
+        Ok(regions)
+    }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Resource {
-    upload: Arc<[u8]>,
-    delete: Arc<[u8]>,
-}
-
-fn resources<'a>(records: impl Iterator<Item = &'a Record>) -> Vec<Resource> {
+fn resources<'a>(records: impl Iterator<Item = &'a Record>) -> Vec<PlacementResource> {
     let mut result = Vec::new();
     for record in records {
-        if record.options.upload.is_empty() && record.options.delete.is_empty() {
+        let Some(resource) = &record.options.resource else {
             continue;
-        }
-        let resource = Resource {
-            upload: record.options.upload.clone(),
-            delete: record.options.delete.clone(),
         };
-        if !result.contains(&resource) {
-            result.push(resource);
+        if !result.contains(resource) {
+            result.push(resource.clone());
         }
     }
     result
 }
 
-fn resources_from_records(records: &[Record]) -> Vec<Resource> {
+fn resources_from_records(records: &[Record]) -> Vec<PlacementResource> {
     resources(records.iter())
 }
 
-fn clear_record(front: &mut RenderBuffer, record: &Record) {
+fn clear_record(front: &mut RenderBuffer, record: &Record, above: &[Record]) {
     if let Some(cells) = &record.options.cells {
         for y in record.area.y..record.area.bottom().min(front.height()) {
             let mut x = record.area.x;
@@ -446,6 +564,11 @@ fn clear_record(front: &mut RenderBuffer, record: &Record) {
                     && (0..width).all(|offset| {
                         front.cell((x + offset, y).into())
                             == cells.cell((x + offset - record.area.x, y - record.area.y).into())
+                    })
+                    && !(0..width).any(|offset| {
+                        above
+                            .iter()
+                            .any(|other| other.owns_cell(front, x + offset, y))
                     })
                 {
                     for offset in 0..width {
@@ -496,11 +619,15 @@ impl Renderer {
                 || cells.height() != area.height
                 || !options.draw.is_empty()
                 || !options.erase.is_empty()
+                || options.encoder.is_some()
                 || options.erase_on_overwrite)
         {
             return Err(invalid(
                 "cell placements require matching dimensions and cell overwrite behavior",
             ));
+        }
+        if options.encoder.is_some() && (!options.draw.is_empty() || !options.erase.is_empty()) {
+            return Err(invalid("encoded placements require empty static payloads"));
         }
         if let Some(cells) = &options.cells {
             for y in 0..cells.height() {
@@ -509,11 +636,13 @@ impl Renderer {
                 }
             }
         }
+        if let Some(old) = self.placements.desired.get(&id)
+            && (old.area != area || old.options.cells.is_some() != options.cells.is_some())
+        {
+            clear_record(front, old, &self.placements.above(id));
+        }
         let reference = if let Some(old) = self.placements.desired.get_mut(&id) {
-            if old.area != area || old.options.cells.is_some() != options.cells.is_some() {
-                clear_record(front, old);
-                old.area = area;
-            }
+            old.area = area;
             if old.options.as_ref() != options {
                 old.options = Arc::new(options.clone());
             }
@@ -527,6 +656,8 @@ impl Renderer {
                     reference,
                     area,
                     options: Arc::new(options.clone()),
+                    output_area: area,
+                    output: Arc::from([]),
                 },
             );
             reference
@@ -548,9 +679,10 @@ impl Renderer {
     }
 
     pub(crate) fn remove_placement(&mut self, front: &mut RenderBuffer, id: PlacementId) {
+        let above = self.placements.above(id);
         if let Some(old) = self.placements.desired.remove(&id) {
             self.placements.order.retain(|previous| *previous != id);
-            clear_record(front, &old);
+            clear_record(front, &old, &above);
         }
     }
 
@@ -582,6 +714,12 @@ impl Renderer {
                     self.invalid_rows[y as usize] = true;
                 }
             }
+            for record in &frame.active {
+                if let Some(desired) = self.placements.desired.get_mut(&record.id) {
+                    desired.output_area = record.output_area;
+                    desired.output = record.output.clone();
+                }
+            }
             self.placements.displayed = frame.active;
             self.placements.retired = frame.retired;
             self.placements.coverage = frame.coverage;
@@ -594,7 +732,7 @@ impl Renderer {
     pub(crate) fn upload_resources(&self, out: &mut Vec<u8>) {
         if let Some(frame) = &self.placements.frame {
             for resource in &frame.uploads {
-                out.extend_from_slice(&resource.upload);
+                out.extend_from_slice(resource.upload());
             }
         }
     }
@@ -602,7 +740,7 @@ impl Renderer {
     pub(crate) fn delete_resources(&self, out: &mut Vec<u8>) -> bool {
         let start = out.len();
         for resource in &self.placements.retired {
-            out.extend_from_slice(&resource.delete);
+            out.extend_from_slice(resource.delete());
         }
         out.len() != start
     }
@@ -642,17 +780,51 @@ impl Renderer {
         let result = (|| {
             if let Some(frame) = &frame {
                 for record in &frame.erase {
-                    self.write_placement(
-                        out,
-                        size,
-                        (record.area.x, record.area.y).into(),
-                        &record.options.erase,
-                    )?;
+                    self.write_placement_record(out, size, record, true)?;
                 }
             }
             Ok(())
         })();
         self.placements.frame = frame;
         result
+    }
+
+    pub(super) fn write_placement_record(
+        &mut self,
+        out: &mut Vec<u8>,
+        size: crate::layout::Size,
+        record: &Record,
+        erase: bool,
+    ) -> io::Result<()> {
+        if record.options.encoder.is_some() {
+            for fragment in record.output.iter() {
+                self.write_placement(
+                    out,
+                    size,
+                    (
+                        record.area.x + fragment.area.x,
+                        record.area.y + fragment.area.y,
+                    )
+                        .into(),
+                    if erase {
+                        &fragment.output.erase
+                    } else {
+                        &fragment.output.draw
+                    },
+                )?;
+            }
+            Ok(())
+        } else {
+            self.write_placement(
+                out,
+                size,
+                (record.area.x, record.area.y).into(),
+                if erase {
+                    &record.options.erase
+                } else {
+                    &record.options.draw
+                },
+            )
+        }
     }
 }
