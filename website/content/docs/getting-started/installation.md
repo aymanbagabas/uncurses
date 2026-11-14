@@ -10,8 +10,9 @@ default width backend or pick another one, and you are ready to draw.
 
 Published releases of [uncurses](https://crates.io/crates/uncurses) and
 [uncurses-ratatui](https://crates.io/crates/uncurses-ratatui) are available on
-crates.io. Select a released version with its matching
-[docs.rs reference](https://docs.rs/uncurses).
+crates.io. Select the matching docs.rs reference for your release:
+[uncurses](https://docs.rs/uncurses) or
+[uncurses-ratatui](https://docs.rs/uncurses-ratatui).
 
 This website follows the current repository source. For its examples and
 features, use a git dependency:
