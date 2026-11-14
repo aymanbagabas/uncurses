@@ -38,7 +38,10 @@ fn register(
 ```
 
 The caller retains the controller if registration or its flush fails.
-Attempt `close`, flush the cleanup output, and restore the terminal on every exit path.
+On exit, call `close` only while protocol output remains safe.
+Flush successful cleanup output.
+If a flush fails, stop controller writes unless the writer guarantees safe resumption.
+Attempt terminal restoration on every exit path.
 
 For incoming drops, accept or reject the offer during `Event::Hover`.
 Request the desired entry after `Event::Drop`.
@@ -64,9 +67,12 @@ On success, both methods send the complete body and its end marker.
 `send_from` reports both source read failures and terminal write failures as `Error::Io`.
 Attempt `fail_data` for a failed MIME response.
 For file responses, attempt `fail_drag` or `cancel_drag`.
-Cancel a failed initial offer before startup.
+Cancel a failed initial body before startup.
 On `OutputFailed`, restore the terminal.
 The controller rejects these recovery attempts before any write when earlier output failed.
+
+If `offer` returns `Error::Io`, restore the terminal even if `cancel_drag` succeeds.
+Cancellation success in this case confirms local cleanup, not safe terminal output.
 
 Use `Entry::Text`, `Entry::UriList`, or a MIME string to select the content.
 
@@ -114,7 +120,11 @@ Flush responses promptly.
 For large transfers through a `Screen`, flush its staged output first.
 Then pass `screen.writer_mut()` to the controller and flush that writer afterward.
 This keeps the screen's output buffer from retaining the complete transfer.
-Call `close` and flush before the terminal session ends.
+
+If a flush fails, stop controller writes unless the writer guarantees safe resumption.
+Flush failures occur outside the controller's output checks.
+Call `close` before the terminal session ends only while protocol output remains safe.
+Flush successful cleanup output.
 Attempt terminal restoration even when controller cleanup fails.
 
 The application owns file access, previews, and copy or move policy.
