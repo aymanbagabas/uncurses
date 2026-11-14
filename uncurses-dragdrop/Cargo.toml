@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "README.md"
 keywords = ["terminal", "tui", "kitty", "drag-and-drop"]
 categories = ["command-line-interface"]
 
