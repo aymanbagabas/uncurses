@@ -168,9 +168,13 @@ impl Receiver {
             ));
         }
         if let Some(directory) = self.listing {
-            *self.directories.get_mut(&directory).unwrap() += 1;
+            let children = self.directories.get_mut(&directory).unwrap();
+            self.pending
+                .insert(*children, (entry, relative, self.listing));
+            *children += 1;
+        } else {
+            self.pending.push_back((entry, relative, self.listing));
         }
-        self.pending.push_back((entry, relative, self.listing));
         self.listed += 1;
         Ok(true)
     }
