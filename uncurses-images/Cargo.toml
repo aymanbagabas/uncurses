@@ -1,0 +1,24 @@
+[package]
+name = "uncurses-images"
+description = "Native and cell-based terminal images for uncurses"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.90"
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["unicode-rs", "jpeg"]
+unicode-rs = ["uncurses/unicode-rs"]
+icu = ["uncurses/icu"]
+jpeg = ["image/jpeg"]
+gif = ["image/gif"]
+webp = ["image/webp"]
+
+[dependencies]
+uncurses = { path = "../uncurses", version = "0.0.7", default-features = false }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+base64 = "0.22"
+quantette = { version = "0.6", default-features = false, features = ["kmeans"] }
+bitflags.workspace = true
+font8x8 = { version = "0.3.1", default-features = false, features = ["unicode"] }
