@@ -8,7 +8,7 @@ use std::{
 
 use percent_encoding::percent_decode_str;
 use tempfile::TempDir;
-use uncurses_dragdrop::{Directory, Entry, EntryKind};
+use uncurses_dragdrop::{Directory, DragDropOptions, Entry, EntryKind};
 use url::Url;
 
 const PREVIEW_LIMIT: usize = 256;
@@ -88,6 +88,7 @@ fn root_name(uri: &[u8]) -> io::Result<OsString> {
 
 #[derive(Default)]
 pub struct Receiver {
+    pub active: bool,
     storage: Option<TempDir>,
     file: Option<File>,
     link: Option<Vec<u8>>,
@@ -107,6 +108,7 @@ pub struct Receiver {
 impl Receiver {
     pub fn begin(&mut self, mime: &str, destination: Option<&Path>) -> io::Result<()> {
         self.abort()?;
+        self.active = true;
         self.checksum = 0xcbf29ce484222325;
         if let Some(destination) = destination {
             fs::create_dir_all(destination)?;
@@ -135,9 +137,17 @@ impl Receiver {
             .open(self.storage.as_ref().unwrap().path().join(relative))
     }
 
-    pub fn listed(&mut self, entry: Entry, name: Vec<u8>) -> io::Result<()> {
+    pub fn listed(
+        &mut self,
+        entry: Entry,
+        name: Vec<u8>,
+        options: &DragDropOptions,
+    ) -> io::Result<bool> {
         let relative = match &entry {
-            Entry::File(file) if file.root_index().is_some() => PathBuf::from(root_name(&name)?),
+            Entry::File(file) if file.root_index().is_some() => match root_name(&name) {
+                Ok(name) => PathBuf::from(name),
+                Err(_) => return Ok(false),
+            },
             Entry::File(_) => {
                 let name = native_name(name)?;
                 component(&name)?;
@@ -148,12 +158,21 @@ impl Receiver {
             }
             _ => return Err(invalid("expected a file entry")),
         };
+        if options
+            .max_path_bytes
+            .is_some_and(|limit| relative.as_os_str().as_encoded_bytes().len() > limit)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::QuotaExceeded,
+                "destination path limit exceeded",
+            ));
+        }
         if let Some(directory) = self.listing {
             *self.directories.get_mut(&directory).unwrap() += 1;
         }
         self.pending.push_back((entry, relative, self.listing));
         self.listed += 1;
-        Ok(())
+        Ok(true)
     }
 
     pub fn next(&mut self) -> Option<Entry> {
@@ -221,12 +240,13 @@ impl Receiver {
             let relative = self.current.as_ref().unwrap();
             let target = PathBuf::from(native_name(bytes)?);
             let mut depth = relative.parent().unwrap().components().count();
+            let mut named = false;
             for part in target.components() {
                 match part {
-                    Component::Normal(_) => depth += 1,
+                    Component::Normal(_) => named = true,
                     Component::CurDir => {}
-                    Component::ParentDir if depth > 0 => depth -= 1,
-                    _ => return Err(invalid("symlink target escapes the drop directory")),
+                    Component::ParentDir if !named && depth > 0 => depth -= 1,
+                    _ => return Err(invalid("symlink target can escape the drop directory")),
                 }
             }
             #[cfg(unix)]
@@ -259,6 +279,7 @@ impl Receiver {
     }
 
     pub fn finish(&mut self) -> Option<PathBuf> {
+        self.active = false;
         self.storage.take().map(TempDir::keep)
     }
 
