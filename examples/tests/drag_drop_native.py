@@ -66,7 +66,7 @@ screen = kitty.Screen(None, 24, 80, 100, 8, 16, window)
 output = bytearray()
 replies = bytearray()
 protocol_pending = bytearray()
-replied_da = False
+saw_da_query = False
 hold_da_reply = True
 hold_start_reply = False
 held_replies = bytearray()
@@ -101,7 +101,7 @@ def check_restored():
 
 
 def pump_until(condition):
-    global replied_da
+    global saw_da_query
     deadline = time.monotonic() + 5
     while not condition():
         remaining = deadline - time.monotonic()
@@ -137,10 +137,10 @@ def pump_until(condition):
                 pending = pending[count:]
                 screen.test_parse_written_data()
         # A fake screen has no child writer for ordinary terminal queries.
-        if not replied_da and b"\x1b[c" in output:
+        if not saw_da_query and b"\x1b[c" in output:
             if not hold_da_reply:
                 reply(window, b"\x1b[?62c")
-            replied_da = True
+            saw_da_query = True
 
 
 kitty.dnd_set_test_write_func(reply)
@@ -156,7 +156,7 @@ def wait_for_exit(message):
 
 try:
     initial_drop_wanted = probe("drop_wanted")
-    pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
+    pump_until(lambda: saw_da_query and "Checking drag and drop support" in visible())
     require(probe("drop_wanted") == initial_drop_wanted
             and not probe("drag_can_offer") and b"\x1b]72;t=a" not in output,
             f"Drag and drop was enabled before DA1:\n{bytes(output)!r}\n"
@@ -288,7 +288,7 @@ try:
         output.clear()
         replies.clear()
         protocol_pending.clear()
-        replied_da = False
+        saw_da_query = False
         hold_start_reply = True
         process = start_example()
         pump_until(lambda: probe("drag_can_offer") and "Ready for text" in visible())
@@ -309,11 +309,11 @@ try:
     output.clear()
     replies.clear()
     protocol_pending.clear()
-    replied_da = False
+    saw_da_query = False
     hold_da_reply = True
     hold_start_reply = False
     process = start_example()
-    pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
+    pump_until(lambda: saw_da_query and "Checking drag and drop support" in visible())
     reply(window, b"q")
     try:
         process.wait(timeout=0.2)
@@ -331,9 +331,9 @@ try:
     output.clear()
     replies.clear()
     protocol_pending.clear()
-    replied_da = False
+    saw_da_query = False
     process = start_example()
-    pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
+    pump_until(lambda: saw_da_query and "Checking drag and drop support" in visible())
     pump_until(lambda: b"capability query timed out" in output)
     require(process.wait(timeout=5) != 0, "Missing DA1 must report a timeout")
     check_restored()
