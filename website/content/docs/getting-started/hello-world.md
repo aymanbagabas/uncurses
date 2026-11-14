@@ -15,23 +15,26 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    program.init()?;
+    let result = (|| {
+        program.init()?;
 
-    let screen = program.screen_mut();
-    let w = screen.width();
-    screen.resize((w, 2));
-    screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
-    screen.render()?;
+        let screen = program.screen_mut();
+        let w = screen.width();
+        screen.resize((w, 2));
+        screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
+        screen.render()?;
 
-    let q: Key = "q".parse().unwrap();
-    loop {
-        let ev = program.read_event()?;
-        if matches!(ev, Event::KeyPress(k) if k == q) {
-            break;
+        let q: Key = "q".parse().unwrap();
+        loop {
+            let ev = program.read_event()?;
+            if matches!(ev, Event::KeyPress(k) if k == q) {
+                break;
+            }
         }
-    }
-
-    program.finish()
+        Ok(())
+    })();
+    let finish = program.finish();
+    result.and(finish)
 }
 ```
 
@@ -109,13 +112,18 @@ that event is the `q` key. Keys parse from strings, so `"q"`, `"ctrl+c"`, and
 **Put the terminal back.**
 
 ```rust
-program.finish()
+let finish = program.finish();
+result.and(finish)
 ```
 
 One call. `finish()` resets the modes this `Program` emitted, resets the managed
 area, restores the terminal's prior state, and consumes the program so you
 cannot use it by accident afterward. Arrange for `finish()` to run before your
 app returns, including from error paths.
+
+The closure stores the session result instead of returning from `main` on an
+error. `finish()` then attempts restoration, including after an initialization
+error. `result.and(finish)` preserves the session error if both operations fail.
 
 If you want terminal capability discovery, it is explicit: call
 `program.query_capabilities(&[])?`, then keep reading events until
@@ -137,23 +145,26 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    program.init()?;
-    program.enter_alt_screen()?;
-    program.hide_cursor()?;
+    let result = (|| {
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
-    let screen = program.screen_mut();
-    screen.set_str((0, 0), "Fullscreen. Press q to quit.", Style::new());
-    screen.render()?;
+        let screen = program.screen_mut();
+        screen.set_str((0, 0), "Fullscreen. Press q to quit.", Style::new());
+        screen.render()?;
 
-    let q: Key = "q".parse().unwrap();
-    loop {
-        let ev = program.read_event()?;
-        if matches!(ev, Event::KeyPress(k) if k == q) {
-            break;
+        let q: Key = "q".parse().unwrap();
+        loop {
+            let ev = program.read_event()?;
+            if matches!(ev, Event::KeyPress(k) if k == q) {
+                break;
+            }
         }
-    }
-
-    program.finish()
+        Ok(())
+    })();
+    let finish = program.finish();
+    result.and(finish)
 }
 ```
 

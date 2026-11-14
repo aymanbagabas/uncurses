@@ -1,4 +1,4 @@
-baseURL = "https://uncurses-website.pages.dev/"
+baseURL = "https://uncurses.org/"
 title = "uncurses"
 enableRobotsTXT = true
 enableGitInfo = true
