@@ -400,13 +400,24 @@ fn failed_completion_output_keeps_storage_owned_for_cleanup() {
             demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
                 .unwrap();
         }
-        assert!(
-            demo.handle_event(
+        let error = demo
+            .handle_event(
                 &mut controller,
                 &mut BrokenOutput { flush_only },
-                &raw("t=r:x=1", "")
+                &raw("t=r:x=1", ""),
             )
-            .is_err()
+            .unwrap_err();
+        let Error::OutputFailed(cause) = error else {
+            panic!("expected a fatal completion error");
+        };
+        assert!(matches!(*cause, Error::Io(_)));
+        assert_eq!(
+            cause.to_string(),
+            if flush_only {
+                "terminal flush failed"
+            } else {
+                "terminal write failed"
+            }
         );
         demo.receiver.abort().unwrap();
         assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);

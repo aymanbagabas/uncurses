@@ -45,10 +45,18 @@ fn component(name: &OsStr) -> io::Result<()> {
         let name = name
             .to_str()
             .ok_or_else(|| invalid("invalid Windows filename"))?;
-        let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(' ')
+            .to_ascii_uppercase();
         if name.contains([':', '<', '>', '"', '|', '?', '*'])
             || name.ends_with(['.', ' '])
-            || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || matches!(
+                stem.as_str(),
+                "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+            )
             || (stem.starts_with("COM") || stem.starts_with("LPT"))
                 && matches!(
                     &stem[3..],
