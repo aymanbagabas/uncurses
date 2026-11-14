@@ -7,8 +7,8 @@ Kitty 0.47 or newer supports the protocol.
 
 ## Usage
 
-Probe support through `Program` before registration.
-Wait for `Event::PrimaryDeviceAttributes` in the normal event loop, then check support and enable the desired roles.
+Call `Program::query_capabilities(uncurses::ansi::drag_drop::REQUEST_DRAG_DROP)` before registration.
+Wait for `uncurses::event::Event::PrimaryDeviceAttributes`, then check support and enable the desired roles.
 Feed terminal events to `DragDrop::handle_event`.
 Handle the returned events in your application.
 
@@ -17,7 +17,10 @@ use std::io::Write;
 use uncurses_dragdrop::{DragDrop, DragDropOptions};
 
 fn register(out: &mut impl Write) -> Result<DragDrop, Box<dyn std::error::Error>> {
-    let mut controller = DragDrop::new(DragDropOptions::default());
+    let mut controller = DragDrop::new(DragDropOptions {
+        max_entries: Some(2_000),
+        ..DragDropOptions::default()
+    });
     controller.enable_drops(out, &["text/plain"])?;
     controller.enable_drags(out)?;
     out.flush()?;
@@ -31,24 +34,28 @@ After `Event::DataEnd`, call `complete_drop` or `cancel_drop`.
 The controller permits one receive request at a time.
 
 A new drag can replace an unfinished drop.
-The controller emits `Event::DropCanceled` before the new hover or drop notification.
-Discard partial application data and queued entries when this occurs.
-The terminal releases the old drop's resources; process the new offer after local cleanup.
+The controller emits `Event::DropCanceled` before the next hover, drop, or leave notification.
+Discard partial application data and queued entries on `DropCanceled` and `DropFailed`.
+The terminal releases the old drop's resources; process the next notification after local cleanup.
 
-For outgoing drags, offer MIME types and supply initial data with `send`.
-Call `start_drag`, then answer `Event::DataRequested` with `send` or `send_from`.
+For outgoing drags, wait for the terminal gesture notification, `Event::DragRequested`.
+Then offer MIME types and supply initial data with `send`.
+Call `start_drag` and wait for `Event::DragStarted` to confirm startup.
+Answer later `Event::DataRequested` notifications with `send` or `send_from`.
 Both methods send the complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
 Use `Entry::Text`, `Entry::UriList`, or a MIME string to select the content.
 
 For file drops, call `list` after the drop.
 `Event::Listed` supplies each URI and its requestable `Entry`.
-Request an entry to receive its kind, data, or directory listing.
+Queue these entries until the listing reaches `Event::DataEnd`.
+Then request an entry to receive its kind, data, or directory listing.
 Process requests sequentially and release each `Directory` with `close_directory`.
 Release it when its direct children finish; open child directories have independent lifetimes.
 File contents and symlink targets arrive through `Data` and `DataEnd`.
+After a raw `Entry::UriList` request completes, `root_entry(index)` supplies each root by its zero-based index.
 
-For outgoing local files, call `offer_paths` with `Path` or `PathBuf` values.
+After `Event::DragRequested`, call `offer_paths` with local `Path` or `PathBuf` values.
 It inspects each path and returns root entries in supplied order.
 Associate these entries with application sources, then call `start_drag`.
 Use `offer_files` when the application supplies file URIs directly.
@@ -72,7 +79,7 @@ Use `send_directory_bytes` and `send_symlink_bytes` for uninterpreted protocol n
 
 Upload drag thumbnails before `start_drag` with `add_thumbnail` or `add_thumbnail_from`.
 The controller supports RGB, RGBA, PNG, and text.
-Use `select_thumbnail` to select an uploaded image or remove the current image.
+After `Event::DragStarted`, use `select_thumbnail` to select an uploaded image or remove the current image.
 
 Output methods write without a flush.
 Flush responses promptly.
@@ -89,7 +96,13 @@ Assign the result to `DragDropOptions::machine_id` as `Some(id)`.
 The method reads the operating system's machine ID and applies the protocol's HMAC-SHA256 hash.
 It returns an error if the source is unavailable or empty.
 The terminal uses the identity to choose local file access or remote transfer.
-The application owns destination paths, filename validation, limits, and cleanup.
+The application owns destination paths, filename validation, and cleanup.
+
+`DragDropOptions::default()` sets control and record bounds of 64 KiB, 10,000 entries per drop, and 128 open directories.
+It also supplies a 4 KiB destination path limit for filesystem adapters.
+The bidirectional example enforces the path limit and uses the directory limit for local handles.
+Set any limit field to `None` to disable that limit.
+Fields omitted with `..DragDropOptions::default()` retain their default values.
 
 See the [guide](https://uncurses.org/docs/guides/drag-and-drop/) for the event loop
 and the [API reference](https://uncurses.org/api/uncurses_dragdrop/) for method details.
@@ -127,6 +140,7 @@ Completed drops remain on disk.
 
 The example rejects duplicate destination names and unsafe child paths.
 On Unix, it saves relative symlinks without following them and rejects targets that lexically escape the drop directory.
+It also rejects `..` after a named component to prevent escapes through other received symlinks.
 Other platforms report an error for saved symlinks.
 Treat saved links and HTML as untrusted content when opening them in another application.
 Local filesystem or protocol errors stop the example after cleanup.
