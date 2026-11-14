@@ -11,6 +11,14 @@ Use `uncurses-dragdrop` for typed events and streamed data.
 Use the raw uncurses interface when your application needs direct protocol control.
 Your application selects MIME types, handles data, and completes each exchange.
 
+Add both crates to your dependencies:
+
+```toml
+[dependencies]
+uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses-dragdrop = { git = "https://github.com/aymanbagabas/uncurses" }
+```
+
 ## Detect support
 
 Pass `REQUEST_DRAG_DROP` to the existing capability query:
@@ -65,7 +73,8 @@ Default options leave `routing_id` and `machine_id` unset.
 Configure these identities only when your environment needs them.
 See the [API reference](/api/uncurses_dragdrop/) for their formats and routing rules.
 
-The default limits bound control payloads, retained names, entries per drop, and open directories.
+The default limits bound control payloads, retained names, entries per drop, open directories, and unanswered outgoing requests.
+`max_pending_requests` bounds MIME and root requests together, separately from generated directory children.
 Set a limit field to `None` for unlimited operation.
 Fields omitted with `..DragDropOptions::default()` retain their default values.
 The [options reference](/api/uncurses_dragdrop/struct.DragDropOptions.html) lists each default.
@@ -73,7 +82,7 @@ The [options reference](/api/uncurses_dragdrop/struct.DragDropOptions.html) list
 The bidirectional example also uses these options for filesystem resources.
 It bounds queued destination paths with `max_path_bytes` and retained local handles with `max_directories`.
 Exceeding a filesystem limit cancels the affected transfer, removes partial output, and keeps the example available.
-Incoming controller limits cancel both roles because the error does not identify the affected exchange.
+Controller limits cancel both roles because the error does not identify the affected exchange.
 
 ### Identify the application host
 
@@ -208,10 +217,14 @@ fn offer_text(
 }
 ```
 
-Both `send` and `send_from` send a complete body and its end marker.
+On success, both `send` and `send_from` send a complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
+Use `fail_data` after a MIME source read fails, or cancel the drag.
+For file responses, use `fail_drag` or `cancel_drag`.
+Cancel a failed initial offer before startup.
+Terminal output errors require terminal recovery.
 Output methods do not flush, so flush responses before the next input wait.
-This dispatcher calls both helpers and cancels the incoming drop on decode errors:
+This dispatcher calls both helpers and cancels both exchanges on decode errors:
 
 ```rust
 use std::io::Write;
@@ -229,6 +242,7 @@ fn dispatch_terminal_event(
         Err(error) => {
             destination.clear();
             controller.cancel_drop(out)?;
+            controller.cancel_drag(out)?;
             out.flush()?;
             return Err(error.into());
         }
