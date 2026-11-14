@@ -236,6 +236,7 @@ try:
                     break
                 data.extend(block)
             require(data == outgoing, f"Outgoing {mime} changed")
+    output.clear()
     kitty.dnd_test_drag_finish(window, True)
     pump_until(lambda: "canceled" in visible())
 
@@ -264,6 +265,7 @@ try:
                     break
                 data.extend(block)
             require(data == expected, f"Outgoing {mime} changed")
+            output.clear()
             kitty.dnd_test_drag_finish(window, True)
             pump_until(lambda: "canceled" in visible())
 
@@ -317,8 +319,11 @@ try:
         pass
     reply(window, b"\x1b[?62c")
     wait_for_exit("Example did not quit after it drained DA1")
+    pump_until(lambda: b"\x1b[?1049l" in output)
     require(not probe("drop_wanted") and not probe("drag_can_offer"),
             "Registration leaked before DA1")
+    require(b"\x1b]72;t=a" not in output and b"\x1b]72;t=o\x1b\\" not in output,
+            "The example registered after a startup quit request")
     check_restored()
     output.clear()
     replies.clear()
@@ -326,8 +331,8 @@ try:
     replied_da = False
     process = start_example()
     pump_until(lambda: replied_da and "Checking drag and drop support" in visible())
-    require(process.wait(timeout=5) != 0, "Missing DA1 must report a timeout")
     pump_until(lambda: b"capability query timed out" in output)
+    require(process.wait(timeout=5) != 0, "Missing DA1 must report a timeout")
     check_restored()
     print("Verified delayed DA1 cleanup and a bounded capability-query timeout.")
     print("Verified native drops, chunked offers, cancellation, registration cleanup, and PTY restoration.")

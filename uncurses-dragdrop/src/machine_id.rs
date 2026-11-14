@@ -80,6 +80,25 @@ fn platform_id() -> io::Result<String> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_uuid_text_matches_ioreg() {
+        let output = std::process::Command::new("/usr/sbin/ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let properties = String::from_utf8(output.stdout).unwrap();
+        let uuid = properties
+            .lines()
+            .find_map(|line| {
+                line.split_once("\"IOPlatformUUID\" = \"")
+                    .and_then(|(_, value)| value.strip_suffix('"'))
+            })
+            .expect("IOPlatformUUID property");
+        assert_eq!(platform_id().unwrap(), uuid);
+    }
+
     #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn native_identity_is_a_valid_machine_id() {

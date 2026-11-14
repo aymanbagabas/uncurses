@@ -67,6 +67,11 @@ impl DragDrop {
         }
     }
 
+    /// Return the unchanged options supplied at construction.
+    pub fn options(&self) -> &DragDropOptions {
+        &self.options
+    }
+
     /// Register MIME types for incoming notifications.
     ///
     /// An empty list registers general interest. Registration is separate from
@@ -413,7 +418,7 @@ impl DragDrop {
     /// Other event types, other routing IDs, and capability query replies are
     /// ignored. Queries can interleave with a chunk chain. Incoming bytes are
     /// decoded incrementally; one input can produce final data and `DataEnd`.
-    /// Control messages are limited to 64 KiB across continuation frames.
+    /// `max_control_bytes` bounds control payloads across continuation frames.
     /// Incomplete OSC 72 strings return a protocol error.
     ///
     /// Protocol errors require application cleanup. This method preserves
@@ -457,23 +462,26 @@ impl DragDrop {
                 _ => false,
             },
         });
-        if !message.discarded {
+        let result = (|| {
+            if message.discarded {
+                return Ok(Vec::new());
+            }
             if message.value("t") != Some("r")
-                && payload.len() > (64 * 1024usize).saturating_sub(message.payload.len())
+                && self.options.max_control_bytes.is_some_and(|limit| {
+                    payload.len() > limit.saturating_sub(message.payload.len())
+                })
             {
-                return Err(Error::Protocol("control message exceeds 64 KiB".into()));
+                return Err(Error::LimitExceeded("control payload limit exceeded"));
             }
             message.payload.extend_from_slice(payload);
-        }
-        let result = if message.discarded {
-            Ok(Vec::new())
-        } else if message.value("t") == Some("r") {
-            self.incoming_data(&mut message, !more, payload.is_empty())
-        } else if more {
-            Ok(Vec::new())
-        } else {
-            self.message(&message)
-        };
+            if message.value("t") == Some("r") {
+                self.incoming_data(&mut message, !more, payload.is_empty())
+            } else if more {
+                Ok(Vec::new())
+            } else {
+                self.message(&message)
+            }
+        })();
         if result.is_err() {
             if matches!(message.value("t"), Some("r" | "R")) {
                 self.request = None;

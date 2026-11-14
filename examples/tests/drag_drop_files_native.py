@@ -212,6 +212,20 @@ with tempfile.TemporaryDirectory(prefix="dnd-native-", dir="target") as director
             for extension, data in images.items():
                 require((saved / "nested" / f"photo.{extension}").read_bytes() == data, "Saved image changed")
 
+        previous_drops = set(destination.iterdir()) if not preview else set()
+        output.clear()
+        kitty.dnd_test_fake_drop_event(window, True, ["text/uri-list"], 5, 3, 2)
+        pump(lambda: probe("drop_getting_data_for_mime") == "text/uri-list")
+        kitty.dnd_test_fake_drop_data(
+            window, "text/uri-list", ((incoming.as_uri() + "/\r\n") * 10_001).encode()
+        )
+        pump(lambda: "Drop canceled: drop entry limit exceeded" in diagnostics())
+        require(process.poll() is None and probe("drop_wanted"), "Entry limit stopped the example")
+        require(probe("last_drop_action") == 0, "Entry limit did not cancel the drop")
+        if not preview:
+            require(set(destination.iterdir()) == previous_drops, "Entry limit leaked partial storage")
+
+        output.clear()
         kitty.dnd_test_start_drag_offer(window, 5, 3, 40, 48)
         pump(lambda: "Drag started" in diagnostics())
         require(probe("drag_thumbnail_size") == 16 * 16 * 4, diagnostics())
@@ -245,6 +259,21 @@ with tempfile.TemporaryDirectory(prefix="dnd-native-", dir="target") as director
             require((tree / "nested" / f"photo.{extension}").read_bytes() == data, "Outgoing nested image changed")
         kitty.dnd_test_drag_finish(window, False)
         pump(lambda: "finished: canceled=" in diagnostics())
+        if not local:
+            for index in range(150):
+                directory = sources / f"wide-{index:03}"
+                directory.mkdir()
+                (directory / "leaf").write_bytes(b"leaf")
+            output.clear()
+            kitty.dnd_test_start_drag_offer(window, 5, 3, 40, 48)
+            pump(lambda: b"\x1b]72;t=P:x=-1\x1b\\" in output)
+            kitty.dnd_test_force_drag_dropped(window)
+            kitty.dnd_test_request_drag_data(window, 0)
+            pump(lambda: "Drag canceled: outgoing directory handle limit exceeded" in diagnostics())
+            require(process.poll() is None and probe("drag_can_offer"), "Handle limit stopped the example")
+        print("Verified default entry limits, partial cleanup, and available registrations.")
+        if not local:
+            print("Verified default handle limits during a wide outgoing tree.")
         pty_pending.extend(b"q")
         pump(lambda: b"\x1b[?1049l" in output)
         require(process.wait(timeout=5) == 0, diagnostics())
