@@ -11,7 +11,11 @@
 //!
 //! Confirm terminal support with uncurses' capability query before registration.
 //! Output methods write without flushing. Flush the terminal writer after each
-//! batch. Call [`DragDrop::close`] before terminal teardown.
+//! batch. Call [`DragDrop::close`] before terminal teardown while output remains
+//! safe. [`Error::OutputFailed`] reports a fatal error immediately and preserves
+//! its original cause. Stop all controller calls after this error.
+//! Restore the terminal. Failed external flushes also require terminal recovery unless
+//! the writer guarantees safe resumption.
 //!
 //! ```
 //! use uncurses_dragdrop::{DragDrop, DragDropOptions};

@@ -407,7 +407,10 @@ pub enum Event {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// A source read or terminal write failed.
+    /// An I/O operation failed.
+    ///
+    /// Direct results describe local file access or recoverable source errors.
+    /// Terminal write failures enclose this cause in [`Self::OutputFailed`].
     Io(io::Error),
     /// The operation is invalid in the current exchange state.
     InvalidState(&'static str),
@@ -417,9 +420,12 @@ pub enum Error {
     LimitExceeded(&'static str),
     /// An incoming message is malformed or inconsistent.
     Protocol(String),
-    /// A previous output failure left terminal state uncertain.
+    /// A failure left terminal protocol state uncertain.
+    ///
+    /// Stop using this controller, including cancellation and cleanup methods.
     /// Restore the terminal before constructing another controller.
-    OutputFailed,
+    /// The enclosed error preserves the write, source, or validation failure.
+    OutputFailed(Box<Error>),
 }
 
 impl fmt::Display for Error {
@@ -430,7 +436,7 @@ impl fmt::Display for Error {
             | Self::InvalidInput(message)
             | Self::LimitExceeded(message) => f.write_str(message),
             Self::Protocol(message) => write!(f, "invalid drag and drop message: {message}"),
-            Self::OutputFailed => f.write_str("previous terminal output failed"),
+            Self::OutputFailed(error) => write!(f, "drag and drop output failed: {error}"),
         }
     }
 }
@@ -439,6 +445,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
+            Self::OutputFailed(error) => Some(error.as_ref()),
             _ => None,
         }
     }
