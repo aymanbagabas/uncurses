@@ -260,7 +260,8 @@ impl Demo {
                     controller.request(out, entry)?;
                 } else {
                     controller.complete_drop(out, Operation::Copy)?;
-                    out.flush()?;
+                    out.flush()
+                        .map_err(|error| Error::OutputFailed(Box::new(error.into())))?;
                     let saved = self.receiver.finish();
                     self.log(format!(
                         "Drop complete: {} bytes, {} entries, checksum={:016x}",
