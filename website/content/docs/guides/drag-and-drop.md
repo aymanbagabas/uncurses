@@ -220,10 +220,14 @@ fn offer_text(
 
 On success, both `send` and `send_from` send a complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
-Use `fail_data` after a MIME source read fails, or cancel the drag.
-For file responses, use `fail_drag` or `cancel_drag`.
-Cancel a failed initial offer before startup when the controller remains writable.
-Terminal output errors require terminal recovery.
+
+`send_from` reports both source read failures and terminal write failures as `Error::Io`.
+Attempt `fail_data` for a failed MIME response.
+For file responses, attempt `fail_drag` or `cancel_drag`.
+Cancel a failed initial offer before startup.
+On `OutputFailed`, restore the terminal.
+The controller rejects these recovery attempts before any write when earlier output failed.
+
 Output methods do not flush, so flush responses before the next input wait.
 This dispatcher calls both helpers and cancels both exchanges on decode errors:
 
@@ -532,7 +536,9 @@ Treat saved links and HTML as untrusted content when opening them elsewhere.
 The example copies file URIs that name a file or directory.
 Root URIs without a safe file name remain in the escaped log and are skipped.
 File access and validation errors cancel the affected transfer and leave the example available.
-Terminal output failures and other protocol errors stop the example after cleanup.
+The example cancels both roles after controller limit or protocol errors.
+Successful cleanup leaves the example available for later transfers.
+Terminal output failures and unhandled controller errors stop the example after cleanup.
 Outgoing traversal retains open directory handles and opens children without following symbolic links.
 Directory listings include regular files, directories, and symlinks.
 Each opened file must be a regular file before transmission.
