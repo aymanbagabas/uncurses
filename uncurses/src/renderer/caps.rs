@@ -221,7 +221,7 @@ impl Optimizations {
     /// receiving terminal is in cooked mode without `TAB0` set on
     /// `c_oflag` and `\t` would otherwise be expanded to spaces.
     ///
-    /// A [`Screen`](crate::screen::Screen) enables this on every raw-mode
+    /// A [`Program`](crate::program::Program) enables this on every raw-mode
     /// entry, since raw mode is what makes `\t` safe, so setting it here
     /// matters only when driving a renderer directly.
     #[must_use]
@@ -235,7 +235,7 @@ impl Optimizations {
     /// receiving terminal does not interpret `\x08` as cursor-left
     /// by one cell.
     ///
-    /// A [`Screen`](crate::screen::Screen) enables this on every raw-mode
+    /// A [`Program`](crate::program::Program) enables this on every raw-mode
     /// entry, since raw mode is what makes `\x08` safe, so setting it here
     /// matters only when driving a renderer directly.
     #[must_use]
@@ -249,7 +249,7 @@ impl Optimizations {
     /// Enable when the terminal is in cooked mode with `ONLCR` set so a
     /// newline both advances a row and resets the column.
     ///
-    /// A [`Screen`](crate::screen::Screen) never sets this — raw mode
+    /// A [`Program`](crate::program::Program) never sets this — raw mode
     /// clears `OPOST`, so `\n` carries no carriage return — but it never
     /// clears it either. It is yours to opt into and yours to keep.
     #[must_use]
