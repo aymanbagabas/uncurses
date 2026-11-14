@@ -3,6 +3,113 @@ use crate::types::Identity;
 use url::Url;
 
 #[test]
+fn raw_root_entries_are_bounded_and_invalidated_by_a_new_list() {
+    let mut controller = file_drop();
+    assert!(controller.root_entry(0).is_none());
+    controller.request(&mut Vec::new(), Entry::UriList).unwrap();
+    handle(
+        &mut controller,
+        "t=r:x=2",
+        BASE64.encode(b"# comment\nfile:///one\n").as_bytes(),
+    );
+    assert!(controller.root_entry(0).is_none());
+    handle(&mut controller, "t=r:x=2", b"");
+    let old = controller.root_entry(0).unwrap();
+    assert!(controller.root_entry(1).is_none());
+    assert!(controller.root_entry(usize::MAX).is_none());
+    controller.list(&mut Vec::new()).unwrap();
+    assert!(controller.root_entry(0).is_none());
+    handle(
+        &mut controller,
+        "t=r:x=2",
+        BASE64.encode(b"file:///two\n").as_bytes(),
+    );
+    handle(&mut controller, "t=r:x=2", b"");
+    assert!(controller.request(&mut Vec::new(), old).is_err());
+    controller
+        .request(&mut Vec::new(), controller.root_entry(0).unwrap())
+        .unwrap();
+    controller.cancel_drop(&mut Vec::new()).unwrap();
+    assert!(controller.root_entry(0).is_none());
+}
+
+#[test]
+fn optional_entry_and_record_limits_apply_before_events_escape() {
+    for (entries, record, expected_error) in [
+        (Some(0), None, true),
+        (Some(1), None, true),
+        (None, Some(3), true),
+        (Some(2), Some(9), false),
+        (None, None, false),
+    ] {
+        let options = DragDropOptions {
+            max_entries: entries,
+            max_record_bytes: record,
+            ..DragDropOptions::default()
+        };
+        let mut controller = DragDrop::new(options.clone());
+        controller.enable_drops(&mut Vec::new(), &[]).unwrap();
+        handle(&mut controller, "t=M:o=1", b"text/uri-list");
+        controller.list(&mut Vec::new()).unwrap();
+        let result = controller.handle_event(&raw(
+            "t=r:x=1",
+            BASE64.encode(b"file:///a\nfile:///b\n").as_bytes(),
+        ));
+        assert_eq!(
+            matches!(result, Err(Error::LimitExceeded(_))),
+            expected_error
+        );
+        assert_eq!(controller.options(), &options);
+        if !expected_error {
+            assert_eq!(
+                result
+                    .unwrap()
+                    .iter()
+                    .filter(|e| matches!(e, Event::Listed { .. }))
+                    .count(),
+                2
+            );
+            handle(&mut controller, "t=r:x=1", b"");
+            assert!(controller.root_entry(1).is_some());
+        }
+    }
+}
+
+#[test]
+fn directory_limit_is_optional_and_counts_open_handles() {
+    for limit in [Some(1), None] {
+        let mut controller = DragDrop::new(DragDropOptions {
+            max_directories: limit,
+            ..DragDropOptions::default()
+        });
+        controller.enable_drops(&mut Vec::new(), &[]).unwrap();
+        handle(&mut controller, "t=M:o=1", b"text/uri-list");
+        controller.list(&mut Vec::new()).unwrap();
+        handle(
+            &mut controller,
+            "t=r:x=1",
+            BASE64.encode(b"file:///root/").as_bytes(),
+        );
+        handle(&mut controller, "t=r:x=1", b"");
+        controller
+            .request(&mut Vec::new(), controller.root_entry(0).unwrap())
+            .unwrap();
+        let entry = listed_entry(handle(
+            &mut controller,
+            "t=r:x=1:y=1:X=37",
+            BASE64.encode(b"child\0").as_bytes(),
+        ));
+        handle(&mut controller, "t=r:x=1:y=1:X=37", b"");
+        controller.request(&mut Vec::new(), entry).unwrap();
+        let result = controller.handle_event(&raw("t=r:Y=37:x=1:X=38", b""));
+        assert_eq!(
+            matches!(result, Err(Error::LimitExceeded(_))),
+            limit.is_some()
+        );
+    }
+}
+
+#[test]
 fn raw_uri_lists_stream_long_records_without_buffering_names() {
     let mut controller = file_drop();
     controller.request(&mut Vec::new(), Entry::UriList).unwrap();
@@ -18,7 +125,7 @@ fn raw_uri_lists_stream_long_records_without_buffering_names() {
     handle(&mut controller, "t=r:x=2", BASE64.encode(tail).as_bytes());
     assert_eq!(handle(&mut controller, "t=r:x=2", b""), [Event::DataEnd]);
     controller
-        .request(&mut Vec::new(), uri(&controller, 2))
+        .request(&mut Vec::new(), controller.root_entry(1).unwrap())
         .unwrap();
 }
 
@@ -77,7 +184,7 @@ fn incoming_records_are_bounded_across_messages() {
         }
         assert!(matches!(
             controller.handle_event(&raw(metadata, b"YQ")),
-            Err(Error::Protocol(_))
+            Err(Error::LimitExceeded(_))
         ));
     }
 }
@@ -395,7 +502,14 @@ fn path_offers_preserve_trailing_directory_separators() {
     controller.enable_drags(&mut out).unwrap();
     handle(&mut controller, "t=o", b"");
     out.clear();
-    for name in ["file/", "file-link/", "broken-link/"] {
+    for name in [
+        "file/",
+        "file-link/",
+        "broken-link/",
+        "file/.",
+        "file-link/.",
+        "broken-link/.",
+    ] {
         let path = temporary.0.join(name);
         assert!(fs::symlink_metadata(&path).is_err());
         assert!(path_to_uri(&path).is_err(), "{name}");
@@ -408,7 +522,7 @@ fn path_offers_preserve_trailing_directory_separators() {
         assert_eq!(controller.drag.phase, DragPhase::Requested);
     }
 
-    for name in ["folder/", "folder-link/"] {
+    for name in ["folder/", "folder-link/", "folder/.", "folder-link/."] {
         let path = temporary.0.join(name);
         let uri = path_to_uri(&path).unwrap();
         assert!(uri.ends_with('/'), "{uri}");
