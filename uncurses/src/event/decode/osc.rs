@@ -232,6 +232,26 @@ mod tests {
     }
 
     #[test]
+    fn numeric_drag_drop_commands_preserve_payload_limits() {
+        for command in [b"072".as_slice(), b"00072", b"+72"] {
+            let valid = [b"\x1b]", command, b";t=r:x=1;YQ\x1b\\"].concat();
+            assert_eq!(
+                Decoder::default().parse(&valid),
+                [Event::DragDrop {
+                    options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
+                    payload: b"YQ".to_vec(),
+                }]
+            );
+            let body = [command, b";t=r:x=1;", &b"YQ".repeat(2050)].concat();
+            let oversized = [b"\x1b]".as_slice(), &body, b"\x1b\\"].concat();
+            assert_eq!(
+                Decoder::default().parse(&oversized),
+                [Event::UnknownOsc(body)]
+            );
+        }
+    }
+
+    #[test]
     fn program_status_support_reply_accepts_extensions_and_split_input() {
         for intro in [b"\x1b]".as_slice(), b"\x9d"] {
             for ending in [b"\x07".as_slice(), b"\x1b\\", b"\x9c"] {
