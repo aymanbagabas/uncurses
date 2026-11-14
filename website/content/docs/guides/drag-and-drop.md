@@ -374,13 +374,13 @@ Associate these entries with your application sources:
 
 ```rust
 use std::{collections::HashMap, io::Write, path::PathBuf};
-use uncurses_dragdrop::{DragDrop, Entry, Error, Operations};
+use uncurses_dragdrop::{DragDrop, Entry, Operations};
 
 fn offer_paths(
     controller: &mut DragDrop,
     out: &mut impl Write,
     paths: &[PathBuf],
-) -> Result<HashMap<Entry, PathBuf>, Error> {
+) -> Result<HashMap<Entry, PathBuf>, Box<dyn std::error::Error>> {
     let entries = controller.offer_paths(out, paths, Operations::COPY)?;
     let sources = entries.into_iter().zip(paths.iter().cloned()).collect();
     controller.start_drag(out)?;
