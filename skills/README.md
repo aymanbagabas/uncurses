@@ -1,4 +1,4 @@
-# Use uncurses with an AI assistant
+# uncurses skill
 
 The [uncurses skill](uncurses/SKILL.md) helps an assistant write applications
 that depend on uncurses. It explains the ownership model, safe teardown,
