@@ -71,6 +71,13 @@ uncurses uses the 2024 edition, currently needs Rust 1.88 or newer, and tracks
 the latest stable toolchain. There is no separate toolchain or build step: a
 normal `cargo build` is all it takes.
 
+## AI assistants
+
+The repository includes an
+[uncurses skill](https://github.com/aymanbagabas/uncurses/blob/main/skills/README.md)
+for assistants that help build applications. It explains the ownership model,
+common API mistakes, installation, and revision compatibility.
+
 ## Next steps
 
 With the crate added, the next page writes the smallest complete interactive
