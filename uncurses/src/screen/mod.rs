@@ -77,10 +77,15 @@
 
 mod commit;
 mod placements;
+mod resource;
 #[cfg(test)]
 mod tests;
 pub use crate::ansi::text_sizing::TextSizing;
-pub use placements::{PlacementId, PlacementOptions};
+pub use placements::{
+    PlacementContext, PlacementEncoder, PlacementId, PlacementOptions, PlacementOutput,
+};
+pub use resource::PlacementResource;
+pub(crate) use resource::ResourceKey;
 
 /// Cell-diff capability flags controlling which optimized escape
 /// sequences the screen's renderer may emit. Re-exported from the

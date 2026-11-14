@@ -74,11 +74,11 @@ impl Renderer {
                     .iter()
                     .filter(|r| r.options.cells.is_none() && frame.rows.contains_key(&r.area.y))
                 {
-                    self.write_placement(
+                    self.write_placement_record(
                         out,
                         crate::layout::Size::new(width, height),
-                        (record.area.x, record.area.y).into(),
-                        &record.options.draw,
+                        record,
+                        false,
                     )?;
                 }
                 for (&y, overlay) in &frame.rows {

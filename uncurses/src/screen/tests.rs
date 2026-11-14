@@ -1296,8 +1296,10 @@ fn commit_rows_retries_cursor_output_with_a_retained_placement() {
             Rect::new(0, 2, 1, 1),
             &PlacementOptions {
                 draw: b"C".to_vec(),
-                upload: std::sync::Arc::from(b"<UPLOAD>".as_slice()),
-                delete: std::sync::Arc::from(b"<DELETE>".as_slice()),
+                resource: Some(super::PlacementResource::new(
+                    b"<UPLOAD>".as_slice(),
+                    b"<DELETE>".as_slice(),
+                )),
                 ..Default::default()
             },
         )
