@@ -45,7 +45,10 @@ use std::io::Write;
 use uncurses_dragdrop::{DragDrop, DragDropOptions};
 
 fn register(out: &mut impl Write) -> Result<DragDrop, Box<dyn std::error::Error>> {
-    let mut controller = DragDrop::new(DragDropOptions::default());
+    let mut controller = DragDrop::new(DragDropOptions {
+        max_entries: Some(2_000),
+        ..DragDropOptions::default()
+    });
     controller.enable_drops(out, &["text/plain"])?;
     controller.enable_drags(out)?;
     out.flush()?;
@@ -56,6 +59,15 @@ fn register(out: &mut impl Write) -> Result<DragDrop, Box<dyn std::error::Error>
 Default options leave `routing_id` and `machine_id` unset.
 Configure these identities only when your environment needs them.
 See the [API reference](/api/uncurses_dragdrop/) for their formats and routing rules.
+
+The default limits bound control payloads, retained names, entries per drop, and open directories.
+Set a limit field to `None` for unlimited operation.
+Fields omitted with `..DragDropOptions::default()` retain their default values.
+The [options reference](/api/uncurses_dragdrop/struct.DragDropOptions.html) lists each default.
+
+The bidirectional example also uses these options for filesystem resources.
+It bounds queued destination paths with `max_path_bytes` and retained local handles with `max_directories`.
+Exceeding a limit cancels the affected transfer, removes partial output, and keeps the example available.
 
 ### Identify the application host
 
@@ -88,68 +100,58 @@ cargo run -p examples --example machine_id
 
 ### Receive text copies
 
-Pass terminal events to `handle_event`.
+Decode each terminal event once with `handle_event`.
+Pass each returned event to the receive and offer handlers.
 Accept a supported offer, then request data after `Event::Drop`.
 The controller tracks MIME indices and decodes data across message boundaries.
 
 ```rust
 use std::io::Write;
-use uncurses::event::Event as TerminalEvent;
 use uncurses_dragdrop::{DragDrop, Event, Operation, Operations};
 
 fn receive_text(
     controller: &mut DragDrop,
-    event: &TerminalEvent,
+    event: &Event,
     out: &mut impl Write,
     destination: &mut Vec<u8>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let events = match controller.handle_event(event) {
-        Ok(events) => events,
-        Err(error) => {
+    match event {
+        Event::Hover(offer)
+            if !offer.operations.contains(Operations::COPY)
+                || !offer.mime_types.iter().any(|mime| mime == "text/plain") =>
+        {
+            controller.reject(out)?;
+        }
+        Event::Drop(offer)
+            if !offer.operations.contains(Operations::COPY)
+                || !offer.mime_types.iter().any(|mime| mime == "text/plain") =>
+        {
+            controller.cancel_drop(out)?;
+        }
+        Event::Hover(_) => controller.accept(out, &["text/plain"], Operation::Copy)?,
+        Event::Drop(_) => {
             destination.clear();
-            return Err(error.into());
+            controller.request(out, "text/plain")?;
         }
-    };
-    for event in events {
-        match event {
-            Event::Hover(offer)
-                if !offer.operations.contains(Operations::COPY)
-                    || !offer.mime_types.iter().any(|mime| mime == "text/plain") =>
-            {
-                controller.reject(out)?;
-            }
-            Event::Drop(offer)
-                if !offer.operations.contains(Operations::COPY)
-                    || !offer.mime_types.iter().any(|mime| mime == "text/plain") =>
-            {
+        Event::Data(bytes) => {
+            if bytes.len() > (1024 * 1024usize).saturating_sub(destination.len()) {
+                destination.clear();
                 controller.cancel_drop(out)?;
+                out.flush()?;
+                return Err("text drop exceeds 1 MiB".into());
             }
-            Event::Hover(_) => controller.accept(out, &["text/plain"], Operation::Copy)?,
-            Event::Drop(_) => {
-                destination.clear();
-                controller.request(out, "text/plain")?;
-            }
-            Event::Data(bytes) => {
-                if bytes.len() > (1024 * 1024usize).saturating_sub(destination.len()) {
-                    destination.clear();
-                    controller.cancel_drop(out)?;
-                    out.flush()?;
-                    return Err("text drop exceeds 1 MiB".into());
-                }
-                destination.extend_from_slice(&bytes);
-            }
-            Event::DataEnd => {
-                controller.complete_drop(out, Operation::Copy)?;
-            }
-            Event::DropCanceled => destination.clear(),
-            Event::DropFailed(error) => {
-                destination.clear();
-                return Err(error.into());
-            }
-            _ => {}
+            destination.extend_from_slice(bytes);
         }
+        Event::DataEnd => {
+            controller.complete_drop(out, Operation::Copy)?;
+        }
+        Event::DropCanceled => destination.clear(),
+        Event::DropFailed(error) => {
+            destination.clear();
+            return Err(error.to_string().into());
+        }
+        _ => {}
     }
-    out.flush()?;
     Ok(())
 }
 ```
@@ -179,7 +181,7 @@ use uncurses_dragdrop::{DragDrop, Event, Operations};
 
 fn offer_text(
     controller: &mut DragDrop,
-    event: Event,
+    event: &Event,
     out: &mut impl Write,
 ) -> Result<(), Box<dyn std::error::Error>> {
     const TEXT: &[u8] = b"Hello from uncurses!\n";
@@ -190,12 +192,11 @@ fn offer_text(
             controller.start_drag(out)?;
         }
         Event::DataRequested { mime_type } => {
-            controller.send_from(out, &mime_type, &mut Cursor::new(TEXT))?;
+            controller.send_from(out, mime_type, &mut Cursor::new(TEXT))?;
         }
         Event::DragFailed(error) => return Err(format!("{error}").into()),
         _ => {}
     }
-    out.flush()?;
     Ok(())
 }
 ```
@@ -203,7 +204,34 @@ fn offer_text(
 Both `send` and `send_from` send a complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
 Output methods do not flush, so flush responses before the next input wait.
-Dispatch the events from each `handle_event` call to both roles if your application supports both.
+This dispatcher calls both helpers and clears partial receive data on decode errors:
+
+```rust
+use std::io::Write;
+use uncurses::event::Event as TerminalEvent;
+use uncurses_dragdrop::DragDrop;
+
+fn dispatch_terminal_event(
+    controller: &mut DragDrop,
+    event: &TerminalEvent,
+    out: &mut impl Write,
+    destination: &mut Vec<u8>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let events = match controller.handle_event(event) {
+        Ok(events) => events,
+        Err(error) => {
+            destination.clear();
+            return Err(error.into());
+        }
+    };
+    for event in events {
+        receive_text(controller, &event, out, destination)?;
+        offer_text(controller, &event, out)?;
+    }
+    out.flush()?;
+    Ok(())
+}
+```
 
 For large transfers, write directly to the screen's underlying writer.
 Flush staged screen output first to preserve output order:
@@ -263,7 +291,25 @@ Pass the opaque `Entry` supplied by `Listed` back to `request`.
 The controller validates the entry's owner and listing.
 Closing a directory invalidates its child entries, while nested directories remain open until explicitly closed.
 Raw URI bodies stream without retaining full records.
-The `list` method limits each retained name to 64 KiB.
+The default `max_record_bytes` limit bounds each retained name to 64 KiB.
+After a raw `Entry::UriList` request reaches `DataEnd`, use `root_entry` to obtain a requestable root:
+
+```rust
+use std::io::Write;
+use uncurses_dragdrop::DragDrop;
+
+fn request_first_root(
+    controller: &mut DragDrop,
+    out: &mut impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let entry = controller.root_entry(0).ok_or("the URI list has no first root")?;
+    controller.request(out, entry)?;
+    Ok(())
+}
+```
+
+Indices start at zero and exclude comments and empty lines.
+The method returns `None` before completion or for an index outside the list.
 `Entry::Text` and `Entry::Custom(mime)` select other MIME bodies.
 Existing MIME strings also work with `request`, `send`, and `send_from`.
 
@@ -380,7 +426,7 @@ Supply image dimensions, or a text scale and opacity.
 Raw RGB and RGBA byte counts must match their dimensions.
 See the [thumbnail reference](/api/uncurses_dragdrop/enum.ThumbnailFormat.html) for format details.
 Call `select_thumbnail` after `Event::DragStarted`.
-If thumbnail input fails before any output, cancel the drag or report a drag failure.
+If thumbnail input fails before any output, use `cancel_drag` to release the prepared offer.
 If a thumbnail continuation is already on the wire, restore the terminal and discard the controller.
 In that case, further output methods, including `cancel_drag` and `close`, return `Error::OutputFailed`.
 
@@ -450,9 +496,12 @@ POSIX and Windows source URIs use the same receive path.
 
 On Unix, saved symlinks retain relative targets without following them.
 Targets that lexically escape the drop directory cause an error.
+Leading `..` components can reach existing parent directories inside the drop.
+The example rejects `..` after a named component because another received symlink can change that component's destination.
 Other platforms report an error for saved symlinks.
 Treat saved links and HTML as untrusted content when opening them elsewhere.
-Incoming file URIs must name a file or directory; filesystem roots and other URI schemes cause an error.
+The example copies file URIs that name a file or directory.
+Root URIs without a safe file name remain in the escaped log and are skipped.
 Local filesystem and protocol errors stop the example after cleanup.
 Outgoing traversal retains open directory handles and opens children without following symbolic links.
 Directory listings include regular files, directories, and symlinks.
@@ -587,10 +636,10 @@ Start the prepared drag with `t=P:x=-1`.
 Handle `t=e` status changes and data requests, and `t=E` results or errors.
 The protocol specification documents thumbnail formats and remote entries.
 
-The `drag_drop` example offers text with an RGBA thumbnail and answers later data requests:
+The `drag_drop_raw` example offers text with an RGBA thumbnail and answers later data requests:
 
 ```sh
-cargo run -p examples --example drag_drop
+cargo run -p examples --example drag_drop_raw
 ```
 
 It also receives text copies and displays an escaped preview.
