@@ -7,6 +7,14 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[[example]]
+name = "drag_drop"
+test = true
+
+[[example]]
+name = "drag_drop_raw"
+test = true
+
 [features]
 default = ["unicode-rs", "async"]
 unicode-rs = ["uncurses/unicode-rs", "uncurses-ratatui/unicode-rs", "uncurses-dragdrop/unicode-rs"]
@@ -14,13 +22,18 @@ icu = ["uncurses/icu", "uncurses-ratatui/icu", "uncurses-dragdrop/icu"]
 async = ["uncurses/async"]
 
 [dependencies]
+cap-std = "4"
+cap-fs-ext = "4"
 base64 = "0.22"
+percent-encoding = "2"
 uncurses = { path = "../uncurses", default-features = false }
 uncurses-dragdrop = { path = "../uncurses-dragdrop", default-features = false }
 uncurses-ratatui = { path = "../uncurses-ratatui", default-features = false }
 ratatui = { version = "0.30", features = ["underline-color"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
+tempfile = "3"
+url = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
