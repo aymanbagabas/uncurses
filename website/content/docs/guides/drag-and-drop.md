@@ -228,15 +228,21 @@ fn offer_text(
 On success, both `send` and `send_from` send a complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
 
-`send_from` reports both source read failures and terminal write failures as `Error::Io`.
-Attempt `fail_data` for a failed MIME response.
+`send_from` returns `Error::Io` for a recoverable source read failure.
+Use `fail_data` for a failed MIME response.
 For file responses, attempt `fail_drag` or `cancel_drag`.
 Cancel a failed initial body before startup.
-On `OutputFailed`, restore the terminal.
-The controller rejects these recovery attempts before any write when earlier output failed.
 
-If `offer` returns `Error::Io`, restore the terminal even if `cancel_drag` succeeds.
-Cancellation success in this case confirms local cleanup, not safe terminal output.
+Terminal write failures return `Error::OutputFailed` immediately, with the original error boxed as its cause.
+On this error, stop all controller calls, including cancellation and `close`.
+Restore the terminal before creating another controller.
+The application owns this recovery decision.
+
+Run the error recovery example without a terminal:
+
+```sh
+cargo run -p examples --example drag_drop_errors
+```
 
 Output methods do not flush, so flush responses before the next input wait.
 This dispatcher calls both helpers and cancels both exchanges on decode errors:
@@ -467,15 +473,17 @@ Raw RGB and RGBA byte counts must match their dimensions.
 See the [thumbnail reference](/api/uncurses_dragdrop/enum.ThumbnailFormat.html) for format details.
 Call `select_thumbnail` after `Event::DragStarted`.
 If thumbnail input fails before any output, use `cancel_drag` to release the prepared offer.
-If a thumbnail continuation is already on the wire, restore the terminal and discard the controller.
-In that case, further output methods, including `cancel_drag` and `close`, return `Error::OutputFailed`.
+If a thumbnail continuation is already on the wire, the failed call returns `Error::OutputFailed` with the original cause.
+Stop controller calls, including `cancel_drag` and `close`.
+Restore the terminal.
 
 ### Close the controller
 
 Call `close` before `Program::pause` or `Program::finish` only while protocol output remains safe.
 Flush successful cleanup output.
 Register again after resume.
-After a flush failure, restore the terminal without this helper unless your writer guarantees safe resumption.
+After `OutputFailed`, restore the terminal without this helper.
+After a flush failure, also skip this helper unless your writer guarantees safe resumption.
 This helper attempts terminal restoration even when its cleanup fails:
 
 ```rust
@@ -552,7 +560,8 @@ Root URIs without a safe file name remain in the escaped log and are skipped.
 File access and validation errors cancel the affected transfer and leave the example available.
 The example cancels both roles after controller limit or protocol errors.
 Successful cleanup leaves the example available for later transfers.
-Terminal output failures and unhandled controller errors stop the example after cleanup.
+Terminal output failures stop controller calls and trigger terminal restoration.
+Other unhandled controller errors stop the example after cleanup.
 Outgoing traversal retains open directory handles and opens children without following symbolic links.
 Directory listings include regular files, directories, and symlinks.
 Each opened file must be a regular file before transmission.
