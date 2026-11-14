@@ -59,7 +59,7 @@ On success, both methods send the complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
 If a source read fails, use `fail_data` to end a MIME response with an error.
 For file responses, abort the exchange with `fail_drag` or `cancel_drag`.
-Cancel a failed initial offer before startup.
+Cancel a failed initial offer before startup when the controller remains writable.
 Terminal output errors require terminal recovery instead of another response.
 Use `Entry::Text`, `Entry::UriList`, or a MIME string to select the content.
 
@@ -97,6 +97,10 @@ Use `send_directory_bytes` and `send_symlink_bytes` for uninterpreted protocol n
 Upload drag thumbnails before `start_drag` with `add_thumbnail` or `add_thumbnail_from`.
 The controller supports RGB, RGBA, PNG, and text.
 After `Event::DragStarted`, use `select_thumbnail` to select an uploaded image or remove the current image.
+If a streaming thumbnail fails after its first chunk, recover the terminal before creating another controller.
+Reader errors and later validation failures can leave the thumbnail continuation open.
+The controller then rejects cancellation with `OutputFailed` to prevent it from becoming thumbnail data.
+A thumbnail failure before output can be canceled normally.
 
 Output methods write without a flush.
 Flush responses promptly.
@@ -138,6 +142,8 @@ cargo run -p examples --example drag_drop -- Cargo.toml uncurses-dragdrop/src
 Drop content onto the window to inspect a bounded, escaped byte preview.
 Use Kitty's drag gesture to copy the selected content out.
 The example offers supplied paths first, or generated text when run without paths.
+Outgoing directory listings include regular files, directories, and symlinks.
+The example skips FIFOs, sockets, and device nodes inside those trees.
 
 Press f for files, t for text, h for HTML, p for PNG, or j for JPEG.
 Press 1 for an image thumbnail, 2 for text, or 0 for none.
@@ -179,6 +185,7 @@ The checkout, source paths, and receive directory belong to the SSH host.
 Drop local files onto the terminal to copy them to that host.
 Drag offered remote files into a local file manager to copy them back.
 The example uses `MachineId::current()` so Kitty can select remote transfer.
+The example requires this identity at startup, including for text and image transfers.
 Each body transfer is synchronous.
 
 The [raw example](../examples/examples/drag_drop_raw.rs) demonstrates text transfers
