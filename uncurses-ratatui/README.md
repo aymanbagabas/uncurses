@@ -73,7 +73,8 @@ That's the shape of it; the full API and guides live at
 
 Published releases are available on
 [crates.io](https://crates.io/crates/uncurses-ratatui).
-This example follows the current repository source. Use matching git dependencies:
+For examples from a checkout of the repository's default branch, use matching git
+dependencies:
 
 ```toml
 [dependencies]
