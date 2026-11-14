@@ -82,18 +82,12 @@ impl Content {
         }
     }
 
-    fn body(self, mime: &str, roots: &[PathBuf]) -> Result<Vec<u8>, Error> {
+    fn body(self, mime: &str, uri_list: &[u8]) -> Result<Vec<u8>, Error> {
         if !self.mimes().contains(&mime) {
             return Err(Error::InvalidInput("requested MIME type was not offered"));
         }
         Ok(match self {
-            Self::Files => {
-                let uris = roots
-                    .iter()
-                    .map(path_to_uri)
-                    .collect::<io::Result<Vec<_>>>()?;
-                format!("{}\r\n", uris.join("\r\n")).into_bytes()
-            }
+            Self::Files => uri_list.to_vec(),
             Self::Text => TEXT.repeat(512),
             Self::Html if mime == "text/plain" => TEXT.to_vec(),
             Self::Html => HTML.to_vec(),
@@ -120,6 +114,7 @@ struct Demo {
     active: Option<Content>,
     sources: HashMap<Entry, Source>,
     source_dirs: DirectoryPool,
+    uri_list: Vec<u8>,
     receiver: Receiver,
     thumbnail: support::Thumbnail,
     log: VecDeque<String>,
@@ -138,6 +133,7 @@ impl Demo {
             active: None,
             sources: HashMap::new(),
             source_dirs: DirectoryPool::default(),
+            uri_list: Vec::new(),
             receiver: Receiver::default(),
             thumbnail: support::Thumbnail::default(),
             log: VecDeque::new(),
@@ -149,6 +145,26 @@ impl Demo {
         if self.log.len() > 8 {
             self.log.pop_front();
         }
+    }
+
+    fn handle_event(
+        &mut self,
+        controller: &mut DragDrop,
+        out: &mut impl Write,
+        event: &TerminalEvent,
+    ) -> Result<(), Error> {
+        let events = match controller.handle_event(event) {
+            Ok(events) => events,
+            Err(Error::LimitExceeded(message)) => {
+                self.cancel_drop(controller, out, message)?;
+                return self.cancel_drag(controller, out, message);
+            }
+            Err(error) => return Err(error),
+        };
+        for event in events {
+            self.event(controller, out, event)?;
+        }
+        Ok(())
     }
 
     fn key(&mut self, key: &Key) {
@@ -194,7 +210,9 @@ impl Demo {
                     self.log("Drop canceled: no supported copy format");
                     return Ok(());
                 };
-                self.receiver.begin(mime, self.destination.as_deref())?;
+                if let Err(error) = self.receiver.begin(mime, self.destination.as_deref()) {
+                    return self.cancel_drop(controller, out, &error.to_string());
+                }
                 self.log(format!("Receiving {mime}"));
                 if mime == "text/uri-list" {
                     controller.list(out)?;
@@ -215,24 +233,34 @@ impl Demo {
                 match self.receiver.listed(entry, name, controller.options()) {
                     Ok(true) => {}
                     Ok(false) => self.log("Skipped URI: no safe file entry"),
-                    Err(error) if error.kind() == io::ErrorKind::QuotaExceeded => {
-                        self.limit_drop(controller, out, &error.to_string())?;
+                    Err(error) => {
+                        self.cancel_drop(controller, out, &error.to_string())?;
                     }
-                    Err(error) => return Err(error.into()),
                 }
             }
-            Event::Entry(kind) => self.receiver.kind(kind)?,
-            Event::Data(bytes) => self.receiver.data(&bytes)?,
+            Event::Entry(kind) => {
+                if let Err(error) = self.receiver.kind(kind) {
+                    return self.cancel_drop(controller, out, &error.to_string());
+                }
+            }
+            Event::Data(bytes) => {
+                if let Err(error) = self.receiver.data(&bytes) {
+                    return self.cancel_drop(controller, out, &error.to_string());
+                }
+            }
             Event::DataEnd => {
-                self.receiver.end_body()?;
+                if let Err(error) = self.receiver.end_body() {
+                    return self.cancel_drop(controller, out, &error.to_string());
+                }
                 for directory in self.receiver.closed.drain(..) {
                     controller.close_directory(out, directory)?;
                 }
                 if let Some(entry) = self.receiver.next() {
                     controller.request(out, entry)?;
                 } else {
-                    let saved = self.receiver.finish();
                     controller.complete_drop(out, Operation::Copy)?;
+                    out.flush()?;
+                    let saved = self.receiver.finish();
                     self.log(format!(
                         "Drop complete: {} bytes, {} entries, checksum={:016x}",
                         self.receiver.bytes, self.receiver.listed, self.receiver.checksum,
@@ -258,21 +286,28 @@ impl Demo {
                     let sources = self
                         .roots
                         .iter()
-                        .map(|path| Source::new(path, &mut self.source_dirs))
+                        .map(|path| {
+                            Ok((
+                                Source::new(path, &mut self.source_dirs)?,
+                                path_to_uri(path)?,
+                            ))
+                        })
                         .collect::<io::Result<Vec<_>>>();
                     let sources = match sources {
                         Ok(sources) => sources,
-                        Err(error) if error.kind() == io::ErrorKind::QuotaExceeded => {
-                            return self.limit_drag(controller, out, &error.to_string());
+                        Err(error) => {
+                            return self.cancel_drag(controller, out, &error.to_string());
                         }
-                        Err(error) => return Err(error.into()),
                     };
-                    let entries = controller.offer_paths(out, &self.roots, Operations::COPY)?;
+                    let (sources, uris): (Vec<_>, Vec<_>) = sources.into_iter().unzip();
+                    let uris: Vec<_> = uris.iter().map(String::as_str).collect();
+                    let entries = controller.offer_files(out, &uris, Operations::COPY)?;
+                    self.uri_list = uris.join("\r\n").into_bytes();
                     self.sources = entries.into_iter().zip(sources).collect();
                 } else {
                     controller.offer(out, content.mimes(), Operations::COPY)?;
                     for mime in content.mimes() {
-                        controller.send(out, *mime, &content.body(mime, &self.roots)?)?;
+                        controller.send(out, *mime, &content.body(mime, &self.uri_list)?)?;
                     }
                 }
                 self.active = Some(content);
@@ -282,16 +317,14 @@ impl Demo {
             Event::DragStarted => self.log("Drag started"),
             Event::DataRequested { mime_type } => {
                 let content = self.active.ok_or(Error::InvalidState("no active offer"))?;
-                controller.send(out, &mime_type, &content.body(&mime_type, &self.roots)?)?;
+                controller.send(out, &mime_type, &content.body(&mime_type, &self.uri_list)?)?;
             }
             Event::DragFinished { canceled } => {
-                self.sources.clear();
-                self.active = None;
+                self.clear_drag();
                 self.log(format!("Drag finished: canceled={canceled}"));
             }
             Event::DragFailed(error) => {
-                self.sources.clear();
-                self.active = None;
+                self.clear_drag();
                 self.log(format!("Drag failed: {error}"));
             }
             _ => {}
@@ -310,10 +343,9 @@ impl Demo {
             .clone();
         let data = match source.read(&mut self.source_dirs) {
             Ok(data) => data,
-            Err(error) if error.kind() == io::ErrorKind::QuotaExceeded => {
-                return self.limit_drag(controller, out, &error.to_string());
+            Err(error) => {
+                return self.cancel_drag(controller, out, &error.to_string());
             }
-            Err(error) => return Err(error.into()),
         };
         match data {
             Data::Symlink(target) => controller.send_symlink(out, &entry, target)?,
@@ -325,7 +357,11 @@ impl Demo {
                 )?;
                 self.sources.extend(entries.into_iter().zip(children));
             }
-            Data::File(mut file) => controller.send_from(out, &entry, &mut file)?,
+            Data::File(mut file) => {
+                if let Err(error) = controller.send_from(out, &entry, &mut file) {
+                    return self.source_error(controller, out, error);
+                }
+            }
         }
         if matches!(&entry, Entry::File(file) if file.root_index().is_none()) {
             self.sources.remove(&entry);
@@ -334,7 +370,24 @@ impl Demo {
         Ok(())
     }
 
-    fn limit_drop(
+    fn source_error(
+        &mut self,
+        controller: &mut DragDrop,
+        out: &mut impl Write,
+        error: Error,
+    ) -> Result<(), Error> {
+        if !matches!(error, Error::Io(_)) {
+            return Err(error);
+        }
+        // A terminal write failure poisons the controller, so cancellation
+        // returns OutputFailed without another write. Preserve the I/O error.
+        match self.cancel_drag(controller, out, &error.to_string()) {
+            Err(Error::OutputFailed) => Err(error),
+            result => result,
+        }
+    }
+
+    fn cancel_drop(
         &mut self,
         controller: &mut DragDrop,
         out: &mut impl Write,
@@ -346,16 +399,21 @@ impl Demo {
         Ok(())
     }
 
-    fn limit_drag(
+    fn clear_drag(&mut self) {
+        self.sources.clear();
+        self.source_dirs = DirectoryPool::default();
+        self.uri_list.clear();
+        self.active = None;
+    }
+
+    fn cancel_drag(
         &mut self,
         controller: &mut DragDrop,
         out: &mut impl Write,
         message: &str,
     ) -> Result<(), Error> {
         controller.cancel_drag(out)?;
-        self.sources.clear();
-        self.source_dirs = DirectoryPool::default();
-        self.active = None;
+        self.clear_drag();
         self.log(format!("Drag canceled: {message}"));
         Ok(())
     }
@@ -441,20 +499,9 @@ fn run(
             }
             _ => {}
         }
-        let events = match controller.handle_event(&event) {
-            Ok(events) => events,
-            Err(Error::LimitExceeded(message)) => {
-                demo.limit_drop(controller, program.screen_mut(), message)?;
-                program.screen_mut().flush()?;
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
         let screen = program.screen_mut();
         screen.flush()?;
-        for event in events {
-            demo.event(controller, screen.writer_mut(), event)?;
-        }
+        demo.handle_event(controller, screen.writer_mut(), &event)?;
         screen.writer_mut().flush()?;
     }
 }
