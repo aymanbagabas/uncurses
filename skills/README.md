@@ -8,29 +8,29 @@ The skill complements the [website](https://uncurses.org) and API reference.
 It targets the repository source. Check your dependency revision before using
 its samples with a published release.
 
-## Install with Copilot CLI
+## Install the skill
 
-From an uncurses checkout, copy the skill into your personal skill directory:
+The repository distributes the skill in `skills/uncurses/`, with `SKILL.md`
+as its entry point. Use your assistant's documented installation procedure
+for skills. Choose a project installation for one application or a personal
+installation for use across projects, if your assistant supports these options.
 
-```sh
-copilot skill add ./skills/uncurses/SKILL.md
-```
+If your assistant installs skills from a directory, select `skills/uncurses/`.
+If it accepts a skill file, select `skills/uncurses/SKILL.md`.
+For a manual installation, copy the whole `uncurses` directory into the skill
+location documented by your assistant. Keep `SKILL.md` and any supporting
+files together.
 
-For a project-specific copy, run this command from your application directory.
-Replace the example path with the path to your uncurses checkout:
+Use your assistant's skill list or discovery procedure to confirm that it
+finds `uncurses`.
 
-```sh
-copilot skill add --project /path/to/uncurses/skills/uncurses/SKILL.md
-```
+## Update the skill
 
-Copilot CLI copies file-based skills. Use `copilot skill list` to check discovery.
-To update an installed copy, first remove it with `copilot skill remove uncurses`.
-Then repeat the appropriate `add` command.
-
-The repository keeps the distributable skill in `skills/uncurses/`.
-Copilot CLI discovers project copies in `.github/skills/`.
-Other assistants can use the same `SKILL.md` format through their supported
-installation mechanism.
+After you update the uncurses checkout, refresh the installed skill through
+your assistant's update procedure. For a manually copied installation, replace
+the installed directory with the updated `skills/uncurses/` directory.
+Check the application's dependency revision against the skill's source revision
+before you use updated samples.
 
 ## Work on the repository
 
