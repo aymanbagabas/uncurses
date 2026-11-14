@@ -46,14 +46,14 @@ impl CellImage {
     ///
     /// Screen placements already include these bytes.
     pub fn upload(&self) -> &[u8] {
-        &self.resource.upload
+        self.resource.commands.upload()
     }
 
     /// Raw deletion bytes for manual output after its cells are cleared.
     ///
     /// Screen placements already manage resource deletion.
     pub fn delete(&self) -> &[u8] {
-        &self.resource.delete
+        self.resource.commands.delete()
     }
 
     /// Prepare a cell placement under the destination screen's color profile.
@@ -70,8 +70,7 @@ impl CellImage {
         }
         Ok(PlacementOptions {
             cells: Some(self.cells.clone()),
-            upload: self.resource.upload.clone(),
-            delete: self.resource.delete.clone(),
+            resource: Some(self.resource.commands.clone()),
             ..Default::default()
         })
     }
@@ -273,8 +272,7 @@ mod tests {
         screen.set_color_profile(Profile::TrueColor);
         let options = cells.placement(&screen).unwrap();
         assert!(Arc::ptr_eq(options.cells.as_ref().unwrap(), &cells.cells));
-        assert!(Arc::ptr_eq(&options.upload, &cells.resource.upload));
-        assert!(Arc::ptr_eq(&options.delete, &cells.resource.delete));
+        assert_eq!(options.resource.as_ref(), Some(&cells.resource.commands));
         for profile in [
             Profile::Ansi256,
             Profile::Ansi,

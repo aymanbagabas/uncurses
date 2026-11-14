@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
-use super::{Screen, TextSizing};
+use super::{PlacementResource, Screen, TextSizing};
 use crate::ansi::text_sizing::write_sized_text;
 use crate::buffer::Buffer;
 use crate::layout::{Position, Rect};
@@ -9,6 +9,51 @@ use crate::style::Style;
 
 /// A nonzero, caller-selected placement identifier within one screen.
 pub type PlacementId = u64;
+
+/// Resolved geometry for one visible fragment of a placement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlacementContext {
+    /// The complete placement rectangle in screen coordinates.
+    pub area: Rect,
+    /// The visible fragment, relative to the complete rectangle's origin.
+    pub clip: Rect,
+    /// Screen-owned identity of this displayed instance.
+    ///
+    /// Movement preserves the identity. Removal or commitment of the complete
+    /// placement ends it; registration under the same application ID creates
+    /// a new instance.
+    pub instance: u64,
+}
+
+/// Commands for one visible placement fragment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlacementOutput {
+    /// Replay-safe draw commands within the fragment.
+    pub draw: Vec<u8>,
+    /// Commands that erase this fragment at its previous origin.
+    pub erase: Vec<u8>,
+}
+
+/// Prepare bounded output after the screen resolves cell ownership.
+///
+/// The screen prepares each visible rectangular fragment when its content
+/// or geometry changes. It replays prepared commands for surrounding damage
+/// and completes all preparation before any frame output.
+/// Preparation must perform no terminal I/O and must preserve caller settings.
+///
+/// The renderer positions each payload at the fragment's origin. Commands
+/// must stay inside the fragment, preserve terminal modes and the saved
+/// cursor, and avoid scrolling. Encode resource setup in
+/// [`PlacementResource`] instead of the draw payload.
+///
+/// Keep prepared content immutable. Reuse its `Arc` across frames and copies
+/// so an unchanged placement remains an unchanged frame.
+/// The screen reuses output while the instance, area, options, and visible
+/// rectangles match the displayed placement.
+pub trait PlacementEncoder: std::fmt::Debug + Send + Sync {
+    /// Prepare a fragment, or return an error before terminal output.
+    fn prepare(&self, context: PlacementContext) -> io::Result<PlacementOutput>;
+}
 
 /// Encoded placement output and overwrite behavior.
 ///
@@ -19,8 +64,8 @@ pub type PlacementId = u64;
 /// then restores its cursor and pen after each payload.
 ///
 /// The screen emits shared uploads before frame output and deletes resources
-/// after their final placement removal succeeds. Equal upload and deletion
-/// bytes identify one shared resource.
+/// after their final placement removal succeeds. Cloned resource handles
+/// identify the same shared resource.
 /// Resources used by [`Screen::commit_rows`] stay in the terminal for committed output.
 #[derive(Clone, Debug, Default)]
 pub struct PlacementOptions {
@@ -29,28 +74,32 @@ pub struct PlacementOptions {
     /// Bytes that remove this placement, emitted at its previous origin.
     ///
     /// An empty payload uses ordinary cell erasure. For shared images, encode
-    /// placement removal here and use `delete` for resource deletion.
+    /// placement removal here and resource deletion in [`PlacementResource`].
     pub erase: Vec<u8>,
     /// Remove the whole placement when ordinary text overwrites any part.
     ///
-    /// Use this for indivisible sized text. Otherwise the renderer retains
-    /// the placement beneath text and replays overlaid cells after its bytes.
+    /// Use this for indivisible sized text. Static payloads otherwise remain
+    /// beneath text; encoders prepare their remaining visible cells.
     /// Complete coverage removes the placement; register it again to restore it.
     pub erase_on_overwrite: bool,
     /// Ordinary cells occupying the rectangle, instead of an opaque draw payload.
     ///
-    /// Dimensions must match the rectangle. Use empty draw and erase payloads
-    /// and leave `erase_on_overwrite` false. Private placement markers are invalid.
+    /// Dimensions must match the rectangle. Use empty draw and erase payloads,
+    /// leave `encoder` unset, and leave `erase_on_overwrite` false.
+    /// Private placement markers are invalid.
     /// Removal replaces matching cells with default-style blanks and preserves
     /// changed overlay cells.
     pub cells: Option<Arc<Buffer>>,
-    /// Shared resource bytes emitted before the first frame that uses them.
+    /// Prepare opaque fragments from the final visible cell regions.
     ///
-    /// Upload and deletion bytes must preserve the cursor, pen, and terminal modes.
-    /// The screen restores uploads after invalidation or output recovery.
-    pub upload: Arc<[u8]>,
-    /// Resource deletion bytes emitted after its final placement is removed and flushed.
-    pub delete: Arc<[u8]>,
+    /// Use empty `draw` and `erase` payloads and leave `cells` unset.
+    /// Later cell writes exclude those cells from the prepared fragments.
+    pub encoder: Option<Arc<dyn PlacementEncoder>>,
+    /// Shared resource required by this placement.
+    ///
+    /// Clones share uploads and cleanup. The screen restores managed uploads
+    /// after invalidation or output recovery.
+    pub resource: Option<PlacementResource>,
 }
 
 impl PartialEq for PlacementOptions {
@@ -58,8 +107,12 @@ impl PartialEq for PlacementOptions {
         self.draw == other.draw
             && self.erase == other.erase
             && self.erase_on_overwrite == other.erase_on_overwrite
-            && self.upload == other.upload
-            && self.delete == other.delete
+            && self.resource == other.resource
+            && match (&self.encoder, &other.encoder) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
             && match (&self.cells, &other.cells) {
                 (None, None) => true,
                 (Some(a), Some(b)) => {
@@ -80,8 +133,10 @@ impl<W: Write> Screen<W> {
     ///
     /// The ID must be nonzero and the nonempty rectangle must fit the screen.
     /// One ID describes one rectangle. Use another ID for another instance.
-    /// Calls establish placement order; later ordinary cell writes cover
-    /// placements. Repaint the background when moving or removing content.
+    /// Calls establish emission order. Later cell writes replace ownership
+    /// of the cells they cover. Encoders prepare only owned cells; static
+    /// payloads follow their protocol's visual layer rules.
+    /// Repaint the background when moving or removing content.
     /// Resize removes placements whose complete rectangle no longer fits.
     ///
     /// Opaque placement cells retain the existing cell styles. Erasure replaces
@@ -216,10 +271,273 @@ mod tests {
         cells.set((1, 0), &Cell::new("B", 1));
         PlacementOptions {
             cells: Some(Arc::new(cells)),
-            upload: Arc::from(b"<UPLOAD>".as_slice()),
-            delete: Arc::from(b"<DELETE>".as_slice()),
+            resource: Some(PlacementResource::new(
+                b"<UPLOAD>".as_slice(),
+                b"<DELETE>".as_slice(),
+            )),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn committed_resources_release_their_upload_buffers() {
+        let mut screen = Screen::new(Vec::new(), (10, 4));
+        let upload: Arc<[u8]> = Arc::from(b"<UPLOAD>".as_slice());
+        let retained = Arc::downgrade(&upload);
+        let options = PlacementOptions {
+            draw: b"AB".to_vec(),
+            resource: Some(PlacementResource::new(upload, b"<DELETE>".as_slice())),
+            ..Default::default()
+        };
+        screen
+            .set_placement(1, Rect::new(0, 0, 2, 1), &options)
+            .unwrap();
+        screen.commit_rows(1).unwrap();
+        drop(options);
+        assert!(retained.upgrade().is_none());
+        screen.writer_mut().clear();
+        screen.release_placements().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+
+    #[test]
+    fn three_overlapping_static_placements_follow_registration_order() {
+        let mut screen = Screen::new(Vec::new(), (10, 4));
+        for (id, x, text) in [(1, 1, b"AAA"), (2, 2, b"BBB"), (3, 3, b"CCC")] {
+            screen
+                .set_placement(
+                    id,
+                    Rect::new(x, 1, 3, 1),
+                    &PlacementOptions {
+                        draw: text.to_vec(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        screen.render().unwrap();
+        let output = String::from_utf8_lossy(screen.writer());
+        assert!(output.find("AAA").unwrap() < output.find("BBB").unwrap());
+        assert!(output.find("BBB").unwrap() < output.find("CCC").unwrap());
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+
+    #[test]
+    fn three_cell_placements_commit_only_the_visible_resources() {
+        use crate::buffer::SurfaceMut;
+
+        let mut screen = Screen::new(Vec::new(), (10, 4));
+        let first = cell_options();
+        let mut lower_cells = Buffer::new(2, 2);
+        lower_cells.fill(&Cell::new("X", 1));
+        let lower = PlacementOptions {
+            cells: Some(Arc::new(lower_cells)),
+            resource: Some(PlacementResource::new(
+                b"<LOWER UPLOAD>".as_slice(),
+                b"<LOWER DELETE>".as_slice(),
+            )),
+            ..Default::default()
+        };
+        let mut upper_cells = Buffer::new(2, 1);
+        upper_cells.fill(&Cell::new("X", 1));
+        let upper = PlacementOptions {
+            cells: Some(Arc::new(upper_cells)),
+            resource: Some(PlacementResource::new(
+                b"<UPPER UPLOAD>".as_slice(),
+                b"<UPPER DELETE>".as_slice(),
+            )),
+            ..Default::default()
+        };
+        screen
+            .set_placement(1, Rect::new(0, 0, 2, 1), &first)
+            .unwrap();
+        screen
+            .set_placement(2, Rect::new(3, 0, 2, 2), &lower)
+            .unwrap();
+        screen
+            .set_placement(3, Rect::new(3, 0, 2, 1), &upper)
+            .unwrap();
+        screen.commit_rows(1).unwrap();
+        screen.writer_mut().clear();
+        screen.remove_placement(2);
+        screen.render().unwrap();
+        assert!(screen.writer().ends_with(b"<LOWER DELETE>"));
+        assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPPER DELETE>"));
+
+        screen
+            .set_placement(3, Rect::new(3, 0, 2, 1), &upper)
+            .unwrap();
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+        screen.remove_placement(3);
+        screen.render().unwrap();
+        assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPPER DELETE>"));
+    }
+
+    #[test]
+    fn removal_and_movement_preserve_later_identical_cell_placements() {
+        use crate::buffer::SurfaceMut;
+
+        for render_first in [false, true] {
+            for move_first in [false, true] {
+                let mut screen = Screen::new(Vec::new(), (10, 4));
+                let mut cells = Buffer::new(4, 1);
+                cells.fill(&Cell::new("A", 1));
+                let options = PlacementOptions {
+                    cells: Some(Arc::new(cells)),
+                    ..cell_options()
+                };
+                screen
+                    .set_placement(1, Rect::new(1, 1, 4, 1), &options)
+                    .unwrap();
+                screen
+                    .set_placement(2, Rect::new(3, 1, 4, 1), &options)
+                    .unwrap();
+                if render_first {
+                    screen.render().unwrap();
+                }
+                if move_first {
+                    screen
+                        .set_placement(1, Rect::new(0, 0, 4, 1), &options)
+                        .unwrap();
+                } else {
+                    screen.remove_placement(1);
+                }
+                for x in 1..3 {
+                    assert!(screen.cell((x, 1).into()).unwrap().is_blank());
+                }
+                for x in 3..7 {
+                    assert_eq!(screen.cell((x, 1).into()).unwrap().content(), "A");
+                }
+                screen.render().unwrap();
+                screen.writer_mut().clear();
+                screen.render().unwrap();
+                assert!(screen.writer().is_empty());
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct EncodedText(std::sync::Mutex<Vec<PlacementContext>>);
+
+    impl PlacementEncoder for EncodedText {
+        fn prepare(&self, context: PlacementContext) -> io::Result<PlacementOutput> {
+            self.0.lock().unwrap().push(context);
+            Ok(PlacementOutput {
+                draw: vec![b'X'; usize::from(context.clip.width)],
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn encoders_receive_visible_regions_and_fresh_instances_after_commit() {
+        let mut screen = Screen::new(Vec::new(), (10, 6));
+        let encoder = Arc::new(EncodedText::default());
+        let options = PlacementOptions {
+            encoder: Some(encoder.clone()),
+            ..Default::default()
+        };
+        let area = Rect::new(1, 1, 6, 3);
+        screen.set_placement(1, area, &options).unwrap();
+        screen.set_str((3, 2), "T", Style::EMPTY);
+        assert!(encoder.0.lock().unwrap().is_empty());
+        screen.render().unwrap();
+        let first = encoder.0.lock().unwrap().clone();
+        assert_eq!(
+            first.iter().map(|context| context.clip).collect::<Vec<_>>(),
+            [
+                Rect::new(0, 0, 6, 1),
+                Rect::new(0, 1, 2, 1),
+                Rect::new(3, 1, 3, 1),
+                Rect::new(0, 2, 6, 1),
+            ]
+        );
+        assert!(first.iter().all(|context| context.area == area));
+        screen.writer_mut().clear();
+        screen.set_placement(1, area, &options).unwrap();
+        screen.set_str((3, 2), "T", Style::EMPTY);
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+        assert_eq!(encoder.0.lock().unwrap().len(), first.len());
+        screen.set_str((9, 1), "Z", Style::EMPTY);
+        screen.render().unwrap();
+        assert_eq!(encoder.0.lock().unwrap().len(), first.len());
+
+        screen
+            .set_placement(1, Rect::new(2, 1, 6, 3), &options)
+            .unwrap();
+        screen.render().unwrap();
+        assert_eq!(
+            encoder.0.lock().unwrap().last().unwrap().instance,
+            first[0].instance
+        );
+        screen.commit_rows(4).unwrap();
+        screen.resize_height(6);
+        screen.set_placement(1, area, &options).unwrap();
+        screen.render().unwrap();
+        assert_ne!(
+            encoder.0.lock().unwrap().last().unwrap().instance,
+            first[0].instance
+        );
+    }
+
+    #[test]
+    fn encoder_errors_leave_output_untouched_and_allow_replacement() {
+        #[derive(Debug)]
+        struct Invalid;
+        impl PlacementEncoder for Invalid {
+            fn prepare(&self, _: PlacementContext) -> io::Result<PlacementOutput> {
+                Err(io::Error::other("cannot encode this fragment"))
+            }
+        }
+        let mut screen = Screen::new(Vec::new(), (10, 4));
+        let mut options = PlacementOptions {
+            encoder: Some(Arc::new(Invalid)),
+            resource: cell_options().resource,
+            ..Default::default()
+        };
+        let area = Rect::new(1, 1, 2, 1);
+        screen.set_placement(1, area, &options).unwrap();
+        for _ in 0..2 {
+            assert!(screen.render().is_err());
+            assert!(screen.writer().is_empty());
+        }
+        options.encoder = Some(Arc::new(EncodedText::default()));
+        screen.set_placement(1, area, &options).unwrap();
+        screen.render().unwrap();
+        let output = String::from_utf8_lossy(screen.writer());
+        assert!(output.find("<UPLOAD>").unwrap() < output.find("XX").unwrap());
+    }
+
+    #[test]
+    fn encoders_reprepare_rebased_geometry_on_the_next_repaint() {
+        let mut screen = Screen::new(Vec::new(), (10, 6));
+        let encoder = Arc::new(EncodedText::default());
+        screen
+            .set_placement(
+                1,
+                Rect::new(1, 2, 2, 1),
+                &PlacementOptions {
+                    encoder: Some(encoder.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        screen.render().unwrap();
+        screen.commit_rows(1).unwrap();
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+        assert_eq!(encoder.0.lock().unwrap().len(), 1);
+        screen.invalidate();
+        screen.render().unwrap();
+        let prepared = encoder.0.lock().unwrap();
+        assert_eq!(prepared.len(), 2);
+        assert_eq!(prepared[1].area, Rect::new(1, 1, 2, 1));
+        assert_eq!(prepared[1].instance, prepared[0].instance);
     }
 
     #[test]
@@ -263,8 +581,10 @@ mod tests {
         cells.set((2, 0), &Cell::new("界", 2));
         let options = PlacementOptions {
             cells: Some(Arc::new(cells)),
-            upload: Arc::from(b"<UPLOAD>".as_slice()),
-            delete: Arc::from(b"<DELETE>".as_slice()),
+            resource: Some(PlacementResource::new(
+                b"<UPLOAD>".as_slice(),
+                b"<DELETE>".as_slice(),
+            )),
             ..Default::default()
         };
         screen
