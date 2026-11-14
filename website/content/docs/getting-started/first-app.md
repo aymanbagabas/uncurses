@@ -26,8 +26,8 @@ fragments from one complete file.
 
 ## Setting up
 
-`start` opens the program, takes over the full terminal, and seeds the counter
-at zero.
+`new` opens the program and seeds the counter at zero. `start` configures the
+terminal after the caller owns the app and can restore it on an error.
 
 ```rust
 use uncurses::buffer::SurfaceMut;
@@ -44,12 +44,17 @@ struct App {
 }
 
 impl App {
-    fn start() -> std::io::Result<Self> {
-        let mut program = Program::stdio()?;
-        program.init()?;
-        program.enter_alt_screen()?;
-        program.hide_cursor()?;
-        Ok(Self { program, count: 0 })
+    fn new() -> std::io::Result<Self> {
+        Ok(Self {
+            program: Program::stdio()?,
+            count: 0,
+        })
+    }
+
+    fn start(&mut self) -> std::io::Result<()> {
+        self.program.init()?;
+        self.program.enter_alt_screen()?;
+        self.program.hide_cursor()
     }
 }
 ```
@@ -127,8 +132,8 @@ terminal only repaints when the frame would actually differ.
 
 `stop` consumes the app and finishes the program, restoring the terminal exactly
 as it was. `main` wires the three lifecycle steps together and still runs `stop`
-when `run` returns an error, so an error mid-loop never leaves the terminal in an
-altered state.
+when `start` or `run` returns an error. This gives terminal restoration a chance
+to run after setup or application errors.
 
 ```rust
 impl App {
@@ -138,10 +143,10 @@ impl App {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut app = App::start()?;
-    let result = app.run();
-    app.stop()?;
-    result
+    let mut app = App::new()?;
+    let result = app.start().and_then(|()| app.run());
+    let stop = app.stop();
+    result.and(stop)
 }
 ```
 

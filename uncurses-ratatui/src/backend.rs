@@ -67,7 +67,7 @@ fn cursor_position_report(ev: &Event) -> Option<Position> {
 ///
 /// ## What it wraps
 ///
-/// The wrapped screen owns the terminal handle, the cell buffer, and the event
+/// The wrapped program owns the terminal handle, the screen, and the event
 /// source. Keeping those pieces behind one backend means frame rendering,
 /// cursor movement, clearing, size tracking, raw-mode setup, and input reads all
 /// observe the same terminal state.

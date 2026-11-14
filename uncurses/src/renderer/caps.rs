@@ -21,10 +21,10 @@
 //! [`Optimizations::ONLCR`] describe the host's output processing, not
 //! the terminal's own abilities, so no baseline here carries them: a
 //! `\t` is only usable if the line discipline passes it through, which
-//! `$TERM` cannot tell you. A [`Screen`](crate::screen::Screen) enables
+//! `$TERM` cannot tell you. A [`Program`](crate::program::Program) enables
 //! `TABS` and `BS` on *every* raw-mode entry —
-//! [`init`](crate::screen::Screen::init) and
-//! [`resume`](crate::screen::Screen::resume) alike — because raw mode
+//! [`init`](crate::program::Program::init) and
+//! [`resume`](crate::program::Program::resume) alike — because raw mode
 //! turns the host's output processing off, which is exactly what makes
 //! `\t` and `\x08` safe to emit.
 //!
@@ -60,7 +60,7 @@ bitflags! {
     ///
     /// [`TABS`](Self::TABS), [`BS`](Self::BS), and
     /// [`ONLCR`](Self::ONLCR) are the odd ones out: they describe the
-    /// *host*, not the terminal. A [`Screen`](crate::screen::Screen)
+    /// *host*, not the terminal. A [`Program`](crate::program::Program)
     /// enables `TABS` and `BS` on every raw-mode entry and never touches
     /// `ONLCR`. See the module docs.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
