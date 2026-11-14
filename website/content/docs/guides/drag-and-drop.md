@@ -221,7 +221,7 @@ On success, both `send` and `send_from` send a complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
 Use `fail_data` after a MIME source read fails, or cancel the drag.
 For file responses, use `fail_drag` or `cancel_drag`.
-Cancel a failed initial offer before startup.
+Cancel a failed initial offer before startup when the controller remains writable.
 Terminal output errors require terminal recovery.
 Output methods do not flush, so flush responses before the next input wait.
 This dispatcher calls both helpers and cancels both exchanges on decode errors:
@@ -497,7 +497,10 @@ HTML stays inert; image bodies remain binary data.
 Press f for supplied files, t for text, h for HTML, p for PNG, or j for JPEG.
 The text, HTML, and image choices offer generated sample content.
 Supplied files retain their contents and names, including images inside nested directories.
+Outgoing directory listings include regular files, directories, and symlinks.
+The example skips FIFOs, sockets, and device nodes inside those trees.
 Without source paths, the first outgoing selection is text.
+The bidirectional example stops before terminal setup if the host identity is unavailable.
 Press 1 for an image thumbnail, 2 for text, or 0 for none.
 Content and thumbnail selections apply to the next drag.
 Press q or Ctrl-C to exit.
