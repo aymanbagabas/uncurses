@@ -151,6 +151,7 @@ def wait_for_exit(message):
         # SSH must drain the remote PTY before its session can close.
         pump_until(lambda: b"\x1b[?1049l" in output)
     require(process.wait(timeout=5) == 0, message)
+    pump_until(lambda: b"\x1b[?1049l" in output)
 
 
 try:
@@ -270,6 +271,7 @@ try:
             pump_until(lambda: "canceled" in visible())
 
     # Quit during an accepted drop, so cleanup must cancel and unregister.
+    completed_directories = set(Path(destination.name).iterdir()) if save else set()
     kitty.dnd_test_fake_drop_event(window, True, ["text/plain"], 5, 3, 2)
     pump_until(lambda: probe("drop_getting_data_for_mime") == "text/plain")
     reply(window, b"q")
@@ -279,7 +281,8 @@ try:
     require(not probe("drop_wanted") and not probe("drag_can_offer"), "Registration leaked")
     require(probe("last_drop_action") == 0, "Pending drop was not canceled")
     if save:
-        require(len(list(Path(destination.name).iterdir())) == 6, "Partial drop directory leaked")
+        require(set(Path(destination.name).iterdir()) == completed_directories,
+                "Cleanup changed completed drops or leaked a partial directory")
     check_restored()
     if high_level:
         output.clear()
