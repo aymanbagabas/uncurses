@@ -374,12 +374,7 @@ impl Demo {
         if !matches!(error, Error::Io(_)) {
             return Err(error);
         }
-        // A terminal write failure poisons the controller, so cancellation
-        // returns OutputFailed without another write. Preserve the I/O error.
-        match self.cancel_drag(controller, out, &error.to_string()) {
-            Err(Error::OutputFailed) => Err(error),
-            result => result,
-        }
+        self.cancel_drag(controller, out, &error.to_string())
     }
 
     fn cancel_drop(
@@ -530,10 +525,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut program = Program::stdio()?;
     let result = run(&mut program, &mut controller, &mut demo);
     let partial = demo.receiver.abort().map_err(Into::into);
-    let cleanup = controller.close(program.screen_mut()).map_err(Into::into);
-    let flush = program.screen_mut().flush().map_err(Into::into);
+    let cleanup = match &result {
+        Err(error)
+            if error.is::<io::Error>()
+                || matches!(error.downcast_ref::<Error>(), Some(Error::OutputFailed(_))) =>
+        {
+            Ok(())
+        }
+        _ => controller
+            .close(program.screen_mut())
+            .map_err(Into::into)
+            .and_then(|()| program.screen_mut().flush().map_err(Into::into)),
+    };
     let finish = program.finish().map_err(Into::into);
-    result.and(partial).and(cleanup).and(flush).and(finish)
+    result.and(partial).and(cleanup).and(finish)
 }
 
 #[cfg(test)]

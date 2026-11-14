@@ -1408,7 +1408,7 @@ fn invalid_thumbnail_arguments_emit_nothing_and_allow_correction() {
 }
 
 #[test]
-fn thumbnail_source_failures_never_emit_success_and_poison_only_started_chains() {
+fn thumbnail_source_failures_are_fatal_only_after_a_continuation_starts() {
     let format = ThumbnailFormat::Png {
         width: 1,
         height: 1,
@@ -1416,20 +1416,24 @@ fn thumbnail_source_failures_never_emit_success_and_poison_only_started_chains()
     for before_output in [true, false] {
         let mut controller = preparing();
         let mut out = Vec::new();
-        assert!(matches!(
-            controller.add_thumbnail_from(&mut out, format, &mut FailAfterBlock(before_output)),
-            Err(Error::Io(_))
-        ));
-        assert!(controller.start_drag(&mut Vec::new()).is_err());
-        assert!(
-            controller
-                .add_thumbnail(&mut Vec::new(), format, b"retry")
-                .is_err()
-        );
+        let error = controller
+            .add_thumbnail_from(&mut out, format, &mut FailAfterBlock(before_output))
+            .unwrap_err();
         if before_output {
+            assert!(matches!(error, Error::Io(_)));
+            assert!(controller.start_drag(&mut Vec::new()).is_err());
+            assert!(
+                controller
+                    .add_thumbnail(&mut Vec::new(), format, b"retry")
+                    .is_err()
+            );
             assert!(out.is_empty());
             controller.cancel_drag(&mut out).unwrap();
         } else {
+            let Error::OutputFailed(cause) = error else {
+                panic!("expected a fatal thumbnail failure");
+            };
+            assert!(matches!(*cause, Error::Io(_)));
             let frames = output_messages(&out);
             assert_eq!(frames.len(), 1);
             let RawEvent::DragDrop { options, payload } = &frames[0] else {
@@ -1437,12 +1441,49 @@ fn thumbnail_source_failures_never_emit_success_and_poison_only_started_chains()
             };
             assert_eq!(value(options, "m"), Some("1"));
             assert!(!payload.is_empty());
-            assert!(matches!(
-                controller.cancel_drag(&mut Vec::new()),
-                Err(Error::OutputFailed)
-            ));
         }
     }
+}
+
+#[test]
+fn thumbnail_write_failures_preserve_the_original_cause_after_a_chunk() {
+    struct FailAfterFrame(Vec<u8>);
+    impl Write for FailAfterFrame {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.0.ends_with(b"\x1b\\") {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "second frame failed",
+                ));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            panic!("controller must not flush");
+        }
+    }
+    let mut controller = preparing();
+    let mut out = FailAfterFrame(Vec::new());
+    let error = controller
+        .add_thumbnail_from(
+            &mut out,
+            ThumbnailFormat::Png {
+                width: 1,
+                height: 1,
+            },
+            &mut vec![0; 6144].as_slice(),
+        )
+        .unwrap_err();
+    let Error::OutputFailed(cause) = error else {
+        panic!("expected a fatal thumbnail write error");
+    };
+    let Error::Io(error) = *cause else {
+        panic!("expected the original I/O error without another fatal wrapper");
+    };
+    assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(error.to_string(), "second frame failed");
+    assert_eq!(output_messages(&out.0).len(), 1);
 }
 
 #[test]
@@ -1451,19 +1492,23 @@ fn thumbnail_reader_validates_final_length_and_split_utf8_before_completion() {
         let mut controller = preparing();
         let mut out = Vec::new();
         let data = vec![0; length];
-        assert!(
-            controller
-                .add_thumbnail_from(
-                    &mut out,
-                    ThumbnailFormat::Rgba {
-                        width: 100,
-                        height: 10
-                    },
-                    &mut data.as_slice()
-                )
-                .is_err()
-        );
-        assert!(controller.output_failed);
+        let error = controller
+            .add_thumbnail_from(
+                &mut out,
+                ThumbnailFormat::Rgba {
+                    width: 100,
+                    height: 10,
+                },
+                &mut data.as_slice(),
+            )
+            .unwrap_err();
+        let Error::OutputFailed(cause) = error else {
+            panic!("expected a fatal thumbnail length error");
+        };
+        assert!(matches!(
+            *cause,
+            Error::InvalidInput("thumbnail byte count differs from dimensions")
+        ));
         assert!(!output_messages(&out).iter().any(
             |frame| matches!(frame, RawEvent::DragDrop { payload, .. } if payload.is_empty())
         ));

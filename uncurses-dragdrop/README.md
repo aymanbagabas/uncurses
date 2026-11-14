@@ -64,15 +64,21 @@ Answer later `Event::DataRequested` notifications with `send` or `send_from`.
 On success, both methods send the complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
 
-`send_from` reports both source read failures and terminal write failures as `Error::Io`.
-Attempt `fail_data` for a failed MIME response.
+`send_from` returns `Error::Io` for a recoverable source read failure.
+Use `fail_data` for a failed MIME response.
 For file responses, attempt `fail_drag` or `cancel_drag`.
 Cancel a failed initial body before startup.
-On `OutputFailed`, restore the terminal.
-The controller rejects these recovery attempts before any write when earlier output failed.
 
-If `offer` returns `Error::Io`, restore the terminal even if `cancel_drag` succeeds.
-Cancellation success in this case confirms local cleanup, not safe terminal output.
+Terminal write failures return `Error::OutputFailed` immediately, with the original error boxed as its cause.
+On this error, stop all controller calls, including cancellation and `close`.
+Restore the terminal before creating another controller.
+The application owns this recovery decision.
+
+Run the [error recovery example](../examples/examples/drag_drop_errors.rs) without a terminal:
+
+```sh
+cargo run -p examples --example drag_drop_errors
+```
 
 Use `Entry::Text`, `Entry::UriList`, or a MIME string to select the content.
 
@@ -110,10 +116,10 @@ Use `send_directory_bytes` and `send_symlink_bytes` for uninterpreted protocol n
 Upload drag thumbnails before `start_drag` with `add_thumbnail` or `add_thumbnail_from`.
 The controller supports RGB, RGBA, PNG, and text.
 After `Event::DragStarted`, use `select_thumbnail` to select an uploaded image or remove the current image.
-If a streaming thumbnail fails after its first chunk, recover the terminal before creating another controller.
+If a streaming thumbnail fails after its first chunk, the failed call returns `OutputFailed` with the original cause.
 Reader errors and later validation failures can leave the thumbnail continuation open.
-The controller then rejects cancellation with `OutputFailed` to prevent it from becoming thumbnail data.
-A thumbnail failure before output can be canceled normally.
+Stop controller output and restore the terminal instead of sending cancellation into that continuation.
+Source and validation errors detected before thumbnail output permit cancellation.
 
 Output methods write without a flush.
 Flush responses promptly.
@@ -191,7 +197,8 @@ Treat saved links and HTML as untrusted content when opening them in another app
 File access and validation errors cancel the affected transfer, remove partial output, and leave the example available.
 The example cancels both roles after controller limit or protocol errors because these errors do not identify the affected exchange.
 Successful cleanup leaves the example available for later transfers.
-Terminal output failures and unhandled controller errors stop the example after cleanup.
+Terminal output failures stop controller calls and trigger terminal restoration.
+Other unhandled controller errors stop the example after cleanup.
 
 Run on an SSH host from a local Kitty terminal:
 
