@@ -227,7 +227,7 @@ with tempfile.TemporaryDirectory(prefix="dnd-native-", dir="target") as director
 
         output.clear()
         kitty.dnd_test_start_drag_offer(window, 5, 3, 40, 48)
-        pump(lambda: "Drag started" in diagnostics())
+        pump(lambda: b"\x1b]72;t=P:x=-1\x1b\\" in output)
         require(probe("drag_thumbnail_size") == 16 * 16 * 4, diagnostics())
         kitty.dnd_test_force_drag_dropped(window)
         if local:

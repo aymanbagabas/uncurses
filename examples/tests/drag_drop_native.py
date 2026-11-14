@@ -322,7 +322,7 @@ try:
     pump_until(lambda: b"\x1b[?1049l" in output)
     require(not probe("drop_wanted") and not probe("drag_can_offer"),
             "Registration leaked before DA1")
-    require(b"\x1b]72;t=a" not in output and b"\x1b]72;t=o\x1b\\" not in output,
+    require(b"\x1b]72;t=a" not in output and b"\x1b]72;t=o:x=1" not in output,
             "The example registered after a startup quit request")
     check_restored()
     output.clear()

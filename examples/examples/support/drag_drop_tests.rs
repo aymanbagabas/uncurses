@@ -204,6 +204,7 @@ fn renamed_source_ancestors_do_not_redirect_file_reads() {
     fs::write(offered.join("file"), b"original").unwrap();
     fs::write(outside.join("file"), b"secret").unwrap();
     let mut demo = Demo::new(vec![offered.clone()], None);
+    let original_uri = path_to_uri(&offered).unwrap();
     let mut controller = DragDrop::default();
     let mut out = Vec::new();
     controller.enable_drags(&mut out).unwrap();
@@ -218,21 +219,261 @@ fn renamed_source_ancestors_do_not_redirect_file_reads() {
     out.clear();
     demo.send_next(&mut controller, &mut out).unwrap();
     assert!(out.windows(11).any(|bytes| bytes == b"b3JpZ2luYWw"));
+    out.clear();
+    for event in feed(&mut controller, "t=e:x=5:y=0", "") {
+        demo.event(&mut controller, &mut out, event).unwrap();
+    }
+    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+    let expected = STANDARD_NO_PAD.encode(original_uri);
+    assert!(
+        out.windows(expected.len())
+            .any(|bytes| bytes == expected.as_bytes())
+    );
 }
 
 fn feed(controller: &mut DragDrop, metadata: &str, payload: &str) -> Vec<Event> {
-    controller
-        .handle_event(&TerminalEvent::DragDrop {
-            options: metadata
-                .split(':')
-                .map(|field| {
-                    let (key, value) = field.split_once('=').unwrap();
-                    (key.to_owned(), value.to_owned())
-                })
-                .collect(),
-            payload: payload.as_bytes().to_vec(),
-        })
-        .unwrap()
+    controller.handle_event(&raw(metadata, payload)).unwrap()
+}
+
+fn raw(metadata: &str, payload: &str) -> TerminalEvent {
+    TerminalEvent::DragDrop {
+        options: metadata
+            .split(':')
+            .map(|field| {
+                let (key, value) = field.split_once('=').unwrap();
+                (key.to_owned(), value.to_owned())
+            })
+            .collect(),
+        payload: payload.as_bytes().to_vec(),
+    }
+}
+
+#[test]
+fn rejected_destinations_cancel_only_the_drop() {
+    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+    for (uris, bodies) in [
+        (
+            "file:///a/same\nfile:///b/same\n",
+            vec![("t=r:x=1:y=1", ""), ("t=r:x=1:y=2", "")],
+        ),
+        ("file:///link\n", vec![("t=r:x=1:y=1:X=1", "../outside")]),
+        (
+            "file:///folder/\n",
+            vec![("t=r:x=1:y=1:X=37", "../invalid\0")],
+        ),
+    ] {
+        let destination = tempfile::tempdir().unwrap();
+        let mut controller = DragDrop::default();
+        let mut demo = Demo::new(Vec::new(), Some(destination.path().to_owned()));
+        let mut out = Vec::new();
+        controller.enable_drops(&mut out, MIMES).unwrap();
+        for (metadata, payload) in [
+            ("t=M:o=1", "text/uri-list".to_owned()),
+            ("t=r:x=1", STANDARD_NO_PAD.encode(uris)),
+            ("t=r:x=1", String::new()),
+        ] {
+            demo.handle_event(&mut controller, &mut out, &raw(metadata, &payload))
+                .unwrap();
+        }
+        for (metadata, bytes) in bodies {
+            if !bytes.is_empty() {
+                demo.handle_event(
+                    &mut controller,
+                    &mut out,
+                    &raw(metadata, &STANDARD_NO_PAD.encode(bytes)),
+                )
+                .unwrap();
+            }
+            demo.handle_event(&mut controller, &mut out, &raw(metadata, ""))
+                .unwrap();
+        }
+        assert!(!demo.receiver.active);
+        assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);
+        assert!(
+            demo.log
+                .iter()
+                .any(|line| line.starts_with("Drop canceled:"))
+        );
+        for (metadata, payload) in [
+            ("t=M:o=1", "text/plain"),
+            ("t=r:x=1", "b2s"),
+            ("t=r:x=1", ""),
+        ] {
+            demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
+                .unwrap();
+        }
+        let saved = fs::read_dir(destination.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(fs::read(saved.join("text.txt")).unwrap(), b"ok");
+    }
+}
+
+struct BrokenOutput {
+    flush_only: bool,
+}
+
+#[test]
+fn source_read_failures_recover_but_terminal_write_failures_propagate() {
+    struct BrokenSource(bool);
+    impl io::Read for BrokenSource {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            if self.0 {
+                return Err(io::Error::other("source read failed"));
+            }
+            self.0 = true;
+            bytes.fill(b'a');
+            Ok(bytes.len())
+        }
+    }
+
+    for output_failure in [false, true] {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut controller = DragDrop::default();
+        let mut demo = Demo::new(vec![file.path().to_owned()], None);
+        let mut out = Vec::new();
+        controller.enable_drags(&mut out).unwrap();
+        for (metadata, payload) in [("t=o", ""), ("t=E", "OK"), ("t=k:x=1", "")] {
+            demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
+                .unwrap();
+        }
+        let entry = controller.next_send().unwrap().unwrap();
+        if output_failure {
+            let mut out = BrokenOutput { flush_only: false };
+            let error = controller.send(&mut out, entry, b"data").unwrap_err();
+            let error = demo
+                .source_error(&mut controller, &mut out, error)
+                .unwrap_err();
+            assert!(matches!(error, Error::Io(_)));
+            assert_eq!(error.to_string(), "terminal write failed");
+        } else {
+            out.clear();
+            let error = controller
+                .send_from(&mut out, entry, &mut BrokenSource(false))
+                .unwrap_err();
+            assert!(!out.is_empty());
+            demo.source_error(&mut controller, &mut out, error).unwrap();
+            assert!(demo.sources.is_empty());
+            assert!(demo.uri_list.is_empty());
+            assert!(
+                demo.log
+                    .iter()
+                    .any(|line| line.contains("source read failed"))
+            );
+            demo.selected = Content::Text;
+            demo.handle_event(&mut controller, &mut out, &raw("t=o", ""))
+                .unwrap();
+            assert!(demo.active == Some(Content::Text));
+        }
+    }
+}
+
+impl Write for BrokenOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.flush_only {
+            Ok(bytes.len())
+        } else {
+            Err(io::Error::other("terminal write failed"))
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::Error::other("terminal flush failed"))
+    }
+}
+
+#[test]
+fn failed_completion_output_keeps_storage_owned_for_cleanup() {
+    for flush_only in [false, true] {
+        let destination = tempfile::tempdir().unwrap();
+        let mut controller = DragDrop::default();
+        let mut demo = Demo::new(Vec::new(), Some(destination.path().to_owned()));
+        let mut out = Vec::new();
+        controller.enable_drops(&mut out, MIMES).unwrap();
+        for (metadata, payload) in [("t=M:o=1", "text/plain"), ("t=r:x=1", "b2s")] {
+            demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
+                .unwrap();
+        }
+        assert!(
+            demo.handle_event(
+                &mut controller,
+                &mut BrokenOutput { flush_only },
+                &raw("t=r:x=1", "")
+            )
+            .is_err()
+        );
+        demo.receiver.abort().unwrap();
+        assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn disappeared_sources_cancel_only_the_drag() {
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let path = source.path().to_owned();
+    let mut controller = DragDrop::default();
+    let mut demo = Demo::new(vec![path.clone()], None);
+    let mut out = Vec::new();
+    controller.enable_drags(&mut out).unwrap();
+    for (metadata, payload) in [("t=o", ""), ("t=E", "OK"), ("t=k:x=1", "")] {
+        demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
+            .unwrap();
+    }
+    source.close().unwrap();
+    demo.send_next(&mut controller, &mut out).unwrap();
+    assert!(demo.active.is_none());
+    assert!(demo.sources.is_empty());
+    assert!(
+        demo.log
+            .iter()
+            .any(|line| line.starts_with("Drag canceled:"))
+    );
+    demo.selected = Content::Text;
+    demo.handle_event(&mut controller, &mut out, &raw("t=o", ""))
+        .unwrap();
+    assert!(demo.active == Some(Content::Text));
+}
+
+#[test]
+fn control_limit_cancels_both_roles_and_drains_continuations() {
+    for more in [false, true] {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let mut controller = DragDrop::new(DragDropOptions {
+            max_control_bytes: Some(64),
+            ..DragDropOptions::default()
+        });
+        let mut demo = Demo::new(
+            vec![source.path().to_owned()],
+            Some(destination.path().to_owned()),
+        );
+        let mut out = Vec::new();
+        controller.enable_drags(&mut out).unwrap();
+        controller.enable_drops(&mut out, MIMES).unwrap();
+        for (metadata, payload) in [("t=o", ""), ("t=E", "OK"), ("t=M:o=1", "text/plain")] {
+            demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
+                .unwrap();
+        }
+        let metadata = if more { "t=E:m=1" } else { "t=E" };
+        demo.handle_event(&mut controller, &mut out, &raw(metadata, &"x".repeat(65)))
+            .unwrap();
+        assert!(demo.active.is_none());
+        assert!(demo.sources.is_empty());
+        assert!(!demo.receiver.active);
+        assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);
+        if more {
+            demo.handle_event(&mut controller, &mut out, &raw("t=o", ""))
+                .unwrap();
+            assert!(demo.active.is_none());
+        }
+        demo.selected = Content::Text;
+        demo.handle_event(&mut controller, &mut out, &raw("t=o", ""))
+            .unwrap();
+        assert!(demo.active == Some(Content::Text));
+    }
 }
 
 #[test]
