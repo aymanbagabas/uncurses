@@ -60,10 +60,14 @@ Call `start_drag` and wait for `Event::DragStarted` to confirm startup.
 Answer later `Event::DataRequested` notifications with `send` or `send_from`.
 On success, both methods send the complete body and its end marker.
 `send_from` reads synchronously with bounded buffers.
-If a source read fails, use `fail_data` to end a MIME response with an error.
-For file responses, abort the exchange with `fail_drag` or `cancel_drag`.
-Cancel a failed initial offer before startup when the controller remains writable.
-Terminal output errors require terminal recovery instead of another response.
+
+`send_from` reports both source read failures and terminal write failures as `Error::Io`.
+Attempt `fail_data` for a failed MIME response.
+For file responses, attempt `fail_drag` or `cancel_drag`.
+Cancel a failed initial offer before startup.
+On `OutputFailed`, restore the terminal.
+The controller rejects these recovery attempts before any write when earlier output failed.
+
 Use `Entry::Text`, `Entry::UriList`, or a MIME string to select the content.
 
 For file drops, call `list` after the drop.
@@ -175,8 +179,9 @@ It also rejects `..` after a named component to prevent escapes through other re
 Other platforms report an error for saved symlinks.
 Treat saved links and HTML as untrusted content when opening them in another application.
 File access and validation errors cancel the affected transfer, remove partial output, and leave the example available.
-Terminal output failures and other protocol errors stop the example after cleanup.
-Controller limits cancel both roles because the error does not identify the affected exchange.
+The example cancels both roles after controller limit or protocol errors because these errors do not identify the affected exchange.
+Successful cleanup leaves the example available for later transfers.
+Terminal output failures and unhandled controller errors stop the example after cleanup.
 
 Run on an SSH host from a local Kitty terminal:
 
