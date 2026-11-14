@@ -28,6 +28,8 @@ Linux, macOS, and Windows.
 
 Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
 
+For repository development, read the [contributor guide](CONTRIBUTING.md).
+
 ## Features
 
 Nothing is read from terminfo. `Program` asks the terminal what it supports,
