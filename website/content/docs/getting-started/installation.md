@@ -8,7 +8,14 @@ default width backend or pick another one, and you are ready to draw.
 
 ## Add the dependency
 
-uncurses is not on crates.io yet, so depend on it straight from git:
+Published releases of [uncurses](https://crates.io/crates/uncurses) and
+[uncurses-ratatui](https://crates.io/crates/uncurses-ratatui) are available on
+crates.io. Select the matching docs.rs reference for your release:
+[uncurses](https://docs.rs/uncurses) or
+[uncurses-ratatui](https://docs.rs/uncurses-ratatui).
+
+This website follows the current repository source. For its examples and
+features, use a git dependency:
 
 ```toml
 [dependencies]

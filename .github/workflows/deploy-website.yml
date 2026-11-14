@@ -59,7 +59,7 @@ jobs:
             # Production. Override with the SITE_BASE_URL variable to point at
             # a custom domain without editing this workflow.
             url="$SITE_BASE_URL"
-            [ -n "$url" ] || url="https://${PROJECT_NAME}.pages.dev"
+            [ -n "$url" ] || url="https://uncurses.org"
           else
             # Preview. Cloudflare serves a non-production branch at a branch
             # alias built by lowercasing the branch, replacing every run of

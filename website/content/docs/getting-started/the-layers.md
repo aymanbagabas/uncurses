@@ -50,18 +50,21 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    program.init()?;
-    program.enter_alt_screen()?;
-    program.hide_cursor()?;
+    let result = (|| {
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
-    program
-        .screen_mut()
-        .set_str((0, 0), "managed session, pure renderer", Style::new());
-    program.screen_mut().render()?;
+        program
+            .screen_mut()
+            .set_str((0, 0), "managed session, pure renderer", Style::new());
+        program.screen_mut().render()?;
 
-    while !matches!(program.read_event()?, Event::KeyPress(_)) {}
-
-    program.finish()
+        while !matches!(program.read_event()?, Event::KeyPress(_)) {}
+        Ok(())
+    })();
+    let finish = program.finish();
+    result.and(finish)
 }
 ```
 
@@ -161,14 +164,16 @@ use uncurses::terminal::Terminal;
 
 fn main() -> std::io::Result<()> {
     let mut term = Terminal::stdio();
-    term.make_raw()?;
-    let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
-
-    if let Event::KeyPress(key) = events.read()? {
-        let _ = key;
-    }
-
-    term.restore()
+    let result = (|| {
+        term.make_raw()?;
+        let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
+        if let Event::KeyPress(key) = events.read()? {
+            let _ = key;
+        }
+        Ok(())
+    })();
+    let restore = term.restore();
+    result.and(restore)
 }
 ```
 
