@@ -437,6 +437,83 @@ fn disappeared_sources_cancel_only_the_drag() {
     assert!(demo.active == Some(Content::Text));
 }
 
+#[cfg(windows)]
+#[test]
+fn unpaired_windows_child_names_cancel_the_drag() {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join(OsString::from_wide(&[0xd800])),
+        b"data",
+    )
+    .unwrap();
+    let mut controller = DragDrop::default();
+    let mut demo = Demo::new(vec![directory.path().to_owned()], None);
+    let mut out = Vec::new();
+    controller.enable_drags(&mut out).unwrap();
+    for (metadata, payload) in [("t=o", ""), ("t=E", "OK"), ("t=k:x=1", "")] {
+        demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
+            .unwrap();
+    }
+    demo.send_next(&mut controller, &mut out).unwrap();
+    assert!(demo.active.is_none());
+    assert!(demo.sources.is_empty());
+    assert!(
+        demo.log
+            .iter()
+            .any(|line| line.starts_with("Drag canceled:"))
+    );
+    demo.selected = Content::Text;
+    demo.handle_event(&mut controller, &mut out, &raw("t=o", ""))
+        .unwrap();
+    assert!(demo.active == Some(Content::Text));
+}
+
+#[test]
+fn received_children_precede_siblings_and_keep_chunked_listing_order() {
+    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+    let mut demo = Demo::new(Vec::new(), None);
+    let mut controller = DragDrop::new(DragDropOptions {
+        max_directories: Some(2),
+        ..DragDropOptions::default()
+    });
+    let mut out = Vec::new();
+    controller
+        .enable_drops(&mut out, &["text/uri-list"])
+        .unwrap();
+    for (metadata, payload) in [
+        ("t=M:o=1", "text/uri-list".to_owned()),
+        ("t=r:x=1", STANDARD_NO_PAD.encode(b"file:///root")),
+        ("t=r:x=1", String::new()),
+        (
+            "t=r:x=1:y=1:X=37",
+            STANDARD_NO_PAD.encode(b"first\0second\0third"),
+        ),
+        ("t=r:x=1:y=1:X=37", String::new()),
+        ("t=r:Y=37:x=1:X=38", STANDARD_NO_PAD.encode(b"a\0")),
+        ("t=r:Y=37:x=1:X=38", STANDARD_NO_PAD.encode(b"b")),
+        ("t=r:Y=37:x=1:X=38", String::new()),
+        ("t=r:Y=38:x=1", STANDARD_NO_PAD.encode(b"first")),
+        ("t=r:Y=38:x=1", String::new()),
+        ("t=r:Y=38:x=2", STANDARD_NO_PAD.encode(b"second")),
+        ("t=r:Y=38:x=2", String::new()),
+        ("t=r:Y=37:x=2:X=39", STANDARD_NO_PAD.encode(b"c")),
+        ("t=r:Y=37:x=2:X=39", String::new()),
+        ("t=r:Y=39:x=1", STANDARD_NO_PAD.encode(b"third")),
+        ("t=r:Y=39:x=1", String::new()),
+        ("t=r:Y=37:x=3:X=40", String::new()),
+    ] {
+        demo.handle_event(&mut controller, &mut out, &raw(metadata, &payload))
+            .unwrap();
+    }
+    assert!(
+        demo.log
+            .iter()
+            .any(|line| line.starts_with("Drop complete"))
+    );
+    assert!(demo.receiver.preview.contains("firstsecondthird"));
+}
+
 #[test]
 fn control_limit_cancels_both_roles_and_drains_continuations() {
     for more in [false, true] {

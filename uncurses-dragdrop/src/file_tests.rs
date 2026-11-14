@@ -1190,12 +1190,43 @@ fn file_source_failure_requires_global_error_and_discards_the_queue() {
             },
         )
         .unwrap();
-    assert!(out.ends_with(b"\x1b]72;t=E;EIO:source failed\x1b\\"));
+    assert!(out.ends_with(b"\x1b]72;t=E;EIO:source failed\x1b\\\x1b]72;t=E:y=-1\x1b\\"));
     assert!(controller.drag.file_requests.is_empty());
     assert!(handle(&mut controller, "t=k:x=2", b"").is_empty());
     assert!(controller.next_send().unwrap().is_none());
 }
 
+#[test]
+fn outgoing_request_limits_cover_both_queues_and_release_capacity() {
+    for limit in [Some(0), Some(2), None] {
+        let mut controller = file_drag();
+        controller.options.max_pending_requests = limit;
+        let mut accepted = 0;
+        for metadata in ["t=e:x=5:y=0", "t=k:x=1", "t=e:x=5:y=0", "t=k:x=1"] {
+            let result = controller.handle_event(&raw(metadata, b""));
+            if limit.is_some_and(|limit| accepted >= limit) {
+                assert!(matches!(result, Err(Error::LimitExceeded(_))));
+            } else {
+                result.unwrap();
+                accepted += 1;
+            }
+            assert_eq!(
+                controller.drag.requests.len() + controller.drag.file_requests.len(),
+                accepted
+            );
+        }
+        if limit == Some(2) {
+            controller
+                .send(&mut Vec::new(), Entry::UriList, b"file:///first")
+                .unwrap();
+            handle(&mut controller, "t=k:x=1", b"");
+            assert_eq!(controller.drag.file_requests.len(), 2);
+        }
+        controller.cancel_drag(&mut Vec::new()).unwrap();
+        assert!(controller.drag.requests.is_empty());
+        assert!(controller.drag.file_requests.is_empty());
+    }
+}
 #[test]
 fn thumbnails_use_one_chunk_chain_each_and_support_selection_and_removal() {
     let mut controller = preparing();
