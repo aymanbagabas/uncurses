@@ -347,21 +347,15 @@ impl Demo {
                 return self.cancel_drag(controller, out, &error.to_string());
             }
         };
-        match data {
-            Data::Symlink(target) => controller.send_symlink(out, &entry, target)?,
-            Data::Directory(children) => {
-                let entries = controller.send_directory(
-                    out,
-                    &entry,
-                    children.iter().map(|child| &child.name),
-                )?;
-                self.sources.extend(entries.into_iter().zip(children));
-            }
-            Data::File(mut file) => {
-                if let Err(error) = controller.send_from(out, &entry, &mut file) {
-                    return self.source_error(controller, out, error);
-                }
-            }
+        let result = match data {
+            Data::Symlink(target) => controller.send_symlink(out, &entry, target),
+            Data::Directory(children) => controller
+                .send_directory(out, &entry, children.iter().map(|child| &child.name))
+                .map(|entries| self.sources.extend(entries.into_iter().zip(children))),
+            Data::File(mut file) => controller.send_from(out, &entry, &mut file),
+        };
+        if let Err(error) = result {
+            return self.source_error(controller, out, error);
         }
         if matches!(&entry, Entry::File(file) if file.root_index().is_none()) {
             self.sources.remove(&entry);
