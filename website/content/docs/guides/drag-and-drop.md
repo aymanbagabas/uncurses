@@ -304,7 +304,9 @@ The response starts with `Entry(kind)`:
 | `EntryKind::Directory(directory)` | `Listed` events contain child names and entries |
 
 Preserve directory names as bytes until your application chooses a filesystem policy.
-Append directory children to the queue and request them one at a time.
+Insert directory children before pending siblings and request them one at a time.
+Preserve the listing order, including across chunks.
+This depth-first traversal releases directories before the receiver opens more siblings.
 Release each `Directory` with `close_directory` after its direct children finish.
 Release an empty directory at its `DataEnd`.
 Call `complete_drop` after all required data reaches its destination.
