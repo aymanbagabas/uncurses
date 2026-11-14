@@ -92,6 +92,16 @@ cargo test -p uncurses-ratatui --locked
 cargo test -p uncurses-ratatui --locked --no-default-features --features icu
 ```
 
+Check synchronous examples separately:
+
+```sh
+cargo check -p examples --examples --locked --no-default-features --features unicode-rs
+cargo check -p examples --examples --locked --no-default-features --features icu
+```
+
+Cargo skips the three async examples when `async` is disabled.
+The Linux feature-isolation job covers both library and example configurations.
+
 Use the [manifests](uncurses/Cargo.toml) for exact dependency and feature choices.
 The [installation guide](website/content/docs/getting-started/installation.md)
 explains those choices for application authors.

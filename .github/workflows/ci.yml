@@ -71,6 +71,24 @@ jobs:
       - run: cargo build --workspace --locked ${{ matrix.features.flags }}
       - run: cargo test --workspace --locked ${{ matrix.features.flags }}
 
+  feature-isolation:
+    name: isolated features (${{ matrix.features.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - { name: default, flags: "", backend: unicode-rs }
+          - { name: icu-only, flags: "--no-default-features --features icu", backend: icu }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test libraries without example feature unification
+        run: cargo test -p uncurses -p uncurses-ratatui --locked ${{ matrix.features.flags }}
+      - name: Check synchronous examples
+        run: cargo check -p examples --examples --locked --no-default-features --features ${{ matrix.features.backend }}
+
   # musl libc on Linux. The crate is pure Rust, so a static musl binary
   # links without a C toolchain and runs on the glibc host.
   musl:
