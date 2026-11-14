@@ -14,7 +14,7 @@ mod support;
 use std::{
     collections::{HashMap, VecDeque},
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::Duration,
 };
 
@@ -32,7 +32,7 @@ use uncurses_dragdrop::{
     path_to_uri,
 };
 
-use drag_source::{Data, Source};
+use drag_source::{Data, DirectoryPool, Source};
 use drop_receiver::Receiver;
 
 const MIMES: &[&str] = &[
@@ -119,6 +119,7 @@ struct Demo {
     selected: Content,
     active: Option<Content>,
     sources: HashMap<Entry, Source>,
+    source_dirs: DirectoryPool,
     receiver: Receiver,
     thumbnail: support::Thumbnail,
     log: VecDeque<String>,
@@ -136,6 +137,7 @@ impl Demo {
             destination,
             active: None,
             sources: HashMap::new(),
+            source_dirs: DirectoryPool::default(),
             receiver: Receiver::default(),
             thumbnail: support::Thumbnail::default(),
             log: VecDeque::new(),
@@ -201,6 +203,8 @@ impl Demo {
                 }
             }
             Event::UriList { remote } => self.log(format!("URI list: remote={remote}")),
+            Event::Listed { .. } | Event::Entry(_) | Event::Data(_) | Event::DataEnd
+                if !self.receiver.active => {}
             Event::Listed { entry, name } => {
                 let preview: String = name
                     .iter()
@@ -208,7 +212,14 @@ impl Demo {
                     .map(char::from)
                     .collect();
                 self.log(format!("Listed {preview}"));
-                self.receiver.listed(entry, name)?;
+                match self.receiver.listed(entry, name, controller.options()) {
+                    Ok(true) => {}
+                    Ok(false) => self.log("Skipped URI: no safe file entry"),
+                    Err(error) if error.kind() == io::ErrorKind::QuotaExceeded => {
+                        self.limit_drop(controller, out, &error.to_string())?;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
             Event::Entry(kind) => self.receiver.kind(kind)?,
             Event::Data(bytes) => self.receiver.data(&bytes)?,
@@ -243,11 +254,19 @@ impl Demo {
             Event::DragRequested(_) => {
                 let content = self.selected;
                 if content == Content::Files {
+                    self.source_dirs = DirectoryPool::new(controller.options().max_directories);
                     let sources = self
                         .roots
                         .iter()
-                        .map(|path| Source::new(path))
-                        .collect::<io::Result<Vec<_>>>()?;
+                        .map(|path| Source::new(path, &mut self.source_dirs))
+                        .collect::<io::Result<Vec<_>>>();
+                    let sources = match sources {
+                        Ok(sources) => sources,
+                        Err(error) if error.kind() == io::ErrorKind::QuotaExceeded => {
+                            return self.limit_drag(controller, out, &error.to_string());
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
                     let entries = controller.offer_paths(out, &self.roots, Operations::COPY)?;
                     self.sources = entries.into_iter().zip(sources).collect();
                 } else {
@@ -289,7 +308,14 @@ impl Demo {
             .get(&entry)
             .ok_or(Error::InvalidInput("unknown source entry"))?
             .clone();
-        match source.read()? {
+        let data = match source.read(&mut self.source_dirs) {
+            Ok(data) => data,
+            Err(error) if error.kind() == io::ErrorKind::QuotaExceeded => {
+                return self.limit_drag(controller, out, &error.to_string());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        match data {
             Data::Symlink(target) => controller.send_symlink(out, &entry, target)?,
             Data::Directory(children) => {
                 let entries = controller.send_directory(
@@ -305,6 +331,32 @@ impl Demo {
             self.sources.remove(&entry);
         }
         self.log(format!("Sent {:?}", source.name));
+        Ok(())
+    }
+
+    fn limit_drop(
+        &mut self,
+        controller: &mut DragDrop,
+        out: &mut impl Write,
+        message: &str,
+    ) -> Result<(), Error> {
+        controller.cancel_drop(out)?;
+        self.receiver.abort()?;
+        self.log(format!("Drop canceled: {message}"));
+        Ok(())
+    }
+
+    fn limit_drag(
+        &mut self,
+        controller: &mut DragDrop,
+        out: &mut impl Write,
+        message: &str,
+    ) -> Result<(), Error> {
+        controller.cancel_drag(out)?;
+        self.sources.clear();
+        self.source_dirs = DirectoryPool::default();
+        self.active = None;
+        self.log(format!("Drag canceled: {message}"));
         Ok(())
     }
 }
@@ -389,7 +441,15 @@ fn run(
             }
             _ => {}
         }
-        let events = controller.handle_event(&event)?;
+        let events = match controller.handle_event(&event) {
+            Ok(events) => events,
+            Err(Error::LimitExceeded(message)) => {
+                demo.limit_drop(controller, program.screen_mut(), message)?;
+                program.screen_mut().flush()?;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         let screen = program.screen_mut();
         screen.flush()?;
         for event in events {
@@ -417,7 +477,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if options && arg.as_encoded_bytes().starts_with(b"-") {
             return Err(format!("unknown option: {arg:?}").into());
         } else {
-            roots.push(std::path::absolute(Path::new(&arg))?);
+            roots.push(PathBuf::from(arg));
         }
     }
     let mut demo = Demo::new(roots, destination);

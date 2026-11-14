@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn optional_path_limit_is_checked_before_enqueue() {
+    let mut controller = uncurses_dragdrop::DragDrop::default();
+    controller.enable_drags(&mut Vec::new()).unwrap();
+    controller
+        .handle_event(&uncurses::event::Event::DragDrop {
+            options: vec![("t".into(), "o".into())],
+            payload: Vec::new(),
+        })
+        .unwrap();
+    let root = controller
+        .offer_files(
+            &mut Vec::new(),
+            &["file:///name"],
+            uncurses_dragdrop::Operations::COPY,
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+    let mut receiver = Receiver::default();
+    receiver.begin("text/uri-list", None).unwrap();
+    let options = DragDropOptions {
+        max_path_bytes: Some(3),
+        ..DragDropOptions::default()
+    };
+    assert_eq!(
+        receiver
+            .listed(root.clone(), b"file:///name".to_vec(), &options)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::QuotaExceeded
+    );
+    assert!(receiver.pending.is_empty());
+    let options = DragDropOptions {
+        max_path_bytes: None,
+        ..DragDropOptions::default()
+    };
+    assert!(
+        receiver
+            .listed(
+                root,
+                format!("file:///{}", "a".repeat(8192)).into_bytes(),
+                &options
+            )
+            .unwrap()
+    );
+    assert_eq!(receiver.pending.len(), 1);
+}
+
+#[test]
 fn incoming_names_stay_inside_the_destination() {
     for name in ["", ".", "..", "../escape", "/absolute", "a/b", "a/", "a\0b"] {
         assert!(component(OsStr::new(name)).is_err(), "{name:?}");
@@ -149,6 +198,29 @@ fn symlinks_are_preserved_without_following_them() {
         receiver.current = Some("link".into());
         receiver.kind(EntryKind::Symlink).unwrap();
         receiver.data(target).unwrap();
+        assert!(receiver.end_body().is_err());
+        receiver.abort().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn chained_symlinks_cannot_escape_the_drop_directory() {
+    let destination = tempfile::tempdir().unwrap();
+    for forward_reference in [false, true] {
+        let mut receiver = Receiver::default();
+        receiver
+            .begin("text/uri-list", Some(destination.path()))
+            .unwrap();
+        if !forward_reference {
+            receiver.current = Some("a".into());
+            receiver.kind(EntryKind::Symlink).unwrap();
+            receiver.data(b".").unwrap();
+            receiver.end_body().unwrap();
+        }
+        receiver.current = Some("b".into());
+        receiver.kind(EntryKind::Symlink).unwrap();
+        receiver.data(b"a/../outside").unwrap();
         assert!(receiver.end_body().is_err());
         receiver.abort().unwrap();
     }

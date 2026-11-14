@@ -16,6 +16,42 @@ mod files;
 const MIME: &str = "text/plain";
 
 #[test]
+fn control_limit_can_be_changed_or_disabled() {
+    for limit in [Some(8), None] {
+        let mut controller = DragDrop::new(DragDropOptions {
+            max_control_bytes: limit,
+            ..DragDropOptions::default()
+        });
+        assert!(handle(&mut controller, "t=unknown:m=1", b"12345678").is_empty());
+        let result = controller.handle_event(&raw("m=0", b"9"));
+        assert_eq!(
+            matches!(result, Err(Error::LimitExceeded(_))),
+            limit.is_some()
+        );
+    }
+}
+
+#[test]
+fn oversized_control_continuations_are_drained_after_registration_changes() {
+    let mut controller = dropping();
+    assert!(
+        controller
+            .handle_event(&raw("t=R:m=1", &vec![b'a'; 65537]))
+            .is_err()
+    );
+    assert!(controller.request.is_none());
+    controller.close(&mut Vec::new()).unwrap();
+    controller.enable_drops(&mut Vec::new(), &[MIME]).unwrap();
+    assert!(handle(&mut controller, "t=M:o=1:m=1", MIME.as_bytes()).is_empty());
+    assert!(handle(&mut controller, "t=M:o=1", b"").is_empty());
+    assert!(controller.dropped.is_none());
+    assert!(matches!(
+        handle(&mut controller, "t=M:o=1", MIME.as_bytes()).as_slice(),
+        [Event::Drop(_)]
+    ));
+}
+
+#[test]
 fn malformed_replacement_preserves_the_active_drop_for_cleanup() {
     for (metadata, payload) in [
         ("t=m:x=invalid:o=1", MIME.as_bytes()),
@@ -46,7 +82,7 @@ fn assembled_control_messages_are_bounded_but_data_streams_are_not() {
         }
         assert!(matches!(
             controller.handle_event(&raw("m=0", b"a")),
-            Err(Error::Protocol(_))
+            Err(Error::LimitExceeded(_))
         ));
     }
 
@@ -288,6 +324,7 @@ fn routing_filter_precedes_continuation_state() {
     let options = DragDropOptions {
         routing_id: Some(17),
         machine_id: Some(format!("1:{}", "a".repeat(64)).parse().unwrap()),
+        ..DragDropOptions::default()
     };
     let mut controller = DragDrop::new(options.clone());
     let mut out = Vec::new();
