@@ -792,12 +792,14 @@ fn source_failure_does_not_finish_or_allow_a_retry() {
 }
 
 #[test]
-fn partial_output_failure_poisoning_and_no_implicit_flush() {
+fn output_failures_report_the_cause_immediately_without_flushing() {
+    use std::error::Error as _;
+
     struct FailWriter(usize);
     impl Write for FailWriter {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             if self.0 == 0 {
-                return Err(io::Error::other("broken output"));
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken output"));
             }
             let count = self.0.min(bytes.len());
             self.0 -= count;
@@ -807,20 +809,68 @@ fn partial_output_failure_poisoning_and_no_implicit_flush() {
             panic!("controller must not flush");
         }
     }
-    let mut controller = preparing();
-    assert!(matches!(
-        controller.send(&mut FailWriter(5), MIME, b"abc"),
-        Err(Error::Io(_))
-    ));
-    let mut out = Vec::new();
-    assert!(matches!(
-        controller.cancel_drag(&mut out),
-        Err(Error::OutputFailed)
-    ));
-    assert!(matches!(controller.next_send(), Err(Error::OutputFailed)));
-    assert!(out.is_empty());
+    for initial_body in [false, true] {
+        let mut controller = DragDrop::default();
+        controller.enable_drags(&mut Vec::new()).unwrap();
+        handle(&mut controller, "t=o", b"");
+        let error = if initial_body {
+            controller
+                .offer(&mut Vec::new(), &[MIME], Operations::COPY)
+                .unwrap();
+            controller.send(&mut FailWriter(5), MIME, b"abc")
+        } else {
+            controller.offer(&mut FailWriter(5), &[MIME], Operations::COPY)
+        }
+        .unwrap_err();
+        assert!(matches!(error, Error::OutputFailed(_)));
+        let cause = error.source().unwrap().downcast_ref::<Error>().unwrap();
+        let Error::Io(source) = cause else {
+            panic!("expected the original I/O error");
+        };
+        assert_eq!(source.kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(source.to_string(), "broken output");
+        assert!(error.to_string().contains("broken output"));
+    }
     let mut controller = preparing();
     controller.send(&mut FailWriter(100), MIME, b"abc").unwrap();
+}
+
+#[test]
+fn cleanup_stops_at_the_first_output_failure() {
+    struct FailOnce {
+        failed: bool,
+        later_writes: usize,
+    }
+    impl Write for FailOnce {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if !self.failed {
+                self.failed = true;
+                return Err(io::Error::other("cleanup failed"));
+            }
+            self.later_writes += 1;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            panic!("controller must not flush");
+        }
+    }
+    for incoming in [false, true] {
+        let mut controller = dragging();
+        if incoming {
+            controller.enable_drops(&mut Vec::new(), &[MIME]).unwrap();
+            handle(&mut controller, "t=M:o=1", MIME.as_bytes());
+        }
+        let mut writer = FailOnce {
+            failed: false,
+            later_writes: 0,
+        };
+        assert!(matches!(
+            controller.close(&mut writer),
+            Err(Error::OutputFailed(_))
+        ));
+        assert!(writer.failed);
+        assert_eq!(writer.later_writes, 0);
+    }
 }
 
 #[test]
