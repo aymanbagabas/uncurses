@@ -28,6 +28,9 @@ Linux, macOS, and Windows.
 
 Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
 
+The [uncurses skill](skills/README.md) provides application context and example
+routes.
+
 For repository development, read the [contributor guide](CONTRIBUTING.md).
 
 ## Features
@@ -192,12 +195,6 @@ for feature choices and supported platforms.
 
 Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
 the latest stable Rust (currently 1.88 or newer).
-
-## AI assistants
-
-The [uncurses skill](skills/README.md) helps an assistant use the library in
-your application. It covers session ownership, API pitfalls, and example routes.
-Repository contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits
 

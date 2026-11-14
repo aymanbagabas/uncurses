@@ -51,6 +51,8 @@ Published releases and the current source can differ.
 - Keep terminal restoration reachable after setup and application errors.
 - Compile changed Rust samples in Markdown. Cargo does not check them as doctests.
 - Describe APIs by their positive behavior. Use American English.
+- Use commas, colons, or parentheses instead of em dashes in Markdown.
+  Rustdoc may use em dashes.
 - Use Conventional Commit subjects and sign off commits, as explained in the
   [contributor guide](CONTRIBUTING.md#commits-and-pull-requests).
 

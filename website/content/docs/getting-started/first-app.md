@@ -15,8 +15,9 @@ the program and app state, a setup step, a loop, and a teardown step.
 
 ```mermaid
 flowchart TB
-  begin["start: open the program, init state"]
-  begin --> eventloop["run: read event, update state, redraw"]
+  begin["new: open the program, initialize state"]
+  begin --> setup["start: configure the terminal"]
+  setup --> eventloop["run: read event, update state, redraw"]
   eventloop --> eventloop
   eventloop --> teardown["stop: finish the program"]
 ```
