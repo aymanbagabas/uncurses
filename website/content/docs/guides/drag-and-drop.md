@@ -59,7 +59,7 @@ fn register(
     controller: &mut DragDrop,
     out: &mut impl Write,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    controller.enable_drops(out, &["text/plain"])?;
+    controller.enable_drops(out, &["text/plain", "text/uri-list"])?;
     controller.enable_drags(out)?;
     out.flush()?;
     Ok(())
@@ -82,7 +82,7 @@ The [options reference](/api/uncurses_dragdrop/struct.DragDropOptions.html) list
 The bidirectional example also uses these options for filesystem resources.
 It bounds queued destination paths with `max_path_bytes` and retained local handles with `max_directories`.
 Exceeding a filesystem limit cancels the affected transfer, removes partial output, and keeps the example available.
-Controller limits cancel both roles because the error does not identify the affected exchange.
+The example cancels both roles after controller limit or protocol errors because these errors do not identify the affected exchange.
 
 ### Identify the application host
 
@@ -178,6 +178,7 @@ For larger content, stream into a temporary file and remove it on cancellation o
 Finish every desired request and copy promised files before confirming the drop.
 Call `complete_drop` only after the destination accepts the data.
 Call `cancel_drop` if your application cannot finish the copy.
+Discard partial destination data and queued entries directly after local cancellation.
 
 A new drag can replace an unfinished drop.
 `handle_event` emits `Event::DropCanceled` before the new hover or drop notification.
