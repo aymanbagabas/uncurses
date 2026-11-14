@@ -11,6 +11,10 @@ publish = false
 name = "drag_drop"
 test = true
 
+[[example]]
+name = "drag_drop_raw"
+test = true
+
 [features]
 default = ["unicode-rs", "async"]
 unicode-rs = ["uncurses/unicode-rs", "uncurses-ratatui/unicode-rs", "uncurses-dragdrop/unicode-rs"]

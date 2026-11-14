@@ -38,7 +38,8 @@ fn register(
 The caller retains the controller if registration or its flush fails.
 Attempt `close`, flush the cleanup output, and restore the terminal on every exit path.
 
-For incoming drops, accept an offer and request one entry after the drop.
+For incoming drops, accept or reject the offer during `Event::Hover`.
+Request the desired entry after `Event::Drop`.
 Write each decoded `Event::Data` chunk to your destination.
 `Event::DataEnd` ends one request, including a URI or directory listing.
 Finish every desired request and copy any promised files before calling `complete_drop`.
