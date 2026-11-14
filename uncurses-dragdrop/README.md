@@ -244,6 +244,10 @@ uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 uncurses-dragdrop = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
 
+Both crates enable `unicode-rs` by default.
+`uncurses-dragdrop` forwards its `unicode-rs` and `icu` features to `uncurses`.
+For ICU-only builds, set `default-features = false, features = ["icu"]` on both dependencies.
+
 ## License
 
 MIT. See [LICENSE](../LICENSE).
