@@ -77,4 +77,4 @@ With the crate added, the next page writes the smallest complete interactive
 program: [Hello, terminal]({{< relref "hello-world.md" >}}).
 
 The [uncurses skill](https://github.com/aymanbagabas/uncurses/blob/main/skills/README.md)
-provides application context and example routes.
+helps coding assistants write uncurses applications and find relevant examples.
