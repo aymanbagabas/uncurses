@@ -155,9 +155,10 @@ impl Demo {
     ) -> Result<(), Error> {
         let events = match controller.handle_event(event) {
             Ok(events) => events,
-            Err(Error::LimitExceeded(message)) => {
-                self.cancel_drop(controller, out, message)?;
-                return self.cancel_drag(controller, out, message);
+            Err(error @ (Error::LimitExceeded(_) | Error::Protocol(_))) => {
+                let message = error.to_string();
+                self.cancel_drop(controller, out, &message)?;
+                return self.cancel_drag(controller, out, &message);
             }
             Err(error) => return Err(error),
         };

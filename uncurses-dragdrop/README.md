@@ -13,9 +13,11 @@ Set a deadline and limit each `Program::poll_event` wait to the time that remain
 If the deadline expires, report unconfirmed support, keep both roles disabled, and restore the terminal with `Program::finish`.
 Feed terminal events to `DragDrop::handle_event`.
 Handle the returned events in your application.
-If `handle_event` returns an error, discard partial destination data and queued entries.
-Cancel the affected exchange and flush the output.
+If `handle_event` returns an error, cancel the affected exchange.
 When the error does not identify a role, call both `cancel_drop` and `cancel_drag`.
+Discard partial destination data and queued entries when you cancel the incoming drop.
+Preserve incoming state when only the outgoing drag fails.
+Flush the cleanup output.
 Decode errors can occur without a `DropFailed` event.
 
 Construct the controller in the caller and pass it to the registration helper:
@@ -28,7 +30,7 @@ fn register(
     controller: &mut DragDrop,
     out: &mut impl Write,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    controller.enable_drops(out, &["text/plain"])?;
+    controller.enable_drops(out, &["text/plain", "text/uri-list"])?;
     controller.enable_drags(out)?;
     out.flush()?;
     Ok(())
@@ -44,6 +46,7 @@ Write each decoded `Event::Data` chunk to your destination.
 `Event::DataEnd` ends one request, including a URI or directory listing.
 Finish every desired request and copy any promised files before calling `complete_drop`.
 Call `cancel_drop` if the application cannot finish the copy.
+Discard partial destination data and queued entries directly after local cancellation.
 The controller permits one receive request at a time.
 
 A new drag can replace an unfinished drop.
