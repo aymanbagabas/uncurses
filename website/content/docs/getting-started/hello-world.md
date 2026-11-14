@@ -45,12 +45,14 @@ whole contract.
 ## Line by line
 
 The snippets below are fragments from the complete program above.
+The closure starts in the first fragment and ends in the cleanup fragment.
 
 **Open the program.**
 
 ```rust
 let mut program = Program::stdio()?;
-program.init()?;
+let result = (|| {
+    program.init()?;
 ```
 
 `Program::stdio()` wires a `Program` to standard input and output. The program
@@ -112,6 +114,8 @@ that event is the `q` key. Keys parse from strings, so `"q"`, `"ctrl+c"`, and
 **Put the terminal back.**
 
 ```rust
+    Ok(())
+})();
 let finish = program.finish();
 result.and(finish)
 ```
