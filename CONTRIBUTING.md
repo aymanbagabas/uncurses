@@ -183,6 +183,15 @@ A Hugo preview alone does not include that API output.
 
 [VHS tapes](assets/tapes/) produce the example GIFs.
 Read a tape's commands and install its required tools before recording it.
+The tapes run binaries from `target/debug/examples/`.
+From the workspace root, build the matching example before recording:
+
+```sh
+CARGO_TARGET_DIR="$PWD/target" cargo build --locked -p examples --example tour
+vhs assets/tapes/tour.tape
+```
+
+Replace `tour` in both commands with the example named in the tape.
 The repository stores GIFs with Git LFS, as defined in [.gitattributes](.gitattributes).
 For README images, use an image-serving URL rather than a raw LFS pointer.
 
