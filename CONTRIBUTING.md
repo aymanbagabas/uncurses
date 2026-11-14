@@ -115,9 +115,15 @@ cargo run -p examples --example sized_text_overlap -- --dump |
 ```
 
 The drag-and-drop check needs a Kitty build with its drag-and-drop test hooks.
-Its [module comment](examples/tests/drag_drop_native.py) gives the build and run
-commands. That check simulates desktop gestures; it does not prove actual
-desktop gestures or behavior on a remote host.
+From the workspace root, build its example into the checkout's `target` directory:
+
+```sh
+CARGO_TARGET_DIR="$PWD/target" cargo build --locked -p examples --example drag_drop
+kitty +runpy 'import runpy; runpy.run_path("examples/tests/drag_drop_native.py", run_name="__main__")'
+```
+
+The [check](examples/tests/drag_drop_native.py) simulates desktop gestures; it
+does not prove actual desktop gestures or behavior on a remote host.
 
 CI covers native and virtualized platforms. A local macOS result establishes
 only the local configuration. Preserve the platform exceptions documented in
@@ -152,8 +158,13 @@ Keep crate READMEs useful on their own. Retain a short introduction and example,
 then link to the full guide or API reference.
 
 Read [website/AGENTS.md](website/AGENTS.md) before changing website content.
-Compile changed Rust samples in Markdown manually against the dependency they
-name. Cargo doctests cover rustdoc, not the Markdown files in this repository.
+Compile changed Rust samples in Markdown manually.
+For current-source samples, use a temporary project outside the workspace with
+`path` dependencies on the crates in this checkout.
+Make dependency substitutions only in the temporary project.
+For release-targeted samples, pin dependencies to the exact documented versions.
+
+Cargo doctests cover rustdoc, not the Markdown files in this repository.
 Combine tutorial fragments in their stated order before compilation.
 
 ### Build the website
@@ -221,6 +232,9 @@ It publishes workspace crates in dependency order and creates the GitHub release
 
 Before a release, check the workspace version, internal dependency versions,
 installation text, and examples against the intended artifact.
+The release tag must equal `v` followed by `[workspace.package].version` in the
+root `Cargo.toml` at the tagged commit.
+Check this match before you push the tag.
 Optional release-specific notes belong in `.github/releases/<tag>.md`.
 The workflow combines them with the introduction and git-cliff output.
 Only push a release tag when the release is explicitly authorized.
