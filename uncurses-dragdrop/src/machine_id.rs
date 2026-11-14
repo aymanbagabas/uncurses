@@ -73,12 +73,30 @@ fn platform_id() -> io::Result<String> {
 
 #[cfg(not(any(target_os = "macos", windows)))]
 fn platform_id() -> io::Result<String> {
-    std::fs::read_to_string("/etc/machine-id").map(|id| id.trim_end().to_owned())
+    std::fs::read_to_string("/etc/machine-id").map(|id| normalize_file_id(&id))
+}
+
+#[cfg(any(test, not(any(target_os = "macos", windows))))]
+fn normalize_file_id(id: &str) -> String {
+    id.trim_end().to_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_identity_removes_only_trailing_whitespace() {
+        for (id, expected) in [
+            ("id\n", "id"),
+            ("id \t\r\n", "id"),
+            (" id\n", " id"),
+            ("\t id\r\n", "\t id"),
+            (" \t\r\n", ""),
+        ] {
+            assert_eq!(normalize_file_id(id), expected);
+        }
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
