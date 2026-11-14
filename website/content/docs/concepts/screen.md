@@ -71,6 +71,17 @@ renderer, because they all share the same
 [surface]({{< relref "surfaces.md" >}}) interface. `Screen` also accepts raw
 bytes written straight to it, and keeps them in order with its own output.
 
+## Placements
+
+A placement gives the screen an area and encoded output to draw there.
+Use one for an image or sized text that ordinary cells cannot describe.
+The screen tracks its position and redraws text above it when necessary.
+The image implementation prepares the terminal commands.
+The screen owns attached image resources.
+
+Placements share the ordinary `render()` call with text.
+See the [placement guide]({{< relref "../guides/placements.md" >}}) for examples and resource ownership.
+
 ## Inline or fullscreen
 
 A `Screen` starts inline: it owns a band of rows in the normal terminal window,
