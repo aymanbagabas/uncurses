@@ -7,6 +7,18 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[[example]]
+name = "async_arcade"
+required-features = ["async"]
+
+[[example]]
+name = "async_input"
+required-features = ["async"]
+
+[[example]]
+name = "async_screen"
+required-features = ["async"]
+
 [features]
 default = ["unicode-rs", "async"]
 unicode-rs = ["uncurses/unicode-rs", "uncurses-ratatui/unicode-rs"]
