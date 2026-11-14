@@ -68,6 +68,33 @@ fn incoming_names_stay_inside_the_destination() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_device_aliases_are_rejected() {
+    for name in [
+        "NUL .txt",
+        "nul  .txt",
+        "COM1 .log",
+        "LPT1 .log",
+        "CONIN$",
+        "conout$",
+    ] {
+        assert_eq!(
+            component(OsStr::new(name)).unwrap_err().kind(),
+            io::ErrorKind::InvalidData,
+            "{name:?}"
+        );
+    }
+    for name in [
+        "nul-data.txt",
+        "COM10.log",
+        "console.txt",
+        "COM1 backup.txt",
+    ] {
+        component(OsStr::new(name)).unwrap();
+    }
+}
+
 #[test]
 fn file_uri_names_are_independent_of_the_source_platform() {
     for uri in [
