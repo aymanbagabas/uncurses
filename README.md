@@ -193,6 +193,12 @@ for feature choices and supported platforms.
 Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
 the latest stable Rust (currently 1.88 or newer).
 
+## AI assistants
+
+The [uncurses skill](skills/README.md) helps an assistant use the library in
+your application. It covers session ownership, API pitfalls, and example routes.
+Repository contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Credits
 
 uncurses stands on the shoulders of projects worth naming:
