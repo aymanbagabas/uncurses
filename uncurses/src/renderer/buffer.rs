@@ -66,31 +66,6 @@ impl RenderBuffer {
         self.buffer.height()
     }
 
-    /// Mark one cell position as touched.
-    ///
-    /// Expands the row's existing touched span to include `pos.x`.
-    /// Out-of-bounds rows are ignored.
-    #[allow(dead_code)]
-    pub fn touch(&mut self, pos: impl Into<Position>) {
-        let pos = pos.into();
-        let y = pos.y as usize;
-        if y >= self.touched.len() {
-            return;
-        }
-        match &mut self.touched[y] {
-            Some(span) => {
-                span.first = span.first.min(pos.x);
-                span.last = span.last.max(pos.x);
-            }
-            None => {
-                self.touched[y] = Some(TouchedSpan {
-                    first: pos.x,
-                    last: pos.x,
-                });
-            }
-        }
-    }
-
     /// Mark an inclusive column range on one row as touched.
     ///
     /// # Parameters
