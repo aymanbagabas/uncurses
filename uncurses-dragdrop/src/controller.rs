@@ -43,7 +43,9 @@ pub(crate) enum FailedBody {
 ///
 /// Receiving and offering have separate registrations and exchange state.
 /// Both use the fixed identities supplied at construction. Rust destruction
-/// performs no I/O; call [`Self::close`] explicitly.
+/// performs no I/O; call [`Self::close`] explicitly while output remains safe.
+/// After [`Error::OutputFailed`], stop using the controller and restore the
+/// terminal. The caller must honor this error before any further controller call.
 #[derive(Debug, Default)]
 pub struct DragDrop {
     pub(crate) options: DragDropOptions,
@@ -55,7 +57,6 @@ pub struct DragDrop {
     pub(crate) received: Received,
     pub(crate) drag: Drag,
     pub(crate) continuation: Option<Message>,
-    pub(crate) output_failed: bool,
 }
 
 impl DragDrop {
@@ -309,14 +310,12 @@ impl DragDrop {
         if !self.drops_enabled {
             return Ok(());
         }
-        let cancel = self.cancel_drop(out);
-        let unregister = self.write(out, &["t=A"], b"");
-        if unregister.is_ok() {
-            self.drops_enabled = false;
-            self.hover = None;
-            self.clear_drop();
-        }
-        cancel.and(unregister)
+        self.cancel_drop(out)?;
+        self.write(out, &["t=A"], b"")?;
+        self.drops_enabled = false;
+        self.hover = None;
+        self.clear_drop();
+        Ok(())
     }
 
     /// Cancel an active drag and unregister the offering role.
@@ -324,28 +323,25 @@ impl DragDrop {
         if !self.drags_enabled {
             return Ok(());
         }
-        let cancel = if matches!(self.drag.phase, DragPhase::Starting | DragPhase::Active) {
-            self.write(out, &["t=E", "y=-1"], b"")
-        } else {
-            Ok(())
-        };
-        let unregister = self.write(out, &["t=o", "x=2"], b"");
-        if unregister.is_ok() {
-            self.drags_enabled = false;
-            self.drag = Drag::default();
-            self.discard_continuation(&["o", "e", "E", "k"]);
+        if matches!(self.drag.phase, DragPhase::Starting | DragPhase::Active) {
+            self.write(out, &["t=E", "y=-1"], b"")?;
         }
-        cancel.and(unregister)
+        self.write(out, &["t=o", "x=2"], b"")?;
+        self.drags_enabled = false;
+        self.drag = Drag::default();
+        self.discard_continuation(&["o", "e", "E", "k"]);
+        Ok(())
     }
 
-    /// Attempt cleanup for both roles, returning the first error.
+    /// Clean up both roles, stopping at the first output failure.
     ///
-    /// Flush afterward, then restore the terminal. A poisoned output stream
-    /// requires terminal recovery; this method does not retry partial messages.
+    /// Flush successful cleanup, then restore the terminal. After
+    /// [`Error::OutputFailed`], restore the terminal without further controller
+    /// calls. A failed external flush also requires terminal recovery unless
+    /// the writer guarantees safe resumption.
     pub fn close(&mut self, out: &mut impl Write) -> Result<(), Error> {
-        let drops = self.disable_drops(out);
-        let drags = self.disable_drags(out);
-        drops.and(drags)
+        self.disable_drops(out)?;
+        self.disable_drags(out)
     }
 
     fn check_operation(offer: &DropOffer, operation: Operation) -> Result<(), Error> {
@@ -366,21 +362,12 @@ impl DragDrop {
         }
     }
 
-    pub(crate) fn check_output(&self) -> Result<(), Error> {
-        if self.output_failed {
-            Err(Error::OutputFailed)
-        } else {
-            Ok(())
-        }
-    }
-
     pub(crate) fn write(
         &mut self,
         out: &mut impl Write,
         metadata: &[&str],
         payload: &[u8],
     ) -> Result<(), Error> {
-        self.check_output()?;
         let id = self.options.routing_id.map(|id| format!("i={id}"));
         let mut options = metadata.to_vec();
         if let Some(id) = &id {
@@ -406,11 +393,7 @@ impl DragDrop {
             }
             result
         };
-        if let Err(error) = result {
-            self.output_failed = true;
-            return Err(error.into());
-        }
-        Ok(())
+        result.map_err(|error| Error::OutputFailed(Box::new(error.into())))
     }
 
     /// Parse one raw event into application notifications.
