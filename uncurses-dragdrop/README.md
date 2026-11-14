@@ -9,28 +9,36 @@ Kitty 0.47 or newer supports the protocol.
 
 Call `Program::query_capabilities(uncurses::ansi::drag_drop::REQUEST_DRAG_DROP)` before registration.
 Wait for `uncurses::event::Event::PrimaryDeviceAttributes`, then check support and enable the desired roles.
+Set a deadline and limit each `Program::poll_event` wait to the time that remains.
+If the deadline expires, report unconfirmed support, keep both roles disabled, and restore the terminal with `Program::finish`.
 Feed terminal events to `DragDrop::handle_event`.
 Handle the returned events in your application.
 
+Construct the controller in the caller and pass it to the registration helper:
+
 ```rust
 use std::io::Write;
-use uncurses_dragdrop::{DragDrop, DragDropOptions};
+use uncurses_dragdrop::DragDrop;
 
-fn register(out: &mut impl Write) -> Result<DragDrop, Box<dyn std::error::Error>> {
-    let mut controller = DragDrop::new(DragDropOptions {
-        max_entries: Some(2_000),
-        ..DragDropOptions::default()
-    });
+fn register(
+    controller: &mut DragDrop,
+    out: &mut impl Write,
+) -> Result<(), Box<dyn std::error::Error>> {
     controller.enable_drops(out, &["text/plain"])?;
     controller.enable_drags(out)?;
     out.flush()?;
-    Ok(controller)
+    Ok(())
 }
 ```
 
+The caller retains the controller if registration or its flush fails.
+Attempt `close`, flush the cleanup output, and restore the terminal on every exit path.
+
 For incoming drops, accept an offer and request one entry after the drop.
 Write each decoded `Event::Data` chunk to your destination.
-After `Event::DataEnd`, call `complete_drop` or `cancel_drop`.
+`Event::DataEnd` ends one request, including a URI or directory listing.
+Finish every desired request and copy any promised files before calling `complete_drop`.
+Call `cancel_drop` if the application cannot finish the copy.
 The controller permits one receive request at a time.
 
 A new drag can replace an unfinished drop.
@@ -143,7 +151,9 @@ On Unix, it saves relative symlinks without following them and rejects targets t
 It also rejects `..` after a named component to prevent escapes through other received symlinks.
 Other platforms report an error for saved symlinks.
 Treat saved links and HTML as untrusted content when opening them in another application.
-Local filesystem or protocol errors stop the example after cleanup.
+File access and validation errors cancel the affected transfer, remove partial output, and leave the example available.
+Terminal output failures and other protocol errors stop the example after cleanup.
+Incoming control limits cancel both roles because the error does not identify the affected exchange.
 
 Run on an SSH host from a local Kitty terminal:
 
