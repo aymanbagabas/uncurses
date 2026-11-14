@@ -515,6 +515,70 @@ fn received_children_precede_siblings_and_keep_chunked_listing_order() {
 }
 
 #[test]
+fn malformed_uri_lists_cancel_both_roles_and_allow_later_transfers() {
+    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    let mut controller = DragDrop::default();
+    let mut demo = Demo::new(
+        vec![source.path().to_owned()],
+        Some(destination.path().to_owned()),
+    );
+    let mut out = Vec::new();
+    controller.enable_drags(&mut out).unwrap();
+    controller.enable_drops(&mut out, MIMES).unwrap();
+    for (metadata, payload) in [("t=o", ""), ("t=E", "OK"), ("t=M:o=1", "text/uri-list")] {
+        demo.handle_event(&mut controller, &mut out, &raw(metadata, payload))
+            .unwrap();
+    }
+    demo.handle_event(
+        &mut controller,
+        &mut out,
+        &raw("t=r:x=1", &STANDARD_NO_PAD.encode(b"file:///queued\n")),
+    )
+    .unwrap();
+    assert_eq!(demo.receiver.listed, 1);
+    assert!(!demo.sources.is_empty());
+    assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 1);
+
+    out.clear();
+    demo.handle_event(
+        &mut controller,
+        &mut out,
+        &raw("t=r:x=1", &STANDARD_NO_PAD.encode(b"file:///bad\0name")),
+    )
+    .unwrap();
+    assert_eq!(out, b"\x1b]72;t=r:o=0\x1b\\\x1b]72;t=E:y=-1\x1b\\");
+    assert!(demo.active.is_none());
+    assert!(demo.sources.is_empty());
+    assert!(!demo.receiver.active);
+    assert!(demo.receiver.next().is_none());
+    assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);
+    assert!(demo.log.iter().any(|line| line.contains("NUL in URI list")));
+
+    for (metadata, payload) in [
+        ("t=r:x=1", String::new()),
+        ("t=M:o=1", "text/plain".to_owned()),
+        ("t=r:x=1", STANDARD_NO_PAD.encode(b"new")),
+        ("t=r:x=1", String::new()),
+    ] {
+        demo.handle_event(&mut controller, &mut out, &raw(metadata, &payload))
+            .unwrap();
+    }
+    let saved = fs::read_dir(destination.path())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(fs::read(saved.join("text.txt")).unwrap(), b"new");
+    demo.selected = Content::Text;
+    demo.handle_event(&mut controller, &mut out, &raw("t=o", ""))
+        .unwrap();
+    assert!(demo.active == Some(Content::Text));
+}
+
+#[test]
 fn control_limit_cancels_both_roles_and_drains_continuations() {
     for more in [false, true] {
         let source = tempfile::NamedTempFile::new().unwrap();
