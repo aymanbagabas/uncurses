@@ -131,6 +131,7 @@ fn malformed_routed_messages_preserve_other_endpoints() {
         RawEvent::Unknown(b"\x1b]72;t=r:i=99;partial".to_vec()),
         RawEvent::Unknown(b"\x9d72;i=99:t=r".to_vec()),
         RawEvent::Unknown(b"\xc2\x9d72;i=99;partial".to_vec()),
+        RawEvent::UnknownOsc(b"72;t=r;payload:i=99;".to_vec()),
     ] {
         assert!(controller.handle_event(&event).unwrap().is_empty());
         assert!(controller.request.is_some());
@@ -139,7 +140,7 @@ fn malformed_routed_messages_preserve_other_endpoints() {
         RawEvent::UnknownOsc(b"72;t=r:i=17;invalid".to_vec()),
         RawEvent::Unknown(b"\x1b]72;i=17;partial".to_vec()),
         RawEvent::Unknown(b"\x1b]72;i=99".to_vec()),
-        RawEvent::UnknownOsc(b"72;t=r;payload:i=99;".to_vec()),
+        RawEvent::UnknownOsc(b"72;t=r:i=17;payload:i=99;".to_vec()),
     ] {
         assert!(matches!(
             controller.handle_event(&event),
@@ -169,6 +170,105 @@ fn bare_malformed_drag_commands_are_not_ignored() {
     ] {
         assert!(dropping().handle_event(&event).unwrap().is_empty());
     }
+}
+
+#[test]
+fn numeric_osc72_spellings_report_lost_data() {
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut source = uncurses::event::EventSource::new(reader).unwrap();
+    for command in [b"072".as_slice(), b"00072", b"+72"] {
+        let valid = [b"\x1b]", command, b";t=r:x=1;YQ\x1b\\"].concat();
+        writer.write_all(&valid).unwrap();
+        assert!(matches!(source.read().unwrap(), RawEvent::DragDrop { .. }));
+        let oversized = [
+            b"\x1b]",
+            command,
+            b";t=r:x=1;",
+            &b"YQ".repeat(2050),
+            b"\x1b\\",
+        ]
+        .concat();
+        let event = std::thread::scope(|scope| {
+            let sending = scope.spawn(|| writer.write_all(&oversized).unwrap());
+            let event = source.read().unwrap();
+            sending.join().unwrap();
+            event
+        });
+        assert!(matches!(event, RawEvent::UnknownOsc(_)));
+        let mut controller = dropping();
+        assert!(matches!(
+            controller.handle_event(&event),
+            Err(Error::Protocol(_))
+        ));
+        controller.cancel_drop(&mut Vec::new()).unwrap();
+        assert!(handle(&mut controller, "t=r:x=1", b"").is_empty());
+        for prefix in [b"\x1b]".as_slice(), b"\x9d", b"\xc2\x9d"] {
+            let event = RawEvent::Unknown([prefix, command, b";t=r:x=1;YQ"].concat());
+            assert!(matches!(
+                dropping().handle_event(&event),
+                Err(Error::Protocol(_))
+            ));
+        }
+    }
+}
+
+#[test]
+fn complete_malformed_headers_use_default_zero_routing() {
+    let mut controller = DragDrop::new(DragDropOptions {
+        routing_id: Some(17),
+        ..DragDropOptions::default()
+    });
+    controller.enable_drops(&mut Vec::new(), &[MIME]).unwrap();
+    handle(&mut controller, "t=M:i=17:o=1", MIME.as_bytes());
+    controller.request(&mut Vec::new(), MIME).unwrap();
+    for event in [
+        RawEvent::UnknownOsc([b"72;t=r:x=1;".as_slice(), &vec![b'a'; 4097]].concat()),
+        RawEvent::UnknownOsc(b"72;t=r:x=1".to_vec()),
+        RawEvent::Unknown(b"\x1b]72;t=r:x=1;partial".to_vec()),
+    ] {
+        assert!(controller.handle_event(&event).unwrap().is_empty());
+        assert!(controller.request.is_some());
+        assert!(matches!(
+            dropping().handle_event(&event),
+            Err(Error::Protocol(_))
+        ));
+    }
+    for event in [
+        RawEvent::Unknown(b"\x1b]72;t=r:x=1".to_vec()),
+        RawEvent::UnknownOsc(b"72;broken;payload".to_vec()),
+        RawEvent::UnknownOsc(b"72;t=r:i=bad;payload".to_vec()),
+        RawEvent::UnknownOsc(b"72;t=r:\0bad=value;payload".to_vec()),
+    ] {
+        assert!(matches!(
+            controller.handle_event(&event),
+            Err(Error::Protocol(_))
+        ));
+    }
+}
+
+#[test]
+fn orphaned_request_errors_preserve_replacement_drops() {
+    for replacement in [false, true] {
+        let mut controller = dropping();
+        if replacement {
+            handle(&mut controller, "t=M:o=1", MIME.as_bytes());
+        } else {
+            controller.cancel_drop(&mut Vec::new()).unwrap();
+        }
+        for metadata in ["t=R:x=1", "t=R:y=1", "t=R:Y=37:x=1"] {
+            assert!(handle(&mut controller, metadata, b"EIO:late").is_empty());
+            assert_eq!(controller.dropped.is_some(), replacement);
+        }
+        assert!(matches!(
+            handle(&mut controller, "t=R:x=0:y=0:Y=0", b"EIO:global").as_slice(),
+            [Event::DropFailed(_)]
+        ));
+        assert!(controller.dropped.is_none());
+    }
+    assert!(matches!(
+        handle(&mut dropping(), "t=R", b"EIO:global").as_slice(),
+        [Event::DropFailed(_)]
+    ));
 }
 
 fn raw(metadata: &str, payload: &[u8]) -> RawEvent {
