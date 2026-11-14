@@ -498,16 +498,24 @@ impl DragDrop {
     }
 
     fn malformed_message(&self, bytes: &[u8], terminated: bool) -> Result<Vec<Event>, Error> {
-        let metadata = match bytes.strip_prefix(b"72;") {
-            Some(metadata) => metadata,
-            None if bytes == b"72" => b"",
-            None => return Ok(Vec::new()),
-        };
+        let mut parts = bytes.splitn(2, |byte| *byte == b';');
+        let command = std::str::from_utf8(parts.next().unwrap())
+            .ok()
+            .and_then(|command| command.parse::<u32>().ok());
+        if command != Some(72) {
+            return Ok(Vec::new());
+        }
+        let metadata = parts.next();
+        let header_present = metadata.is_some();
+        let metadata = metadata.unwrap_or(b"");
         let end = metadata.iter().position(|byte| *byte == b';');
-        let fields = metadata[..end.unwrap_or(metadata.len())].split(|byte| *byte == b':');
+        let header = &metadata[..end.unwrap_or(metadata.len())];
+        let fields = header.split(|byte| *byte == b':');
         let mut fields = fields.peekable();
+        let mut has_routing = false;
         while let Some(field) = fields.next() {
             if let Some(id) = field.strip_prefix(b"i=") {
+                has_routing = true;
                 // A timed-out final field can still be an unfinished number.
                 if (terminated || end.is_some() || fields.peek().is_some())
                     && let Some(id) = std::str::from_utf8(id)
@@ -519,6 +527,23 @@ impl DragDrop {
                 }
                 break;
             }
+        }
+        if !has_routing
+            && header_present
+            && (terminated || end.is_some())
+            && self.options.routing_id.unwrap_or(0) != 0
+            && std::str::from_utf8(header).is_ok_and(|header| {
+                header
+                    .split(':')
+                    .filter(|field| !field.is_empty())
+                    .all(|field| {
+                        field.split_once('=').is_some_and(|(key, _)| {
+                            !key.is_empty() && !field.chars().any(char::is_control)
+                        })
+                    })
+            })
+        {
+            return Ok(Vec::new());
         }
         Err(Error::Protocol(
             if terminated {
@@ -592,10 +617,18 @@ impl DragDrop {
                 }
             }
             Some("R") if self.drops_enabled => {
-                let error = message.remote_error()?;
-                if let Some(request) = &self.request {
+                let target = [
+                    message.number("x")?,
+                    message.number("y")?,
+                    message.number("Y")?,
+                ];
+                if target != [0, 0, 0] {
+                    let Some(request) = &self.request else {
+                        return Ok(Vec::new());
+                    };
                     request.matches(message)?;
                 }
+                let error = message.remote_error()?;
                 self.clear_drop();
                 Event::DropFailed(error)
             }
