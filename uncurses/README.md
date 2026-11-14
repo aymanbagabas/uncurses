@@ -110,7 +110,8 @@ That's the shape of it; the full API and guides live at
 ## Install
 
 Published releases are available on [crates.io](https://crates.io/crates/uncurses).
-These examples follow the current repository source. Use its git dependency:
+For examples from a checkout of the repository's default branch, use a git
+dependency:
 
 ```toml
 [dependencies]

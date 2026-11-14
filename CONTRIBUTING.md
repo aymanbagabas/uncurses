@@ -7,7 +7,9 @@ For application development, start with the [website](https://uncurses.org).
 
 Install the current stable Rust toolchain with Cargo, rustfmt, and Clippy.
 The workspace records its Rust requirement in [Cargo.toml](Cargo.toml).
-CI uses current stable; the benchmark build uses nightly.
+The main test matrix uses current stable Rust on Linux, macOS, and Windows.
+The FreeBSD, OpenBSD, and NetBSD jobs use OS-packaged Rust, which can trail stable.
+The benchmark build uses nightly.
 
 Clone the repository and run:
 
