@@ -1287,6 +1287,42 @@ impl Write for CommitWriter {
 }
 
 #[test]
+fn commit_rows_retries_cursor_output_with_a_retained_placement() {
+    use super::PlacementOptions;
+    let mut screen = Screen::new(CommitWriter::default(), (10, 3));
+    screen
+        .set_placement(
+            1,
+            Rect::new(0, 2, 1, 1),
+            &PlacementOptions {
+                draw: b"C".to_vec(),
+                resource: Some(super::PlacementResource::new(
+                    b"<UPLOAD>".as_slice(),
+                    b"<DELETE>".as_slice(),
+                )),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    screen.set_cursor_position(Position::ORIGIN);
+    screen.render().unwrap();
+    screen.writer_mut().bytes.clear();
+    screen.writer_mut().fail_write = true;
+    screen.writer_mut().partial = 1;
+    assert!(screen.commit_rows(2).is_err());
+    assert_eq!(screen.size(), Size::new(10, 1));
+    assert_eq!(screen.writer().bytes, b"\n");
+    assert_eq!(screen.out_buf, b"\n");
+
+    screen.writer_mut().fail_write = false;
+    screen.flush().unwrap();
+    assert_eq!(screen.writer().bytes, b"\n\n");
+    screen.remove_placement(1);
+    screen.render().unwrap();
+    assert!(screen.writer().bytes.ends_with(b"<DELETE>"));
+}
+
+#[test]
 fn commit_rows_partial_write_retry_does_not_replay_line_feeds() {
     let mut screen = Screen::new(CommitWriter::default(), (10, 3));
     for (y, row) in ["AAAA", "BBBB", "CCCC"].into_iter().enumerate() {

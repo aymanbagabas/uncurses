@@ -117,6 +117,12 @@ impl Renderer {
         overwrite_line: Option<&[Cell]>,
         pen: PenPolicy,
     ) -> io::Result<()> {
+        let overwrite_line =
+            if self.row_protected(to.y) || self.invalid_rows.get(to.y as usize) == Some(&true) {
+                None
+            } else {
+                overwrite_line
+            };
         if from.y == to.y && from.x == to.x && self.cur.known() {
             return Ok(());
         }

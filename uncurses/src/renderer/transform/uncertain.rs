@@ -131,6 +131,9 @@ impl Renderer {
         y: u16,
         x: u16,
     ) -> io::Result<bool> {
+        if self.row_protected(y) || self.invalid_rows.get(y as usize) == Some(&true) {
+            return Ok(false);
+        }
         let Some(from) = buf
             .line(y)
             .and_then(|l| self.uncertain_from(&l[..l.len().min(x as usize)]))

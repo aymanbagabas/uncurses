@@ -416,6 +416,9 @@ impl<I: Input, O: Write> Program<I, O> {
     /// only on an actual transition.
     pub(super) fn set_alt_screen(&mut self, enter: bool) -> io::Result<()> {
         let changed = self.state.alt_screen != enter;
+        if changed {
+            self.screen.release_placements()?;
+        }
         if changed && enter {
             // Capture the inline anchor before the buffer switch hides it.
             self.screen.save_cursor();

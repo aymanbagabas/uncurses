@@ -1,6 +1,6 @@
 //! Pre-diff setup phase.
 //!
-//! Initialises the current buffer, reacts to surface resizes (including
+//! Erases obsolete placements, initializes the current buffer, reacts to resizes (including
 //! the inline-shrink partial clear), and dispatches the force-clear /
 //! scroll-detection branch before the per-row diff runs.
 
@@ -18,13 +18,17 @@ impl Renderer {
     /// Run the pre-diff phase. Returns whether the surface size
     /// changed this frame so [`Renderer::finalize_frame`] knows
     /// whether to snap the cursor back to the inline bottom-left.
-    pub(super) fn prepare_frame(
+    pub(in crate::renderer) fn prepare_frame(
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &mut RenderBuffer,
         width: u16,
         height: u16,
     ) -> io::Result<bool> {
+        self.erase_placements(out, crate::layout::Size::new(width, height))?;
+        if self.pen_unknown {
+            self.reset_pen(out)?;
+        }
         // Initialize current buffer if needed. Diff against the empty
         // buffer naturally — no need to force a full clear; the
         // transform pass will emit each non-blank cell.
@@ -42,10 +46,11 @@ impl Renderer {
         // right place.
         let prev_width = self.last_width;
         let prev_height = self.last_height;
+        let protected = self.protected_rows.iter().any(|&row| row);
         let resized = width != prev_width || height != prev_height;
         let inline_partial_clear =
             resized && !self.fullscreen && width == prev_width && height < prev_height;
-        if inline_partial_clear && !self.force_clear {
+        if inline_partial_clear && !self.force_clear && !protected {
             self.reset_pen(out)?;
             // Use the previous geometry while the first removed row fits.
             let current = self.cur_buf.take().unwrap();
@@ -67,10 +72,37 @@ impl Renderer {
         self.last_width = width;
         self.last_height = height;
 
+        self.invalid_rows.resize(height as usize, false);
+        if resized && !self.fullscreen && height < prev_height && protected {
+            self.reset_pen(out)?;
+            for row in height..prev_height {
+                self.move_to_between_frames(
+                    out,
+                    crate::layout::Size::new(width, prev_height),
+                    row,
+                    0,
+                )?;
+                out.extend_from_slice(b"\x1b[2K");
+            }
+            self.move_to_between_frames(
+                out,
+                crate::layout::Size::new(width, prev_height),
+                height.saturating_sub(1),
+                0,
+            )?;
+        }
         if self.force_clear {
-            self.clear_update(out, new_buf)?;
+            if protected {
+                self.invalid_rows.fill(true);
+                new_buf.touch_all();
+                self.old_hashes.clear();
+                self.new_hashes.clear();
+            } else {
+                self.clear_update(out, new_buf)?;
+                self.invalid_rows.fill(false);
+            }
             self.force_clear = false;
-        } else if self.scroll_optimize && self.sync_output && self.fullscreen {
+        } else if !protected && self.scroll_optimize && self.sync_output && self.fullscreen {
             let touched_lines = new_buf.touched_lines().count();
             let sparse_threshold = SCROLL_OPTIMIZE_MIN_TOUCHED_LINES
                 .max(height as usize / SCROLL_OPTIMIZE_TOUCHED_DIVISOR);
@@ -82,6 +114,16 @@ impl Renderer {
                 self.update_hashmap(new_buf, height as usize);
                 self.scroll_optimize(out, new_buf)?;
             }
+        }
+
+        // Establish the inline band before an opaque placement can occupy its last row.
+        if protected && !self.fullscreen && height > 0 && (resized || self.cur.y.is_none()) {
+            self.move_to_between_frames(
+                out,
+                crate::layout::Size::new(width, height),
+                height - 1,
+                0,
+            )?;
         }
 
         Ok(resized)

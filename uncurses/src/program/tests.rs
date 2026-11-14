@@ -2052,6 +2052,66 @@ fn enter_and_exit_alt_screen_emit_1049_and_retarget_the_screen() {
     assert!(written(&buf).contains("\x1b[?1049l"));
 }
 
+#[test]
+fn teardown_preserves_resources_used_by_committed_rows() {
+    use crate::{layout::Rect, screen::PlacementOptions};
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (40, 4));
+    let options = PlacementOptions {
+        draw: b"DRAW".to_vec(),
+        erase: b"ERASE".to_vec(),
+        resource: Some(crate::screen::PlacementResource::new(
+            b"<UPLOAD>".as_slice(),
+            b"<DELETE>".as_slice(),
+        )),
+        ..Default::default()
+    };
+    program
+        .screen_mut()
+        .set_placement(1, Rect::new(0, 0, 4, 1), &options)
+        .unwrap();
+    program.screen_mut().commit_rows(1).unwrap();
+    buf.borrow_mut().clear();
+    program.teardown().unwrap();
+    let output = written(&buf);
+    assert!(!output.contains("ERASE"));
+    assert!(!output.contains("<DELETE>"));
+}
+
+#[test]
+fn placement_handoffs_erase_before_switch_and_preserve_pending_content() {
+    use crate::{layout::Rect, screen::PlacementOptions};
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (40, 12));
+    let options = PlacementOptions {
+        draw: b"DRAW".to_vec(),
+        erase: b"ERASE".to_vec(),
+        ..Default::default()
+    };
+    program
+        .screen_mut()
+        .set_placement(1, Rect::new(2, 2, 8, 2), &options)
+        .unwrap();
+    program.screen_mut().render().unwrap();
+    program
+        .screen_mut()
+        .set_placement(2, Rect::new(14, 2, 8, 2), &options)
+        .unwrap();
+    buf.borrow_mut().clear();
+    program.enter_alt_screen().unwrap();
+    let output = written(&buf);
+    assert!(output.find("ERASE").unwrap() < output.find("\x1b[?1049h").unwrap());
+    assert!(!output.contains("\0p"));
+    buf.borrow_mut().clear();
+    program.screen_mut().render().unwrap();
+    assert_eq!(written(&buf).matches("DRAW").count(), 2);
+    buf.borrow_mut().clear();
+    program.enter_alt_screen().unwrap();
+    assert!(!written(&buf).contains("ERASE"));
+    program.exit_alt_screen().unwrap();
+    assert_eq!(written(&buf).matches("ERASE").count(), 2);
+}
+
 /// Some terminals track DECTCEM per screen buffer, so a hidden cursor must be
 /// re-hidden on whichever buffer becomes active.
 #[test]
