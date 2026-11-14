@@ -8,6 +8,7 @@ pub(crate) struct Received {
     pub(crate) scope: Identity,
     pub(crate) uris: Option<u32>,
     pub(crate) directories: HashMap<i64, (Directory, u32)>,
+    entries: usize,
 }
 
 #[derive(Debug)]
@@ -50,6 +51,7 @@ impl Records {
         end: bool,
         scope: Identity,
         directory: Option<i64>,
+        limit: Option<usize>,
         events: &mut Vec<Event>,
     ) -> Result<(), Error> {
         for &byte in bytes {
@@ -64,8 +66,8 @@ impl Records {
                 if directory.is_none() && byte == 0 {
                     return Err(Error::Protocol("NUL in URI list".into()));
                 }
-                if self.pending.len() == 64 * 1024 {
-                    return Err(Error::Protocol("listing record exceeds 64 KiB".into()));
+                if limit.is_some_and(|limit| self.pending.len() >= limit) {
+                    return Err(Error::LimitExceeded("listing record limit exceeded"));
                 }
                 self.pending.push(byte);
             }
@@ -119,9 +121,20 @@ impl DragDrop {
     ///
     /// Names retain the original URI bytes, without line separators.
     /// Comments and empty lines do not consume entry indices.
-    /// Each URI or directory name is limited to 64 KiB across data messages.
+    /// `max_record_bytes` bounds each retained URI or directory name.
     pub fn list(&mut self, out: &mut impl Write) -> Result<(), Error> {
         self.request_entry(out, Entry::UriList, true)
+    }
+
+    /// Return the root at a zero-based URI index after its list completes.
+    ///
+    /// This also works after a raw [`Entry::UriList`] request. Comments and
+    /// blank lines do not consume indices. Return `None` before completion
+    /// or for an index outside the list. A new list or drop invalidates
+    /// previously returned roots.
+    pub fn root_entry(&self, index: usize) -> Option<Entry> {
+        let index = u32::try_from(index.checked_add(1)?).ok()?;
+        (index <= self.received.uris?).then(|| Entry::file(self.received.scope, 0, index))
     }
 
     fn request_entry(
@@ -277,6 +290,13 @@ impl DragDrop {
                     if self.received.directories.contains_key(&handle) {
                         return Err(Error::Protocol("directory handle is already open".into()));
                     }
+                    if self
+                        .options
+                        .max_directories
+                        .is_some_and(|limit| self.received.directories.len() >= limit)
+                    {
+                        return Err(Error::LimitExceeded("open directory limit exceeded"));
+                    }
                     self.received.directories.insert(handle, (directory, 0));
                 }
                 request.kind = Some(kind);
@@ -287,11 +307,21 @@ impl DragDrop {
         }
         let bytes = message.decode_data(final_chunk)?;
         let end = final_chunk && empty;
+        let previous_count = if request.entry.is_uri_list() && !request.list {
+            request.uris.count
+        } else {
+            request.records.count
+        };
         if let Some(EntryKind::Directory(directory)) = request.kind {
             let handle = directory.handle;
-            request
-                .records
-                .feed(&bytes, end, directory.scope, Some(handle), &mut events)?;
+            request.records.feed(
+                &bytes,
+                end,
+                directory.scope,
+                Some(handle),
+                self.options.max_record_bytes,
+                &mut events,
+            )?;
             if end {
                 self.received
                     .directories
@@ -300,9 +330,14 @@ impl DragDrop {
         } else {
             if request.entry.is_uri_list() {
                 if request.list {
-                    request
-                        .records
-                        .feed(&bytes, end, self.received.scope, None, &mut events)?;
+                    request.records.feed(
+                        &bytes,
+                        end,
+                        self.received.scope,
+                        None,
+                        self.options.max_record_bytes,
+                        &mut events,
+                    )?;
                     if end {
                         self.received.uris = Some(request.records.count);
                     }
@@ -324,6 +359,23 @@ impl DragDrop {
             if !request.list && !bytes.is_empty() {
                 events.push(Event::Data(bytes));
             }
+        }
+        let count = if request.entry.is_uri_list() && !request.list {
+            request.uris.count
+        } else {
+            request.records.count
+        };
+        self.received.entries = self
+            .received
+            .entries
+            .checked_add((count - previous_count) as usize)
+            .ok_or(Error::LimitExceeded("entry count overflow"))?;
+        if self
+            .options
+            .max_entries
+            .is_some_and(|limit| self.received.entries > limit)
+        {
+            return Err(Error::LimitExceeded("drop entry limit exceeded"));
         }
         if end {
             self.request = None;
