@@ -46,7 +46,8 @@ impl Entry {
 /// An opaque file target tied to its controller, direction, and listing.
 ///
 /// Obtain targets from [`DragDrop::offer_files`], [`DragDrop::offer_paths`],
-/// [`DragDrop::send_directory`], or [`Event::Listed`] and [`Event::EntryRequested`].
+/// [`DragDrop::send_directory`], [`DragDrop::root_entry`], or [`Event::Listed`]
+/// and [`Event::EntryRequested`].
 /// Keep offered roots until the outgoing exchange ends; roots can be requested
 /// repeatedly. Directory children become invalid when their directory closes
 /// or their outgoing tree finishes.
@@ -283,14 +284,45 @@ impl fmt::Display for MachineId {
     }
 }
 
-/// Fixed identities shared by both roles of a controller.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Fixed identities and resource limits shared by both controller roles.
+///
+/// Each `None` limit is unlimited. Omitted fields in a struct update with
+/// `..Default::default()` retain the default limits.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DragDropOptions {
     /// Multiplexer routing ID. An absent ID uses the protocol default, zero.
     /// This identifies an endpoint, not an individual transfer.
     pub routing_id: Option<u32>,
     /// Optional hashed machine identity.
     pub machine_id: Option<MachineId>,
+    /// Maximum assembled incoming control payload, in bytes. Default: 64 KiB.
+    pub max_control_bytes: Option<usize>,
+    /// Maximum retained URI or directory name, in bytes. Default: 64 KiB.
+    /// Raw URI bodies use a counter instead of retaining names.
+    pub max_record_bytes: Option<usize>,
+    /// Maximum listed entries across all requests in one drop. Default: 10,000.
+    pub max_entries: Option<usize>,
+    /// Maximum queued destination path length, in native encoded bytes.
+    /// Default: 4 KiB. Filesystem adapters enforce this destination policy;
+    /// the controller handles opaque names rather than local paths.
+    pub max_path_bytes: Option<usize>,
+    /// Maximum open incoming directories. Default: 128.
+    /// Filesystem adapters also use this limit for retained local directory handles.
+    pub max_directories: Option<usize>,
+}
+
+impl Default for DragDropOptions {
+    fn default() -> Self {
+        Self {
+            routing_id: None,
+            machine_id: None,
+            max_control_bytes: Some(64 * 1024),
+            max_record_bytes: Some(64 * 1024),
+            max_entries: Some(10_000),
+            max_path_bytes: Some(4 * 1024),
+            max_directories: Some(128),
+        }
+    }
 }
 
 /// A terminal or application error in the protocol's symbolic form.
@@ -401,6 +433,8 @@ pub enum Error {
     InvalidState(&'static str),
     /// An application argument is invalid.
     InvalidInput(&'static str),
+    /// A configured resource limit was exceeded.
+    LimitExceeded(&'static str),
     /// An incoming message is malformed or inconsistent.
     Protocol(String),
     /// A previous output failure left terminal state uncertain.
@@ -412,7 +446,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => error.fmt(f),
-            Self::InvalidState(message) | Self::InvalidInput(message) => f.write_str(message),
+            Self::InvalidState(message)
+            | Self::InvalidInput(message)
+            | Self::LimitExceeded(message) => f.write_str(message),
             Self::Protocol(message) => write!(f, "invalid drag and drop message: {message}"),
             Self::OutputFailed => f.write_str("previous terminal output failed"),
         }

@@ -3,13 +3,147 @@ use std::{collections::HashSet, fs};
 
 #[cfg(unix)]
 #[test]
+fn source_paths_preserve_final_directory_dots() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join("directory")).unwrap();
+    fs::write(temp.path().join("file"), b"file").unwrap();
+    std::os::unix::fs::symlink("directory", temp.path().join("link")).unwrap();
+    let mut pool = DirectoryPool::new(Some(128));
+    assert!(Source::new(&temp.path().join("file/."), &mut pool).is_err());
+    let source = Source::new(&temp.path().join("link/."), &mut pool).unwrap();
+    assert!(matches!(
+        source.read(&mut pool).unwrap(),
+        Data::Directory(_)
+    ));
+}
+
+#[test]
+fn root_sources_share_a_bounded_parent_handle() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut pool = DirectoryPool::new(Some(1));
+    let sources: Vec<_> = (0..32)
+        .map(|index| {
+            let path = temp.path().join(index.to_string());
+            fs::write(&path, b"data").unwrap();
+            Source::new(&path, &mut pool).unwrap()
+        })
+        .collect();
+    for source in sources {
+        assert!(matches!(source.read(&mut pool).unwrap(), Data::File(_)));
+    }
+}
+
+#[test]
+fn wide_trees_cancel_at_the_handle_limit_or_finish_without_it() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        let directory = temp.path().join(name);
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("leaf"), b"leaf").unwrap();
+    }
+    for limit in [Some(2), None] {
+        let mut controller = DragDrop::new(DragDropOptions {
+            max_directories: limit,
+            ..DragDropOptions::default()
+        });
+        let mut demo = Demo::new(vec![temp.path().to_owned()], None);
+        let mut out = Vec::new();
+        controller.enable_drags(&mut out).unwrap();
+        for (metadata, payload) in [("t=o", ""), ("t=E", "OK"), ("t=k:x=1", "")] {
+            for event in feed(&mut controller, metadata, payload) {
+                demo.event(&mut controller, &mut out, event).unwrap();
+            }
+        }
+        while controller.next_send().unwrap().is_some() {
+            demo.send_next(&mut controller, &mut out).unwrap();
+        }
+        assert_eq!(demo.active.is_none(), limit.is_some());
+        if limit.is_some() {
+            assert!(demo.sources.is_empty());
+            assert!(demo.log.iter().any(|line| line.contains("handle limit")));
+            demo.selected = Content::Text;
+            for event in feed(&mut controller, "t=o", "") {
+                demo.event(&mut controller, &mut out, event).unwrap();
+            }
+            assert!(demo.active == Some(Content::Text));
+        }
+    }
+}
+
+#[test]
+fn path_limit_cancels_the_drop_and_removes_partial_storage() {
+    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+    let destination = tempfile::tempdir().unwrap();
+    let mut controller = DragDrop::new(DragDropOptions {
+        max_path_bytes: Some(3),
+        ..DragDropOptions::default()
+    });
+    let mut demo = Demo::new(Vec::new(), Some(destination.path().to_owned()));
+    let mut out = Vec::new();
+    controller
+        .enable_drops(&mut out, &["text/uri-list"])
+        .unwrap();
+    for (metadata, payload) in [
+        ("t=M:o=1", "text/uri-list".to_owned()),
+        (
+            "t=r:x=1",
+            STANDARD_NO_PAD.encode(b"file:///long\nfile:///also-long\n"),
+        ),
+    ] {
+        for event in feed(&mut controller, metadata, &payload) {
+            demo.event(&mut controller, &mut out, event).unwrap();
+        }
+    }
+    assert!(!demo.receiver.active);
+    assert_eq!(fs::read_dir(destination.path()).unwrap().count(), 0);
+    assert!(demo.log.iter().any(|line| line.contains("path limit")));
+    assert!(feed(&mut controller, "t=r:x=1", "").is_empty());
+}
+
+#[test]
+fn browser_links_do_not_end_the_example() {
+    use base64::{Engine, engine::general_purpose::STANDARD_NO_PAD};
+    let mut controller = DragDrop::default();
+    let mut demo = Demo::new(Vec::new(), None);
+    let mut out = Vec::new();
+    controller
+        .enable_drops(&mut out, &["text/uri-list"])
+        .unwrap();
+    for (metadata, payload) in [
+        ("t=M:o=1", "text/uri-list".to_owned()),
+        (
+            "t=r:x=1",
+            STANDARD_NO_PAD.encode(b"https://example.com/\nfile:///safe.txt"),
+        ),
+        ("t=r:x=1", String::new()),
+        ("t=r:x=1:y=2", String::new()),
+    ] {
+        for event in feed(&mut controller, metadata, &payload) {
+            demo.event(&mut controller, &mut out, event).unwrap();
+        }
+    }
+    assert!(
+        demo.log
+            .iter()
+            .any(|line| line.contains("https://example.com/"))
+    );
+    assert!(demo.log.iter().any(|line| line.contains("Drop complete")));
+}
+
+#[cfg(unix)]
+#[test]
 fn source_directories_skip_socket_entries() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(temp.path().join("file"), b"file").unwrap();
     fs::create_dir(temp.path().join("directory")).unwrap();
     std::os::unix::fs::symlink("file", temp.path().join("link")).unwrap();
     let _socket = std::os::unix::net::UnixListener::bind(temp.path().join("socket")).unwrap();
-    let Data::Directory(children) = Source::new(temp.path()).unwrap().read().unwrap() else {
+    let mut pool = DirectoryPool::new(Some(128));
+    let Data::Directory(children) = Source::new(temp.path(), &mut pool)
+        .unwrap()
+        .read(&mut pool)
+        .unwrap()
+    else {
         panic!("expected a directory");
     };
     assert_eq!(

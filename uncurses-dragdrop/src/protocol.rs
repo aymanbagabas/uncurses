@@ -14,7 +14,7 @@ pub(crate) const BASE64: GeneralPurpose = GeneralPurpose::new(
 /// Count URI records without retaining their names or content.
 #[derive(Debug, Default)]
 pub(crate) struct UriCounter {
-    count: u32,
+    pub(crate) count: u32,
     started: bool,
     comment: bool,
     significant: bool,
