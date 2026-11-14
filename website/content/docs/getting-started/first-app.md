@@ -132,9 +132,9 @@ terminal only repaints when the frame would actually differ.
 ## Putting the terminal back
 
 `stop` consumes the app and finishes the program, restoring the terminal exactly
-as it was. `main` wires the three lifecycle steps together and still runs `stop`
-when `start` or `run` returns an error. This gives terminal restoration a chance
-to run after setup or application errors.
+as it was. `main` calls `new`, `start`, `run`, and `stop` in order.
+It still calls `stop` if `start` or `run` returns an error.
+This gives terminal restoration a chance to run after setup or application errors.
 
 ```rust
 impl App {
