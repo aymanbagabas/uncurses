@@ -66,8 +66,11 @@ fn register(
 }
 ```
 
-On every exit path, attempt `close`, flush the cleanup output, and restore the terminal.
-This includes failures from registration and its final flush.
+On exit, call `close` only while protocol output remains safe.
+Flush successful cleanup output.
+If a flush fails, stop controller writes unless the writer guarantees safe resumption.
+Flush failures occur outside the controller's output checks.
+Attempt terminal restoration on every exit path, including registration failures.
 
 Default options leave `routing_id` and `machine_id` unset.
 Configure these identities only when your environment needs them.
@@ -181,7 +184,7 @@ Call `cancel_drop` if your application cannot finish the copy.
 Discard partial destination data and queued entries directly after local cancellation.
 
 A new drag can replace an unfinished drop.
-`handle_event` emits `Event::DropCanceled` before the new hover or drop notification.
+`handle_event` emits `Event::DropCanceled` before the new hover, drop, or leave notification.
 Discard partial destination data, queued entries, and stored directory handles before processing the next notification.
 The terminal releases the replaced drop's resources.
 Keep this cleanup local because the controller already tracks the new offer.
@@ -224,9 +227,12 @@ On success, both `send` and `send_from` send a complete body and its end marker.
 `send_from` reports both source read failures and terminal write failures as `Error::Io`.
 Attempt `fail_data` for a failed MIME response.
 For file responses, attempt `fail_drag` or `cancel_drag`.
-Cancel a failed initial offer before startup.
+Cancel a failed initial body before startup.
 On `OutputFailed`, restore the terminal.
 The controller rejects these recovery attempts before any write when earlier output failed.
+
+If `offer` returns `Error::Io`, restore the terminal even if `cancel_drag` succeeds.
+Cancellation success in this case confirms local cleanup, not safe terminal output.
 
 Output methods do not flush, so flush responses before the next input wait.
 This dispatcher calls both helpers and cancels both exchanges on decode errors:
@@ -462,9 +468,11 @@ In that case, further output methods, including `cancel_drag` and `close`, retur
 
 ### Close the controller
 
-Call `close`, then flush before `Program::pause` or `Program::finish`.
+Call `close` before `Program::pause` or `Program::finish` only while protocol output remains safe.
+Flush successful cleanup output.
 Register again after resume.
-Attempt controller cleanup and terminal restoration even if an earlier operation fails:
+After a flush failure, restore the terminal without this helper unless your writer guarantees safe resumption.
+This helper attempts terminal restoration even when its cleanup fails:
 
 ```rust
 use std::io::Write;
@@ -476,10 +484,12 @@ fn finish(
     mut program: Program<Stdin, Stdout>,
     controller: &mut DragDrop,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let cleanup = controller.close(program.screen_mut()).map_err(Into::into);
-    let flush = program.screen_mut().flush().map_err(Into::into);
+    let cleanup = controller
+        .close(program.screen_mut())
+        .map_err(Into::into)
+        .and_then(|()| program.screen_mut().flush().map_err(Into::into));
     let finish = program.finish().map_err(Into::into);
-    cleanup.and(flush).and(finish)
+    cleanup.and(finish)
 }
 ```
 
