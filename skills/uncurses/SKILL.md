@@ -1,6 +1,6 @@
 ---
 name: uncurses
-description: Use for Rust terminal UIs with the uncurses crate or code that imports uncurses::. Covers terminal sessions, drawing, keyboard and mouse input, resize, async events, raw Kitty drag and drop, program status, and the uncurses-ratatui backend. Includes the ownership model, examples, and API pitfalls.
+description: Use for Rust terminal applications with uncurses or uncurses-ratatui, including code that imports uncurses::. Covers basic terminal behavior, terminal standards, and optional protocol extensions supported by uncurses. Includes sessions, drawing, input, capability queries, async events, the ownership model, examples, and API pitfalls.
 version: 0.1.0
 ---
 
