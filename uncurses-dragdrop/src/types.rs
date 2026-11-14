@@ -286,6 +286,8 @@ pub struct DragDropOptions {
     /// Maximum open incoming directories. Default: 128.
     /// Filesystem adapters also use this limit for retained local directory handles.
     pub max_directories: Option<usize>,
+    /// Maximum unanswered outgoing MIME and root requests combined. Default: 128.
+    pub max_pending_requests: Option<usize>,
 }
 
 impl Default for DragDropOptions {
@@ -298,6 +300,7 @@ impl Default for DragDropOptions {
             max_entries: Some(10_000),
             max_path_bytes: Some(4 * 1024),
             max_directories: Some(128),
+            max_pending_requests: Some(128),
         }
     }
 }
