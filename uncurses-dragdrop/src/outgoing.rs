@@ -100,7 +100,8 @@ impl DragDrop {
     /// caller. Interrupted reads retry. Other source errors leave the body
     /// unfinished and block further data. Use [`Self::fail_data`] for a MIME
     /// request, or [`Self::fail_drag`] or [`Self::cancel_drag`] for other bodies.
-    /// Output errors poison the controller because terminal state is uncertain.
+    /// Terminal writes return [`Error::OutputFailed`] with the original error.
+    /// Stop controller output and restore the terminal after this error.
     pub fn send_from(
         &mut self,
         out: &mut impl Write,
@@ -349,9 +350,10 @@ impl DragDrop {
 
     /// Stream a thumbnail during preparation with bounded buffers.
     ///
-    /// Source errors or invalid content leave the body unfinished. If output
-    /// started, the controller is poisoned: recover the terminal before reuse.
-    /// Otherwise, cancel preparation. No successful end marker is emitted.
+    /// Source errors or invalid content leave the body unfinished. After a
+    /// continuation starts, these failures return [`Error::OutputFailed`] with
+    /// the original cause. Stop controller output and restore the terminal.
+    /// Before output starts, cancel preparation. Errors omit the success marker.
     pub fn add_thumbnail_from(
         &mut self,
         out: &mut impl Write,
@@ -544,7 +546,6 @@ impl BodyCheck {
 
 impl DragDrop {
     fn ready_for_body(&self) -> Result<(), Error> {
-        self.check_output()?;
         if self.drag.failed_body.is_some() {
             return Err(Error::InvalidState("report or cancel the failed data body"));
         }
@@ -561,13 +562,16 @@ impl DragDrop {
     ) -> Result<Option<u32>, Error> {
         let mut incomplete = false;
         let result = self.stream_body(out, metadata, source, &mut check, &mut incomplete);
-        if result.is_err() {
-            self.drag.failed_body = Some(failure);
-            // A thumbnail continuation would consume cancellation as image
-            // data. Preserve the unfinished body instead of falsely ending it.
-            self.output_failed |= incomplete;
+        match result {
+            Err(error @ Error::OutputFailed(_)) => Err(error),
+            // A thumbnail continuation would consume cancellation as image data.
+            Err(error) if incomplete => Err(Error::OutputFailed(Box::new(error))),
+            Err(error) => {
+                self.drag.failed_body = Some(failure);
+                Err(error)
+            }
+            result => result,
         }
-        result
     }
 
     fn stream_body(

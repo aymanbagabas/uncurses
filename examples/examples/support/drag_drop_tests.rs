@@ -347,8 +347,11 @@ fn source_read_failures_recover_but_terminal_write_failures_propagate() {
             let error = demo
                 .source_error(&mut controller, &mut out, error)
                 .unwrap_err();
-            assert!(matches!(error, Error::Io(_)));
-            assert_eq!(error.to_string(), "terminal write failed");
+            let Error::OutputFailed(cause) = error else {
+                panic!("expected a fatal terminal write error");
+            };
+            assert!(matches!(*cause, Error::Io(_)));
+            assert_eq!(cause.to_string(), "terminal write failed");
         } else {
             out.clear();
             let error = controller
