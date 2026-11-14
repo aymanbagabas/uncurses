@@ -9,7 +9,7 @@ use uncurses::screen::{Screen, TextSizing};
 use uncurses::style::Style;
 use uncurses::terminal::Winsize;
 use uncurses::text::{TextSurface, WidthMode};
-use uncurses_images::{Backend, CellImage, PreparedImage};
+use uncurses_images::{CellImage, PreparedImage};
 
 const WAITING_PIXELS: &str = "Waiting for cell pixels. Use --cell-pixels WxH; q quits.";
 
@@ -429,18 +429,7 @@ fn paint<W: Write>(
                         image.size().width,
                         image.size().height,
                     );
-                    let visible = if image.backend() == Backend::Kitty {
-                        visible_rectangles(area, drag.dialog.map(|p| Rect::new(p.x, p.y, 10, 3)))
-                    } else {
-                        vec![area]
-                    };
-                    for (index, rect) in visible.into_iter().enumerate() {
-                        let id = index as u32 + 1;
-                        let source =
-                            Rect::new(rect.x - area.x, rect.y - area.y, rect.width, rect.height);
-                        let options = image.crop(source)?.placement(id)?;
-                        screen.set_placement(u64::from(id), rect, &options)?;
-                    }
+                    screen.set_placement(1, area, &image.placement())?;
                 }
                 Visual::Cells(cells) => {
                     cells.draw(screen, drag.position);
@@ -496,30 +485,6 @@ fn paint<W: Write>(
         screen.set_cursor_position((0, y));
     }
     screen.render()
-}
-
-fn visible_rectangles(area: Rect, overlay: Option<Rect>) -> Vec<Rect> {
-    let Some(overlay) = overlay else {
-        return vec![area];
-    };
-    let cut = area.intersection(overlay);
-    if cut.width == 0 || cut.height == 0 {
-        return vec![area];
-    }
-    [
-        Rect::new(area.x, area.y, area.width, cut.y - area.y),
-        Rect::new(
-            area.x,
-            cut.bottom(),
-            area.width,
-            area.bottom() - cut.bottom(),
-        ),
-        Rect::new(area.x, cut.y, cut.x - area.x, cut.height),
-        Rect::new(cut.right(), cut.y, area.right() - cut.right(), cut.height),
-    ]
-    .into_iter()
-    .filter(|r| r.width > 0 && r.height > 0)
-    .collect()
 }
 
 fn dump(options: &Options, content: &mut impl Content) -> io::Result<()> {

@@ -61,43 +61,6 @@ fn extended_cursor_position_request_flushes() {
     assert_eq!(written(&out), "\x1b[?6n\x1b[6n");
 }
 
-#[test]
-fn sized_text_delegates_to_the_screen_without_flushing() {
-    use crate::buffer::Surface;
-
-    let out = RefCell::new(Vec::new());
-    let mut program = Program::for_test(&out, (20, 6));
-    let sizing = TextSizing {
-        scale: 2,
-        width: 4,
-        ..Default::default()
-    };
-    let style = Style::new().bold();
-    program
-        .set_sized_text(1, (2, 1), "Demo", sizing, &style)
-        .unwrap();
-    assert!(out.borrow().is_empty());
-    assert_eq!(program.screen().cell((2, 1).into()).unwrap().style, style);
-    program.screen_mut().flush().unwrap();
-    assert!(out.borrow().is_empty());
-    program.screen_mut().render().unwrap();
-    assert!(written(&out).contains("\x1b]66;s=2:w=4:n=0:d=0:v=0:h=0;Demo\x1b\\"));
-    out.borrow_mut().clear();
-    assert_eq!(
-        program
-            .set_sized_text(1, (19, 5), "Invalid", sizing, &style)
-            .unwrap_err()
-            .kind(),
-        io::ErrorKind::InvalidInput
-    );
-    program.screen_mut().render().unwrap();
-    assert!(out.borrow().is_empty());
-    program.screen_mut().remove_placement(1);
-    program.screen_mut().render().unwrap();
-    assert!(!written(&out).contains("\x1b]66;"));
-    assert!(program.state.chosen.is_empty());
-}
-
 impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
     /// Build a program over `buf` and a null input, with a managed area of
     /// `size`. Bypasses [`new`](Program::new) so no fds are needed: nothing
@@ -2097,8 +2060,10 @@ fn teardown_preserves_resources_used_by_committed_rows() {
     let options = PlacementOptions {
         draw: b"DRAW".to_vec(),
         erase: b"ERASE".to_vec(),
-        upload: Arc::from(b"<UPLOAD>".as_slice()),
-        delete: Arc::from(b"<DELETE>".as_slice()),
+        resource: Some(crate::screen::PlacementResource::new(
+            b"<UPLOAD>".as_slice(),
+            b"<DELETE>".as_slice(),
+        )),
         ..Default::default()
     };
     program

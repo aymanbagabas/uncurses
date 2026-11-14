@@ -11,9 +11,8 @@
 //! - the [`Capabilities`] the terminal has reported, recorded from replies as
 //!   they pass through the read path.
 //!
-//! Draw through [`screen_mut`](Program::screen_mut), or stage sized text with
-//! [`set_sized_text`](Program::set_sized_text). Call [`render`](Screen::render)
-//! on the screen to emit the frame.
+//! Draw through [`screen_mut`](Program::screen_mut). Call
+//! [`render`](Screen::render) on the screen to emit the frame.
 //!
 //! Construction is inert: [`Program::new`] (and the [`stdio`](Program::stdio)
 //! / [`open`](Program::open) shortcuts) only build the program. Begin a
@@ -85,8 +84,7 @@ use crate::event::SourceFlags;
 use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
-use crate::screen::{PlacementId, Screen, TextSizing};
-use crate::style::Style;
+use crate::screen::Screen;
 use crate::terminal::Terminal;
 
 /// An interactive terminal session composing a [`Terminal`], an
@@ -380,38 +378,6 @@ where
     /// [`pause`](Self::pause) / [`resume`](Self::resume) round trip.
     pub fn screen_mut(&mut self) -> &mut Screen<O> {
         &mut self.screen
-    }
-
-    /// Stage styled Kitty OSC 66 text on the managed screen.
-    ///
-    /// This forwards to [`Screen::set_sized_text`]. Call
-    /// `program.screen_mut().render()` to emit the frame, and use
-    /// [`Screen::remove_placement`] for explicit removal.
-    ///
-    /// ```no_run
-    /// use uncurses::{program::Program, screen::TextSizing, style::Style};
-    ///
-    /// # fn main() -> std::io::Result<()> {
-    /// let mut program = Program::stdio()?;
-    /// let result = (|| {
-    ///     program.init()?;
-    ///     let sizing = TextSizing { scale: 2, width: 4, ..Default::default() };
-    ///     program.set_sized_text(1, (0, 0), "Demo", sizing, Style::new().bold())?;
-    ///     program.screen_mut().render()
-    /// })();
-    /// result.and(program.finish())
-    /// # }
-    /// ```
-    pub fn set_sized_text(
-        &mut self,
-        id: PlacementId,
-        position: impl Into<Position>,
-        text: &str,
-        sizing: TextSizing,
-        style: impl Into<Style>,
-    ) -> io::Result<()> {
-        self.screen
-            .set_sized_text(id, position, text, sizing, style)
     }
 
     // --- Event delegates -------------------------------------------------

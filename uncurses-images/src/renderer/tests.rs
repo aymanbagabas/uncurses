@@ -20,6 +20,10 @@ fn source() -> Image {
     Image::from_rgb(1, 1, vec![255, 0, 0]).unwrap()
 }
 
+fn image_resource(renderer: &ImageRenderer, id: PlacementId) -> &PlacementResource {
+    renderer.cache[&id].placement.resource.as_ref().unwrap()
+}
+
 fn screen() -> Screen<Vec<u8>> {
     let mut screen = Screen::new(Vec::new(), (20, 8));
     screen.set_color_profile(Profile::TrueColor);
@@ -296,8 +300,8 @@ fn tmux_wraps_resources_but_keeps_cells_and_lifetime_on_the_screen() {
         draw(&mut renderer, &mut screen, &source, 1),
         ImageProtocol::KittyPlaceholders
     );
-    let upload = renderer.cache[&1].placement.upload.clone();
-    let delete = renderer.cache[&1].placement.delete.clone();
+    let upload = image_resource(&renderer, 1).upload().to_vec();
+    let delete = image_resource(&renderer, 1).delete().to_vec();
     let upload_text = String::from_utf8_lossy(&upload);
     let chunks = upload_text.matches("\x1bPtmux;").count();
     assert!(chunks > 2);
@@ -415,7 +419,7 @@ fn screen_owns_image_lifetime_after_the_preparation_cache_is_dropped() {
             ..all()
         });
         draw(&mut renderer, &mut screen, &source(), 1);
-        let deletion = renderer.cache[&1].placement.delete.clone();
+        let deletion = image_resource(&renderer, 1).delete().to_vec();
         drop(renderer);
         assert!(screen.writer().is_empty());
         screen.render().unwrap();
@@ -448,7 +452,7 @@ fn cached_uploads_survive_movement_and_deletion_follows_removal() {
         screen.render().unwrap();
         let initial = String::from_utf8_lossy(screen.writer()).into_owned();
         assert_eq!(initial.matches("a=t,").count(), 1);
-        let resource = renderer.cache[&1].placement.delete.as_ref().to_vec();
+        let resource = image_resource(&renderer, 1).delete().to_vec();
         screen.writer_mut().clear();
         draw(&mut renderer, &mut screen, &source.clone(), 1);
         screen.render().unwrap();
@@ -458,7 +462,7 @@ fn cached_uploads_survive_movement_and_deletion_follows_removal() {
         let moved = String::from_utf8_lossy(screen.writer());
         assert!(!moved.contains("a=t,"));
         assert!(!moved.contains("d=I,"));
-        assert_eq!(renderer.cache[&1].placement.delete.as_ref(), resource);
+        assert_eq!(image_resource(&renderer, 1).delete(), resource);
         screen.writer_mut().clear();
         renderer.remove(&mut screen, 1);
         assert!(screen.writer().is_empty());
@@ -480,7 +484,7 @@ fn replacements_and_failed_preparation_preserve_options_and_frame() {
     draw(&mut renderer, &mut screen, &source, 1);
     screen.render().unwrap();
     screen.writer_mut().clear();
-    let old = renderer.cache[&1].placement.delete.as_ref().to_vec();
+    let old = image_resource(&renderer, 1).delete().to_vec();
     let cell = screen.cell((1, 1).into()).unwrap().clone();
     let options = ImageOptions {
         scale: f64::NAN,
@@ -492,7 +496,7 @@ fn replacements_and_failed_preparation_preserve_options_and_frame() {
             .is_err()
     );
     assert_eq!(screen.cell((1, 1).into()), Some(&cell));
-    assert_eq!(renderer.cache[&1].placement.delete.as_ref(), old);
+    assert_eq!(image_resource(&renderer, 1).delete(), old);
     assert!(screen.writer().is_empty());
     for (id, area) in [
         (0, Rect::new(1, 1, 4, 2)),
@@ -517,7 +521,7 @@ fn replacements_and_failed_preparation_preserve_options_and_frame() {
     screen.render().unwrap();
     assert_eq!(saved, options);
     assert!(screen.writer().ends_with(&old));
-    assert_ne!(renderer.cache[&1].placement.delete.as_ref(), old);
+    assert_ne!(image_resource(&renderer, 1).delete(), old);
 }
 
 #[test]
@@ -670,7 +674,7 @@ fn configuration_changes_apply_on_the_next_draw() {
 }
 
 #[test]
-fn multiple_images_keep_independent_resources_and_unrendered_replacements() {
+fn copies_share_preparation_and_skip_unrendered_replacements() {
     let mut screen = screen();
     let mut renderer = ImageRenderer::new(all());
     let source = source();
@@ -685,14 +689,21 @@ fn multiple_images_keep_independent_resources_and_unrendered_replacements() {
             )
             .unwrap();
     }
-    let first = renderer.cache[&1].placement.delete.as_ref().to_vec();
-    let second = renderer.cache[&2].placement.delete.as_ref().to_vec();
-    assert_ne!(first, second);
+    let first = image_resource(&renderer, 1).delete().to_vec();
+    let second = image_resource(&renderer, 2).delete().to_vec();
+    assert_eq!(first, second);
+    assert!(Arc::ptr_eq(&renderer.cache[&1], &renderer.cache[&2]));
     screen.render().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(screen.writer())
+            .matches("a=t,")
+            .count(),
+        1
+    );
     screen.writer_mut().clear();
     renderer.remove(&mut screen, 1);
     screen.render().unwrap();
-    assert!(screen.writer().ends_with(&first));
+    assert!(!screen.writer().ends_with(&first));
     assert!(
         !screen
             .writer()
@@ -709,7 +720,7 @@ fn multiple_images_keep_independent_resources_and_unrendered_replacements() {
             &ImageOptions::default(),
         )
         .unwrap();
-    let intermediate = renderer.cache[&2].placement.delete.as_ref().to_vec();
+    let intermediate = image_resource(&renderer, 2).delete().to_vec();
     renderer
         .draw(
             &mut screen,
@@ -752,7 +763,7 @@ fn placeholder_compression_saves_exact_metadata_bytes_and_preserves_public_cells
         .unwrap()
         .as_ref()
         .clone();
-    let upload_len = renderer.cache[&1].placement.upload.len();
+    let upload_len = image_resource(&renderer, 1).upload().len();
     cells.draw(&mut plain, (1, 1).into());
     plain.render().unwrap();
     compressed.render().unwrap();

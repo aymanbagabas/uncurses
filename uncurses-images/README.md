@@ -61,7 +61,7 @@ fn main() -> std::io::Result<()> {
 ```
 
 Unknown capabilities select symbols. The automatic renderer preserves options
-and reuses prepared data across movement. Repaint the background after movement or removal.
+and shares prepared data across movement and equivalent copies. Repaint the background after movement or removal.
 For cell images, removal replaces matching cells with default-style blanks and preserves changed overlay cells.
 The screen emits one coordinate anchor per visible placeholder run.
 It adds new anchors after overlays divide a row.
@@ -72,8 +72,8 @@ Then call `screen.invalidate()` before another render.
 ## Prepare output explicitly
 
 Use `Image::prepare` for a `PreparedImage`.
-Pass `placement(id)?` to `Screen::set_placement`, then call `Screen::render`.
-The placement includes its shared upload and deletion bytes.
+Pass `placement()` to `Screen::set_placement`, then call `Screen::render`.
+The placement includes its shared resource handle and a bounded encoder.
 Supply the terminal's actual cell dimensions in pixels.
 
 Use `Image::symbols` for ordinary cells. The method uses the screen's
@@ -87,11 +87,16 @@ Pass `placement(screen)?` to `Screen::set_placement`.
 The method checks the screen's true-color profile and shares cells and resources.
 Render the screen to upload and display the image.
 
-Native Kitty placements use z-index -1, below text foregrounds and above cell backgrounds.
-Use `crop()` around dialogs that need an opaque background, as the image example demonstrates.
-Sixel and iTerm2 emit a complete image before the dialog text in that example.
-Their native visual behavior still requires confirmation in Rio and iTerm2.
+Managed native images follow ordinary cell ownership.
+Later cell writes cover the image cells they replace.
+The screen resolves visible regions, and the image encoder prepares their crops before frame output.
+The image example uses this same API for Kitty, Sixel, and iTerm2.
+Sixel and iTerm2 native visual behavior still requires confirmation in Rio and iTerm2.
 The application redraws the underlying content after movement or when a dialog closes.
+
+Use `raw_placement(id)?` for explicit protocol placement IDs and native layer behavior.
+Raw Kitty placements use z-index -1, below text foregrounds and above cell backgrounds.
+Use distinct protocol placement IDs for simultaneous raw copies.
 
 ## Preparation and lifetime
 
@@ -105,14 +110,16 @@ Dropping prepared data performs no terminal I/O.
 Resources used by committed rows stay in the terminal after program teardown.
 Cell-backed images can cross the commit boundary; their retained rows keep the same placement ID.
 Commit whole opaque images and sized-text blocks. A boundary inside an opaque block returns an error before output.
-Use a fresh image ID for each new automatic image after a commit.
-For explicit native placements, use distinct protocol placement IDs for copies that remain visible.
+Application IDs can be reused after a commit. Managed native output allocates fresh terminal instances.
+The screen keeps compact identity records for committed resources and releases unused upload buffers.
+For raw native placements, use distinct protocol placement IDs for copies that remain visible.
 Terminal reset or eviction can discard committed resources.
 
 For manual protocol output, use the raw `upload()` and `delete()` bytes.
 Upload before drawing. Clear all visible copies before deleting the resource.
 `CellImage::cells()` supports independent copies through `Surface::draw`.
 Manual copies require true color and caller-managed resource lifetime.
+Managed cell ownership covers each registered rectangle.
 
 The loader uses the enabled `image` formats and applies EXIF orientation.
 Rustdoc lists the input and allocation limits.
@@ -131,6 +138,7 @@ cargo run -p examples --example images_auto
 cargo run -p examples --example images_auto -- --dump
 cargo run -p examples --example images_auto -- --dump-placeholders
 cargo run -p examples --example images_auto -- --dump-committed
+cargo run -p examples --example images_auto -- --dump-shared
 cargo run -p examples --example images_drag -- --symbols
 cargo run -p examples --example images_drag -- --kitty
 cargo run -p examples --example images_drag -- --kitty --overlay
@@ -143,7 +151,8 @@ cargo run -p examples --example images_drag -- --sixel --overlay
 Space moves or removes its image. Its dump exercises all five output paths.
 The screen manages uploads and deletion.
 Use `--dump-placeholders` to inspect compressed output across overlays, movement, resize, and cleanup.
-Use `--dump-committed` to inspect permanent native images and split placeholder rows.
+Use `--dump-committed` to inspect permanent images, split placeholder rows, and reused application IDs.
+Use `--dump-shared` to inspect shared uploads, image order, dialog cutouts, and resource replacement.
 
 Supply an image path to use PNG or JPEG input. Add `--dump` for named frames
 with hexadecimal output. Visible native output uses reported pixel geometry.

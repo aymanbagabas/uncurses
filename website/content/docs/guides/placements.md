@@ -44,16 +44,26 @@ Use `display()` or `encode()` to export the cell grid.
 They replace placement references with blanks and preserve each cell's stored style.
 The sample prints the exported string with escaped line breaks.
 
-Register placements in their intended draw order, then write ordinary overlay cells.
+Register placements in their intended emission order, then write ordinary overlay cells.
 An unchanged frame emits zero bytes.
 Movement damages the previous and new areas, including unchanged overlay text.
 Repaint the desired background when moving or removing content.
 
 ## Choose overwrite behavior
 
-The default retains a placement beneath ordinary text.
-The renderer emits its payload before that text whenever the affected rows need a repaint.
+Static payloads retain a placement beneath ordinary text.
+The renderer emits the payload before that text whenever the affected rows need a repaint.
 Complete coverage removes the placement. Register it again when you restore the underlying content.
+
+For cell-based composition, use a `PlacementEncoder` in `PlacementOptions::encoder`.
+The screen divides the final visible cells into rectangles.
+It calls `prepare` for changed content or geometry before any terminal output.
+Prepared commands are reused for surrounding damage.
+`PlacementContext::clip` is relative to the complete placement area.
+The renderer positions each returned payload at that fragment's origin.
+Keep the encoder in an `Arc` and reuse it across frames.
+Prepared image placements use this path.
+The portable `placements` example implements this interface for an ASCII label.
 
 Set `erase_on_overwrite` for indivisible content such as sized text.
 An overwrite then removes the complete placement before the replacement cells appear.
@@ -82,7 +92,7 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-`Program::set_sized_text` accepts the same arguments and stages text on its screen.
+Use `program.screen_mut().set_sized_text(...)` for a program's managed screen.
 Call `program.screen_mut().render()` to emit the frame.
 Use `screen.remove_placement(id)` to remove the block.
 
@@ -152,7 +162,10 @@ The low-level APIs below provide direct control over encoding and resource lifet
 
 `uncurses-images` also prepares placements for an explicit protocol.
 Their options include shared resource commands.
-The screen uploads each resource and deletes it after the final placement disappears.
+The screen uploads each resource and deletes it after the final managed placement disappears.
+Cloned `PlacementResource` handles share identity and terminal lifetime.
+Each new handle owns independent terminal resources with distinct protocol identifiers.
+Its upload and deletion commands remain immutable.
 
 ```rust
 use uncurses::{layout::Rect, screen::Screen};
@@ -164,7 +177,7 @@ fn main() -> std::io::Result<()> {
         Backend::Kitty, (8, 4).into(), (8, 16).into(), &ImageOptions::default(),
     )?;
     let mut screen = Screen::new(Vec::new(), (30, 8));
-    screen.set_placement(1, Rect::new(2, 2, 8, 4), &image.placement(1)?)?;
+    screen.set_placement(1, Rect::new(2, 2, 8, 4), &image.placement())?;
     screen.render()?;
     screen.remove_placement(1);
     screen.render()
@@ -175,12 +188,15 @@ Use the terminal's actual cell dimensions instead of the sample dimensions.
 Prepare the image again when those dimensions change.
 Keep one spare row below Sixel and iTerm2 images.
 
-Native Kitty placements use z-index -1, below text foregrounds and above cell backgrounds.
-The image example crops native Kitty placements around the dialog to preserve its opaque background.
-The image implementation computes these crops and supplies each fragment to the screen.
+Managed images follow ordinary cell ownership.
+Later cell writes cover the image cells they replace.
+The image encoder prepares visible fragments after the screen resolves overlaps.
+The application draws the image and dialog through their normal APIs.
 
-Sixel and iTerm2 use one complete image followed by dialog text in this example.
-The output tests verify that order and the complete image dimensions.
+Use `raw_placement(id)?` for explicit protocol IDs and native layer behavior.
+Raw Kitty placements use z-index -1, below text foregrounds and above cell backgrounds.
+
+The raster output checks verify fragment dimensions and text order.
 Visual behavior still requires confirmation in Rio and iTerm2:
 
 ```sh
@@ -204,8 +220,10 @@ Commit whole opaque placements, including native images and sized text.
 A boundary inside an opaque placement returns `InvalidInput` before any output.
 
 Resources used by committed rows remain in the terminal after managed removal and program teardown.
-Use fresh automatic image IDs for new images after a commit.
-For explicit native placements, use distinct protocol placement IDs for copies that remain visible.
+Reuse application IDs for new managed images after a commit.
+The encoder allocates fresh native instances and preserves committed copies.
+The screen retains compact resource identities and releases unused historical upload buffers.
+For raw native placements, use distinct protocol placement IDs for copies that remain visible.
 Terminal reset or eviction can discard committed resources.
 
 Run the portable placement example:
@@ -218,6 +236,7 @@ Inspect native-image and placeholder output:
 
 ```sh
 cargo run -p examples --example images_auto -- --dump-committed
+cargo run -p examples --example images_auto -- --dump-shared
 ```
 
 ## Handle changes and errors
@@ -232,6 +251,8 @@ For explicit resource control, restore the required resources after a terminal r
 A placement ID belongs to one screen and one positioned rectangle.
 Register another ID for another instance.
 Use `set_placement` to move content instead of translating its marker cells through buffer operations.
+Cell-backed resource ownership covers registered rectangles.
+Copies outside those rectangles require explicit resource lifetime management.
 
 Malformed markers and unresolved references fail before frame output.
 After an output failure, restore the terminal parser and cursor before calling `invalidate()` and retrying.

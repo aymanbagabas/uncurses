@@ -825,7 +825,7 @@ mod tests {
                 .set_placement(
                     1,
                     uncurses::layout::Rect::new(0, 0, 2, 3),
-                    &block.placement(1).unwrap(),
+                    &block.placement(),
                 )
                 .unwrap();
             screen.render().unwrap();
