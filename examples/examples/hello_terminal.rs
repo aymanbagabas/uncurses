@@ -3,7 +3,7 @@
 //! Run with `cargo run --example hello_terminal`.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use uncurses::ansi::cursor::CursorShape;
 use uncurses::buffer::{Bounded, SurfaceMut};
@@ -51,5 +51,14 @@ fn main() -> io::Result<()> {
 }
 
 fn wait_for_key(program: &mut Program<Stdin, Stdout>, delay: Duration) -> io::Result<bool> {
-    Ok(program.poll_event(Some(delay))? && matches!(program.read_event()?, Event::KeyPress(_)))
+    let start = Instant::now();
+    while let Some(remaining) = delay.checked_sub(start.elapsed()) {
+        if !program.poll_event(Some(remaining))? {
+            return Ok(false);
+        }
+        if matches!(program.read_event()?, Event::KeyPress(_)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
