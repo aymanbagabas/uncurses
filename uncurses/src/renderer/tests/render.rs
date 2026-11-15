@@ -39,10 +39,8 @@ fn test_post_scroll_splitter_chain_emits_correct_horizontal_back() {
     // with the right-panel splitter chain.
     if let Some(cb) = r.cur_buf.as_mut() {
         for y in 46u16..=48 {
-            if let Some(row) = cb.line_mut(y) {
-                for c in row.iter_mut() {
-                    *c = Cell::BLANK;
-                }
+            if let Some(mut row) = cb.line_mut(y) {
+                row.fill(Cell::BLANK.as_ref());
             }
         }
     }

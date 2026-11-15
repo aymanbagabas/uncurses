@@ -7,9 +7,13 @@
 //! every window writes into its own buffer in window-local
 //! coordinates, then [`Window::present`] copies its cells to a target
 //! at the configured position.
+//! Its buffer owns the width policy. Reads return borrowed [`CellRef`] values.
+//! Configure subsequent text through [`Window::buffer_mut`].
 
-use crate::cell::Cell;
+use crate::cell::CellRef;
 use crate::layout::{Position, Rect};
+use crate::style::Style;
+use crate::text::{TextSurface, WidthMode};
 
 use super::{Bounded, Buffer, Surface, SurfaceMut};
 
@@ -57,8 +61,11 @@ impl Window {
 
     /// Blit this window's cells onto `target`, mapping the window's
     /// top-left to [`Self::position`] in target coordinates.
+    ///
+    /// The target imports content and styles and preserves stored widths.
+    /// It remains valid after the window is dropped.
     pub fn present<T: SurfaceMut + ?Sized>(&self, target: &mut T) {
-        self.buffer.draw(target, self.position);
+        self.buffer.blit(target, self.position);
     }
 }
 
@@ -69,18 +76,35 @@ impl Bounded for Window {
 }
 
 impl Surface for Window {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<CellRef<'_>> {
         self.buffer.cell(pos)
+    }
+    fn width_mode(&self) -> WidthMode {
+        self.buffer.width_mode()
+    }
+    fn eaw_wide(&self) -> bool {
+        self.buffer.eaw_wide()
     }
 }
 
 impl SurfaceMut for Window {
-    fn set_cell(&mut self, pos: Position, cell: &Cell) {
+    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>) {
         self.buffer.set_cell(pos, cell);
     }
 
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.buffer.cell_mut(pos)
+    fn set_style(&mut self, pos: Position, style: Style) {
+        self.buffer.set_style(pos, style);
+    }
+}
+impl TextSurface for Window {}
+impl Window {
+    /// Write a portable or borrowed cell.
+    pub fn set_cell<'a>(&mut self, pos: Position, cell: impl Into<CellRef<'a>>) {
+        SurfaceMut::set_cell(self, pos, cell.into());
+    }
+    /// Fill the window with a portable or borrowed cell.
+    pub fn fill<'a>(&mut self, cell: impl Into<CellRef<'a>>) {
+        SurfaceMut::fill(self, cell.into());
     }
 }
 

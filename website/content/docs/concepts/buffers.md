@@ -3,67 +3,39 @@ title: "Buffers"
 weight: 3
 ---
 
-One cell is a single slot. A whole terminal screen is a grid of them, rows by
-columns. A *buffer* is that grid held in memory: a rectangle of cells you can
-fill, read, and reshape without anything reaching the terminal yet.
+A `Buffer` holds a rectangular grid of [cells]({{< relref "cells.md" >}}) in memory.
+Positions start at the top-left corner. Columns increase to the right.
+Rows increase downward. A new buffer contains blank cells.
 
-## A grid of cells
+## Prepare a frame in memory
 
-A `Buffer` is `width × height` cells, addressed by `(x, y)` with the origin in
-the top-left corner. `x` grows to the right, `y` grows downward. A brand-new
-buffer is full of [blank cells]({{< relref "cells.md" >}}), ready to paint
-over.
-
-| row / col | 1 | 2 | 3 | 4 | 5 | 6 |
-| --- | --- | --- | --- | --- | --- | --- |
-| row 1 (y=0) | H | i |  |  |  |  |
-| row 2 (y=1) |  |  |  |  |  |  |
-| row 3 (y=2) |  |  |  |  |  |  |
-
-A six-by-three cell buffer with `Hi` painted at the top-left; every other slot
-is a blank cell.
-
-This is exactly how a terminal emulator thinks of its own screen: not a bag of
-pixels, but a grid of character cells it repaints as text arrives. A buffer is
-your private copy of that same idea.
-
-## Off-screen by design
-
-A buffer is just memory. Writing into it changes nothing on the terminal. You
-compose a full frame in the grid, then hand it to something that actually draws:
-[`Screen`]({{< relref "screen.md" >}}) renders a desired grid to bytes, and
-[`Program`]({{< relref "program.md" >}}) owns that screen for interactive apps.
-That separation makes the useful tricks possible: diffing one frame against the
-last, snapshotting a frame in a test, or serializing it to bytes for a
-transcript.
-
-## Wide cells span columns
-
-A wide grapheme occupies several columns in its row. The first column holds
-the primary cell, and each additional column holds a continuation.
-The buffer writes the primary and its continuations together.
-The [Width]({{< relref "width.md" >}}) page explains how uncurses measures
-graphemes and why their widths matter.
-
-## Working with a buffer
-
-Create one, paint cells into it by position, and ask about its shape:
+Use a buffer to compose text, inspect a frame, or prepare reusable content.
+The buffer owns the text width policy. It supports both individual cells and
+whole strings through the [surface traits]({{< relref "surfaces.md" >}}).
 
 ```rust
-use uncurses::buffer::{Buffer, SurfaceMut};
-use uncurses::cell::Cell;
-use uncurses::layout::Position;
+use uncurses::buffer::{Buffer, Surface};
+use uncurses::style::Style;
+use uncurses::text::TextSurface;
 
-fn main() {
-    let mut frame = Buffer::new(20, 5);   // 20 columns, 5 rows of blank cells
-    frame.set_cell(Position::new(0, 0), &Cell::new("H", 1));
-    frame.set_cell(Position::new(1, 0), &Cell::new("i", 1));
-    assert_eq!(frame.width(), 20);
-    assert_eq!(frame.height(), 5);
-}
+let mut frame = Buffer::new(20, 5);
+frame.set_str((0, 0), "Hi 世", Style::new());
+assert_eq!(frame.cell((3, 0).into()).unwrap().content(), "世");
 ```
 
-`Buffer` is the plain grid, but it is not the only one. It implements the shared
-[surface traits]({{< relref "surfaces.md" >}}), so the same fill, clear, and
-copy operations work on every grid type. `TextBuffer` builds on it to paint
-whole strings while respecting [width]({{< relref "width.md" >}}).
+Buffer writes change memory. A [`Screen`]({{< relref "screen.md" >}})
+renders a frame to bytes. A [`Program`]({{< relref "program.md" >}})
+manages the terminal session around that screen.
+
+## Share content between grids
+
+A buffer owns its cell resources. You can copy content into another grid,
+then drop the source. The destination keeps the text, styles, links, and widths.
+Borrowed reads let you inspect cells. Owned snapshots let you keep individual values.
+
+`TextBuffer` provides a thin wrapper around `Buffer` with the same width policy.
+Both support text and frame serialization.
+
+See the [offscreen guide]({{< relref "../guides/offscreen-rendering.md" >}})
+for copies and snapshots. See the [buffer reference](/api/uncurses/buffer/struct.Buffer.html)
+for row access and grid operations.

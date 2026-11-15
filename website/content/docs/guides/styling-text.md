@@ -8,11 +8,42 @@ attributes like bold and italic, an underline shape and color, and optionally an
 OSC 8 hyperlink. You build a style with chained methods and hand it to whatever
 paints the text.
 
+## Inspect and replace a cell style
+
+A borrowed `CellRef` exposes `fg_color`, `bg_color`, `ul_color`, `attributes`,
+`underline_shape`, and `link`. Use `to_style` to keep an owned style.
+An owned `Style` has the same component accessors and `link_target` for its hyperlink.
+
+Use `set_style` to replace one column's complete style.
+Use `set_style_rect` to replace styles in a clipped rectangle.
+These operations preserve the content and stored width.
+Each column has its own style, including each continuation of a wide character.
+Select the whole character when you want every column to match.
+
+```rust
+use uncurses::buffer::{Buffer, Surface, SurfaceMut};
+use uncurses::color::Color;
+use uncurses::layout::Rect;
+use uncurses::style::Style;
+
+let mut frame = Buffer::new(4, 1);
+let cell = frame.new_cell("世", Style::new()).unwrap();
+frame.set_cell((0, 0).into(), &cell);
+let highlight = Style::new().bg(Color::Blue);
+assert_eq!(highlight.bg_color(), Some(Color::Blue));
+frame.set_style_rect(Rect::new(0, 0, 2, 1), highlight);
+frame.set_style((1, 0).into(), Style::new().bg(Color::Green));
+let continuation = frame.cell((1, 0).into()).unwrap();
+assert!(continuation.is_continuation());
+assert_eq!(continuation.bg_color(), Some(Color::Green));
+assert_eq!(frame.cell((0, 0).into()).unwrap().bg_color(), Some(Color::Blue));
+```
+
 ## Building a style
 
-`Style::new()` (or `Style::default()`) starts empty: no color, no attributes, no
-underline, and no link. Builder methods return an updated style, so you chain
-only what you want.
+`Style::new()` (or `Style::default()`) uses the terminal defaults.
+Builder methods return an updated style, so you can select the parts you need.
+Style fields are private. Use accessors to inspect a value and builders to change it.
 
 ```rust
 use uncurses::color::Color;

@@ -93,6 +93,7 @@ pub(super) fn push_sep<const N: usize>(buf: &mut SmallSeq<N>, body_start: usize)
 ///
 /// Returns any I/O error from `w` and does not panic.
 pub(crate) fn write_style<W: Write>(w: &mut W, style: &Style) -> io::Result<()> {
+    let style = crate::cell::storage::StyleParts::from_style(style);
     let mut seq = SgrSeq::new();
     seq.extend_from_slice(b"\x1b[");
     let body_start = seq.len();

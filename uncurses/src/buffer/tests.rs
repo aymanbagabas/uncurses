@@ -4,9 +4,170 @@ use crate::style::Style;
 use crate::text::{Painter, TextSurface, WrapMode};
 
 fn link_of(s: &Style) -> Option<(&str, &str)> {
-    s.link
-        .as_deref()
-        .map(|l| (l.url.as_str(), l.params.as_str()))
+    s.link_target().map(|l| (l.url.as_str(), l.params.as_str()))
+}
+
+#[test]
+fn borrowed_cells_match_portable_values_without_link_count_changes() {
+    use crate::color::Color;
+    use crate::style::UnderlineStyle;
+    use std::sync::Arc;
+    let style = Style::new()
+        .fg(Color::Red)
+        .bg(Color::Indexed(0))
+        .underline_color(Color::Rgb(3, 5, 7))
+        .underline_style(UnderlineStyle::Curly)
+        .bold()
+        .link("https://example.com/borrowed", "id=borrowed");
+    let link = style.link_arc().unwrap();
+    let mut buffer = Buffer::new(8, 1);
+    for (x, text) in ["a", "é", "e\u{301}", "", "arbitrary symbol"]
+        .into_iter()
+        .enumerate()
+    {
+        let owned = Cell::new(text, 1).style(&style);
+        buffer.set((x as u16, 0), &owned);
+        let count = Arc::strong_count(link);
+        for _ in 0..5 {
+            let borrowed = buffer.cell((x as u16, 0).into()).unwrap();
+            assert_eq!(borrowed, owned.as_ref());
+            assert_eq!(borrowed.scalar(), owned.as_ref().scalar());
+            assert_eq!(borrowed.grapheme(), owned.as_ref().grapheme());
+            assert_eq!(borrowed.fg_color(), style.fg_color());
+            assert_eq!(borrowed.bg_color(), style.bg_color());
+            assert_eq!(borrowed.ul_color(), style.ul_color());
+            assert_eq!(borrowed.attributes(), style.attributes());
+            assert_eq!(borrowed.underline_shape(), style.underline_shape());
+            assert_eq!(borrowed.to_style(), style);
+            assert_eq!(borrowed.to_owned(), owned);
+            assert!(std::ptr::eq(borrowed.link().unwrap(), link.as_ref()));
+            assert!(borrowed.style_eq(&style));
+        }
+        assert_eq!(Arc::strong_count(link), count);
+    }
+    buffer.resources.audit(&buffer.cells);
+}
+
+#[test]
+fn cell_equality_resolves_owner_local_ids() {
+    let mut a = Buffer::new(2, 1);
+    let mut b = Buffer::new(2, 1);
+    a.set(
+        (0, 0),
+        &Cell::new("e\u{301}", 1).style(Style::new().link("https://a", "")),
+    );
+    b.set(
+        (0, 0),
+        &Cell::new("o\u{301}", 1).style(Style::new().link("https://b", "")),
+    );
+    assert_ne!(a.cell((0, 0).into()), b.cell((0, 0).into()));
+    assert_ne!(a.row(0), b.row(0));
+    b.set((0, 0), a.cell((0, 0).into()).unwrap());
+    assert_eq!(a.row(0), b.row(0));
+    a.resources.audit(&a.cells);
+    b.resources.audit(&b.cells);
+}
+
+#[test]
+fn style_replacement_changes_only_selected_columns_inside_a_view() {
+    use crate::color::Color;
+    let old = Style::new().fg(Color::Red).bg(Color::Blue).bold();
+    let replacement = Style::new().underline_color(Color::Green);
+    let mut buffer = Buffer::new(6, 1);
+    buffer.set((1, 0), &Cell::new("中", 2).style(&old));
+    {
+        let mut view = View::new(&mut buffer, Rect::new(2, 0, 1, 1));
+        view.set_style((1, 0).into(), Style::new().italic());
+        view.set_style_rect(Rect::new(0, 0, 6, 1), replacement.clone());
+    }
+    assert_eq!(buffer.cell((1, 0).into()).unwrap().to_style(), old);
+    let continuation = buffer.cell((2, 0).into()).unwrap();
+    assert!(continuation.is_continuation());
+    assert_eq!(continuation.to_style(), replacement);
+    assert_eq!(buffer.cell((3, 0).into()).unwrap().to_style(), Style::EMPTY);
+    buffer.resources.audit(&buffer.cells);
+}
+
+#[test]
+fn packed_grid_operations_reclaim_resources_and_transfer_ownership() {
+    use crate::color::Color;
+    use std::sync::Arc;
+    let style = Style::new()
+        .bg(Color::Indexed(6))
+        .link("https://example.com/shared", "id=shared");
+    let link = style.link_arc().unwrap();
+    let baseline = Arc::strong_count(link);
+    let mut source = Buffer::new(12, 4);
+    for n in 0..80 {
+        let fill = Cell::new(format!("e\u{301}{n}"), 3).style(&style);
+        source.fill(&fill);
+        source.resources.audit(&source.cells);
+        source.insert_cells((1, 0), 2, 10, &Cell::BLANK);
+        source.delete_cells((2, 1), 3, 11, &fill);
+        source.insert_lines(1, 1, 4, &fill);
+        source.delete_lines(0, 1, 4, &fill);
+        source.set_style((3, 2).into(), Style::new().italic());
+        source.row_mut(3).unwrap().slice(1..10).rotate_right(3);
+        source.resources.audit(&source.cells);
+        let mut target = Buffer::new(12, 4);
+        target
+            .fill(&Cell::new("different\u{301}", 1).style(Style::new().link("https://other", "")));
+        for y in 0..4 {
+            target.row_mut(y).unwrap().copy_from(source.row(y).unwrap());
+            assert_eq!(target.row(y), source.row(y));
+        }
+        target.resources.audit(&target.cells);
+        let copy = target.clone();
+        copy.resources.audit(&copy.cells);
+        target.resize(7, 3);
+        target.resources.audit(&target.cells);
+        target.resize(12, 4);
+        target.resources.audit(&target.cells);
+        drop(target);
+        drop(copy);
+        source.clear();
+        source.resources.audit(&source.cells);
+        let (glyph_slots, live_glyphs, extras_slots, live_extras) = source.resources.slots();
+        assert_eq!((live_glyphs, live_extras), (0, 0));
+        assert!(glyph_slots <= 2 && extras_slots <= 1);
+    }
+    drop(source);
+    assert_eq!(Arc::strong_count(link), baseline);
+}
+
+#[test]
+fn width_policy_factory_validates_and_structural_copies_preserve_width() {
+    use crate::cell::CellError;
+    let source = Buffer::new(10, 1).with_width_mode(WidthMode::Wc);
+    assert_eq!(source.new_cell("", Style::EMPTY), Err(CellError::Empty));
+    assert_eq!(
+        source.new_cell("ab", Style::EMPTY),
+        Err(CellError::MultipleGraphemes)
+    );
+    assert_eq!(
+        source.new_cell("\u{301}", Style::EMPTY),
+        Err(CellError::ZeroWidth)
+    );
+    let family = "👩‍👩‍👧‍👦";
+    let owned = source.new_cell(family, Style::EMPTY).unwrap();
+    let mut source = source;
+    source.set((0, 0), &owned);
+    source.set_style((1, 0).into(), Style::new().bold());
+    let mut target = Buffer::new(10, 1).with_width_mode(WidthMode::Grapheme);
+    assert_ne!(
+        target.new_cell(family, Style::EMPTY).unwrap().width(),
+        owned.width()
+    );
+    target.row_mut(0).unwrap().copy_from(source.row(0).unwrap());
+    assert_eq!(target.row(0), source.row(0));
+    let mut blitted = Buffer::new(10, 1).with_width_mode(WidthMode::Grapheme);
+    source.blit(&mut blitted, Position::ORIGIN);
+    assert_eq!(blitted.row(0), source.row(0));
+    target.resize(1, 1);
+    assert_eq!(target.cell((0, 0).into()).unwrap().width(), owned.width());
+    target.resources.audit(&target.cells);
+    let wide = Buffer::new(2, 1).with_eaw_wide(true);
+    assert_eq!(wide.new_cell("·", Style::EMPTY).unwrap().width(), 2);
 }
 
 #[test]
@@ -58,7 +219,7 @@ fn test_broken_wide_cell_keeps_bg() {
     buf.set((4, 0), &Cell::new("A", 1));
     let primary = buf.cell(Position::new(3, 0)).unwrap();
     assert!(primary.is_blank());
-    assert_eq!(primary.style.bg, Some(Color::Red));
+    assert_eq!(primary.bg_color(), Some(Color::Red));
 
     // Overwriting the primary blanks the trailing continuation; that blank
     // keeps the wide cell's background too.
@@ -66,7 +227,7 @@ fn test_broken_wide_cell_keeps_bg() {
     buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
     buf.set((3, 0), &Cell::new("A", 1));
     assert_eq!(
-        buf.cell(Position::new(4, 0)).unwrap().style.bg,
+        buf.cell(Position::new(4, 0)).unwrap().bg_color(),
         Some(Color::Red)
     );
 
@@ -76,27 +237,25 @@ fn test_broken_wide_cell_keeps_bg() {
     buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
     let edge = buf.cell(Position::new(3, 0)).unwrap();
     assert!(edge.is_blank());
-    assert_eq!(edge.style.bg, Some(Color::Red));
+    assert_eq!(edge.bg_color(), Some(Color::Red));
 }
 
 fn check_partial_fill_style(use_view: bool) {
     use crate::color::Color;
     use crate::style::AttrFlags;
 
-    let style = Style {
-        attrs: AttrFlags::BOLD,
-        ..Style::EMPTY
-            .fg(Color::White)
-            .bg(Color::Red)
-            .link("https://example.com/fill", "")
-    };
+    let style = Style::EMPTY
+        .attrs(AttrFlags::BOLD)
+        .fg(Color::White)
+        .bg(Color::Red)
+        .link("https://example.com/fill", "");
     for width in [2, 3, 8] {
         for columns in [1, 5, 10] {
             let mut buf = Buffer::new(16, 3);
             let rect = Rect::new(2, 1, columns, 1);
             let fill = Cell::new("W", width).style(style.clone());
             if use_view {
-                View::new(&mut buf, rect).fill_rect(Rect::new(0, 0, 16, 3), &fill);
+                View::new(&mut buf, rect).fill_rect(Rect::new(0, 0, 16, 3), fill.as_ref());
             } else {
                 buf.fill_rect(rect, &fill);
             }
@@ -141,13 +300,11 @@ fn check_fill_boundary_style(rect: Rect) {
     use crate::color::Color;
     use crate::style::AttrFlags;
 
-    let old_style = Style {
-        attrs: AttrFlags::BOLD,
-        ..Style::EMPTY
-            .fg(Color::Yellow)
-            .bg(Color::Blue)
-            .link("https://example.com/old", "")
-    };
+    let old_style = Style::EMPTY
+        .attrs(AttrFlags::BOLD)
+        .fg(Color::Yellow)
+        .bg(Color::Blue)
+        .link("https://example.com/old", "");
     let fill = Cell::new("x", 1).style(
         Style::EMPTY
             .fg(Color::White)
@@ -381,11 +538,11 @@ fn write_string_with_link() {
         Style::default().link("https://example.com", ""),
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(0, 0)).unwrap().style),
+        link_of(&buf.cell(Position::new(0, 0)).unwrap().to_style()),
         Some(("https://example.com", ""))
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(1, 0)).unwrap().style),
+        link_of(&buf.cell(Position::new(1, 0)).unwrap().to_style()),
         Some(("https://example.com", ""))
     );
 }
@@ -528,13 +685,7 @@ fn height_resize_reuses_storage_and_blanks_returned_rows() {
     assert_eq!(buffer.cells.capacity(), capacity);
     assert_eq!(buffer.cell((0, 0).into()).unwrap().content(), "kept");
     for y in 1..5 {
-        assert!(
-            buffer
-                .line(y)
-                .unwrap()
-                .iter()
-                .all(|cell| cell == &Cell::BLANK)
-        );
+        assert!(buffer.line(y).unwrap().all(|cell| cell == Cell::BLANK));
     }
     buffer.resize(4, 20);
     assert_eq!(buffer.cell((0, 0).into()).unwrap().content(), "kept");

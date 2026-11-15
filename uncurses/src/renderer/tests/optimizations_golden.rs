@@ -364,10 +364,7 @@ fn bce_on_with_colored_blanks_paints_explicit_run() {
     let mut buf = RenderBuffer::new(20, 1);
     set_text(&mut buf, 0, "HELLO WORLD!!!!");
     let _ = render_to_vec(&mut r, &mut buf);
-    let red_bg = Style {
-        bg: Some(Color::Indexed(1)),
-        ..Style::default()
-    };
+    let red_bg = Style::default().bg(Some(Color::Indexed(1)));
     set_text(&mut buf, 0, "HELLO");
     for x in 5..15u16 {
         buf.set_cell((x, 0), &Cell::new(" ", 1).style(red_bg.clone()));
@@ -383,10 +380,7 @@ fn bce_off_with_colored_blanks_paints_explicit_run() {
     let mut buf = RenderBuffer::new(20, 1);
     set_text(&mut buf, 0, "HELLO WORLD!!!!");
     let _ = render_to_vec(&mut r, &mut buf);
-    let red_bg = Style {
-        bg: Some(Color::Indexed(1)),
-        ..Style::default()
-    };
+    let red_bg = Style::default().bg(Some(Color::Indexed(1)));
     set_text(&mut buf, 0, "HELLO");
     for x in 5..15u16 {
         buf.set_cell((x, 0), &Cell::new(" ", 1).style(red_bg.clone()));

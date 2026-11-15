@@ -164,7 +164,7 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
         // row resets to default, so everything past `last_visible` is dropped.
         let last_visible = (bounds.x..x_end).rev().find(|&x| {
             surface.cell(Position::new(x, y)).is_some_and(|cell| {
-                !cell.is_blank() || !convert_style(&cell.style, profile).is_empty()
+                !cell.is_blank() || !convert_style(&cell.to_style(), profile).is_empty()
             })
         });
         let Some(last_visible) = last_visible else {
@@ -186,7 +186,7 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
 
             // Downsample to the target profile, then emit the SGR and OSC 8
             // hyperlink delta from the current pen.
-            let to = convert_style(&cell.style, profile);
+            let to = convert_style(&cell.to_style(), profile);
             write_style_diff(w, &pen, &to)?;
             pen = to;
             w.write_all(cell.draw_bytes())?;
@@ -203,7 +203,7 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::{Buffer, SurfaceMut};
+    use crate::buffer::Buffer;
     use crate::cell::Cell;
     use crate::style::{RESET, Style};
 

@@ -3,7 +3,7 @@
 
 use std::io;
 
-use crate::cell::Cell;
+use crate::cell::CellRef;
 use crate::renderer::Renderer;
 use crate::style::Style;
 use crate::style::diff::write_style_diff;
@@ -12,22 +12,25 @@ impl Renderer {
     /// Update the pen with minimal escape sequences. `None` resets to
     /// the default style (emits SGR reset and/or hyperlink terminator
     /// only when the current pen actually has something set).
-    pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
-        let target_style = match cell {
-            Some(c) => &c.style,
-            None => &Style::default(),
-        };
-
+    pub(crate) fn update_pen(
+        &mut self,
+        out: &mut Vec<u8>,
+        cell: Option<CellRef<'_>>,
+    ) -> io::Result<()> {
         // Raw-equality fast path: most cells in a styled run share the
         // exact same style (including any open link) as the last cell
         // that updated the pen, so a single PartialEq check (no clones,
         // no color-profile conversion) short-circuits the whole
         // function.
-        if target_style == self.cur.style() {
+        if cell.map_or_else(
+            || self.cur.style() == &Style::default(),
+            |cell| cell.style_eq(self.cur.style()),
+        ) {
             return Ok(());
         }
 
-        let to = self.color_profile.convert_style(target_style);
+        let target_style = cell.map_or_else(Style::default, |cell| cell.to_style());
+        let to = self.color_profile.convert_style(&target_style);
         let from = self.color_profile.convert_style(self.cur.style());
 
         // `write_style_diff` emits both the SGR delta and the OSC 8 hyperlink
@@ -36,7 +39,7 @@ impl Renderer {
         // there with no special-case code here.
         write_style_diff(out, &from, &to)?;
 
-        self.cur.set_style(target_style.clone());
+        self.cur.set_style(target_style);
         Ok(())
     }
 

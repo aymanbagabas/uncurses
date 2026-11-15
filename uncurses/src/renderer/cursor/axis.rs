@@ -6,10 +6,10 @@
 //! reset the column (under ONLCR with a `\n` win), so its plan carries
 //! the post-vertical column for the horizontal leg to consume.
 
+use crate::buffer::CellRow;
 use std::io::{self, Write};
 
 use crate::ansi::{cost, cursor};
-use crate::cell::Cell;
 use crate::renderer::Renderer;
 use crate::renderer::caps::Optimizations;
 
@@ -208,7 +208,7 @@ impl Renderer {
         &self,
         fx: u16,
         tx: u16,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
         use_tabs: bool,
         use_backspace: bool,
     ) -> HorizontalPlan {
@@ -343,7 +343,7 @@ impl Renderer {
         &self,
         out: &mut Vec<u8>,
         shape: HorizontalShape,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
     ) -> io::Result<()> {
         match shape {
             HorizontalShape::None => Ok(()),
@@ -417,7 +417,7 @@ impl Renderer {
     /// `overwrite_line` is supplied and pen-compatible.
     fn forward_residual_cost(
         &self,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
         fx: u16,
         tx: u16,
     ) -> (ForwardKind, usize) {
@@ -435,7 +435,7 @@ impl Renderer {
         // iteration-free on long forward moves.
         if (n as usize) < cuf
             && let Some(line) = overwrite_line
-            && let Some(ow) = cost::overwrite_cost(line, self.cur.style(), fx, tx)
+            && let Some(ow) = self.overwrite_cost(line, fx, tx)
             && ow < best_cost
         {
             best_kind = ForwardKind::Overwrite { fx, tx };
@@ -448,7 +448,7 @@ impl Renderer {
         &self,
         out: &mut Vec<u8>,
         kind: ForwardKind,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
     ) -> io::Result<()> {
         match kind {
             ForwardKind::None => Ok(()),
@@ -563,9 +563,10 @@ mod tests {
             .collect();
         for fx in 0u16..20 {
             for tx in fx..20 {
-                let plan = r.plan_horizontal_cost(fx, tx, Some(&line), false, false);
+                let plan =
+                    r.plan_horizontal_cost(fx, tx, Some(CellRow::from_cells(&line)), false, false);
                 let mut bytes = Vec::new();
-                r.emit_horizontal(&mut bytes, plan.shape, Some(&line))
+                r.emit_horizontal(&mut bytes, plan.shape, Some(CellRow::from_cells(&line)))
                     .unwrap();
                 assert_eq!(
                     plan.cost,

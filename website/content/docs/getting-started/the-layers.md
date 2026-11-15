@@ -36,8 +36,10 @@ uncurses gives you two common routes. `Program` manages an interactive terminal
 session: it owns the terminal, decodes input, emits terminal modes, and exposes a
 `Screen` for diffed drawing. `Screen` by itself is only the renderer: you paint a
 cell grid and render it into any writer, with no input or session involved.
-`TextBuffer` is for off-screen output: you paint whole frames and serialize them
-to bytes yourself. `Terminal` and `EventSource` are the pieces `Program` uses for
+`Buffer` owns an offscreen grid and its text width policy.
+`TextBuffer` wraps a buffer with the same text and serialization support.
+You can paint either grid and serialize the frame to bytes.
+`Terminal` and `EventSource` are the pieces `Program` uses for
 raw-mode terminal access and input decoding, and you can use them directly when
 that is the right fit.
 

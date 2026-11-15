@@ -1,11 +1,13 @@
 //! [`TextSurface`] — text drawing as an extension of any mutable surface.
 //!
-//! [`SurfaceMut`](crate::buffer::SurfaceMut) reads and writes cells; it does
-//! not decide how many cells a string occupies. `TextSurface` adds that policy
-//! layer. Implementors provide a [width mode](TextSurface::width_mode) and
-//! [East-Asian Ambiguous policy](TextSurface::eaw_wide); the default `set_str`
+//! [`SurfaceMut`](crate::buffer::SurfaceMut) reads and writes cells.
+//! [`Surface`](crate::buffer::Surface) supplies the width policy.
+//! `TextSurface` adds text helpers; the default `set_str`
 //! family segments the input into grapheme clusters and paints each with the
 //! given style.
+//! [`crate::buffer::Buffer`] implements this trait and owns its width policy.
+//! [`crate::buffer::TextBuffer`] forwards that policy to its underlying buffer.
+//! Structural cell copies preserve stored widths.
 //!
 //! The default methods paint text **literally**: inline SGR (`CSI … m`) and
 //! OSC 8 hyperlink sequences are not interpreted, so they are segmented and
@@ -17,7 +19,11 @@
 //! Use this trait when writing widgets, layout helpers, or tests that should
 //! accept any text-capable destination:
 //!
-//! ```rust,ignore
+//! ```rust
+//! use uncurses::layout::Position;
+//! use uncurses::style::Style;
+//! use uncurses::text::TextSurface;
+//!
 //! fn label(surface: &mut impl TextSurface, at: Position, text: &str, style: Style) {
 //!     surface.set_str(at, text, style);
 //! }
@@ -32,10 +38,8 @@ use super::{WidthMode, WrapMode, grapheme_cells};
 
 /// A [`SurfaceMut`] with a text-measurement policy and string-painting helpers.
 ///
-/// Implement this for surface types that can accept styled text. The only
-/// required decisions are [`width_mode`](Self::width_mode), which controls how
-/// grapheme clusters are measured, and [`eaw_wide`](Self::eaw_wide), which
-/// controls East-Asian Ambiguous code points.
+/// Implement this for surface types that can accept styled text.
+/// Text helpers use the width policy from [`Surface`](crate::buffer::Surface).
 ///
 /// The default `set_str` family paints text literally: each grapheme cluster is
 /// drawn with the given style and inline SGR / OSC 8 escapes are not
@@ -43,24 +47,6 @@ use super::{WidthMode, WrapMode, grapheme_cells};
 /// `TextSurface`, to parse inline style and hyperlink escapes. Newline and
 /// carriage return move the paint cursor within the active clip rectangle.
 pub trait TextSurface: SurfaceMut {
-    /// Return the width-measurement mode used when shaping strings.
-    ///
-    /// [`WidthMode::Wc`] sums the code points of each grapheme cluster;
-    /// [`WidthMode::Grapheme`] measures the whole cluster. The selected mode is
-    /// used by the `set_str` family and [`str_width`](Self::str_width).
-    ///
-    /// This method is pure policy lookup. It should not inspect or mutate the
-    /// surface contents.
-    fn width_mode(&self) -> WidthMode;
-
-    /// Return the East-Asian Ambiguous width policy for this surface.
-    ///
-    /// When `true`, code points whose East-Asian-Width property is
-    /// `Ambiguous` are measured as two cells. When `false`, they are measured
-    /// as one. The flag is passed to [`char_width`](super::char_width) and
-    /// [`grapheme_width`](super::grapheme_width) by all text operations.
-    fn eaw_wide(&self) -> bool;
-
     /// Paint `s` at `pos`, clipped to the surface bounds.
     ///
     /// Every cell painted gets `style`. This default implementation paints
@@ -328,8 +314,8 @@ pub trait TextSurface: SurfaceMut {
     /// Measure the display width of `s` in terminal columns.
     ///
     /// The measurement segments `s` into grapheme clusters under this
-    /// surface's [`width_mode`](Self::width_mode) and
-    /// [`eaw_wide`](Self::eaw_wide) policy and sums their widths. Like the
+    /// surface's [`width_mode`](crate::buffer::Surface::width_mode) and
+    /// [`eaw_wide`](crate::buffer::Surface::eaw_wide) policy and sums their widths. Like the
     /// default `set_str` family, this does **not** interpret inline escape
     /// sequences: an SGR or OSC 8 sequence in `s` is measured as the width of
     /// its visible bytes. Use [`Painter`](super::Painter), whose `str_width`
@@ -530,7 +516,7 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
         }
         if clip.contains(Position::new(x, y)) {
             let cell = Cell::new(cluster, cw);
-            target.set_cell(Position::new(x, y), &cell.style(style.clone()));
+            target.set_cell(Position::new(x, y), cell.style(style.clone()).as_ref());
         }
         x += w;
     }

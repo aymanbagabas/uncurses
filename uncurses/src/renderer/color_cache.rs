@@ -83,18 +83,14 @@ impl ColorCache {
         match self.profile {
             Profile::TrueColor => Cow::Borrowed(style),
             Profile::Disabled => Cow::Owned(Style::default()),
-            Profile::Ascii => Cow::Owned(Style {
-                fg: None,
-                bg: None,
-                underline_color: None,
-                ..style.clone()
-            }),
-            Profile::Ansi | Profile::Ansi256 => Cow::Owned(Style {
-                fg: style.fg.and_then(|c| self.convert(c)),
-                bg: style.bg.and_then(|c| self.convert(c)),
-                underline_color: style.underline_color.and_then(|c| self.convert(c)),
-                ..style.clone()
-            }),
+            Profile::Ascii => Cow::Owned(style.clone().fg(None).bg(None).underline_color(None)),
+            Profile::Ansi | Profile::Ansi256 => Cow::Owned(
+                style
+                    .clone()
+                    .fg(style.fg_color().and_then(|c| self.convert(c)))
+                    .bg(style.bg_color().and_then(|c| self.convert(c)))
+                    .underline_color(style.ul_color().and_then(|c| self.convert(c))),
+            ),
         }
     }
 }

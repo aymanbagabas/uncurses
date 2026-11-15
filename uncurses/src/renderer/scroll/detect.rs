@@ -6,7 +6,8 @@
 //! growth past hash mismatches is allowed whenever the per-cell cost
 //! of scrolling-then-patching beats redrawing in place.
 
-use crate::cell::Cell;
+use crate::buffer::CellRow;
+use crate::cell::CellRef;
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
 
@@ -246,7 +247,7 @@ impl Renderer {
         // Split-borrow: `self.cur` is disjoint from `self.cur_buf` and
         // `self.oldnum`, so the blank template ref stays live across
         // the cost-helper calls below.
-        let clear_blank: &Cell = self.cur.current_blank();
+        let clear_blank = self.cur.current_blank().as_ref();
         let old_buf = self.cur_buf.as_ref().unwrap();
 
         let new_from_signed = self.oldnum.get(from).copied().unwrap_or(NO_MAP);
@@ -324,13 +325,17 @@ fn invalidate_bad_hunks(oldnum: &mut [i32], height: usize) {
 /// Cell-level cost of repainting `to` from `from`: count mismatched
 /// columns between the two rows up to the buffer width. Two missing
 /// cells at the same index are treated as equal.
-fn update_cost(old_line: Option<&[Cell]>, new_line: Option<&[Cell]>, width: usize) -> usize {
-    let old: &[Cell] = old_line.unwrap_or(&[]);
-    let new: &[Cell] = new_line.unwrap_or(&[]);
+fn update_cost(
+    old_line: Option<CellRow<'_>>,
+    new_line: Option<CellRow<'_>>,
+    width: usize,
+) -> usize {
+    let old = old_line.unwrap_or(CellRow::from_cells(&[]));
+    let new = new_line.unwrap_or(CellRow::from_cells(&[]));
     let common = old.len().min(new.len()).min(width);
     let mut cost = 0;
     for i in 0..common {
-        if old[i] != new[i] {
+        if old.at(i) != new.at(i) {
             cost += 1;
         }
     }
@@ -343,11 +348,15 @@ fn update_cost(old_line: Option<&[Cell]>, new_line: Option<&[Cell]>, width: usiz
 /// Cell-level cost of repainting `to` from a blank line, with the
 /// renderer's current clear-blank as the implicit source. Counts
 /// cells in `to` that differ from `clear_blank`.
-fn update_cost_blank(clear_blank: &Cell, to_line: Option<&[Cell]>, width: usize) -> usize {
-    let to: &[Cell] = to_line.unwrap_or(&[]);
+fn update_cost_blank(
+    clear_blank: CellRef<'_>,
+    to_line: Option<CellRow<'_>>,
+    width: usize,
+) -> usize {
+    let to = to_line.unwrap_or(CellRow::from_cells(&[]));
     let common = to.len().min(width);
     let mut cost = 0;
-    for c in &to[..common] {
+    for c in to.slice(..common).iter() {
         if c != clear_blank {
             cost += 1;
         }
@@ -361,6 +370,7 @@ fn update_cost_blank(clear_blank: &Cell, to_line: Option<&[Cell]>, width: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell::Cell;
     use crate::renderer::Renderer;
 
     fn renderer_with_hashes(old: Vec<u64>, new: Vec<u64>, height: u16) -> (Renderer, RenderBuffer) {
@@ -514,10 +524,10 @@ mod tests {
         );
     }
 
-    fn simple_hash(line: &[Cell]) -> u64 {
+    fn simple_hash(line: CellRow<'_>) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        for c in line {
+        for c in line.iter() {
             c.content().hash(&mut h);
         }
         h.finish()

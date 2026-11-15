@@ -1,11 +1,12 @@
 //! Per-line transform algorithm — the diff loop and its core helpers
 //! (`transform_line`, `transform_line_taken`, `transform_line_inner`).
 
+use crate::buffer::{CellRow, CellRowMut};
 use std::io::{self, Write};
 
 use super::predicates::can_clear_with;
 use crate::ansi;
-use crate::cell::Cell;
+use crate::cell::CellRef;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 
@@ -45,11 +46,13 @@ impl Renderer {
         let first_diff = self.transform_line_inner(out, new_buf, cur_line, y, first_x, last_x)?;
         if let Some(first_diff) = first_diff
             && let Some(cur) = cur_buf.as_mut()
-            && let (Some(new_line), Some(cur_line)) = (new_buf.line(y), cur.line_mut(y))
+            && let (Some(new_line), Some(mut cur_line)) = (new_buf.line(y), cur.line_mut(y))
         {
             let len = cur_line.len().min(new_line.len());
             if first_diff < cur_line.len() && first_diff < new_line.len() {
-                cur_line[first_diff..len].clone_from_slice(&new_line[first_diff..len]);
+                cur_line
+                    .slice(first_diff..len)
+                    .copy_from(new_line.slice(first_diff..len));
             } else if len > 0 {
                 // Reference falls back to refreshing the entire short
                 // line from index 0 when first_diff is past one of the
@@ -57,7 +60,7 @@ impl Renderer {
                 // when a resize leaves cur_line shorter than the new
                 // line and the emission already covered the leading
                 // columns.
-                cur_line[..len].clone_from_slice(&new_line[..len]);
+                cur_line.slice(..len).copy_from(new_line.slice(..len));
             }
         }
         Ok(())
@@ -75,7 +78,7 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        mut cur_line: Option<&mut [Cell]>,
+        mut cur_line: Option<CellRowMut<'_>>,
         y: u16,
         _first_x: u16,
         _last_x: u16,
@@ -91,18 +94,12 @@ impl Renderer {
 
         // Scroll operations can change the old buffer outside the touched
         // span, so compare the full row before reusing its equal prefix.
-        let mut first_diff = 0;
-        while first_diff < width {
-            let new_cell = &new_line[first_diff];
-            let old_cell = cur_line.as_deref().and_then(|line| line.get(first_diff));
-            if old_cell.is_none_or(|old| old != new_cell) {
-                break;
-            }
-            first_diff += 1;
-        }
-        if first_diff == width {
+        let first_diff = cur_line
+            .as_ref()
+            .map_or(Some(0), |line| new_line.first_difference(line.as_row()));
+        let Some(first_diff) = first_diff else {
             return Ok(None);
-        }
+        };
 
         // === Step 0: give up on the diff at a cluster of uncertain width ===
         //
@@ -115,8 +112,12 @@ impl Renderer {
         // an erase of its own. That erase reaches the columns a ligated
         // cluster was drawn into, and no later step would redraw what it
         // wiped.
-        if let Some(bail) = self.uncertain_bail(new_line, cur_line.as_deref(), first_diff) {
-            let cur_slice = cur_line.as_deref();
+        if let Some(bail) = self.uncertain_bail(
+            new_line,
+            cur_line.as_ref().map(CellRowMut::as_row),
+            first_diff,
+        ) {
+            let cur_slice = cur_line.as_ref().map(CellRowMut::as_row);
             // Columns left of the cluster are measured the way the terminal
             // draws them, so an ordinary comparison still holds there.
             let first = first_diff.min(bail);
@@ -134,24 +135,24 @@ impl Renderer {
         // reproduce by erasing (default-style blanks), we may be able
         // to use EL-1 to wipe a leading run. Otherwise reuse the first
         // differing column found above.
-        let leading_blank: &Cell = &new_line[0];
+        let leading_blank: CellRef<'_> = new_line.at(0);
         let mut first_cell;
         // `copy_from` is the leftmost column where the post-emission
         // screen matches `new_line`. The wrapper uses it to copy
-        // new_line[copy_from..] into cur_buf. For most paths it equals
+        // new_line.slice(copy_from..) into cur_buf. For most paths it equals
         // first_cell, but the EL-1 emission also clears columns to the
         // left of first_cell, so copy_from stays at the pre-erase
         // first_cell in that case.
         let mut copy_from;
         if can_clear_with(leading_blank, self.opts.contains(Optimizations::BCE)) {
             let mut o_first = 0usize;
-            if let Some(cur) = cur_line.as_deref() {
-                while o_first < cur.len() && &cur[o_first] == leading_blank {
+            if let Some(cur) = cur_line.as_ref().map(CellRowMut::as_row) {
+                while o_first < cur.len() && cur.at(o_first) == leading_blank {
                     o_first += 1;
                 }
             }
             let mut n_first = 0usize;
-            while n_first < new_line.len() && &new_line[n_first] == leading_blank {
+            while n_first < new_line.len() && new_line.at(n_first) == leading_blank {
                 n_first += 1;
             }
 
@@ -193,11 +194,11 @@ impl Renderer {
                     // disjoint from `cur_line` (already split off
                     // above), so the bce_blank ref lives directly.
                     let bce = self.opts.contains(Optimizations::BCE);
-                    let bce_fill: &Cell = self.cur.bce_blank(bce);
-                    if let Some(cur) = cur_line.as_deref_mut() {
+                    let bce_fill = self.cur.bce_blank(bce).as_ref();
+                    if let Some(cur) = cur_line.as_mut() {
                         let end = n_first.min(cur.len());
                         if first_cell < end {
-                            crate::buffer::fill_line_into(&mut cur[first_cell..end], bce_fill);
+                            cur.slice(first_cell..end).fill_line(bce_fill);
                         }
                     }
                     // After the erase the cleared columns match `new`;
@@ -225,7 +226,7 @@ impl Renderer {
         // owns the cell re-emits the whole cluster instead.
         //
         // `copy_from` follows, because the wrapper mirrors
-        // `new_line[copy_from..]` into the back buffer. Left where it was,
+        // `new_line.slice(copy_from..)` into the back buffer. Left where it was,
         // the re-emitted lead would never be recorded and the same
         // difference would be found again on every later frame.
         let owner = super::emit::cluster_start(new_line, first_cell);
@@ -238,13 +239,13 @@ impl Renderer {
         // from owns the cell it holds. Every branch below places a cursor
         // there, and a continuation writes no bytes and moves no cursor.
         debug_assert!(
-            !new_line[first_cell].is_continuation()
+            !new_line.at(first_cell).is_continuation()
                 || first_cell == 0
-                || !new_line[first_cell - 1].is_wide(),
+                || !new_line.at(first_cell - 1).is_wide(),
             "first_cell {first_cell} on row {y} points at a continuation a cell owns"
         );
 
-        let cur_slice = cur_line.as_deref();
+        let cur_slice = cur_line.as_ref().map(CellRowMut::as_row);
 
         // === Step 2: trailing-uncolorable fast path ===
         //
@@ -254,11 +255,11 @@ impl Renderer {
         // current pen, which would visibly alter the right margin. In
         // that case just walk backward to find the last differing
         // column and overwrite the changed range.
-        let trailing = &new_line[width - 1];
+        let trailing = new_line.at(width - 1);
         if !can_clear_with(trailing, self.opts.contains(Optimizations::BCE)) {
             let mut n_last = width - 1;
             while n_last > first_cell {
-                let new_c = &new_line[n_last];
+                let new_c = new_line.at(n_last);
                 let old_c = cur_slice.and_then(|c| c.get(n_last));
                 if old_c.is_some_and(|o| o == new_c) {
                     n_last -= 1;
@@ -279,17 +280,18 @@ impl Renderer {
             }
             // The backward scan already proved the suffix equal. Copy only
             // this interval; a shorter old row uses the wrapper's fallback.
-            if let Some(cur) = cur_line
-                && let Some(changed) = cur.get_mut(copy_from..=n_last)
+            if let Some(mut cur) = cur_line
+                && n_last < cur.len()
             {
-                changed.clone_from_slice(&new_line[copy_from..=n_last]);
+                cur.slice(copy_from..=n_last)
+                    .copy_from(new_line.slice(copy_from..=n_last));
                 return Ok(None);
             }
             return Ok(Some(copy_from));
         }
 
         // === Step 3: locate last non-blank cells on each side ===
-        let blank: &Cell = trailing;
+        let blank: CellRef<'_> = trailing;
         let mut o_last = width.saturating_sub(1);
         while o_last > first_cell
             && cur_slice
@@ -299,7 +301,7 @@ impl Renderer {
             o_last -= 1;
         }
         let mut n_last = width - 1;
-        while n_last > first_cell && &new_line[n_last] == blank {
+        while n_last > first_cell && new_line.at(n_last) == blank {
             n_last -= 1;
         }
 
@@ -320,7 +322,7 @@ impl Renderer {
         if n_last == first_cell && el0 < o_last.saturating_sub(n_last) {
             // === Step 4a: single non-blank cell + erase the rest ===
             self.move_to(out, new_buf, y, first_cell as u16)?;
-            if &new_line[first_cell] != blank {
+            if new_line.at(first_cell) != blank {
                 // The single non-blank column may be the lead of a wide
                 // cluster whose continuation sits at `first_cell + 1`.
                 // Close the range so the emitter sees the whole glyph
@@ -357,17 +359,17 @@ impl Renderer {
             let o_last_nonblank = o_last;
             let mut n_lc = n_last as isize;
             let mut o_lc = o_last as isize;
-            fn cell_at_isize(line: &[Cell], i: isize) -> Option<&Cell> {
+            fn cell_at_isize(line: CellRow<'_>, i: isize) -> Option<CellRef<'_>> {
                 if i < 0 { None } else { line.get(i as usize) }
             }
             let cur_at_isize =
-                |i: isize| -> Option<&Cell> { cur_slice.and_then(|c| cell_at_isize(c, i)) };
+                |i: isize| -> Option<CellRef<'_>> { cur_slice.and_then(|c| cell_at_isize(c, i)) };
             // Treat out-of-bounds slots as unequal so the walk-back
             // stops at the line boundary rather than stepping past it.
             // Returning false when either side is absent makes the loop
             // break at At(-1) instead of decrementing both indices to
             // -1.
-            fn cells_eq(a: Option<&Cell>, b: Option<&Cell>) -> bool {
+            fn cells_eq(a: Option<CellRef<'_>>, b: Option<CellRef<'_>>) -> bool {
                 matches!((a, b), (Some(x), Some(y)) if x == y)
             }
             while cells_eq(cell_at_isize(new_line, n_lc), cur_at_isize(o_lc)) {
@@ -441,7 +443,7 @@ impl Renderer {
                 }
                 debug_assert!(
                     (n + 1) as usize >= new_line.len()
-                        || !new_line[(n + 1) as usize].is_continuation(),
+                        || !new_line.at((n + 1) as usize).is_continuation(),
                     "ICH move_to({}) on row {y} lands inside a cluster",
                     n + 1
                 );
@@ -460,7 +462,7 @@ impl Renderer {
                 {
                     self.put_range(out, new_buf, cur_slice, new_line, y, (n + 1) as usize, m)?;
                 } else {
-                    self.insert_cells_op(out, &new_line[(n + 1) as usize..], ich_count)?;
+                    self.insert_cells_op(out, new_line.slice((n + 1) as usize..), ich_count)?;
                 }
             } else if o_lc > n_lc {
                 // Deletion: new row has fewer non-blank cells than old.
@@ -483,7 +485,7 @@ impl Renderer {
                 };
                 debug_assert!(
                     (n_effective + 1) as usize >= new_line.len()
-                        || !new_line[(n_effective + 1) as usize].is_continuation(),
+                        || !new_line.at((n_effective + 1) as usize).is_continuation(),
                     "DCH move_to({}) on row {y} lands inside a cluster",
                     n_effective + 1
                 );

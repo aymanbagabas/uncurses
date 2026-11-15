@@ -92,9 +92,10 @@ use std::{
 
 use crate::ansi::mode;
 use crate::buffer::{Bounded, Surface, SurfaceMut};
-use crate::cell::Cell;
+use crate::cell::CellRef;
 use crate::layout::{Position, Rect, Size};
 use crate::renderer::{RenderBuffer, Renderer};
+use crate::style::Style;
 use crate::text::{TextSurface, WidthMode};
 
 /// A cell-diff renderer over a writer. See the [module documentation](self).
@@ -219,13 +220,20 @@ impl<W: Write> Screen<W> {
     /// Write `cell` at `pos` in the desired frame.
     /// A continuation is placed by the wide cell that owns it, so one passed
     /// here is ignored and the column keeps the value its owner gave it.
-    pub fn set_cell(&mut self, pos: impl Into<Position>, cell: &Cell) {
-        self.front_buf.set_cell(pos.into(), cell);
+    ///
+    /// Accepts a [`CellRef`] or a reference to an owned [`crate::cell::Cell`].
+    /// The screen imports source resources and preserves the supplied width.
+    /// Use [`Surface::new_cell`] to measure a grapheme with this screen's policy.
+    pub fn set_cell<'a>(&mut self, pos: impl Into<Position>, cell: impl Into<CellRef<'a>>) {
+        self.front_buf.set_cell(pos.into(), cell.into());
     }
 
-    /// Borrow the cell at `pos` mutably, marking its columns touched.
-    pub fn cell_mut(&mut self, pos: impl Into<Position>) -> Option<&mut Cell> {
-        self.front_buf.cell_mut(pos.into())
+    /// Replace the style at `pos`, preserving the cell's content and width.
+    ///
+    /// This replaces one column, including a wide-cell continuation.
+    /// Use [`SurfaceMut::set_style_rect`] to style a complete wide character.
+    pub fn set_style(&mut self, pos: impl Into<Position>, style: Style) {
+        self.front_buf.set_style(pos.into(), style);
     }
 
     /// The managed area size in cells.
@@ -682,6 +690,7 @@ impl<W: Write> Screen<W> {
             return;
         }
         self.grapheme_clusters = enabled;
+        self.front_buf.buffer.set_width_mode(self.width_mode());
         self.renderer.set_width_mode(self.width_mode());
         // Whatever is on screen was measured under the old model, so the
         // tracked terminal contents no longer describe it. Diffing against
@@ -703,6 +712,7 @@ impl<W: Write> Screen<W> {
     pub fn set_ambiguous_wide(&mut self, wide: bool) {
         if self.eaw_wide != wide {
             self.eaw_wide = wide;
+            self.front_buf.buffer.set_eaw_wide(wide);
             self.invalidate();
         }
     }
@@ -1022,38 +1032,10 @@ impl<W: Write> Bounded for Screen<W> {
 }
 
 impl<W: Write> Surface for Screen<W> {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<CellRef<'_>> {
         self.front_buf.cell(pos)
     }
-}
 
-impl<W: Write> SurfaceMut for Screen<W> {
-    fn set_cell(&mut self, pos: Position, cell: &Cell) {
-        self.front_buf.set_cell(pos, cell);
-    }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.front_buf.cell_mut(pos)
-    }
-
-    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        self.front_buf.insert_lines(y, n, bounds_bottom, fill);
-    }
-
-    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        self.front_buf.delete_lines(y, n, bounds_bottom, fill);
-    }
-
-    fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        self.front_buf.insert_cells(pos, n, bounds_right, fill);
-    }
-
-    fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        self.front_buf.delete_cells(pos, n, bounds_right, fill);
-    }
-}
-
-impl<W: Write> TextSurface for Screen<W> {
     fn width_mode(&self) -> WidthMode {
         if self.grapheme_clusters {
             WidthMode::Grapheme
@@ -1066,3 +1048,31 @@ impl<W: Write> TextSurface for Screen<W> {
         self.eaw_wide
     }
 }
+
+impl<W: Write> SurfaceMut for Screen<W> {
+    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>) {
+        self.front_buf.set_cell(pos, cell);
+    }
+
+    fn set_style(&mut self, pos: Position, style: Style) {
+        self.front_buf.set_style(pos, style);
+    }
+
+    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: CellRef<'_>) {
+        self.front_buf.insert_lines(y, n, bounds_bottom, fill);
+    }
+
+    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: CellRef<'_>) {
+        self.front_buf.delete_lines(y, n, bounds_bottom, fill);
+    }
+
+    fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: CellRef<'_>) {
+        self.front_buf.insert_cells(pos, n, bounds_right, fill);
+    }
+
+    fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: CellRef<'_>) {
+        self.front_buf.delete_cells(pos, n, bounds_right, fill);
+    }
+}
+
+impl<W: Write> TextSurface for Screen<W> {}

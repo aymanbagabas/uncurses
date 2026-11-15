@@ -2,7 +2,7 @@
 //! and the constructor / [`Default`] impl. Behavior methods live in the
 //! sibling submodules.
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellRef};
 use crate::color::{Color, Profile};
 use crate::layout::Position;
 use crate::renderer::buffer::RenderBuffer;
@@ -134,14 +134,11 @@ impl Cursor {
     /// `bce` is supplied by the caller since it lives on Renderer
     /// state, not Cursor.
     pub(super) fn bce_blank(&mut self, bce: bool) -> &Cell {
-        let want_bg = if bce { self.style.bg } else { None };
+        let want_bg = if bce { self.style.bg_color() } else { None };
         if self.bce_blank_key != Some((bce, want_bg)) {
             self.bce_blank = match want_bg {
                 Some(bg) => {
-                    let s = Style {
-                        bg: Some(bg),
-                        ..Style::default()
-                    };
+                    let s = Style::default().bg(bg);
                     Cell::BLANK.style(s)
                 }
                 None => Cell::BLANK,
@@ -420,16 +417,13 @@ impl Renderer {
     /// [`crate::screen::Screen::set_grapheme_clusters`] sets only the
     /// measurement and leaves the terminal to whoever owns it.
     #[inline]
-    pub(super) fn width_is_uncertain(&self, cell: &Cell) -> bool {
-        let content = cell.content();
-        if self.width_mode != WidthMode::Wc || content.len() <= 1 {
+    pub(super) fn width_is_uncertain(&self, cell: CellRef<'_>) -> bool {
+        if self.width_mode != WidthMode::Wc {
             return false;
         }
-        // In valid UTF-8, a multibyte scalar's leading byte gives its
-        // byte count. A single scalar cannot have an uncertain tail.
-        if content.as_bytes()[0].leading_ones() as usize == content.len() {
+        let Some(content) = cell.grapheme() else {
             return false;
-        }
+        };
         // East-Asian Ambiguous code points measure one column or two, never
         // zero, so the policy cannot change the answer to this question.
         content.chars().skip(1).any(|c| {

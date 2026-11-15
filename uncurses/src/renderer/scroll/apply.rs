@@ -482,7 +482,7 @@ mod tests {
         let bottom_row = cb.line(3).unwrap();
         let expected = Cell::BLANK.style(bg_style);
         assert!(
-            bottom_row.iter().all(|c| *c == expected),
+            bottom_row.iter().all(|c| c == expected.as_ref()),
             "cur_buf bottom row must be styled-blank, got: {bottom_row:?}",
         );
     }
@@ -515,7 +515,7 @@ mod tests {
         let bg_only = Style::default().bg(Color::Red);
         let expected = Cell::BLANK.style(bg_only);
         assert!(
-            bottom_row.iter().all(|c| *c == expected),
+            bottom_row.iter().all(|c| c == expected.as_ref()),
             "cur_buf bottom row must be bg-only, got: {bottom_row:?}",
         );
     }
@@ -544,7 +544,7 @@ mod tests {
         let cb = renderer.cur_buf.as_ref().unwrap();
         let bottom_row = cb.line(3).unwrap();
         assert!(
-            bottom_row.iter().all(|c| *c == Cell::BLANK),
+            bottom_row.iter().all(|c| c == Cell::BLANK.as_ref()),
             "without BCE, freed cells must be default-blank, got: {bottom_row:?}",
         );
     }
