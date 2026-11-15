@@ -130,7 +130,7 @@ you can keep the `EventStream` live across `pause`, `resume`, and `finish`; you
 do not have to drop and rebuild it. Program reads auto-observe events, so
 capability and size tracking update as replies and resize reports are read. If
 you consume an event from somewhere else, pass it to `program.observe_event(&ev)?`
-to apply the same tracking. The ratatui backend follows the same rule. Events go
+to apply the same tracking. The Ratatui backend follows the same rule. Events go
 to whichever consumer drains first, so avoid polling app input while the child
 program owns the terminal.
 {{< /callout >}}

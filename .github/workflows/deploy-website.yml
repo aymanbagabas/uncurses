@@ -32,12 +32,12 @@ jobs:
         with:
           fetch-depth: 0 # for .GitInfo / lastmod
 
-      - name: Setup Go (for Hugo Modules / Hextra)
-        uses: actions/setup-go@v6
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          go-version: stable
-          # Hugo Modules (Hextra) live under website/, so cache on its go.sum.
-          cache-dependency-path: website/go.sum
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
 
       - name: Setup Hugo (extended)
         uses: peaceiris/actions-hugo@v3
@@ -80,7 +80,8 @@ jobs:
       - name: Build site
         working-directory: website
         run: |
-          hugo mod get
+          npm ci
+          npm test
           hugo --gc --minify --baseURL "${{ steps.base.outputs.url }}/"
 
       - name: Attach rustdoc under /api
