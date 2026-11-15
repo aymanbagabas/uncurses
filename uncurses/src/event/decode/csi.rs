@@ -155,7 +155,7 @@ impl Decoder {
         // The builtin recogniser, then `Event::UnknownCsi`. The lazy
         // [`Params`] walker is stateless and cheap to re-create.
         let raw_with_intro = &buf[..consumed];
-        let evt = recognize(&view, raw_with_intro, self.flags)
+        let evt = recognize(&view, raw_with_intro, self.flags, self.kitty_modifiers)
             .unwrap_or_else(|| Event::UnknownCsi(raw_with_intro.to_vec()));
         ParseResult::Event(evt, consumed)
     }
@@ -169,6 +169,7 @@ fn recognize(
     view: &ControlSequence<'_>,
     raw_with_intro: &[u8],
     flags: DecoderFlags,
+    kitty_modifiers: bool,
 ) -> Option<Event> {
     let final_byte = view.final_byte();
     let params = view.params();
@@ -417,7 +418,7 @@ fn recognize(
             _ => None,
         };
         if let Some(kc) = key_code {
-            let key = key_with_mods(kc, csi_modifiers(params, flags));
+            let key = key_with_mods(kc, csi_modifiers(params, kitty_modifiers));
             return Some(key_event_for_phase(key, csi_kitty_phase(params)));
         }
         match final_byte {
@@ -428,7 +429,7 @@ fn recognize(
                 return Some(key_event_for_phase(key, csi_kitty_phase(params)));
             }
             b'~' => {
-                if let Some(ev) = recognize_tilde(params, flags) {
+                if let Some(ev) = recognize_tilde(params, flags, kitty_modifiers) {
                     return Some(ev);
                 }
             }
@@ -447,7 +448,11 @@ fn recognize(
 ///
 /// modifyOtherKeys uses exactly three parameters. Other keys accept at most
 /// two, and paste boundaries require exactly one.
-fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
+fn recognize_tilde(
+    params: Params<'_>,
+    flags: DecoderFlags,
+    kitty_modifiers: bool,
+) -> Option<Event> {
     let code = params.get_or(0, 0);
     let count = params.len();
 
@@ -471,7 +476,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
     if count > 2 {
         return None;
     }
-    let mods = csi_modifiers(params, flags);
+    let mods = csi_modifiers(params, kitty_modifiers);
 
     if code == 200 && count == 1 {
         return Some(Event::PasteStart);

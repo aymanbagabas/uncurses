@@ -1365,11 +1365,19 @@ fn kitty_support_selects_functional_modifiers_even_with_enhancements_disabled() 
         .unwrap();
     program.set_kitty_keyboard(None).unwrap();
     assert_eq!(program.options.legacy_keys, DecoderFlags::CTRL_I);
-    assert!(program.decoder_flags().contains(DecoderFlags::CTRL_I));
+    assert_eq!(program.decoder_flags(), DecoderFlags::CTRL_I);
+    program.set_decoder_flags(DecoderFlags::CTRL_M);
 
     let mut source = program.source.lock().unwrap();
-    writer.write_all(b"\x1b[127;9u\x1b[1;9D\x1b[3;9~").unwrap();
+    writer
+        .write_all(b"\r\x1b[127;9u\x1b[1;9D\x1b[3;9~")
+        .unwrap();
     assert!(source.poll(Some(Duration::ZERO)).unwrap());
+    let Some(Event::KeyPress(key)) = source.try_read() else {
+        panic!("expected Ctrl+m");
+    };
+    assert_eq!(key.code, KeyCode::Char('m'));
+    assert_eq!(key.modifiers, KeyModifiers::CTRL);
     for code in [KeyCode::Backspace, KeyCode::Left, KeyCode::Delete] {
         let Some(Event::KeyPress(key)) = source.try_read() else {
             panic!("expected {code:?}");

@@ -173,10 +173,10 @@ pub(super) fn parse_kitty_options(s: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
-pub(super) fn csi_modifiers(params: Params<'_>, flags: DecoderFlags) -> KeyModifiers {
+pub(super) fn csi_modifiers(params: Params<'_>, kitty_modifiers: bool) -> KeyModifiers {
     // Modifier param defaults to 1 (= no modifiers) per the xterm protocol.
     let modifiers = params.get_or(1, 1);
-    if flags.contains(DecoderFlags::KITTY_MODIFIERS) {
+    if kitty_modifiers {
         super::kitty::decode_kitty_modifiers(modifiers)
     } else {
         xterm_modifiers(modifiers as u16)

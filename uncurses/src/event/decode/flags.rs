@@ -10,8 +10,7 @@
 //! ## Affected paths
 //!
 //! The flags affect C0 controls, a timed-out lone `ESC`, Delete/Backspace, and
-//! VT220 Find/Select tilde codes. [`DecoderFlags::KITTY_MODIFIERS`] selects the
-//! modifier mapping for CSI cursor and functional keys.
+//! VT220 Find/Select tilde codes.
 //!
 //! ## Gotchas
 //!
@@ -89,20 +88,5 @@ bitflags! {
         /// already reads as Ctrl+Backspace. [`CTRL_H`](Self::CTRL_H) and
         /// [`DEL_IS_DELETE`](Self::DEL_IS_DELETE) retain their precedence.
         const CTRL_BACKSPACE      = 1 << 9;
-        /// Use Kitty's modifier mapping for CSI cursor and tilde functional keys.
-        ///
-        /// This maps modifier bits 8, 16, and 32 to Super, Hyper, and Meta,
-        /// and preserves Caps Lock and Num Lock. The default xterm mapping
-        /// interprets bit 8 as Meta.
-        ///
-        /// Select this for terminals that use the Kitty keyboard protocol,
-        /// including their legacy mode. Enhancement flags are independent.
-        /// [`Program`](crate::program::Program) selects this after observing
-        /// a [`KittyKeyboardEnhancements`](crate::event::Event::KittyKeyboardEnhancements)
-        /// reply, even when the reported enhancements are empty.
-        ///
-        /// CSI-u keeps its Kitty mapping. Xterm modifyOtherKeys and the
-        /// ambiguous F3/cursor-position report keep their xterm mapping.
-        const KITTY_MODIFIERS     = 1 << 10;
     }
 }
