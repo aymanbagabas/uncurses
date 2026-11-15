@@ -36,7 +36,7 @@ button, summary { cursor: pointer; }
 button { color: inherit; }
 a { color: var(--accent); text-decoration: none; text-underline-offset: 3px; }
 a:hover { color: var(--accent-hover); text-decoration: underline; }
-p a, .home main a { text-decoration: underline; text-underline-offset: 2px; }
+p a, .prose a:not(.doc-card), .home main a { text-decoration: underline; text-underline-offset: 2px; }
 img, svg { max-width: 100%; }
 img { height: auto; }
 h1, h2, h3, h4, p, figure { margin: 0; }

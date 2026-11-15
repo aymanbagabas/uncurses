@@ -163,6 +163,21 @@ test("documentation overviews link README features to usage documentation", asyn
   await expect(page.getByRole("heading", { name: "Hyperlinks", exact: true })).toBeInViewport();
 });
 
+test("prose links stay underlined without changing section cards", async ({ page }) => {
+  for (const colorScheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme });
+    for (const [path, selector] of [
+      ["/docs/features/", ".prose td a"],
+      ["/docs/getting-started/first-app/", ".prose li > a"],
+    ]) {
+      await page.goto(path);
+      await expect(page.locator(selector).first()).toHaveCSS("text-decoration-line", "underline");
+    }
+    await page.goto("/docs/getting-started/");
+    await expect(page.locator(".doc-card").first()).toHaveCSS("text-decoration-line", "none");
+  }
+});
+
 test("sidebar sections collapse and expand with the pointer and keyboard", async ({ page }) => {
   await page.goto("/docs/concepts/cells/");
   const sidebar = page.getByRole("complementary", { name: "Documentation navigation" });
