@@ -429,6 +429,71 @@ mod tests {
     }
 
     #[test]
+    fn ready_input_preserves_a_simultaneous_wake() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx);
+        write_bytes(&tx, b"ab");
+        src.waker().wake().unwrap();
+        assert!(src.poll(Some(Duration::ZERO)).unwrap());
+        for code in [KeyCode::Char('a'), KeyCode::Char('b')] {
+            assert!(matches!(src.read().unwrap(), Event::KeyPress(key) if key.code == code));
+        }
+        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert!(src.try_read().is_none());
+    }
+
+    #[test]
+    fn ready_resize_preserves_a_simultaneous_wake() {
+        let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
+            eprintln!("skipping resize/wake regression: no usable PTY");
+            return;
+        };
+        let mut src = new_reader(slave);
+        src.last_size = None;
+        assert_eq!(unsafe { libc::raise(libc::SIGWINCH) }, 0);
+        src.waker().wake().unwrap();
+        assert!(src.poll(Some(Duration::ZERO)).unwrap());
+        assert!(matches!(src.try_read(), Some(Event::Resize(_))));
+        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert!(src.try_read().is_none());
+    }
+
+    #[test]
+    fn repeated_wakes_do_not_starve_input() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx);
+        let waker = src.waker();
+        for _ in 0..100 {
+            write_byte(&tx, b'x');
+            waker.wake().unwrap();
+            assert!(src.poll(Some(Duration::ZERO)).unwrap());
+            assert!(
+                matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Char('x'))
+            );
+        }
+        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn simultaneous_wake_preserves_partial_input() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx);
+        write_bytes(&tx, b"\x1b[");
+        src.waker().wake().unwrap();
+        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(src.pending.slice(), b"\x1b[");
+        write_byte(&tx, b'A');
+        assert!(src.poll(Some(Duration::ZERO)).unwrap());
+        assert!(matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Up));
+    }
+
+    #[test]
     fn esc_resolves_before_late_continuation_byte() {
         // A buffered partial ESC whose deadline elapses must resolve to a
         // bare Esc before a continuation byte that arrives afterward is

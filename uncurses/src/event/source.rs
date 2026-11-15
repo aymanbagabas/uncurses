@@ -161,7 +161,8 @@ pub const DEFAULT_STRING_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// A waker is bound to one source at construction time. Calling [`Waker::wake`]
 /// makes the source's readiness wait return `Interrupted`; multiple wake calls
-/// may coalesce into one interruption. The handle is cheap to clone and can be
+/// may coalesce into one interruption. Ready input events take priority and
+/// leave the wake pending for a later wait. The handle is cheap to clone and can be
 /// sent to other threads.
 #[derive(Clone)]
 pub struct Waker {
@@ -567,6 +568,9 @@ where
     /// * `Ok(false)` when the timeout elapsed or a paired [`Waker`] interrupted
     ///   the wait without producing an event;
     /// * `Err(_)` for fatal input or platform readiness errors.
+    ///
+    /// When input and a wake are ready together, decoded events take priority.
+    /// The wake stays pending until a later poll produces no event.
     pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
         if !self.queue.is_empty() {
             return Ok(true);
@@ -628,21 +632,25 @@ where
             self.handle_winch();
         }
 
+        if ready[READY_INPUT]
+            && let Err(error) = self.drain_input()
+        {
+            // A failed read supplies no continuation bytes.
+            self.expire_elapsed();
+            if self.queue.is_empty() {
+                return Err(error);
+            }
+            self.pending_error = Some(error);
+        }
+        if !self.queue.is_empty() {
+            // Keep the wake signaled until a pass produces no event.
+            return Ok(());
+        }
         if ready[READY_WAKE] {
             self.drain_wake();
             return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
         }
-
-        if ready[READY_INPUT] {
-            if let Err(error) = self.drain_input() {
-                // A failed read supplies no continuation bytes.
-                self.expire_elapsed();
-                if self.queue.is_empty() {
-                    return Err(error);
-                }
-                self.pending_error = Some(error);
-            }
-        } else {
+        if !ready[READY_INPUT] {
             // The wait was tightened to a decode deadline that has elapsed.
             self.expire_elapsed();
         }
