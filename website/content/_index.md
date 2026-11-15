@@ -4,4 +4,4 @@ description: "A library for building terminal user interfaces, with rendering, i
 ---
 
 A library for building terminal user interfaces.
-Combine the renderer, input handling, and terminal controls, or use your own structure.
+Use the renderer, input handling, and terminal controls independently or together.
