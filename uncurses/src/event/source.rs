@@ -405,7 +405,6 @@ where
     /// makes, for a caller holding the source rather than building it.
     /// Buffered input is left alone: the flags decide how a byte is named,
     /// not how it is framed.
-    /// The terminal's modifier mapping and Backarrow mode remain unchanged.
     pub fn set_decoder_flags(&mut self, flags: DecoderFlags) {
         self.parser.set_flags(flags);
     }
@@ -433,11 +432,6 @@ where
     /// to change both the terminal and decoder.
     pub fn set_backspace_mode(&mut self, enabled: bool) {
         self.parser.set_backspace_mode(enabled);
-    }
-
-    /// Select the terminal's modifier mapping without changing user preferences.
-    pub(crate) fn set_kitty_modifiers(&mut self, enabled: bool) {
-        self.parser.set_kitty_modifiers(enabled);
     }
 
     /// Set the idle timeout for an open bracketed paste.

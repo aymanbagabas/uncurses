@@ -86,7 +86,6 @@ pub struct Decoder {
     /// Decoder behavior flags (disambiguation toggles for legacy keys).
     pub(super) flags: DecoderFlags,
     backspace_mode: bool,
-    kitty_modifiers: bool,
     /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
     pub(super) in_paste: bool,
     waiting_for_terminator: bool,
@@ -128,7 +127,6 @@ impl Decoder {
             buf: Vec::with_capacity(256),
             flags,
             backspace_mode: false,
-            kitty_modifiers: false,
             in_paste: false,
             waiting_for_terminator: false,
             utf8_mouse: false,
@@ -180,7 +178,6 @@ impl Decoder {
     ///
     /// Buffered input is left alone: the flags decide how a byte is named,
     /// not how it is framed, so a sequence half-read keeps being read.
-    /// The terminal's modifier mapping and Backarrow mode remain unchanged.
     pub fn set_flags(&mut self, flags: DecoderFlags) {
         self.flags = flags;
     }
@@ -198,12 +195,6 @@ impl Decoder {
     /// Select the Backarrow mode used for future legacy key decoding.
     pub fn set_backspace_mode(&mut self, enabled: bool) {
         self.backspace_mode = enabled;
-    }
-
-    /// Select Kitty (`true`) or xterm (`false`) modifiers for CSI functional keys.
-    /// This state is independent of the legacy key preferences.
-    pub(crate) fn set_kitty_modifiers(&mut self, enabled: bool) {
-        self.kitty_modifiers = enabled;
     }
 
     /// Enable or disable UTF-8 mouse decoding (xterm mode 1005).
@@ -568,7 +559,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kitty_modifiers_apply_to_functional_keys_across_input_splits() {
+    fn kitty_modifier_order_applies_across_csi_key_forms_and_input_splits() {
         use crate::event::{Key, KeyCode, KeyModifiers};
 
         for (body, expected) in [
@@ -583,6 +574,30 @@ mod tests {
             (
                 b"1;33H",
                 Event::KeyPress(Key::new(KeyCode::Home, KeyModifiers::META)),
+            ),
+            (
+                b"27;9;97~",
+                Event::KeyPress(Key::new(KeyCode::Char('a'), KeyModifiers::SUPER)),
+            ),
+            (
+                b"27;33;97~",
+                Event::KeyPress(Key::new(KeyCode::Char('a'), KeyModifiers::META)),
+            ),
+            (
+                b"127;9u",
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::SUPER)),
+            ),
+            (
+                b"127;33u",
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::META)),
+            ),
+            (
+                b"1;257D",
+                Event::KeyPress(Key::new(KeyCode::Left, KeyModifiers::empty())),
+            ),
+            (
+                b"127;265u",
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::SUPER)),
             ),
             (
                 b"13;65:2~",
@@ -611,7 +626,6 @@ mod tests {
                 let bytes = [prefix, body].concat();
                 for split in 0..=bytes.len() {
                     let mut decoder = Decoder::default();
-                    decoder.set_kitty_modifiers(true);
                     let mut events = decoder.parse(&bytes[..split]);
                     events.extend(decoder.parse(&bytes[split..]));
                     assert_eq!(events, vec![expected.clone()], "{bytes:?}, split {split}");
@@ -626,41 +640,27 @@ mod tests {
     }
 
     #[test]
-    fn kitty_modifier_selection_preserves_other_encodings() {
+    fn ambiguous_f3_uses_kitty_modifier_order_and_keeps_cursor_report() {
         use crate::event::{KeyCode, KeyModifiers};
 
         let mut decoder = Decoder::default();
-        for bytes in [b"\x1b[1;9D".as_slice(), b"\x1b[3;9~"] {
-            assert_eq!(
-                first_press(&mut decoder, bytes).modifiers,
-                KeyModifiers::META
-            );
-        }
-        decoder.set_kitty_modifiers(true);
-        assert_eq!(
-            first_press(&mut decoder, b"\x1b[127;9u").modifiers,
-            KeyModifiers::SUPER
-        );
-        assert_eq!(
-            first_press(&mut decoder, b"\x1b[27;9;97~").modifiers,
-            KeyModifiers::META
-        );
-        let f3 = first_press(&mut decoder, b"\x1b[1;9R");
-        assert_eq!(f3.code, KeyCode::F(3));
-        assert_eq!(f3.modifiers, KeyModifiers::META);
-        decoder.set_kitty_modifiers(false);
-        assert_eq!(
-            first_press(&mut decoder, b"\x1b[1;9D").modifiers,
-            KeyModifiers::META
-        );
+        let events = decoder.parse(b"\x1b[1;9R");
+        assert_eq!(events.len(), 2);
+        let key = events[0].as_key().unwrap();
+        assert_eq!(key.code, KeyCode::F(3));
+        assert_eq!(key.modifiers, KeyModifiers::SUPER);
+        assert!(matches!(
+            events[1],
+            Event::CursorPosition { position, page: 0 }
+                if position == crate::layout::Position::new(8, 0)
+        ));
     }
 
     #[test]
-    fn kitty_modifiers_and_legacy_preferences_are_independent() {
+    fn legacy_preferences_preserve_kitty_modifier_order() {
         use crate::event::{KeyCode, KeyModifiers};
 
         let mut decoder = Decoder::new(DecoderFlags::CTRL_I);
-        decoder.set_kitty_modifiers(true);
         assert_eq!(decoder.flags(), DecoderFlags::CTRL_I);
         assert_eq!(first_press(&mut decoder, b"\t").code, KeyCode::Char('i'));
         decoder.set_flags(DecoderFlags::CTRL_M);
@@ -669,12 +669,6 @@ mod tests {
             KeyModifiers::SUPER
         );
         assert_eq!(first_press(&mut decoder, b"\r").code, KeyCode::Char('m'));
-        decoder.set_kitty_modifiers(false);
-        assert_eq!(decoder.flags(), DecoderFlags::CTRL_M);
-        assert_eq!(
-            first_press(&mut decoder, b"\x1b[1;9D").modifiers,
-            KeyModifiers::META
-        );
     }
 
     #[test]

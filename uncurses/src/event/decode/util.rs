@@ -173,14 +173,9 @@ pub(super) fn parse_kitty_options(s: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
-pub(super) fn csi_modifiers(params: Params<'_>, kitty_modifiers: bool) -> KeyModifiers {
+pub(super) fn csi_modifiers(params: Params<'_>) -> KeyModifiers {
     // Modifier param defaults to 1 (= no modifiers) per the xterm protocol.
-    let modifiers = params.get_or(1, 1);
-    if kitty_modifiers {
-        super::kitty::decode_kitty_modifiers(modifiers)
-    } else {
-        xterm_modifiers(modifiers as u16)
-    }
+    key_modifiers(params.get_or(1, 1))
 }
 
 /// Read the Kitty keyboard-protocol event-type sub-parameter from the
@@ -299,22 +294,11 @@ pub(super) fn remap_tilde(n: u16, code: KeyCode, flags: DecoderFlags) -> KeyCode
     }
 }
 
-pub(super) fn xterm_modifiers(n: u16) -> KeyModifiers {
-    let n = n.saturating_sub(1);
-    let mut mods = KeyModifiers::empty();
-    if n & 1 != 0 {
-        mods |= KeyModifiers::SHIFT;
-    }
-    if n & 2 != 0 {
-        mods |= KeyModifiers::ALT;
-    }
-    if n & 4 != 0 {
-        mods |= KeyModifiers::CTRL;
-    }
-    if n & 8 != 0 {
-        mods |= KeyModifiers::META;
-    }
-    mods
+pub(super) fn key_modifiers(parameter: u32) -> KeyModifiers {
+    // Use Kitty's ordering for all CSI key forms. Xterm assigns bit 8 to Meta;
+    // we intentionally interpret it as Super instead of guessing the terminal.
+    // Only the protocol's low eight bits apply; Scroll Lock is a local flag.
+    KeyModifiers::from_bits_truncate((parameter.saturating_sub(1) & 0xff) as u16)
 }
 
 pub(super) fn key_with_mods(code: KeyCode, mods: KeyModifiers) -> Key {

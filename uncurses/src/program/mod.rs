@@ -396,7 +396,7 @@ where
     /// Already-decoded events keep their values, including events returned
     /// through [`unread_event`](Self::unread_event). This updates the shared
     /// [`EventSource`] and leaves [`ProgramOptions::legacy_keys`] unchanged.
-    /// Terminal modes and the decoder's modifier mapping remain unchanged.
+    /// Terminal modes remain unchanged.
     pub fn set_decoder_flags(&mut self, flags: DecoderFlags) {
         self.source.lock().unwrap().set_decoder_flags(flags);
     }
@@ -671,10 +671,6 @@ where
     /// provoked it, and that request is yours, so the report is delivered to
     /// you to match against what you asked.
     ///
-    /// A Kitty keyboard reply selects Kitty's modifier mapping for future CSI
-    /// functional keys, even when its enhancement flags are empty.
-    /// User decoder preferences and already queued events keep their values.
-    ///
     /// Observing is otherwise passive, with one class of exception: a mode
     /// report proving support for grapheme clusters or in-band resize enables
     /// that mode when the matching
@@ -747,10 +743,7 @@ where
                     }
                 }
             }
-            Event::KittyKeyboardEnhancements(flags) => {
-                self.caps.kitty_keyboard = Some(flags);
-                self.source.lock().unwrap().set_kitty_modifiers(true);
-            }
+            Event::KittyKeyboardEnhancements(flags) => self.caps.kitty_keyboard = Some(flags),
             // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
             // query, so a reply means the terminal recognizes the feature.
             Event::ModifyOtherKeys(mode) => self.caps.modify_other_keys = Some(mode),

@@ -45,10 +45,14 @@ use std::fmt;
 bitflags! {
     /// Keyboard modifier flags.
     ///
+    /// The low eight bits follow Kitty's modifier ordering. CSI keyboard input
+    /// uses this ordering consistently, including legacy functional keys and
+    /// modifyOtherKeys. Xterm's Meta bit is intentionally interpreted as Super.
+    ///
     /// Modifiers split into two categories:
     ///
-    /// * **Binding modifiers** — `SHIFT`, `ALT`, `CTRL`, `META`,
-    ///   `HYPER`, `SUPER`. These participate in [`Key`] equality and
+    /// * **Binding modifiers** — `SHIFT`, `ALT`, `CTRL`, `SUPER`,
+    ///   `HYPER`, `META`. These participate in [`Key`] equality and
     ///   in [`Key::matches`].
     /// * **Lock states** — `CAPS_LOCK`, `NUM_LOCK`, `SCROLL_LOCK`,
     ///   collectively [`LOCK_MASK`](Self::LOCK_MASK). These report
@@ -64,12 +68,12 @@ bitflags! {
         const ALT         = 0b0000_0000_0000_0010;
         /// Control key modifier.
         const CTRL        = 0b0000_0000_0000_0100;
-        /// Meta key modifier.
-        const META        = 0b0000_0000_0000_1000;
+        /// Super key modifier.
+        const SUPER       = 0b0000_0000_0000_1000;
         /// Hyper key modifier.
         const HYPER       = 0b0000_0000_0001_0000;
-        /// Super key modifier.
-        const SUPER       = 0b0000_0000_0010_0000;
+        /// Meta key modifier.
+        const META        = 0b0000_0000_0010_0000;
         /// Caps Lock state.
         const CAPS_LOCK   = 0b0000_0000_0100_0000;
         /// Num Lock state.

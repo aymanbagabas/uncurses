@@ -5,8 +5,8 @@
 //! Press Alt+[ or Alt+] to see an ambiguous legacy prefix resolve after idle.
 //! An unterminated control string appears as unknown input after two seconds idle.
 //! Press F3 to enable or disable that timeout through the shared event source.
-//! Press F4 to query Kitty keyboard support. A reply selects Kitty modifiers.
-//! Then press Super+Left or Super+Delete to see the detected mapping.
+//! Press Super+Left or Super+Delete to inspect modifier decoding.
+//! CSI keys use Kitty's ordering: Super, Hyper, then Meta.
 //! Press q or Ctrl-C to quit.
 
 use std::io;
@@ -33,7 +33,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
     program.screen_mut().resize((cols, 1));
     program.screen_mut().set_str(
         (0, 0),
-        "F2: LF; F3: string timeout; F4: query Kitty; q/Ctrl-C: quit.",
+        "F2: LF; F3: string timeout; q/Ctrl-C: quit.",
         Style::default(),
     );
     program
@@ -45,6 +45,9 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
     program
         .screen_mut()
         .insert_above("Unterminated strings appear as unknown input after 2 seconds idle.")?;
+    program
+        .screen_mut()
+        .insert_above("CSI modifier bits: 8 = Super, 16 = Hyper, 32 = Meta.")?;
     program.screen_mut().render()?;
 
     loop {
@@ -79,17 +82,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
                 program
                     .screen_mut()
                     .insert_above(&format!("String idle timeout: {setting}"))?;
-            }
-            Event::KeyPress(key) if key.matches("f4") => {
-                program.request_kitty_keyboard()?;
-                program
-                    .screen_mut()
-                    .insert_above("Requested Kitty keyboard support")?;
-            }
-            Event::KittyKeyboardEnhancements(_) => {
-                program
-                    .screen_mut()
-                    .insert_above("Kitty keyboard detected: CSI functional modifiers use Kitty")?;
             }
             Event::KeyPress(key) => {
                 program
