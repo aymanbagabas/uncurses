@@ -22,7 +22,7 @@
 //! unless you ask: call [`Program::query_capabilities`] for that. Teardown is
 //! explicit: there is **no** `Drop`.
 //! Hand the terminal back to the shell with [`Program::finish`] (consume),
-//! [`Program::pause`] (keep, e.g. to shell out), or [`Program::suspend`]
+//! [`Program::pause`] (keep, e.g. to shell out), or Unix `Program::suspend`
 //! (pause, then stop the process with `SIGTSTP`); resume a
 //! paused/suspended program with [`Program::resume`].
 //!
@@ -87,7 +87,7 @@ use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
 use crate::screen::Screen;
-use crate::terminal::Terminal;
+use crate::terminal::{AsTerminalHandle, Terminal};
 
 /// An interactive terminal session composing a [`Terminal`], an
 /// [`EventSource`], and a [`Screen`] to render with. See
@@ -1107,11 +1107,10 @@ where
     }
 }
 
-#[cfg(unix)]
 impl<I, O> Program<I, O>
 where
-    I: Input + Copy + std::os::fd::AsFd,
-    O: Write + Copy + std::os::fd::AsFd,
+    I: Input + Copy,
+    O: Write + Copy + AsTerminalHandle,
 {
     /// Construct a program over `terminal` without touching the terminal:
     /// size the screen to it and create an [`EventSource`] on its input
@@ -1141,7 +1140,7 @@ where
         // The decoder is the only thing that can act on this, and it is
         // behind the source, so the option is carried there as it is taken.
         self.set_decoder_flags(self.options.legacy_keys);
-        self.terminal.make_raw()?;
+        self.enter_raw_mode()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
@@ -1160,8 +1159,8 @@ where
         Ok(())
     }
 
-    /// Query the current terminal window size (output half first, input as
-    /// fallback). This is a live query; the cached
+    /// Query the current terminal window size through [`Terminal::get_window_size`].
+    /// This is a live query; the cached
     /// [`window_cells`](Self::window_cells) /
     /// [`window_pixels`](Self::window_pixels) accessors return the
     /// last-observed values without I/O.
@@ -1217,13 +1216,7 @@ where
     /// broken pipe cannot leave the terminal in raw mode. The teardown error is
     /// still returned.
     pub fn finish(mut self) -> io::Result<()> {
-        // Restore even when teardown fails. Teardown writes to the output
-        // half, so a broken pipe or a closed terminal fails it routinely, and
-        // returning early there would leave the terminal raw. `finish` consumes
-        // the program, so there would be nothing left to retry with.
-        let teardown = self.teardown();
-        let restore = self.terminal.restore();
-        teardown.and(restore)
+        self.pause()
     }
 
     /// Hand the terminal back to the shell without consuming the program,
@@ -1231,15 +1224,14 @@ where
     /// [`Self::finish`] but keeps the program so the session can continue, and
     /// likewise restores the terminal even when the teardown writes fail.
     pub fn pause(&mut self) -> io::Result<()> {
-        // Restore even when teardown fails, for the same reason as `finish`:
-        // the caller asked for the terminal back, and a failed write to it is
-        // not a reason to keep it raw.
+        // Restore even when teardown fails: the caller asked for the terminal
+        // back, and a failed write to it is not a reason to keep it raw.
         let teardown = self.teardown();
         let restore = self.terminal.restore();
         teardown.and(restore)
     }
 
-    /// Re-acquire the terminal after a [`Self::pause`] or [`Self::suspend`]:
+    /// Re-acquire the terminal after a [`Self::pause`] or Unix `suspend`:
     /// re-enter raw mode, refit the managed area to the current viewport, re-apply
     /// the saved render state and modes, and force a full repaint.
     ///
@@ -1247,7 +1239,7 @@ where
     /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
     /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
-        self.terminal.make_raw()?;
+        self.enter_raw_mode()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
@@ -1255,168 +1247,28 @@ where
         self.restore()?;
         self.screen.invalidate();
         self.screen.flush()
+    }
+
+    fn enter_raw_mode(&mut self) -> io::Result<()> {
+        self.terminal.make_raw()?;
+        #[cfg(windows)]
+        {
+            let mut source = self.source.lock().unwrap();
+            let flags = source.flags() | SourceFlags::VT_INPUT;
+            source.set_flags(flags);
+        }
+        Ok(())
     }
 
     /// Suspend the process: [`pause`](Self::pause) the program, then stop
     /// the process with `SIGTSTP`. Returns once the process is
     /// foregrounded again; the caller should then call [`Self::resume`].
+    #[cfg(unix)]
     pub fn suspend(&mut self) -> io::Result<()> {
         self.pause()?;
         // SAFETY: raise is async-signal-safe.
         unsafe { libc::raise(libc::SIGTSTP) };
         Ok(())
-    }
-}
-
-#[cfg(windows)]
-impl<I, O> Program<I, O>
-where
-    I: Input + Copy + std::os::windows::io::AsHandle,
-    O: Write + Copy + std::os::windows::io::AsHandle,
-{
-    /// Construct a program over `terminal` without touching the terminal:
-    /// size the screen to it and create an [`EventSource`] on its input
-    /// half. The terminal is left as-is; call [`Self::init`] to enter raw
-    /// mode and begin a session.
-    pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
-        let ws = terminal.get_window_size()?;
-        Self::with_render(terminal, (ws.col, ws.row))
-    }
-
-    /// Begin a session with the default [`ProgramOptions`]. See
-    /// [`Self::init_with`].
-    pub fn init(&mut self) -> io::Result<()> {
-        self.init_with(ProgramOptions::default())
-    }
-
-    /// Begin a session: enter raw mode and apply the initialization settings
-    /// from `options`. Store query choices and mode preferences for later use.
-    ///
-    /// The `query_*` options take effect when you call
-    /// [`query_capabilities`](Self::query_capabilities).
-    /// The `prefer_*` options apply when reported capabilities confirm mode support.
-    ///
-    /// Call once after [`Self::new`], before rendering.
-    pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
-        self.options = options;
-        // The decoder is the only thing that can act on this, and it is
-        // behind the source, so the option is carried there as it is taken.
-        self.set_decoder_flags(self.options.legacy_keys);
-        self.terminal.make_raw()?;
-        {
-            let mut source = self.source.lock().unwrap();
-            let flags = source.flags() | SourceFlags::VT_INPUT;
-            source.set_flags(flags);
-        }
-        self.enable_tabs_and_bs();
-        self.reset_lnm()?;
-        self.autoresize()?;
-        // Apply the env color profile on every path so output downsamples
-        // correctly even when capability queries are skipped. Disable color
-        // when the output is not a terminal (redirected to a file or pipe).
-        let is_tty = self.terminal.is_terminal().1;
-        self.apply_env_color_profile(is_tty);
-        self.reset_tab_stops()?;
-        if self.options.bracketed_paste {
-            self.enable_bracketed_paste()?;
-        }
-        if let Some(tracking) = self.options.mouse {
-            self.enable_mouse(tracking)?;
-        }
-        Ok(())
-    }
-
-    /// Query the current terminal window size (output half first, input as
-    /// fallback). This is a live query; the cached
-    /// [`window_cells`](Self::window_cells) /
-    /// [`window_pixels`](Self::window_pixels) accessors return the
-    /// last-observed values without I/O.
-    pub fn get_window_size(&self) -> io::Result<crate::terminal::Winsize> {
-        self.terminal.get_window_size()
-    }
-
-    /// Re-query the terminal size and resize the managed area to fit: the full
-    /// terminal size when fullscreen, or the terminal width with the current
-    /// managed height preserved when inline. Refreshes the cached
-    /// [`window_cells`](Self::window_cells), and
-    /// [`window_pixels`](Self::window_pixels) when the platform reports pixel
-    /// dimensions. Nothing is asked of the terminal: this reads the size the
-    /// operating system already knows. On platforms whose size query carries
-    /// no pixel dimensions (the Windows console), refresh those with
-    /// [`request_window_pixel_size`](Self::request_window_pixel_size).
-    ///
-    /// When the managed area already fits the queried size, this returns
-    /// without resizing and without repainting, so it is safe to call on every
-    /// resize report. Terminals send a report per pixel of a window drag while
-    /// the cell grid only changes at cell boundaries, so most reports ask for a
-    /// size the area already has. To re-establish the area whatever the size,
-    /// call [`Screen::resize`](crate::screen::Screen::resize) instead.
-    pub fn autoresize(&mut self) -> io::Result<()> {
-        let Ok(ws) = self.terminal.get_window_size() else {
-            // Keep the current size when the query fails rather than
-            // collapsing the managed area to zero.
-            return Ok(());
-        };
-        self.cache_window_size(ws);
-        let height = match self.screen.fullscreen() {
-            true => ws.row,
-            false => self.screen.size().height,
-        };
-        // Terminals report resizes for changes that leave the cell grid alone
-        // (a font change that keeps rows and columns, a window move on some
-        // terminals). This runs on every one of them, and `Screen::resize`
-        // repaints unconditionally, so skip the ones that change nothing
-        // rather than flickering on each. A caller that wants the repaint
-        // anyway calls `Screen::resize` directly.
-        if self.screen.size() == crate::layout::Size::new(ws.col, height) {
-            return Ok(());
-        }
-        self.screen.resize((ws.col, height));
-        Ok(())
-    }
-
-    /// Consume the program and hand the terminal back to the shell: tear down
-    /// every staged mode, reset the managed area, flush, and restore the
-    /// terminal's prior state.
-    ///
-    /// The terminal state is restored even when the teardown writes fail, so a
-    /// broken pipe cannot leave the terminal in raw mode. The teardown error is
-    /// still returned.
-    pub fn finish(mut self) -> io::Result<()> {
-        let teardown = self.teardown();
-        let restore = self.terminal.restore();
-        teardown.and(restore)
-    }
-
-    /// Hand the terminal back to the shell without consuming the program,
-    /// e.g. to run a child process. Re-enter with [`Self::resume`].
-    pub fn pause(&mut self) -> io::Result<()> {
-        let teardown = self.teardown();
-        let restore = self.terminal.restore();
-        teardown.and(restore)
-    }
-
-    /// Re-acquire the terminal after a [`Self::pause`]: re-enter raw mode,
-    /// refit the managed area to the current viewport, re-apply the saved
-    /// render state and modes, and force a full repaint.
-    ///
-    /// Re-enables [`TABS`](Optimizations::TABS) and
-    /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
-    /// whatever ran while paused may have disturbed both.
-    pub fn resume(&mut self) -> io::Result<()> {
-        self.terminal.make_raw()?;
-        {
-            let mut source = self.source.lock().unwrap();
-            let flags = source.flags() | SourceFlags::VT_INPUT;
-            source.set_flags(flags);
-        }
-        self.enable_tabs_and_bs();
-        self.reset_lnm()?;
-        self.autoresize()?;
-        self.reset_tab_stops()?;
-        self.restore()?;
-        self.screen.invalidate();
-        self.screen.flush()
     }
 }
 

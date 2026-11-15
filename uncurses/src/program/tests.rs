@@ -1871,6 +1871,30 @@ fn init_grants_tabs_and_bs_after_entering_raw_mode() {
     assert_tabs_and_bs_granted(program.screen().optimizations(), primed, "resume");
 }
 
+#[cfg(windows)]
+#[test]
+fn failed_raw_mode_entry_does_not_enable_vt_input() {
+    let (reader, writer) = std::io::pipe().unwrap();
+    for resume in [false, true] {
+        let terminal = Terminal::new(&reader, &writer, crate::terminal::EnvList::new());
+        let mut program = Program::with_render(terminal, (80, 24)).unwrap();
+        let result = if resume {
+            program.resume()
+        } else {
+            program.init()
+        };
+        assert!(result.is_err());
+        assert!(
+            !program
+                .source
+                .lock()
+                .unwrap()
+                .flags()
+                .contains(SourceFlags::VT_INPUT)
+        );
+    }
+}
+
 /// Exactly what a raw-mode entry must leave behind: `TABS` and `BS` on, and
 /// every other capability -- including the opt-in `ONLCR` -- exactly as the
 /// caller left it. One equality pins the grant, the opt-in, and the baseline.
