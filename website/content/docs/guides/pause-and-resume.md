@@ -70,6 +70,12 @@ need a clean slate.
 
 ```mermaid
 flowchart TB
+  accTitle: Pause, run a child, and resume
+  accDescr {
+    The application pauses and restores the terminal's previous state.
+    A child process reads and draws.
+    After the child exits, the application resumes its terminal modes.
+  }
   app["your program (raw mode, alt screen, ...)"]
   app -->|pause| released["terminal restored to its pre-init state"]
   released -->|run child| child["$EDITOR draws and reads"]

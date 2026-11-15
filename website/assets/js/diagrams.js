@@ -49,13 +49,6 @@ async function renderDiagrams() {
       node.removeAttribute("data-processed");
       message.hidden = true;
       await mermaid.run({ nodes: [node], suppressErrors: false });
-      const svg = node.querySelector("svg");
-      if (svg && !svg.querySelector("title")) {
-        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-        title.textContent = "Documentation diagram";
-        svg.prepend(title);
-        svg.setAttribute("role", "img");
-      }
     } catch (error) {
       message.hidden = false;
       message.textContent = "This diagram could not render. Reload the page to try again.";

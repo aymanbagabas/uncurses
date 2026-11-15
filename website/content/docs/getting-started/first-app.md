@@ -15,6 +15,11 @@ the program and app state, a setup step, a loop, and a teardown step.
 
 ```mermaid
 flowchart TB
+  accTitle: The application lifecycle
+  accDescr {
+    The application opens its Program, initializes state, and configures the terminal.
+    It repeats the read, update, and redraw cycle, then finishes the Program.
+  }
   begin["new: open the program, initialize state"]
   begin --> setup["start: configure the terminal"]
   setup --> eventloop["run: read event, update state, redraw"]

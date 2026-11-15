@@ -328,7 +328,13 @@ test("every documentation page and internal link resolves", async ({ page, reque
     expect(response.status(), entry.url).toBe(200);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(entry.title);
     const diagrams = page.locator(".mermaid");
-    for (const diagram of await diagrams.all()) await expect(diagram.locator("svg")).toBeVisible();
+    for (const diagram of await diagrams.all()) {
+      const svg = diagram.locator("svg");
+      await expect(svg).toBeVisible();
+      await expect(svg).toHaveAccessibleName(/\S/);
+      await expect(svg).not.toHaveAccessibleName("Documentation diagram");
+      await expect(svg).toHaveAccessibleDescription(/\S/);
+    }
     for (const link of await page.locator('a[href^="/"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")))) {
       if (!link.startsWith("/api/")) links.add(link.split("#")[0]);
     }
@@ -382,6 +388,8 @@ test("themes follow the system, persist across pages, and return to automatic mo
   await expect(theme.locator('[data-theme-icon="dark"]')).toBeVisible();
   await expect.poll(() => page.locator(".mermaid").innerHTML()).not.toBe(diagramBefore);
   await expect(page.locator(".mermaid svg")).toBeVisible();
+  await expect(page.locator(".mermaid svg")).toHaveAccessibleName("Cell content, style, and width");
+  await expect(page.locator(".mermaid svg")).toHaveAccessibleDescription(/A cell stores a grapheme/);
   await page.reload();
   await expect(theme).toHaveAccessibleName("Color theme: Dark. Switch to Auto.");
   await expect.poll(logoSource).toMatch(/uncurses-logo-dark\.png$/);

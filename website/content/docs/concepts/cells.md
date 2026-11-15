@@ -14,6 +14,11 @@ look, and how many columns it occupies.
 
 ```mermaid
 flowchart TB
+  accTitle: Cell content, style, and width
+  accDescr {
+    A cell stores a grapheme or empty content, colors and attributes,
+    and the number of columns it occupies.
+  }
   cell["A cell"] --> txt["content: grapheme or empty"]
   cell --> look["style: colors and attributes"]
   cell --> cols["width: columns occupied"]

@@ -15,6 +15,12 @@ the same event stream as keystrokes. There is no separate "query" channel.
 
 ```mermaid
 flowchart TB
+  accTitle: A terminal query and reply
+  accDescr {
+    The application requests the background color from the terminal.
+    The terminal replies.
+    The application receives a BackgroundColor event in its event loop.
+  }
   req["program.request_background_color()"]
   req --> term["terminal"]
   term --> ev["Event::BackgroundColor(color) in your event loop"]

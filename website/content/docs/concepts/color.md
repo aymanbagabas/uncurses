@@ -38,6 +38,12 @@ profile decides how it comes out.
 
 ```mermaid
 flowchart TB
+  accTitle: Color profile conversion
+  accDescr {
+    TrueColor keeps the selected color.
+    Ansi256 and Ansi select a nearby palette color.
+    Ascii and Disabled remove color.
+  }
   color["a color you set (Rgb / Indexed / named)"]
   color --> tc["TrueColor: the original color"]
   color --> a256["Ansi256: nearest palette index"]
