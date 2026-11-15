@@ -181,8 +181,9 @@ Combine tutorial fragments in their stated order before compilation.
 
 ### Build the website
 
-Install Go and Hugo extended for website work.
-[website/go.mod](website/go.mod) records the Go requirement and theme version.
+Install Node.js 24 and Hugo extended for website work.
+[website/package.json](website/package.json) records the diagram dependency.
+The website uses custom Hugo layouts and system fonts.
 The [website workflow](.github/workflows/deploy-website.yml) pins the CI Hugo version.
 
 Build the API reference from the workspace root:
@@ -195,12 +196,24 @@ Build the site into the ignored workspace target directory:
 
 ```sh
 cd website
+npm ci
+npm test
 hugo --destination ../target/website --cacheDir "$PWD/../target/hugo-cache"
 ```
 
 For an interactive preview, run `hugo server` from `website/`.
 The deployment workflow combines the site with rustdoc under `/api/`.
 A Hugo preview alone does not include that API output.
+
+For layout, navigation, search, and accessibility checks:
+
+```sh
+npx playwright install chromium
+npm run test:browser
+```
+
+The browser suite starts its own local Hugo server.
+To use an existing Chrome executable, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`.
 
 ### Update recordings
 

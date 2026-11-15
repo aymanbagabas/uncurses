@@ -9,6 +9,13 @@ it. This page maps those roles and shows when to reach for each one.
 
 ```mermaid
 flowchart TB
+  accTitle: How the library layers connect
+  accDescr {
+    Program manages Screen for rendering, Terminal for the terminal connection,
+    and EventSource for input.
+    Screen and TextBuffer use the surface primitives.
+    Encode turns surfaces into output bytes.
+  }
   Program["Program<br/>session, modes, input facade"]
   Screen["Screen<br/>pure renderer + diffed drawing"]
   Surface["Surface primitives<br/>cells, buffers, TextSurface"]

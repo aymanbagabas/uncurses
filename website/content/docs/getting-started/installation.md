@@ -22,8 +22,8 @@ features, use a git dependency:
 uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
 
-Using the [ratatui](https://docs.rs/ratatui) backend too? Add the core crate,
-the backend crate, and ratatui:
+Using the [Ratatui](https://docs.rs/ratatui) backend too? Add the core crate,
+the backend crate, and Ratatui:
 
 ```toml
 [dependencies]

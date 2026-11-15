@@ -134,13 +134,13 @@ You do not need to drop `Program::event_stream()` before
 [`Program::resume`](/api/uncurses/program/struct.Program.html#method.resume). The
 stream shares the input source by handle and can stay live across those calls.
 
-## ratatui backend async input
+## Ratatui backend async input
 
 With `uncurses-ratatui`'s `async` feature, the backend has the same shared async
 read path. Use [`UncursesBackend::event_stream`](/api/uncurses_ratatui/struct.UncursesBackend.html#method.event_stream)
 and pair streamed events with
 [`UncursesBackend::observe_event`](/api/uncurses_ratatui/struct.UncursesBackend.html#method.observe_event)
-inside the same `select!` loop that draws your ratatui frames.
+inside the same `select!` loop that draws your Ratatui frames.
 
 ## Low-level `EventSource::into_stream()`
 

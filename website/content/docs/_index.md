@@ -14,6 +14,7 @@ shape your output. No terminfo, no widget tree, no hidden global state.
 These docs are organized into three parts. If you are new, read **Getting
 Started** from top to bottom. Come back to **Concepts** when you want the
 reasoning behind the model, and use **Guides** when you have a specific task.
+See the [feature overview]({{< relref "features.md" >}}) for supported capabilities and links to usage guides.
 
 {{< cards >}}
   {{< card link="getting-started/" title="Getting Started" subtitle="Install uncurses, write hello world, and learn the layers." >}}
