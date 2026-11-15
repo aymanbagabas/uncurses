@@ -559,6 +559,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn kitty_modifiers_apply_to_functional_keys_across_input_splits() {
+        use crate::event::{Key, KeyCode, KeyModifiers};
+
+        for (body, expected) in [
+            (
+                b"1;9D".as_slice(),
+                Event::KeyPress(Key::new(KeyCode::Left, KeyModifiers::SUPER)),
+            ),
+            (
+                b"3;17~",
+                Event::KeyPress(Key::new(KeyCode::Delete, KeyModifiers::HYPER)),
+            ),
+            (
+                b"1;33H",
+                Event::KeyPress(Key::new(KeyCode::Home, KeyModifiers::META)),
+            ),
+            (
+                b"13;65:2~",
+                Event::KeyRepeat(Key::new(KeyCode::F(3), KeyModifiers::CAPS_LOCK)),
+            ),
+            (
+                b"1;129:3P",
+                Event::KeyRelease(Key::new(KeyCode::F(1), KeyModifiers::NUM_LOCK)),
+            ),
+            (
+                b"3;256~",
+                Event::KeyPress(Key::new(
+                    KeyCode::Delete,
+                    KeyModifiers::SHIFT
+                        | KeyModifiers::ALT
+                        | KeyModifiers::CTRL
+                        | KeyModifiers::SUPER
+                        | KeyModifiers::HYPER
+                        | KeyModifiers::META
+                        | KeyModifiers::CAPS_LOCK
+                        | KeyModifiers::NUM_LOCK,
+                )),
+            ),
+        ] {
+            for prefix in [b"\x1b[".as_slice(), b"\x9b"] {
+                let bytes = [prefix, body].concat();
+                for split in 0..=bytes.len() {
+                    let mut decoder = Decoder::new(DecoderFlags::KITTY_MODIFIERS);
+                    let mut events = decoder.parse(&bytes[..split]);
+                    events.extend(decoder.parse(&bytes[split..]));
+                    assert_eq!(events, vec![expected.clone()], "{bytes:?}, split {split}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kitty_modifier_selection_preserves_other_encodings() {
+        use crate::event::{KeyCode, KeyModifiers};
+
+        let mut decoder = Decoder::default();
+        for bytes in [b"\x1b[1;9D".as_slice(), b"\x1b[3;9~"] {
+            assert_eq!(
+                first_press(&mut decoder, bytes).modifiers,
+                KeyModifiers::META
+            );
+        }
+        decoder.set_flags(DecoderFlags::KITTY_MODIFIERS);
+        assert_eq!(
+            first_press(&mut decoder, b"\x1b[127;9u").modifiers,
+            KeyModifiers::SUPER
+        );
+        assert_eq!(
+            first_press(&mut decoder, b"\x1b[27;9;97~").modifiers,
+            KeyModifiers::META
+        );
+        let f3 = first_press(&mut decoder, b"\x1b[1;9R");
+        assert_eq!(f3.code, KeyCode::F(3));
+        assert_eq!(f3.modifiers, KeyModifiers::META);
+        decoder.set_flags(DecoderFlags::empty());
+        assert_eq!(
+            first_press(&mut decoder, b"\x1b[1;9D").modifiers,
+            KeyModifiers::META
+        );
+    }
+
+    #[test]
     fn backspace_mode_report_does_not_change_decoder_state() {
         let mut decoder = Decoder::default();
         let input = b"\x1b[?67;1$y\x08";

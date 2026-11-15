@@ -417,7 +417,7 @@ fn recognize(
             _ => None,
         };
         if let Some(kc) = key_code {
-            let key = key_with_mods(kc, csi_modifiers(params));
+            let key = key_with_mods(kc, csi_modifiers(params, flags));
             return Some(key_event_for_phase(key, csi_kitty_phase(params)));
         }
         match final_byte {
@@ -471,7 +471,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
     if count > 2 {
         return None;
     }
-    let mods = csi_modifiers(params);
+    let mods = csi_modifiers(params, flags);
 
     if code == 200 && count == 1 {
         return Some(Event::PasteStart);

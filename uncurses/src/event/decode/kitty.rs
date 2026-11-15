@@ -75,7 +75,7 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     Some(key_event_for_phase(key, phase))
 }
 
-fn decode_kitty_modifiers(m: u32) -> KeyModifiers {
+pub(super) fn decode_kitty_modifiers(m: u32) -> KeyModifiers {
     let m = m.saturating_sub(1); // Kitty uses 1-based modifier encoding
     let mut mods = KeyModifiers::empty();
     if m & 1 != 0 {

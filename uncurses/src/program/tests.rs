@@ -1347,6 +1347,38 @@ fn reset_uses_front_buf_height_not_live_height_after_resize() {
 
 // --- kitty keyboard setter ---
 
+#[cfg(unix)]
+#[test]
+fn kitty_support_selects_functional_modifiers_even_with_enhancements_disabled() {
+    use crate::ansi::kitty::KittyKeyboardFlags;
+    use crate::event::{KeyCode, KeyModifiers};
+
+    let buf = RefCell::new(Vec::new());
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
+    program.options.legacy_keys = DecoderFlags::CTRL_I;
+    program.set_decoder_flags(DecoderFlags::CTRL_I);
+    program
+        .observe_event(&Event::KittyKeyboardEnhancements(
+            KittyKeyboardFlags::empty(),
+        ))
+        .unwrap();
+    program.set_kitty_keyboard(None).unwrap();
+    assert_eq!(program.options.legacy_keys, DecoderFlags::CTRL_I);
+    assert!(program.decoder_flags().contains(DecoderFlags::CTRL_I));
+
+    let mut source = program.source.lock().unwrap();
+    writer.write_all(b"\x1b[127;9u\x1b[1;9D\x1b[3;9~").unwrap();
+    assert!(source.poll(Some(Duration::ZERO)).unwrap());
+    for code in [KeyCode::Backspace, KeyCode::Left, KeyCode::Delete] {
+        let Some(Event::KeyPress(key)) = source.try_read() else {
+            panic!("expected {code:?}");
+        };
+        assert_eq!(key.code, code);
+        assert_eq!(key.modifiers, KeyModifiers::SUPER, "{code:?}");
+    }
+}
+
 #[test]
 fn set_kitty_keyboard_flags_always_emits_set() {
     use crate::ansi::kitty::KittyKeyboardFlags;

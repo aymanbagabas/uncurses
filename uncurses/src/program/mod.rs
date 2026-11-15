@@ -671,6 +671,10 @@ where
     /// provoked it, and that request is yours, so the report is delivered to
     /// you to match against what you asked.
     ///
+    /// A Kitty keyboard reply selects [`DecoderFlags::KITTY_MODIFIERS`] for
+    /// future input, even when its enhancement flags are empty. Already queued
+    /// events keep their decoded values.
+    ///
     /// Observing is otherwise passive, with one class of exception: a mode
     /// report proving support for grapheme clusters or in-band resize enables
     /// that mode when the matching
@@ -743,7 +747,12 @@ where
                     }
                 }
             }
-            Event::KittyKeyboardEnhancements(flags) => self.caps.kitty_keyboard = Some(flags),
+            Event::KittyKeyboardEnhancements(flags) => {
+                self.caps.kitty_keyboard = Some(flags);
+                let mut source = self.source.lock().unwrap();
+                let flags = source.decoder_flags() | DecoderFlags::KITTY_MODIFIERS;
+                source.set_decoder_flags(flags);
+            }
             // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
             // query, so a reply means the terminal recognizes the feature.
             Event::ModifyOtherKeys(mode) => self.caps.modify_other_keys = Some(mode),

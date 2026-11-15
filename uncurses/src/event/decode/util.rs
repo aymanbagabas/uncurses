@@ -173,9 +173,14 @@ pub(super) fn parse_kitty_options(s: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
-pub(super) fn csi_modifiers(params: Params<'_>) -> KeyModifiers {
+pub(super) fn csi_modifiers(params: Params<'_>, flags: DecoderFlags) -> KeyModifiers {
     // Modifier param defaults to 1 (= no modifiers) per the xterm protocol.
-    xterm_modifiers(params.get_or(1, 1) as u16)
+    let modifiers = params.get_or(1, 1);
+    if flags.contains(DecoderFlags::KITTY_MODIFIERS) {
+        super::kitty::decode_kitty_modifiers(modifiers)
+    } else {
+        xterm_modifiers(modifiers as u16)
+    }
 }
 
 /// Read the Kitty keyboard-protocol event-type sub-parameter from the

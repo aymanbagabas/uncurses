@@ -5,6 +5,8 @@
 //! Press Alt+[ or Alt+] to see an ambiguous legacy prefix resolve after idle.
 //! An unterminated control string appears as unknown input after two seconds idle.
 //! Press F3 to enable or disable that timeout through the shared event source.
+//! Press F4 to switch CSI functional modifiers between xterm and Kitty.
+//! Then press Super+Left or Super+Delete to see the selected mapping.
 //! Press q or Ctrl-C to quit.
 
 use std::io;
@@ -31,7 +33,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
     program.screen_mut().resize((cols, 1));
     program.screen_mut().set_str(
         (0, 0),
-        "F2: LF mapping; F3: string timeout; Ctrl+J: test LF; q/Ctrl-C: quit.",
+        "F2: LF; F3: string timeout; F4: Kitty modifiers; q/Ctrl-C: quit.",
         Style::default(),
     );
     program
@@ -77,6 +79,19 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
                 program
                     .screen_mut()
                     .insert_above(&format!("String idle timeout: {setting}"))?;
+            }
+            Event::KeyPress(key) if key.matches("f4") => {
+                let mut flags = program.decoder_flags();
+                flags.toggle(DecoderFlags::KITTY_MODIFIERS);
+                program.set_decoder_flags(flags);
+                let mapping = if flags.contains(DecoderFlags::KITTY_MODIFIERS) {
+                    "Kitty"
+                } else {
+                    "xterm"
+                };
+                program
+                    .screen_mut()
+                    .insert_above(&format!("CSI functional modifiers: {mapping}"))?;
             }
             Event::KeyPress(key) => {
                 program
