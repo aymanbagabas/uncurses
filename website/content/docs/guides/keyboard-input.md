@@ -215,29 +215,3 @@ getting plain presses and it is safe to ask unconditionally.
 
 See the `keylog` example in `examples/examples/` for a live readout of every key,
 modifier, repeat, and release.
-
-## Kitty functional modifiers
-
-Kitty and xterm assign different meanings to modifier bit 8 in cursor and
-functional-key sequences. Kitty uses Super; xterm uses Meta.
-`DecoderFlags::KITTY_MODIFIERS` selects Kitty's complete mapping, including
-Hyper, Meta, Caps Lock, and Num Lock.
-
-`Program` selects this flag after it observes a `KittyKeyboardEnhancements`
-reply. Use `query_capabilities()` to query support before the input loop.
-With an async event stream, pass replies to `observe_event()`.
-An empty enhancement reply still confirms support. Disabling enhancements
-keeps the modifier mapping because Kitty also uses it in legacy mode.
-
-For a known Kitty-protocol terminal without a query, select
-`DecoderFlags::KITTY_MODIFIERS` through `Program::set_decoder_flags()` or
-`EventSource::set_decoder_flags()`. Preserve other flags when you add it.
-Sending an enhancement request alone does not confirm terminal support.
-The default mapping remains xterm-compatible.
-
-The selection affects future decoding. Already queued events retain their
-values. CSI-u uses its existing Kitty mapping; xterm modifyOtherKeys retains
-its xterm mapping.
-
-Run `cargo run --example legacy_keys` and press F4 to switch mappings.
-Then press Super+Left or Super+Delete in Kitty to compare the decoded modifiers.
