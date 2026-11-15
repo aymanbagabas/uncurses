@@ -82,9 +82,9 @@ dialog.addEventListener("click", (event) => {
 });
 input.addEventListener("input", updateSearch);
 document.addEventListener("keydown", (event) => {
-  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.defaultPrevented || event.isComposing || event.altKey || event.shiftKey) return;
   const editing = event.target.closest("input, textarea, select, [contenteditable]");
-  if (event.key === "/" && !editing && !dialog.open) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && !editing && !dialog.open) {
     event.preventDefault();
     dialog.showModal();
     input.focus();

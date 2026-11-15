@@ -61,12 +61,16 @@ test("search supports the shortcut, empty results, and Escape focus restoration"
   await page.goto("/");
   await page.getByRole("button", { name: "Search documentation" }).focus();
   await page.keyboard.press("/");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await page.keyboard.press("Control+k");
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("searchbox").fill("no-such-terminal-term");
   await expect(page.locator(".search-status")).toContainText("No results");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toBeHidden();
   await expect(page.getByRole("button", { name: "Search documentation" })).toBeFocused();
+  await page.keyboard.press("Meta+k");
+  await expect(page.getByRole("dialog")).toBeVisible();
 });
 
 test("the terminal demo types, pauses, and repeats its recorded application output", async ({ page }) => {
