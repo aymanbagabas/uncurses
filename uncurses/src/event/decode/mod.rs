@@ -605,6 +605,11 @@ mod tests {
                     let mut events = decoder.parse(&bytes[..split]);
                     events.extend(decoder.parse(&bytes[split..]));
                     assert_eq!(events, vec![expected.clone()], "{bytes:?}, split {split}");
+                    assert_eq!(
+                        events[0].as_key().unwrap().modifiers,
+                        expected.as_key().unwrap().modifiers,
+                        "{bytes:?}, split {split}"
+                    );
                 }
             }
         }
