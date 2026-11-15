@@ -78,9 +78,9 @@ impl Renderer {
     ///
     /// # Behavior
     ///
-    /// Copies only cells within `front`'s touched spans, skips
-    /// continuation cells, steps by wide-cell width, and clears
-    /// `front`'s touched flags before returning.
+    /// Copies primary cells within `front`'s touched spans and synchronizes
+    /// continuation styles separately. Clears `front`'s touched flags before
+    /// returning.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
         let width = front.width();
         let height = front.height();
@@ -98,32 +98,27 @@ impl Renderer {
             if self.sync_narrow_span(front, y, span) {
                 continue;
             }
-            let mut x = span.first;
-            while x <= span.last {
+            for x in span.first..=span.last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
-                    x += 1;
                     continue;
                 };
-                // Skip continuation columns. Copying the primary places
-                // the continuation on the far side as part of the same
-                // write, so the column is already carrying the value this
-                // loop would ask for. `Buffer::set` ignores a continuation
-                // offered on its own, so passing one on would be a wasted
-                // call rather than a wrong one, and stepping over it keeps
-                // the walk in step with the widths it advances by.
                 if new_cell.is_continuation() {
-                    x += 1;
+                    // A primary write regenerates its continuations, so restore
+                    // each column's independent style afterward.
+                    if self
+                        .back_buf
+                        .cell(pos)
+                        .is_some_and(|old| !old.style_eq_ref(new_cell))
+                    {
+                        self.back_buf.set_style(pos, new_cell.to_style());
+                    }
                     continue;
                 }
                 // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
                 self.back_buf.set_cell(pos, new_cell);
-                // Step over any continuation columns owned by the cell
-                // we just wrote so we don't try to re-copy them.
-                let step = (new_cell.width() as u16).max(1);
-                x = x.saturating_add(step);
             }
         }
         front.clear_touched();
@@ -263,13 +258,8 @@ mod tests {
         assert!(r.sync_front(&mut front));
     }
 
-    /// Regression: sync_front used to step by 1 column even on wide
-    /// cells, which re-visited the continuation column and overwrote
-    /// the wide primary in back_buf with a blank. With the width-
-    /// aware step the primary survives and the continuation is
-    /// skipped.
     #[test]
-    fn sync_advances_by_wide_cell_width_and_skips_continuation() {
+    fn sync_preserves_wide_primaries_and_their_continuations() {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 1);
         // Wide CJK cell at col 0; col 1 is its continuation.
