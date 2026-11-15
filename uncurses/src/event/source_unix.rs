@@ -445,6 +445,24 @@ mod tests {
     }
 
     #[test]
+    fn ready_resize_preserves_a_simultaneous_wake() {
+        let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
+            eprintln!("skipping resize/wake regression: no usable PTY");
+            return;
+        };
+        let mut src = new_reader(slave);
+        src.last_size = None;
+        assert_eq!(unsafe { libc::raise(libc::SIGWINCH) }, 0);
+        src.waker().wake().unwrap();
+        assert!(src.poll(Some(Duration::ZERO)).unwrap());
+        assert!(matches!(src.try_read(), Some(Event::Resize(_))));
+        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert!(src.try_read().is_none());
+    }
+
+    #[test]
     fn repeated_wakes_do_not_starve_input() {
         let (rx, tx) = make_pipe();
         let mut src = new_reader(rx);
