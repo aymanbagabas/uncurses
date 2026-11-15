@@ -26,7 +26,7 @@ fn main() -> io::Result<()> {
             screen.clear();
             screen.set_cursor_position((2, 1));
             screen.render()?;
-            if wait_for_key(&mut program, Duration::from_millis(300))? {
+            if wait_for_key(&mut program, "", Duration::from_millis(300))? {
                 return Ok(());
             }
 
@@ -37,11 +37,11 @@ fn main() -> io::Result<()> {
                 screen.set_str((2, 1), &greeting, Style::new());
                 screen.set_cursor_position((column + 1, 1));
                 screen.render()?;
-                if wait_for_key(&mut program, Duration::from_millis(45))? {
+                if wait_for_key(&mut program, &greeting, Duration::from_millis(45))? {
                     return Ok(());
                 }
             }
-            if wait_for_key(&mut program, Duration::from_secs(5))? {
+            if wait_for_key(&mut program, &greeting, Duration::from_secs(5))? {
                 return Ok(());
             }
         }
@@ -50,14 +50,25 @@ fn main() -> io::Result<()> {
     result.and(finish)
 }
 
-fn wait_for_key(program: &mut Program<Stdin, Stdout>, delay: Duration) -> io::Result<bool> {
+fn wait_for_key(
+    program: &mut Program<Stdin, Stdout>,
+    greeting: &str,
+    delay: Duration,
+) -> io::Result<bool> {
     let start = Instant::now();
     while let Some(remaining) = delay.checked_sub(start.elapsed()) {
         if !program.poll_event(Some(remaining))? {
             return Ok(false);
         }
-        if matches!(program.read_event()?, Event::KeyPress(_)) {
-            return Ok(true);
+        match program.read_event()? {
+            Event::KeyPress(_) => return Ok(true),
+            Event::Resize(_) => {
+                program.autoresize()?;
+                let screen = program.screen_mut();
+                screen.set_str((2, 1), greeting, Style::new());
+                screen.render()?;
+            }
+            _ => {}
         }
     }
     Ok(false)
