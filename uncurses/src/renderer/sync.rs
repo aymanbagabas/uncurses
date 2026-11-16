@@ -8,7 +8,7 @@
 //! when the destination cell actually differs. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
-//! A placeholder immediately after a touched span also gets a fresh anchor check.
+//! Only cells inside touched spans participate in synchronization.
 
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
@@ -62,35 +62,24 @@ impl Renderer {
                 continue;
             };
             let mut x = span.first;
-            let last = span.last.saturating_add(1);
-            let last = if front
-                .cell((last, y).into())
-                .is_some_and(super::placeholders::is_placeholder)
-            {
-                last
-            } else {
-                span.last
-            };
-            while x <= last {
+            while x <= span.last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
                     x += 1;
                     continue;
                 };
-                // Skip continuation columns. Copying the primary places
-                // the continuation on the far side as part of the same
-                // write, so the column is already carrying the value this
-                // loop would ask for. `Buffer::set` ignores a continuation
-                // offered on its own, so passing one on would be a wasted
-                // call rather than a wrong one, and stepping over it keeps
-                // the walk in step with the widths it advances by.
+                // Skip continuation columns. The primary write already copies them.
                 if new_cell.is_continuation() {
                     x += 1;
                     continue;
                 }
-                // `RenderBuffer::set_cell` does a value-equality
-                // check before writing, so unchanged cells pay no
-                // clone and no touch.
+                let existing = self.back_buf.cell(pos).unwrap();
+                let previous_width = existing.width();
+                let changed = existing != new_cell || u16::from(new_cell.width()) > width - x;
+                if !changed {
+                    x = x.saturating_add(u16::from(new_cell.width()));
+                    continue;
+                }
                 if new_cell.is_placement() {
                     if !PLACEMENTS {
                         return Err(std::io::Error::new(
@@ -101,13 +90,7 @@ impl Renderer {
                     self.back_buf
                         .set_cell(pos, &crate::cell::Cell::BLANK.style(&new_cell.style));
                 } else {
-                    if let Some(cell) =
-                        super::placeholders::compressed(front.line(y).unwrap(), usize::from(x))
-                    {
-                        self.back_buf.set_cell(pos, &cell);
-                    } else {
-                        self.back_buf.set_cell(pos, new_cell);
-                    }
+                    self.back_buf.replace_cell(pos, new_cell, previous_width);
                 }
                 // Step over any continuation columns owned by the cell
                 // we just wrote so we don't try to re-copy them.
@@ -164,6 +147,22 @@ mod tests {
         r.sync_front(&mut front);
         assert_eq!(r.back_buf.width(), 10);
         assert_eq!(r.back_buf.height(), 3);
+    }
+
+    #[test]
+    fn sync_normalizes_an_equal_wide_primary_clipped_by_resize() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(3, 1);
+        let style = crate::style::Style::new().bold();
+        front.set_cell((1, 0), &Cell::new("\u{754c}", 2).style(&style));
+        renderer.sync_front(&mut front);
+
+        front.resize(2, 1);
+        renderer.sync_front(&mut front);
+        assert_eq!(
+            renderer.back_buf.cell((1, 0).into()),
+            Some(&Cell::BLANK.style(style))
+        );
     }
 
     #[test]

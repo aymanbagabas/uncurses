@@ -74,10 +74,11 @@ bytes written straight to it, and keeps them in order with its own output.
 ## Placements
 
 A placement gives the screen an area and encoded output to draw there.
-Use one for an image or sized text that ordinary cells cannot describe.
+Use one for opaque image output or sized text.
 The screen tracks its position and redraws text above it when necessary.
 The image implementation prepares the terminal commands.
-The screen owns attached image resources.
+The screen owns resources attached to placements.
+Cell-based images use the surface interface directly.
 
 Placements share the ordinary `render()` call with text.
 See the [placement guide]({{< relref "../guides/placements.md" >}}) for examples and resource ownership.

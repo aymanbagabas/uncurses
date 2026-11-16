@@ -55,7 +55,7 @@ Static payloads retain a placement beneath ordinary text.
 The renderer emits the payload before that text whenever the affected rows need a repaint.
 Complete coverage removes the placement. Register it again when you restore the underlying content.
 
-For cell-based composition, use a `PlacementEncoder` in `PlacementOptions::encoder`.
+For clipped opaque output, use a `PlacementEncoder` in `PlacementOptions::encoder`.
 The screen divides the final visible cells into rectangles.
 It calls `prepare` for changed content or geometry before any terminal output.
 Prepared commands are reused for surrounding damage.
@@ -104,6 +104,9 @@ Use `uncurses_images::ImageRenderer` for automatic protocol selection and resour
 Create it from a `Program` with terminal reports and environment, or supply explicit `ImageCapabilities`.
 It prefers Kitty placeholders, Kitty, iTerm2, Sixel, then symbols.
 Unsupported paths or unsuitable geometry fall back to the next usable path.
+Kitty placeholders and symbols use ordinary buffers.
+The image layer owns placeholder resources.
+The screen manages opaque native placements and their attached resources.
 
 Automatic detection uses the reported terminal name, then nonempty `TERM_PROGRAM`, then exact `TERM` values.
 Kitty, Rio, and Ghostty identities imply Kitty graphics support. A Kitty graphics reply also confirms support.
@@ -129,7 +132,7 @@ For manual forwarding, use `CellImage::upload` and `delete`.
 Other transports require explicit resource forwarding. Nested multiplexers require a transport for each layer.
 
 ```rust
-use uncurses::{layout::Rect, screen::Screen};
+use uncurses::{buffer::SurfaceMut, layout::Rect, screen::Screen};
 use uncurses_images::{Image, ImageCapabilities, ImageOptions, ImageRenderer};
 
 fn main() -> std::io::Result<()> {
@@ -137,9 +140,10 @@ fn main() -> std::io::Result<()> {
     let mut screen = Screen::new(Vec::new(), (30, 8));
     let mut images = ImageRenderer::new(ImageCapabilities::default());
     images.draw(&mut screen, 1, Rect::new(2, 2, 8, 4), &source, &ImageOptions::default())?;
-    screen.render()?;
+    images.render(&mut screen)?;
+    screen.clear();
     images.remove(&mut screen, 1);
-    screen.render()
+    images.render(&mut screen)
 }
 ```
 
@@ -147,16 +151,19 @@ Default capabilities select symbols. Use `ImageRenderer::from_program(&program)`
 Update `images.capabilities` with `ImageCapabilities::from_program(&program)` after new replies or changes in pixel geometry.
 Draw retained images again after those changes or changes to the screen's color and width policies.
 
-Finish managed image frames with `screen.render()`.
-The screen uploads new resources and releases retired resources after successful frame output.
-Use `images.remove(screen, id)` to stage removal.
-Remove each image before the session ends, then render the frame.
+Finish automatic image frames with `images.render(screen)`.
+The image layer uploads placeholder resources and releases unused resources after successful frame output.
+Use `images.remove(screen, id)` to retire cached data and opaque output.
+Repaint ordinary cells to move or remove cell images.
+Clear the image cells and retire cached data before the session ends.
+Then render the final image frame.
 Keep each renderer paired with one screen.
 Repaint underlying content after movement or removal.
 
 Run `cargo run -p examples --example images_auto` to try automatic selection.
 Space moves or removes the image. Add `--dump` for output from all five paths.
-The screen compresses placeholder runs and retains coordinate anchors at gaps.
+The image layer compresses placeholder runs and retains coordinate anchors at gaps.
+Desired cells keep complete coordinates for ordinary composition.
 Use `--dump-placeholders` to inspect frames with overlays, movement, and resize.
 The low-level APIs below provide direct control over encoding and resource lifetime.
 
@@ -188,7 +195,7 @@ Use the terminal's actual cell dimensions instead of the sample dimensions.
 Prepare the image again when those dimensions change.
 Keep one spare row below Sixel and iTerm2 images.
 
-Managed images follow ordinary cell ownership.
+Opaque image placements follow cell ownership.
 Later cell writes cover the image cells they replace.
 The image encoder prepares visible fragments after the screen resolves overlaps.
 The application draws the image and dialog through their normal APIs.
@@ -207,17 +214,21 @@ cargo run -p examples --example images_drag -- --iterm2 --overlay
 `--overlay` starts either drag example with the dialog visible. `--dialog` is an alias.
 Space toggles the dialog. Shift+arrows move it.
 Drag the image or use the arrow keys.
-For Kitty placeholders, pass `CellImage::placement(screen)?` to `set_placement`.
-This checks the screen's color profile and includes the shared cells and resources.
+For prepared Kitty placeholders, call `images.draw_cells(screen, &image, position)`.
+This composes ordinary cells and retains the image resource in the image layer.
+Finish the frame with `images.render(screen)`.
 For manual output, use the raw upload, cell, and deletion accessors with an explicit resource lifetime.
+Symbol buffers compose directly through `Surface::draw`.
 
 ## Commit inline output
 
 Use `screen.commit_rows(count)` to release completed inline rows as permanent output.
 Retained placements receive coordinates relative to the new origin.
-Cell-backed placements can cross the boundary; their retained rows keep the same placement ID.
 Commit whole opaque placements, including native images and sized text.
 A boundary inside an opaque placement returns `InvalidInput` before any output.
+For automatic images, use `images.commit_rows(screen, count)`.
+The image layer preserves resources referenced by committed placeholder cells.
+Those ordinary cells can cross the commit boundary.
 
 Resources used by committed rows remain in the terminal after managed removal and program teardown.
 Reuse application IDs for new managed images after a commit.
@@ -251,13 +262,16 @@ For explicit resource control, restore the required resources after a terminal r
 A placement ID belongs to one screen and one positioned rectangle.
 Register another ID for another instance.
 Use `set_placement` to move content instead of translating its marker cells through buffer operations.
-Cell-backed resource ownership covers registered rectangles.
-Copies outside those rectangles require explicit resource lifetime management.
+Ordinary image cells use the normal surface copy and clipping operations.
+The image layer retains resources for visible placeholder cells, including copies outside their original draw area.
 
 Malformed markers and unresolved references fail before frame output.
 After an output failure, restore the terminal parser and cursor before calling `invalidate()` and retrying.
 The screen discards partially transmitted buffers and retains placement cleanup records.
 With explicit resource control, restore any shared resources affected by the failed output.
-For managed images, `screen.invalidate()` also restores resource uploads on the next render.
+For automatic images, finish pending writes before restoring the terminal state.
+Call `images.invalidate(screen)` to restore placeholder uploads on the next image frame.
+This also restores live resources shared with committed placeholder rows.
+Invalidate after screen switches between image frames.
 
 See [`PlacementOptions`](/api/uncurses/screen/struct.PlacementOptions.html) for the payload contract.

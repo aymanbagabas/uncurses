@@ -21,10 +21,7 @@ impl KittyResource {
     pub fn new(id: u32, upload: Vec<u8>) -> Self {
         Self {
             id,
-            commands: PlacementResource::new(
-                upload,
-                format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\").into_bytes(),
-            ),
+            commands: PlacementResource::new(upload, protocols::kitty::delete_resource(id)),
         }
     }
 }

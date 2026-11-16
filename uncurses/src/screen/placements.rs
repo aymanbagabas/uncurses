@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use super::{PlacementResource, Screen, TextSizing};
 use crate::ansi::text_sizing::write_sized_text;
-use crate::buffer::Buffer;
 use crate::layout::{Position, Rect};
 use crate::style::Style;
 
@@ -82,17 +81,9 @@ pub struct PlacementOptions {
     /// beneath text; encoders prepare their remaining visible cells.
     /// Complete coverage removes the placement; register it again to restore it.
     pub erase_on_overwrite: bool,
-    /// Ordinary cells occupying the rectangle, instead of an opaque draw payload.
-    ///
-    /// Dimensions must match the rectangle. Use empty draw and erase payloads,
-    /// leave `encoder` unset, and leave `erase_on_overwrite` false.
-    /// Private placement markers are invalid.
-    /// Removal replaces matching cells with default-style blanks and preserves
-    /// changed overlay cells.
-    pub cells: Option<Arc<Buffer>>,
     /// Prepare opaque fragments from the final visible cell regions.
     ///
-    /// Use empty `draw` and `erase` payloads and leave `cells` unset.
+    /// Use empty `draw` and `erase` payloads.
     /// Later cell writes exclude those cells from the prepared fragments.
     pub encoder: Option<Arc<dyn PlacementEncoder>>,
     /// Shared resource required by this placement.
@@ -111,16 +102,6 @@ impl PartialEq for PlacementOptions {
             && match (&self.encoder, &other.encoder) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                _ => false,
-            }
-            && match (&self.cells, &other.cells) {
-                (None, None) => true,
-                (Some(a), Some(b)) => {
-                    Arc::ptr_eq(a, b)
-                        || (a.width() == b.width()
-                            && a.height() == b.height()
-                            && (0..a.height()).all(|y| a.line(y) == b.line(y)))
-                }
                 _ => false,
             }
     }
@@ -241,7 +222,7 @@ impl<W: Write> Screen<W> {
     }
 
     pub(crate) fn release_placements(&mut self) -> io::Result<()> {
-        if !self.renderer.placements.has_output() {
+        if !self.renderer.has_placement_output() {
             return Ok(());
         }
         let result = self.render_frame(true);
@@ -265,12 +246,9 @@ mod tests {
         }
     }
 
-    fn cell_options() -> PlacementOptions {
-        let mut cells = Buffer::new(2, 1);
-        cells.set((0, 0), &Cell::new("A", 1));
-        cells.set((1, 0), &Cell::new("B", 1));
+    fn resource_options() -> PlacementOptions {
         PlacementOptions {
-            cells: Some(Arc::new(cells)),
+            draw: b"AB".to_vec(),
             resource: Some(PlacementResource::new(
                 b"<UPLOAD>".as_slice(),
                 b"<DELETE>".as_slice(),
@@ -301,6 +279,41 @@ mod tests {
     }
 
     #[test]
+    fn placement_state_lives_until_cleanup_and_can_be_recreated() {
+        let mut screen = Screen::new(Vec::new(), (10, 4));
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+        assert!(screen.renderer.placements.is_none());
+        let options = resource_options();
+        let area = Rect::new(1, 1, 2, 1);
+        screen.set_placement(1, area, &options).unwrap();
+        screen.remove_placement(1);
+        screen.render().unwrap();
+        assert!(screen.renderer.placements.is_none());
+        assert!(screen.writer().is_empty());
+
+        for _ in 0..2 {
+            screen.set_placement(1, area, &options).unwrap();
+            screen.render().unwrap();
+            assert!(String::from_utf8_lossy(screen.writer()).contains("<UPLOAD>"));
+            screen.writer_mut().clear();
+            screen.remove_placement(1);
+            assert!(screen.renderer.placements.is_some());
+            screen.render().unwrap();
+            assert!(screen.writer().ends_with(b"<DELETE>"));
+            assert!(screen.renderer.placements.is_none());
+            screen.writer_mut().clear();
+            screen.set_str((1, 1), "XY", Style::EMPTY);
+            screen.render().unwrap();
+            assert!(String::from_utf8_lossy(screen.writer()).contains("XY"));
+            assert!(screen.renderer.placements.is_none());
+            screen.writer_mut().clear();
+            screen.render().unwrap();
+            assert!(screen.writer().is_empty());
+        }
+    }
+
+    #[test]
     fn three_overlapping_static_placements_follow_registration_order() {
         let mut screen = Screen::new(Vec::new(), (10, 4));
         for (id, x, text) in [(1, 1, b"AAA"), (2, 2, b"BBB"), (3, 3, b"CCC")] {
@@ -322,101 +335,6 @@ mod tests {
         screen.writer_mut().clear();
         screen.render().unwrap();
         assert!(screen.writer().is_empty());
-    }
-
-    #[test]
-    fn three_cell_placements_commit_only_the_visible_resources() {
-        use crate::buffer::SurfaceMut;
-
-        let mut screen = Screen::new(Vec::new(), (10, 4));
-        let first = cell_options();
-        let mut lower_cells = Buffer::new(2, 2);
-        lower_cells.fill(&Cell::new("X", 1));
-        let lower = PlacementOptions {
-            cells: Some(Arc::new(lower_cells)),
-            resource: Some(PlacementResource::new(
-                b"<LOWER UPLOAD>".as_slice(),
-                b"<LOWER DELETE>".as_slice(),
-            )),
-            ..Default::default()
-        };
-        let mut upper_cells = Buffer::new(2, 1);
-        upper_cells.fill(&Cell::new("X", 1));
-        let upper = PlacementOptions {
-            cells: Some(Arc::new(upper_cells)),
-            resource: Some(PlacementResource::new(
-                b"<UPPER UPLOAD>".as_slice(),
-                b"<UPPER DELETE>".as_slice(),
-            )),
-            ..Default::default()
-        };
-        screen
-            .set_placement(1, Rect::new(0, 0, 2, 1), &first)
-            .unwrap();
-        screen
-            .set_placement(2, Rect::new(3, 0, 2, 2), &lower)
-            .unwrap();
-        screen
-            .set_placement(3, Rect::new(3, 0, 2, 1), &upper)
-            .unwrap();
-        screen.commit_rows(1).unwrap();
-        screen.writer_mut().clear();
-        screen.remove_placement(2);
-        screen.render().unwrap();
-        assert!(screen.writer().ends_with(b"<LOWER DELETE>"));
-        assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPPER DELETE>"));
-
-        screen
-            .set_placement(3, Rect::new(3, 0, 2, 1), &upper)
-            .unwrap();
-        screen.render().unwrap();
-        screen.writer_mut().clear();
-        screen.remove_placement(3);
-        screen.render().unwrap();
-        assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPPER DELETE>"));
-    }
-
-    #[test]
-    fn removal_and_movement_preserve_later_identical_cell_placements() {
-        use crate::buffer::SurfaceMut;
-
-        for render_first in [false, true] {
-            for move_first in [false, true] {
-                let mut screen = Screen::new(Vec::new(), (10, 4));
-                let mut cells = Buffer::new(4, 1);
-                cells.fill(&Cell::new("A", 1));
-                let options = PlacementOptions {
-                    cells: Some(Arc::new(cells)),
-                    ..cell_options()
-                };
-                screen
-                    .set_placement(1, Rect::new(1, 1, 4, 1), &options)
-                    .unwrap();
-                screen
-                    .set_placement(2, Rect::new(3, 1, 4, 1), &options)
-                    .unwrap();
-                if render_first {
-                    screen.render().unwrap();
-                }
-                if move_first {
-                    screen
-                        .set_placement(1, Rect::new(0, 0, 4, 1), &options)
-                        .unwrap();
-                } else {
-                    screen.remove_placement(1);
-                }
-                for x in 1..3 {
-                    assert!(screen.cell((x, 1).into()).unwrap().is_blank());
-                }
-                for x in 3..7 {
-                    assert_eq!(screen.cell((x, 1).into()).unwrap().content(), "A");
-                }
-                screen.render().unwrap();
-                screen.writer_mut().clear();
-                screen.render().unwrap();
-                assert!(screen.writer().is_empty());
-            }
-        }
     }
 
     #[derive(Debug, Default)]
@@ -496,7 +414,7 @@ mod tests {
         let mut screen = Screen::new(Vec::new(), (10, 4));
         let mut options = PlacementOptions {
             encoder: Some(Arc::new(Invalid)),
-            resource: cell_options().resource,
+            resource: resource_options().resource,
             ..Default::default()
         };
         let area = Rect::new(1, 1, 2, 1);
@@ -541,9 +459,9 @@ mod tests {
     }
 
     #[test]
-    fn cell_placements_share_resources_until_the_last_visible_copy_is_gone() {
+    fn placements_share_resources_until_the_last_visible_copy_is_gone() {
         let mut screen = Screen::new(Vec::new(), (10, 4));
-        let options = cell_options();
+        let options = resource_options();
         screen
             .set_placement(1, Rect::new(1, 1, 2, 1), &options)
             .unwrap();
@@ -562,7 +480,7 @@ mod tests {
         screen.remove_placement(1);
         screen.render().unwrap();
         assert!(!String::from_utf8_lossy(screen.writer()).contains("<DELETE>"));
-        assert_eq!(screen.cell((5, 1).into()).unwrap().content(), "A");
+        assert!(screen.cell((5, 1).into()).unwrap().is_placement());
         screen.writer_mut().clear();
         screen.set_str((5, 1), "XY", Style::new().bold());
         screen.render().unwrap();
@@ -574,101 +492,52 @@ mod tests {
     }
 
     #[test]
-    fn wide_cell_placements_retire_after_the_last_primary_is_overwritten() {
+    fn committed_placements_keep_shared_resources_and_rebase_retained_rows() {
         let mut screen = Screen::new(Vec::new(), (10, 4));
-        let mut cells = Buffer::new(4, 1);
-        cells.set((0, 0), &Cell::new("界", 2));
-        cells.set((2, 0), &Cell::new("界", 2));
-        let options = PlacementOptions {
-            cells: Some(Arc::new(cells)),
-            resource: Some(PlacementResource::new(
-                b"<UPLOAD>".as_slice(),
-                b"<DELETE>".as_slice(),
-            )),
-            ..Default::default()
-        };
+        let options = resource_options();
         screen
-            .set_placement(1, Rect::new(1, 1, 4, 1), &options)
+            .set_placement(1, Rect::new(1, 0, 2, 1), &options)
+            .unwrap();
+        screen
+            .set_placement(2, Rect::new(1, 2, 2, 1), &options)
             .unwrap();
         screen.render().unwrap();
         screen.writer_mut().clear();
-
-        screen.set_cell((1, 1), &Cell::new("語", 2));
-        screen.render().unwrap();
-        assert!(!screen.writer().ends_with(b"<DELETE>"));
-        screen.writer_mut().clear();
-
-        screen.set_cell((3, 1), &Cell::new("語", 2));
-        screen.render().unwrap();
-        assert!(screen.writer().ends_with(b"<DELETE>"));
-        for x in [1, 3] {
-            assert_eq!(screen.cell((x, 1).into()).unwrap().content(), "語");
-            assert!(screen.cell((x + 1, 1).into()).unwrap().is_continuation());
-        }
+        screen.commit_rows(1).unwrap();
         screen.writer_mut().clear();
         screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+
+        screen.invalidate();
+        screen.render().unwrap();
+        assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPLOAD>"));
+        screen.writer_mut().clear();
+        screen.remove_placement(2);
+        screen.render().unwrap();
+        assert!(!String::from_utf8_lossy(screen.writer()).contains("<DELETE>"));
+        screen.writer_mut().clear();
+        screen.release_placements().unwrap();
         assert!(screen.writer().is_empty());
     }
 
     #[test]
-    fn committed_placements_keep_shared_resources_and_rebase_retained_rows() {
-        for cell_backed in [false, true] {
-            let mut screen = Screen::new(Vec::new(), (10, 4));
-            let mut options = cell_options();
-            if !cell_backed {
-                options.cells = None;
-                options.draw = b"AB".to_vec();
-            }
-            screen
-                .set_placement(1, Rect::new(1, 0, 2, 1), &options)
-                .unwrap();
-            screen
-                .set_placement(2, Rect::new(1, 2, 2, 1), &options)
-                .unwrap();
-            screen.render().unwrap();
-            screen.writer_mut().clear();
-            screen.commit_rows(1).unwrap();
-            screen.writer_mut().clear();
-            screen.render().unwrap();
-            assert!(screen.writer().is_empty());
-
-            screen.invalidate();
-            screen.render().unwrap();
-            assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPLOAD>"));
-            screen.writer_mut().clear();
-            screen.remove_placement(2);
-            screen.render().unwrap();
-            assert!(!String::from_utf8_lossy(screen.writer()).contains("<DELETE>"));
-            screen.writer_mut().clear();
-            screen.release_placements().unwrap();
-            assert!(screen.writer().is_empty());
-        }
-    }
-
-    #[test]
     fn height_shrink_releases_placements_outside_the_retained_rows() {
-        for cell_backed in [false, true] {
-            let mut screen = Screen::new(Vec::new(), (10, 4));
-            let mut options = cell_options();
-            if !cell_backed {
-                options.cells = None;
-                options.draw = b"AB".to_vec();
-            }
-            screen
-                .set_placement(1, Rect::new(1, 2, 2, 1), &options)
-                .unwrap();
-            screen.render().unwrap();
-            screen.writer_mut().clear();
-            screen.resize_height(2);
-            screen.render().unwrap();
-            assert!(screen.writer().ends_with(b"<DELETE>"));
-        }
+        let mut screen = Screen::new(Vec::new(), (10, 4));
+        let options = resource_options();
+        screen
+            .set_placement(1, Rect::new(1, 2, 2, 1), &options)
+            .unwrap();
+        screen.render().unwrap();
+        screen.writer_mut().clear();
+        screen.resize_height(2);
+        screen.render().unwrap();
+        assert!(screen.writer().ends_with(b"<DELETE>"));
     }
 
     #[test]
     fn overwritten_committed_cells_do_not_pin_the_remaining_resource() {
         let mut screen = Screen::new(Vec::new(), (10, 4));
-        let options = cell_options();
+        let options = resource_options();
         screen
             .set_placement(1, Rect::new(1, 0, 2, 1), &options)
             .unwrap();
@@ -687,7 +556,7 @@ mod tests {
     #[test]
     fn committed_resources_survive_full_release_and_screen_switches() {
         let mut screen = Screen::new(Vec::new(), (10, 2));
-        let options = cell_options();
+        let options = resource_options();
         screen
             .set_placement(1, Rect::new(1, 0, 2, 1), &options)
             .unwrap();
@@ -720,36 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn commit_rows_splits_cell_placements_without_deleting_committed_resources() {
-        let mut screen = Screen::new(Vec::new(), (10, 4));
-        let mut cells = Buffer::new(2, 3);
-        for (y, text) in ["A", "B", "C"].into_iter().enumerate() {
-            cells.set((0, y as u16), &Cell::new(text, 1));
-            cells.set((1, y as u16), &Cell::new(text, 1));
-        }
-        let options = PlacementOptions {
-            cells: Some(Arc::new(cells)),
-            ..cell_options()
-        };
-        screen
-            .set_placement(1, Rect::new(1, 0, 2, 3), &options)
-            .unwrap();
-        screen.commit_rows(1).unwrap();
-        assert_eq!(screen.cell((1, 0).into()).unwrap().content(), "B");
-        assert_eq!(screen.cell((1, 1).into()).unwrap().content(), "C");
-        screen.writer_mut().clear();
-        screen.render().unwrap();
-        assert!(screen.writer().is_empty());
-        screen.remove_placement(1);
-        screen.render().unwrap();
-        for y in 0..2 {
-            assert!(screen.cell((1, y).into()).unwrap().is_blank());
-            assert!(screen.cell((2, y).into()).unwrap().is_blank());
-        }
-        assert!(!String::from_utf8_lossy(screen.writer()).contains("<DELETE>"));
-    }
-
-    #[test]
     fn commit_rows_rejects_split_opaque_placements_before_output() {
         let mut screen = Screen::new(Vec::new(), (10, 4));
         screen
@@ -771,64 +610,29 @@ mod tests {
 
     #[test]
     fn handoff_and_invalidation_restore_managed_uploads() {
-        for cells in [false, true] {
-            let mut screen = Screen::new(Vec::new(), (10, 4));
-            let mut options = cell_options();
-            if !cells {
-                options.cells = None;
-                options.draw = b"AB".to_vec();
-            }
-            screen
-                .set_placement(1, Rect::new(1, 1, 2, 1), &options)
-                .unwrap();
-            screen.render().unwrap();
-            let desired = screen.cell((1, 1).into()).unwrap().clone();
-            screen.writer_mut().clear();
-            screen.release_placements().unwrap();
-            assert!(screen.writer().ends_with(b"<DELETE>"));
-            assert_eq!(screen.cell((1, 1).into()), Some(&desired));
-            screen.writer_mut().clear();
-            screen.render().unwrap();
-            assert!(screen.writer().starts_with(b"<UPLOAD>"));
-            screen.writer_mut().clear();
-            screen.invalidate();
-            screen.render().unwrap();
-            assert!(screen.writer().starts_with(b"<UPLOAD>"));
-            screen.writer_mut().clear();
-            screen.resize((2, 2));
-            screen.render().unwrap();
-            assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPLOAD>"));
-            assert!(screen.writer().ends_with(b"<DELETE>"));
-        }
-    }
-
-    #[test]
-    fn invalid_cell_placements_leave_existing_content_unchanged() {
         let mut screen = Screen::new(Vec::new(), (10, 4));
+        let options = resource_options();
         screen
-            .set_placement(1, Rect::new(1, 1, 2, 1), &cell_options())
+            .set_placement(1, Rect::new(1, 1, 2, 1), &options)
             .unwrap();
-        for kind in ["dimensions", "marker", "draw", "erase", "atomic"] {
-            let mut options = cell_options();
-            match kind {
-                "dimensions" => options.cells = Some(Arc::new(Buffer::new(1, 1))),
-                "marker" => {
-                    Arc::make_mut(options.cells.as_mut().unwrap()).set((0, 0), &Cell::placement(99))
-                }
-                "draw" => options.draw = b"AB".to_vec(),
-                "erase" => options.erase = b"  ".to_vec(),
-                "atomic" => options.erase_on_overwrite = true,
-                _ => unreachable!(),
-            }
-            assert!(
-                screen
-                    .set_placement(1, Rect::new(5, 1, 2, 1), &options)
-                    .is_err()
-            );
-            assert_eq!(screen.cell((1, 1).into()).unwrap().content(), "A");
-            assert!(screen.cell((5, 1).into()).unwrap().is_blank());
-            assert!(screen.writer().is_empty());
-        }
+        screen.render().unwrap();
+        let desired = screen.cell((1, 1).into()).unwrap().clone();
+        screen.writer_mut().clear();
+        screen.release_placements().unwrap();
+        assert!(screen.writer().ends_with(b"<DELETE>"));
+        assert_eq!(screen.cell((1, 1).into()), Some(&desired));
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().starts_with(b"<UPLOAD>"));
+        screen.writer_mut().clear();
+        screen.invalidate();
+        screen.render().unwrap();
+        assert!(screen.writer().starts_with(b"<UPLOAD>"));
+        screen.writer_mut().clear();
+        screen.resize((2, 2));
+        screen.render().unwrap();
+        assert!(!String::from_utf8_lossy(screen.writer()).contains("<UPLOAD>"));
+        assert!(screen.writer().ends_with(b"<DELETE>"));
     }
 
     #[test]
@@ -1227,7 +1031,7 @@ mod tests {
         assert!(second.render().is_err());
         assert!(second.writer().is_empty());
         let mut empty = Screen::new(Vec::new(), (20, 5));
-        empty.set_cell((1, 1), &Cell::new("\0p2:unknown", 0));
+        empty.set_cell((1, 1), &Cell::new("\0p2:unknown", 1));
         assert!(empty.render().is_err());
         assert!(empty.writer().is_empty());
     }

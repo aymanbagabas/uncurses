@@ -90,8 +90,7 @@ impl Renderer {
         // Replay whole glyphs, including those whose continuations overlap.
         let covered = |x: usize| {
             placements.iter().any(|record| {
-                record.options.cells.is_none()
-                    && row >= record.area.y
+                row >= record.area.y
                     && row < record.area.bottom()
                     && x < usize::from(record.area.right())
                     && x + usize::from(cells[x].width()) > usize::from(record.area.x)

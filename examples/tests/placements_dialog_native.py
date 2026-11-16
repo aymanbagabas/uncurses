@@ -82,6 +82,10 @@ for origin in (0, 8, 12) if inline else (0,):
             require(screen.grman.image_count == (name != "remove"), (name, "resource leak"))
             for command in re.findall(rb"\x1b_Ga=p,([^\x1b]+)", payload):
                 values = dict((key.decode(), int(value)) for key, value in re.findall(rb"(\w+)=(\d+)", command))
-                require(values["w"] == values["c"] * 8 and values["h"] == values["r"] * 16,
-                        (name, "fragment pixel dimensions", values))
+                if values.get("U") == 1:
+                    require((values["c"], values["r"]) == image_rect[2:],
+                            (name, "virtual image dimensions", values))
+                else:
+                    require(values["w"] == values["c"] * 8 and values["h"] == values["r"] * 16,
+                            (name, "fragment pixel dimensions", values))
     print(f"Verified seven dialog frames: sized={sized}, inline={inline}, origin={origin}.")

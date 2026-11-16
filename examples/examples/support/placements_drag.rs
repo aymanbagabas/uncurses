@@ -9,7 +9,7 @@ use uncurses::screen::{Screen, TextSizing};
 use uncurses::style::Style;
 use uncurses::terminal::Winsize;
 use uncurses::text::{TextSurface, WidthMode};
-use uncurses_images::{CellImage, PreparedImage};
+use uncurses_images::{CellImage, ImageCapabilities, ImageRenderer, PreparedImage};
 
 const WAITING_PIXELS: &str = "Waiting for cell pixels. Use --cell-pixels WxH; q quits.";
 
@@ -106,6 +106,7 @@ struct Drag {
     position: Position,
     grab: Option<Position>,
     dialog: Option<Position>,
+    images: ImageRenderer,
 }
 
 impl Default for Drag {
@@ -114,6 +115,7 @@ impl Default for Drag {
             position: Position::new(2, 3),
             grab: None,
             dialog: None,
+            images: ImageRenderer::new(ImageCapabilities::default()),
         }
     }
 }
@@ -315,6 +317,7 @@ pub fn run_interactive(options: Options, mut content: impl Content) -> io::Resul
                             size.row
                         };
                         program.screen_mut().resize((size.col, height));
+                        drag.images.invalidate(program.screen_mut());
                         query_origin = options.inline;
                         if content.geometry() != PixelGeometry::Unused
                             && options.cell_pixels.is_none()
@@ -435,12 +438,7 @@ fn paint<W: Write>(
                     cells.draw(screen, drag.position);
                 }
                 Visual::Placeholders(image) => {
-                    let size = visual.size();
-                    screen.set_placement(
-                        1,
-                        Rect::new(drag.position.x, drag.position.y, size.width, size.height),
-                        &image.placement(screen)?,
-                    )?;
+                    drag.images.draw_cells(screen, image, drag.position)?;
                 }
                 Visual::SizedText {
                     text,
@@ -484,7 +482,7 @@ fn paint<W: Write>(
         );
         screen.set_cursor_position((0, y));
     }
-    screen.render()
+    drag.images.render(screen)
 }
 
 fn dump(options: &Options, content: &mut impl Content) -> io::Result<()> {

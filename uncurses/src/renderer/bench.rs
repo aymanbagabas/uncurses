@@ -22,6 +22,9 @@ use crate::renderer::{RenderBuffer, Renderer};
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
 
+#[cfg(test)]
+mod public_screen;
+
 fn bench_placements(b: &mut Bencher, count: u64, workload: u8) {
     use crate::{
         layout::Rect,

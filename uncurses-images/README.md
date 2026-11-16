@@ -39,14 +39,17 @@ Use the raw `CellImage::upload` and `delete` bytes for manual forwarding.
 Other transports require explicit resource forwarding. Nested multiplexers require a transport for each layer.
 
 Call `draw(screen, id, area, image, options)` to stage an image.
-Finish the frame with `screen.render()`.
-The screen owns placements, uploads resources, and releases them after removal.
-Call `remove(screen, id)` to stage removal.
+Finish the frame with `images.render(screen)`.
+Kitty placeholders and symbols use ordinary cells.
+The image layer owns placeholder uploads, deletion, and recovery.
+The screen manages opaque native placements and their attached resources.
+Call `remove(screen, id)` to retire cached data and opaque output.
+Repaint ordinary cells to move or remove cell images.
 Keep the renderer paired with one screen and terminal session.
 After capability, geometry, or screen policy changes, update its configuration and draw the images again.
 
 ```rust
-use uncurses::{layout::Rect, screen::Screen};
+use uncurses::{buffer::SurfaceMut, layout::Rect, screen::Screen};
 use uncurses_images::{Image, ImageCapabilities, ImageOptions, ImageRenderer};
 
 fn main() -> std::io::Result<()> {
@@ -54,20 +57,23 @@ fn main() -> std::io::Result<()> {
     let mut screen = Screen::new(Vec::new(), (20, 6));
     let mut images = ImageRenderer::new(ImageCapabilities::default());
     images.draw(&mut screen, 1, Rect::new(2, 1, 8, 3), &image, &ImageOptions::default())?;
-    screen.render()?;
+    images.render(&mut screen)?;
+    screen.clear();
     images.remove(&mut screen, 1);
-    screen.render()
+    images.render(&mut screen)
 }
 ```
 
 Unknown capabilities select symbols. The automatic renderer preserves options
-and shares prepared data across movement and equivalent copies. Repaint the background after movement or removal.
-For cell images, removal replaces matching cells with default-style blanks and preserves changed overlay cells.
-The screen emits one coordinate anchor per visible placeholder run.
-It adds new anchors after overlays divide a row.
-Prepared cells retain their coordinates for independent copies.
-After an output failure, restore the terminal parser and cursor.
-Then call `screen.invalidate()` before another render.
+and shares prepared data across movement and equivalent copies.
+The image layer emits one coordinate anchor per visible placeholder run.
+It restores complete coordinates in the desired cells after frame output.
+Copies and clipped views therefore keep their source coordinates.
+After an output failure, finish pending writes with `screen.flush()`.
+Restore the terminal parser and cursor.
+Call `images.invalidate(screen)` before another image frame.
+This restores live placeholder resources in both terminal buffers, including resources shared with committed rows.
+Also invalidate after screen switches between image frames.
 
 ## Prepare output explicitly
 
@@ -83,9 +89,10 @@ with `Surface::draw`. Use `symbols_with_policy` for an explicit policy.
 Their `_with_policy` methods accept an explicit width mode and ambiguous-width setting.
 
 Use `Image::kitty_placeholders` for ordinary placeholder cells.
-Pass `placement(screen)?` to `Screen::set_placement`.
-The method checks the screen's true-color profile and shares cells and resources.
-Render the screen to upload and display the image.
+Use `images.draw_cells(screen, &image, position)` to compose a prepared image.
+This method checks the true-color profile and retains its image resource.
+Ordinary surface clipping applies.
+Call `images.render(screen)` to upload the pixels and emit the frame.
 
 Managed native images follow ordinary cell ownership.
 Later cell writes cover the image cells they replace.
@@ -102,16 +109,20 @@ Use distinct protocol placement IDs for simultaneous raw copies.
 
 Reuse prepared values across frames. Clones share source pixels and encoded data.
 Prepare images again when cell pixel dimensions change.
-Remove placements with `Screen::remove_placement`, then render the frame.
-The screen releases managed resources after their final placement disappears.
+Remove opaque placements with `Screen::remove_placement`, then render the frame.
+The screen releases their resources after the final placement disappears.
+For placeholder cells, the image layer tracks visible image identifiers across the entire screen.
+Copied cells retain their resources even outside the original draw area.
+After the final visible cells disappear, a successful image frame releases the uncommitted resource.
 Dropping prepared data performs no terminal I/O.
 
-`Screen::commit_rows` releases inline output while preserving its visible images.
+Use `images.commit_rows(screen, count)` to commit automatic image output.
+Use `Screen::commit_rows` for opaque placements and ordinary text.
 Resources used by committed rows stay in the terminal after program teardown.
-Cell-backed images can cross the commit boundary; their retained rows keep the same placement ID.
+Placeholder cells can cross the commit boundary and keep their encoded image coordinates.
 Commit whole opaque images and sized-text blocks. A boundary inside an opaque block returns an error before output.
 Application IDs can be reused after a commit. Managed native output allocates fresh terminal instances.
-The screen keeps compact identity records for committed resources and releases unused upload buffers.
+Each owner retains compact resource identities and releases unused historical upload buffers.
 For raw native placements, use distinct protocol placement IDs for copies that remain visible.
 Terminal reset or eviction can discard committed resources.
 
@@ -119,7 +130,6 @@ For manual protocol output, use the raw `upload()` and `delete()` bytes.
 Upload before drawing. Clear all visible copies before deleting the resource.
 `CellImage::cells()` supports independent copies through `Surface::draw`.
 Manual copies require true color and caller-managed resource lifetime.
-Managed cell ownership covers each registered rectangle.
 
 The loader uses the enabled `image` formats and applies EXIF orientation.
 Rustdoc lists the input and allocation limits.
@@ -149,7 +159,7 @@ cargo run -p examples --example images_drag -- --sixel --overlay
 
 `images_auto` queries terminal support and cell dimensions, then selects a protocol.
 Space moves or removes its image. Its dump exercises all five output paths.
-The screen manages uploads and deletion.
+The image layer manages placeholder uploads and deletion.
 Use `--dump-placeholders` to inspect compressed output across overlays, movement, resize, and cleanup.
 Use `--dump-committed` to inspect permanent images, split placeholder rows, and reused application IDs.
 Use `--dump-shared` to inspect shared uploads, image order, dialog cutouts, and resource replacement.

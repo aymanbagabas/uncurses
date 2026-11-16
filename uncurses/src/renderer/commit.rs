@@ -8,7 +8,10 @@ impl Renderer {
         front: &RenderBuffer,
         count: u16,
     ) -> std::io::Result<()> {
-        self.placements.validate_commit_rows(front, count)
+        if let Some(placements) = &self.placements {
+            placements.validate_commit_rows(front, count)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn commit_rows(&mut self, front: &mut RenderBuffer, count: u16) {
@@ -19,7 +22,10 @@ impl Renderer {
             return;
         }
         let height = old_height - count;
-        self.placements.commit_rows(front, count);
+        if let Some(placements) = self.placements.as_mut() {
+            placements.commit_rows(front, count);
+        }
+        self.discard_unused_placements();
         for rows in [&mut self.protected_rows, &mut self.invalid_rows] {
             rows.drain(..usize::from(count).min(rows.len()));
         }

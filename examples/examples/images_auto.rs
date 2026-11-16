@@ -4,6 +4,7 @@ use std::io::{self, Write};
 
 use uncurses::{
     buffer::{Surface, SurfaceMut},
+    cell::Cell,
     event::{Event, Input},
     layout::{Rect, Size},
     program::Program,
@@ -56,7 +57,7 @@ fn paint<W: Write>(
         )?;
         screen.set_str((0, 1), &format!("{protocol:?}"), Style::EMPTY);
     }
-    screen.render()
+    images.render(screen)
 }
 
 fn dump(source: &Image) -> io::Result<()> {
@@ -83,7 +84,7 @@ fn dump(source: &Image) -> io::Result<()> {
             record(&mut screen, &format!("{protocol:?} {name}"));
         }
         images.remove(&mut screen, 1);
-        screen.render()?;
+        images.render(&mut screen)?;
         assert!(screen.writer().is_empty());
         match protocol {
             ImageProtocol::KittyPlaceholders => caps.kitty_placeholders = false,
@@ -118,55 +119,61 @@ fn dump_placeholders(source: &Image) -> io::Result<()> {
     let options = ImageOptions::default();
     let area = Rect::new(2, 3, 12, 4);
     images.draw(&mut screen, 1, area, source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "shown");
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "unchanged");
 
     screen.set_str((2, 4), "XX", Style::EMPTY);
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "origin covered");
     screen.set_str((6, 5), "TOP", Style::EMPTY);
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "middle covered");
     images.draw(&mut screen, 2, Rect::new(8, 4, 4, 2), source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "second image");
+    screen.fill_rect(Rect::new(8, 4, 4, 2), &Cell::BLANK);
     images.remove(&mut screen, 2);
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "second removed");
     images.draw(&mut screen, 1, area, source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "restored");
 
     let copied = screen.cell((7, 4).into()).unwrap().clone();
     screen.set_cell((2, 4), &copied);
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "source offset");
     images.draw(&mut screen, 1, area, source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "offset restored");
+    screen.fill_rect(area, &Cell::BLANK);
     images.draw(&mut screen, 1, Rect::new(2, 5, 12, 4), source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "vertical");
+    screen.fill_rect(Rect::new(2, 5, 12, 4), &Cell::BLANK);
     images.draw(&mut screen, 1, Rect::new(28, 8, 12, 4), source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "bottom right");
 
     screen.resize((40, 10));
+    screen.clear();
+    images.invalidate(&mut screen);
     images.draw(&mut screen, 1, Rect::new(26, 5, 12, 4), source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "resized");
     screen.set_color_profile(uncurses::color::Profile::Ansi256);
     images.draw(&mut screen, 1, Rect::new(26, 5, 12, 4), source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "symbols");
     screen.set_color_profile(uncurses::color::Profile::TrueColor);
     images.draw(&mut screen, 1, Rect::new(26, 5, 12, 4), source, &options)?;
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "placeholders restored");
+    screen.clear();
     images.remove(&mut screen, 1);
-    screen.render()?;
+    images.render(&mut screen)?;
     record(&mut screen, "removed");
     Ok(())
 }
@@ -193,10 +200,14 @@ fn dump_committed(source: &Image) -> io::Result<()> {
             source,
             &ImageOptions::default(),
         )?;
-        screen.render()?;
+        images.render(&mut screen)?;
         record(&mut screen, &format!("{protocol} shown"));
-        screen.commit_rows(if placeholders { 3 } else { 5 })?;
+        images.commit_rows(&mut screen, if placeholders { 3 } else { 5 })?;
         record(&mut screen, &format!("{protocol} committed"));
+        images.invalidate(&mut screen);
+        images.render(&mut screen)?;
+        record(&mut screen, &format!("{protocol} committed recovery"));
+        screen.clear();
         images.draw(
             &mut screen,
             1,
@@ -204,13 +215,14 @@ fn dump_committed(source: &Image) -> io::Result<()> {
             source,
             &ImageOptions::default(),
         )?;
-        screen.render()?;
+        images.render(&mut screen)?;
         record(&mut screen, &format!("{protocol} reused ID"));
+        screen.clear();
         images.remove(&mut screen, 1);
-        screen.render()?;
+        images.render(&mut screen)?;
         record(&mut screen, &format!("{protocol} removed"));
-        screen.invalidate();
-        screen.render()?;
+        images.invalidate(&mut screen);
+        images.render(&mut screen)?;
         record(&mut screen, &format!("{protocol} invalidated"));
         images.draw(
             &mut screen,
@@ -219,12 +231,14 @@ fn dump_committed(source: &Image) -> io::Result<()> {
             source,
             &ImageOptions::default(),
         )?;
-        screen.render()?;
+        images.render(&mut screen)?;
         record(&mut screen, &format!("{protocol} new image"));
+        screen.clear();
         images.remove(&mut screen, 2);
-        screen.render()?;
+        images.render(&mut screen)?;
         record(&mut screen, &format!("{protocol} removed new image"));
-        screen.commit_rows(screen.size().height)?;
+        let height = screen.size().height;
+        images.commit_rows(&mut screen, height)?;
         record(&mut screen, &format!("{protocol} committed rest"));
     }
     Ok(())
@@ -303,7 +317,7 @@ fn dump_shared(source: &Image) -> io::Result<()> {
                     screen.set_str((4, 3), "Dialog", style);
                 }
             }
-            screen.render()?;
+            images.render(&mut screen)?;
             record(&mut screen, &format!("{protocol} {name}"));
         }
     }
@@ -375,6 +389,7 @@ fn main() -> io::Result<()> {
                 Event::KeyPress(key) if key.matches("space") => step = (step + 1) % 3,
                 Event::Resize(_) => {
                     program.autoresize()?;
+                    images.invalidate(program.screen_mut());
                     query_images(&mut program, uncurses::ansi::winop::REQUEST_CELL_PIXEL_SIZE)?;
                 }
                 _ => {}
@@ -382,8 +397,9 @@ fn main() -> io::Result<()> {
             images.capabilities = ImageCapabilities::from_program(&program);
             paint(program.screen_mut(), &mut images, &source, step)?;
         }
+        program.screen_mut().clear();
         images.remove(program.screen_mut(), 1);
-        program.screen_mut().render()
+        images.render(program.screen_mut())
     })();
     result.and(program.finish())
 }

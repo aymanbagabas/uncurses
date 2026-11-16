@@ -7,15 +7,18 @@ use std::{
 };
 
 use uncurses::{
+    buffer::{Buffer, Surface},
     color::Profile,
     event::Input,
     layout::{Rect, Size},
     program::Program,
-    screen::{PlacementId, PlacementOptions, PlacementResource, Screen},
+    screen::{PlacementId, PlacementOptions, Screen},
     text::{TextSurface, WidthMode},
 };
 
-use crate::{Backend, Image, ImageOptions, SymbolSet, invalid};
+use crate::{Backend, CellImage, Image, ImageOptions, SymbolSet, invalid};
+
+mod placeholders;
 
 /// Image protocols and physical geometry available to one terminal.
 ///
@@ -179,35 +182,44 @@ struct CachedImage {
     pixels: Option<Size>,
     protocol: ImageProtocol,
     size: Size,
-    placement: PlacementOptions,
+    output: Output,
+}
+
+#[derive(Debug)]
+enum Output {
+    Placeholders(CellImage),
+    Cells(Buffer),
+    Native(PlacementOptions),
 }
 
 /// Prepare and stage images for one screen and terminal session.
 ///
 /// Use [`draw`](Self::draw) for images, then write ordinary text to the screen.
-/// Finish frames with [`Screen::render`]. The screen owns placement geometry,
-/// resource uploads, deletion, and output recovery. This value caches encoded
-/// data; dropping it performs no terminal I/O.
+/// Finish frames with [`render`](Self::render). This value owns placeholder
+/// resources and caches encoded data. The screen owns opaque native placements.
+/// Dropping this value performs no terminal I/O.
 ///
-/// IDs share the screen's placement namespace. Reserve each managed ID until
-/// removal. Keep this renderer paired with the same screen. Repaint underlying
-/// content after image movement or removal. Cell removal clears cells that
-/// still match the last draw to default-style blanks; changed overlay cells remain.
+/// IDs identify cached images and share the screen's placement namespace for
+/// opaque output. Keep this renderer paired with the same screen.
+/// Applications repaint ordinary cells to move or remove cell images.
+/// Use [`commit_rows`](Self::commit_rows) to retain placeholder resources in
+/// committed output and [`invalidate`](Self::invalidate) after terminal recovery.
 ///
 /// Native images, placeholders, and symbols follow ordinary cell ownership.
 /// Later cell writes cover the image cells they replace.
 ///
 /// ```
-/// use uncurses::{layout::Rect, screen::Screen};
+/// use uncurses::{buffer::SurfaceMut, layout::Rect, screen::Screen};
 /// use uncurses_images::{Image, ImageCapabilities, ImageOptions, ImageRenderer};
 ///
 /// let source = Image::from_rgb(1, 1, vec![255, 0, 0])?;
 /// let mut screen = Screen::new(Vec::new(), (20, 6));
 /// let mut images = ImageRenderer::new(ImageCapabilities::default());
 /// images.draw(&mut screen, 1, Rect::new(2, 1, 8, 3), &source, &ImageOptions::default())?;
-/// screen.render()?;
+/// images.render(&mut screen)?;
+/// screen.clear();
 /// images.remove(&mut screen, 1);
-/// screen.render()?;
+/// images.render(&mut screen)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
 #[derive(Debug)]
@@ -218,6 +230,7 @@ pub struct ImageRenderer {
     pub symbols: SymbolSet,
     tmux_passthrough: bool,
     cache: BTreeMap<PlacementId, Arc<CachedImage>>,
+    placeholders: placeholders::Resources,
 }
 
 impl ImageRenderer {
@@ -231,6 +244,7 @@ impl ImageRenderer {
             symbols: SymbolSet::DEFAULT,
             tmux_passthrough: false,
             cache: BTreeMap::new(),
+            placeholders: placeholders::Resources::default(),
         }
     }
 
@@ -318,33 +332,17 @@ impl ImageRenderer {
         let entry = if let Some(entry) = cached {
             entry.clone()
         } else {
-            let placement = match protocol {
+            let output = match protocol {
                 ImageProtocol::KittyPlaceholders => {
                     let image = source.kitty_placeholders(size, pixels.unwrap(), options)?;
-                    let mut placement = image.placement(screen)?;
-                    if self.tmux_passthrough {
-                        let resource = placement.resource.as_ref().unwrap();
-                        placement.resource = Some(PlacementResource::new(
-                            crate::protocols::kitty::wrap_tmux(resource.upload())?,
-                            crate::protocols::kitty::wrap_tmux(resource.delete())?,
-                        ));
-                    }
-                    placement
+                    Output::Placeholders(image)
                 }
                 ImageProtocol::Symbols => {
                     let mut sampling = options.clone();
                     if let Some(pixels) = pixels {
                         sampling.cell_pixels = (pixels.width, pixels.height);
                     }
-                    PlacementOptions {
-                        cells: Some(Arc::new(source.symbols(
-                            size,
-                            &sampling,
-                            self.symbols.clone(),
-                            screen,
-                        )?)),
-                        ..Default::default()
-                    }
+                    Output::Cells(source.symbols(size, &sampling, self.symbols.clone(), screen)?)
                 }
                 native => {
                     let backend = match native {
@@ -354,7 +352,7 @@ impl ImageRenderer {
                         _ => unreachable!(),
                     };
                     let image = source.prepare(backend, size, pixels.unwrap(), options)?;
-                    image.placement()
+                    Output::Native(image.placement())
                 }
             };
             Arc::new(CachedImage {
@@ -365,19 +363,39 @@ impl ImageRenderer {
                 pixels,
                 protocol,
                 size,
-                placement,
+                output,
             })
         };
-        screen.set_placement(id, area, &entry.placement)?;
+        if self
+            .cache
+            .get(&id)
+            .is_some_and(|old| matches!(old.output, Output::Native(_)))
+            && !matches!(entry.output, Output::Native(_))
+        {
+            screen.remove_placement(id);
+        }
+        match &entry.output {
+            Output::Placeholders(image) => {
+                self.draw_cells(screen, image, (area.x, area.y))?;
+            }
+            Output::Cells(cells) => cells.draw(screen, (area.x, area.y).into()),
+            Output::Native(placement) => screen.set_placement(id, area, placement)?,
+        }
         self.cache.insert(id, entry);
         Ok(protocol)
     }
 
-    /// Stage removal. The next render releases resources used only by managed rows.
+    /// Retire a cached image and its opaque native placement.
+    ///
+    /// Applications repaint ordinary cells to remove placeholder and symbol images.
+    /// The next [`render`](Self::render) releases unused placeholder resources.
     /// Resources used by committed rows remain in the terminal.
     pub fn remove<W: Write>(&mut self, screen: &mut Screen<W>, id: PlacementId) {
-        screen.remove_placement(id);
-        self.cache.remove(&id);
+        if let Some(entry) = self.cache.remove(&id)
+            && matches!(entry.output, Output::Native(_))
+        {
+            screen.remove_placement(id);
+        }
     }
 }
 

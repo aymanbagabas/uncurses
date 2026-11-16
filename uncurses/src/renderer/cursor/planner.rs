@@ -117,12 +117,6 @@ impl Renderer {
         overwrite_line: Option<&[Cell]>,
         pen: PenPolicy,
     ) -> io::Result<()> {
-        let overwrite_line =
-            if self.row_protected(to.y) || self.invalid_rows.get(to.y as usize) == Some(&true) {
-                None
-            } else {
-                overwrite_line
-            };
         if from.y == to.y && from.x == to.x && self.cur.known() {
             return Ok(());
         }
@@ -138,6 +132,13 @@ impl Renderer {
             return cursor::write_cup(out, to.y, to.x);
         }
 
+        let overwrite_line = if self.placements.is_some()
+            && (self.row_protected(to.y) || self.invalid_rows.get(to.y as usize) == Some(&true))
+        {
+            None
+        } else {
+            overwrite_line
+        };
         let mut best = self.plan_move(from, to, overwrite_line);
 
         // A `\n` that scrolls the host carries the active pen into the
