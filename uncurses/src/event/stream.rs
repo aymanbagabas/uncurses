@@ -105,6 +105,10 @@ struct Wait {
 /// The stream yields `Some(Ok(event))` for each event. It reports an input or
 /// readiness error once as `Some(Err(_))`, then fuses to `None`. Dropping it ends the
 /// helper thread; the shared source is left intact for any other holder.
+///
+/// Source wakes request another readiness pass. Ready events consume pending
+/// wakes; a wake alone keeps the stream pending. Use a separate async signal
+/// for cancellation.
 pub struct EventStream<I: Input> {
     source: Arc<Mutex<EventSource<I>>>,
     notification: Arc<DeadlineWake>,
@@ -235,9 +239,6 @@ impl<I: Input> futures_core::Stream for EventStream<I> {
         // wait and stay pending rather than block here.
         match this.source.try_lock() {
             Ok(mut src) => {
-                if let Some(ev) = src.try_read() {
-                    return Poll::Ready(Some(Ok(ev)));
-                }
                 // Only drive I/O when no waiter is in flight. A dispatched
                 // waiter owns the next readiness wait and already captured the
                 // decode deadline; draining here could consume input (and set
@@ -246,7 +247,8 @@ impl<I: Input> futures_core::Stream for EventStream<I> {
                 // a waiter is in flight the input stays level-ready, so the
                 // waiter wakes on it and the next poll (with `dispatched`
                 // cleared) drains and re-arms with the new deadline.
-                if !this.dispatched.load(Ordering::SeqCst) {
+                // Queued events need only the non-blocking wake acknowledgment.
+                if !src.queue.is_empty() || !this.dispatched.load(Ordering::SeqCst) {
                     match src.poll(Some(Duration::ZERO)) {
                         Ok(_) => {
                             if let Some(ev) = src.try_read() {
@@ -307,7 +309,7 @@ fn waiter_loop<I: Input>(
                 // own `try_lock`; stray wakes are harmless.
                 match poller.poll(&mut ready, timeout) {
                     Ok(_) if ready[READY_SLOTS] => {
-                        if let Err(error) = notification.waker.clear() {
+                        if let Err(error) = notification.waker.take() {
                             notification.fail(error);
                         }
                     }
@@ -400,6 +402,72 @@ mod tests {
         let b = next_blocking(&mut stream).unwrap().unwrap();
         assert!(matches!(a, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
         assert!(matches!(b, Event::KeyPress(k) if k.code == KeyCode::Char('b')));
+    }
+
+    #[test]
+    fn queued_event_consumes_wake_even_with_a_wait_in_flight() {
+        let (rx, _tx) = make_pipe();
+        let shared = Arc::new(Mutex::new(EventSource::new(rx).unwrap()));
+        let mut stream = EventStream::from_shared(Arc::clone(&shared));
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        stream.wait_started = Some(started_tx);
+        let waker = Waker::from(Arc::new(FlagWaker(AtomicBool::new(false))));
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            None
+        );
+        {
+            let mut source = shared.lock().unwrap();
+            source.unread(Event::PasteStart);
+            source.unread(Event::PasteEnd);
+            source.waker().wake().unwrap();
+        }
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(Event::PasteEnd)))
+        ));
+        let mut source = shared.lock().unwrap();
+        assert!(!source.waker.take().unwrap());
+        assert_eq!(source.try_read(), Some(Event::PasteStart));
+    }
+
+    #[test]
+    fn wake_only_retries_and_expired_string_still_arrives() {
+        let (rx, tx) = make_pipe();
+        let source = EventSource::new(rx)
+            .unwrap()
+            .with_string_idle_timeout(Some(Duration::ZERO));
+        let shared = Arc::new(Mutex::new(source));
+        let mut stream = EventStream::from_shared(Arc::clone(&shared));
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        stream.wait_started = Some(started_tx);
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        let waker = Waker::from(Arc::new(Notify(wake_tx)));
+        let mut cx = Context::from_waker(&waker);
+        shared.lock().unwrap().waker().wake().unwrap();
+        assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            None
+        );
+        assert!(matches!(
+            wake_rx.recv_timeout(Duration::from_millis(20)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        {
+            let mut source = shared.lock().unwrap();
+            write_bytes(&tx, b"\x1b]unfinished");
+            assert!(!source.poll(Some(Duration::ZERO)).unwrap());
+            source.waker().wake().unwrap();
+        }
+        wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(Event::Unknown(bytes)))) if bytes == b"\x1b]unfinished"
+        ));
+        assert!(!shared.lock().unwrap().waker.take().unwrap());
     }
 
     #[test]

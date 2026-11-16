@@ -37,14 +37,18 @@ use std::io::{self, Write};
 #[cfg(feature = "async")]
 use std::sync::Arc;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::System::Console::{
     FOCUS_EVENT, GetNumberOfConsoleInputEvents, INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED,
     LEFT_CTRL_PRESSED, MENU_EVENT, MOUSE_EVENT, MOUSE_HWHEELED, MOUSE_MOVED, MOUSE_WHEELED,
     RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED,
     WINDOW_BUFFER_SIZE_EVENT,
 };
-use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, ResetEvent, SetEvent, WaitForSingleObject,
+};
 
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
@@ -54,11 +58,7 @@ use super::source::{
 
 const READ_BATCH: usize = 64;
 
-/// Inner waker state. Owns a Win32 `Event` HANDLE that signals the
-/// cancellation slot of [`WaitForMultipleObjects`]. The `HANDLE` value
-/// is also copied into [`EventSource::wake_event`] so the wait array
-/// can reference it without an `Arc` indirection; ownership remains
-/// with the waker (its `Drop` calls [`CloseHandle`]).
+/// Owns the manual-reset event used by the source's readiness poller.
 pub(super) struct WindowsWakerInner {
     event: HANDLE,
 }
@@ -76,12 +76,20 @@ impl WindowsWakerInner {
         self.event
     }
 
-    #[cfg(feature = "async")]
-    pub(super) fn clear(&self) -> io::Result<()> {
-        if unsafe { ResetEvent(self.event) } == 0 {
-            return Err(io::Error::last_os_error());
+    pub(super) fn take(&self) -> io::Result<bool> {
+        match unsafe { WaitForSingleObject(self.event, 0) } {
+            WAIT_OBJECT_0 => {
+                if unsafe { ResetEvent(self.event) } == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(true)
+            }
+            WAIT_TIMEOUT => Ok(false),
+            WAIT_FAILED => Err(io::Error::last_os_error()),
+            status => Err(io::Error::other(format!(
+                "wake wait returned unexpected status {status}"
+            ))),
         }
-        Ok(())
     }
 
     pub(super) fn wake(&self) -> io::Result<()> {
@@ -104,11 +112,6 @@ impl Drop for WindowsWakerInner {
 // SetEvent / CloseHandle are thread-safe.
 unsafe impl Send for WindowsWakerInner {}
 unsafe impl Sync for WindowsWakerInner {}
-
-// SAFETY: the contained HANDLE in `EventSource::wake_event` is a kernel
-// object, not a pointer into thread-local memory; the underlying read
-// handle is also thread-safe to use.
-unsafe impl<I> Send for EventSource<I> where I: Input {}
 
 impl<I> EventSource<I>
 where
@@ -170,7 +173,6 @@ where
             waker,
             handle_resize: true,
             poller,
-            wake_event,
             pending_high_surrogate: [None, None],
             last_size: None,
             last_mouse_buttons: 0,
@@ -191,16 +193,6 @@ where
             ],
             false,
         )
-    }
-
-    /// Reset the wake event after a [`Waker`] fired.
-    ///
-    /// Platform hook for [`EventSource::fill`]. Resetting consumes the wake so a
-    /// later wait can block again.
-    pub(super) fn drain_wake(&mut self) {
-        unsafe {
-            ResetEvent(self.wake_event);
-        }
     }
 
     /// Read ready console records and serialize them through the decoder.

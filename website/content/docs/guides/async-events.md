@@ -126,6 +126,23 @@ streamed event with `program.observe_event(&ev)?` before you act on capability
 state or window geometry. That is the same shape used by `async_screen.rs` and
 `async_arcade.rs`.
 
+## Worker requests and wakes
+
+For a synchronous reader, obtain a
+[`Waker`](/api/uncurses/event/struct.Waker.html) from the shared event source.
+Set your request flag before calling `wake()`.
+Check that flag after each read result, including successful input and resize events.
+
+A ready event satisfies the wake request and consumes the pending notification.
+Otherwise, `read()` returns `Interrupted`, or `poll()` returns `false`.
+Concurrent wakes may coalesce. Keep the requested work in a shared flag or queue.
+See the [`wake` example](https://github.com/aymanbagabas/uncurses/blob/main/examples/examples/wake.rs)
+for a complete synchronous loop.
+
+For an async reader, use a channel or cancellation future beside `events.next()` in `select!`.
+A source wake makes the stream retry; the stream yields terminal events and errors.
+See [`Waker::wake`](/api/uncurses/event/struct.Waker.html#method.wake) for the exact contract.
+
 ## Cleaning up
 
 You do not need to drop `Program::event_stream()` before

@@ -1602,6 +1602,24 @@ fn an_unread_event_is_not_observed_a_second_time() {
     assert_eq!(program.origin_queries_pending, 1);
 }
 
+#[test]
+fn unread_events_consume_wakes_in_poll_and_read() {
+    for use_poll in [false, true] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (10, 3));
+        program.unread_event(Event::PasteStart);
+        program.source.lock().unwrap().waker().wake().unwrap();
+        let event = if use_poll {
+            assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
+            program.try_read_event().unwrap().unwrap()
+        } else {
+            program.read_event().unwrap()
+        };
+        assert_eq!(event, Event::PasteStart);
+        assert!(!program.source.lock().unwrap().consume_wake().unwrap());
+    }
+}
+
 /// Pixel-to-cell mapping has to scale across the whole grid. Dividing by a
 /// truncated cell width reports columns past the last one whenever the pixel
 /// width is not an exact multiple of the column count.

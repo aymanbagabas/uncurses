@@ -405,6 +405,7 @@ where
     /// event became available. See [`EventSource::poll`].
     pub fn poll_event(&self, timeout: Option<Duration>) -> io::Result<bool> {
         if !self.unread.is_empty() {
+            self.source.lock().unwrap().consume_wake()?;
             return Ok(true);
         }
         let ready = self.source.lock().unwrap().poll(timeout)?;
@@ -437,8 +438,9 @@ where
     /// Block until the next event, tracking capabilities as it passes
     /// through. See [`EventSource::read`].
     pub fn read_event(&mut self) -> io::Result<Event> {
-        if let Some(event) = self.unread.pop_front() {
-            return Ok(event);
+        if !self.unread.is_empty() {
+            self.source.lock().unwrap().consume_wake()?;
+            return Ok(self.unread.pop_front().unwrap());
         }
         let event = self.source.lock().unwrap().read()?;
         self.observe_event(&event)?;
