@@ -87,8 +87,7 @@ pub use decode::DecoderFlags;
 pub use key::{Key, KeyCode, KeyModifiers, ParseKeyError};
 pub use mouse::{Mouse, MouseButton, mouse_pixel_to_cell};
 pub use source::{
-    DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, DEFAULT_STRING_IDLE_TIMEOUT, EventSource,
-    Input, SourceFlags, Waker,
+    DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
 };
 #[cfg(feature = "async")]
 pub use stream::EventStream;
@@ -432,8 +431,8 @@ pub enum Event {
     /// Unknown APC sequence (payload).
     UnknownApc(Vec<u8>),
     /// Catch-all for unrecognized byte sequences, including incomplete control
-    /// strings whose idle deadline expired or which another Escape sequence
-    /// interrupted. These incomplete strings include their introducer bytes.
+    /// strings interrupted by another Escape sequence. These incomplete strings
+    /// include their introducer bytes.
     Unknown(Vec<u8>),
 }
 

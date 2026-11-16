@@ -41,9 +41,8 @@ use super::pending::Pending;
 use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT,
-    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, READY_INPUT, READY_SLOTS, READY_WAKE,
-    READY_WINCH, SourceFlags, Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
+    READY_INPUT, READY_SLOTS, READY_WAKE, READY_WINCH, SourceFlags, Waker,
 };
 use crate::event::Event;
 use crate::terminal::get_window_size;
@@ -111,11 +110,9 @@ where
     /// subscribes to the shared SIGWINCH fan-out, and registers the input, wake,
     /// and resize fds with the selected poll backend.
     ///
-    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`], [`DEFAULT_PASTE_IDLE_TIMEOUT`],
-    /// and [`DEFAULT_STRING_IDLE_TIMEOUT`]. Override them with
-    /// [`EventSource::with_esc_timeout`],
-    /// [`EventSource::with_paste_idle_timeout`], and
-    /// [`EventSource::with_string_idle_timeout`].
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and [`DEFAULT_PASTE_IDLE_TIMEOUT`].
+    /// Override them with [`EventSource::with_esc_timeout`] and
+    /// [`EventSource::with_paste_idle_timeout`].
     ///
     /// Resize deduplication starts from the size `input` reports here, so a
     /// `SIGWINCH` that does not actually change the size produces no
@@ -156,8 +153,6 @@ where
             esc_deadline: None,
             paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
-            string_idle_timeout: Some(DEFAULT_STRING_IDLE_TIMEOUT),
-            string_deadline: None,
             #[cfg(feature = "async")]
             deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
@@ -557,19 +552,15 @@ mod tests {
 
     #[test]
     fn expired_sequences_consume_wakes() {
-        for bytes in [b"\x1b[".as_slice(), b"\x1b]unfinished"] {
-            let (rx, tx) = make_pipe();
-            let mut src = new_reader(rx)
-                .with_esc_timeout(Duration::ZERO)
-                .with_string_idle_timeout(Some(Duration::ZERO));
-            write_bytes(&tx, bytes);
-            assert!(!src.poll(Some(Duration::ZERO)).unwrap());
-            src.waker().wake().unwrap();
-            assert!(src.poll(Some(Duration::ZERO)).unwrap());
-            assert!(src.try_read().is_some());
-            while src.try_read().is_some() {}
-            src.fill(Some(Duration::ZERO)).unwrap();
-        }
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+        write_bytes(&tx, b"\x1b[");
+        assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+        src.waker().wake().unwrap();
+        assert!(src.poll(Some(Duration::ZERO)).unwrap());
+        assert!(src.try_read().is_some());
+        while src.try_read().is_some() {}
+        src.fill(Some(Duration::ZERO)).unwrap();
     }
 
     #[test]
@@ -714,9 +705,12 @@ mod tests {
         for (input, expected) in [
             (
                 b"\x1b[".as_slice(),
-                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+                Some(Event::KeyPress(Key::new(
+                    KeyCode::Char('['),
+                    KeyModifiers::ALT,
+                ))),
             ),
-            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+            (b"\x1b]q", None),
         ] {
             for expired in [false, true] {
                 let (rx, tx) = make_pipe();
@@ -725,17 +719,16 @@ mod tests {
                 } else {
                     Duration::from_secs(60)
                 };
-                let mut src = new_reader(rx)
-                    .with_esc_timeout(timeout)
-                    .with_string_idle_timeout(Some(timeout));
+                let mut src = new_reader(rx).with_esc_timeout(timeout);
                 write_bytes(&tx, input);
                 assert!(!src.poll(Some(Duration::ZERO)).unwrap());
                 drop(tx);
 
-                if expired {
-                    assert_eq!(src.read().unwrap(), expected);
+                if expired && let Some(expected) = &expected {
+                    assert_eq!(&src.read().unwrap(), expected);
                 }
                 assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+                assert!(src.try_read().is_none());
             }
         }
     }
@@ -768,9 +761,12 @@ mod tests {
         for (input, expected) in [
             (
                 b"\x1b[".as_slice(),
-                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+                Some(Event::KeyPress(Key::new(
+                    KeyCode::Char('['),
+                    KeyModifiers::ALT,
+                ))),
             ),
-            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+            (b"\x1b]q", None),
         ] {
             let (rx, tx) = make_pipe();
             let mut src = EventSource::new(ErrorAfterRead {
@@ -778,14 +774,16 @@ mod tests {
                 fail: false,
             })
             .unwrap()
-            .with_esc_timeout(Duration::ZERO)
-            .with_string_idle_timeout(Some(Duration::ZERO));
+            .with_esc_timeout(Duration::ZERO);
             write_bytes(&tx, input);
             assert!(!src.poll(Some(Duration::ZERO)).unwrap());
             write_byte(&tx, b'x');
 
-            assert_eq!(src.read().unwrap(), expected);
+            if let Some(expected) = expected {
+                assert_eq!(src.read().unwrap(), expected);
+            }
             assert_eq!(src.read().unwrap_err().raw_os_error(), Some(libc::EIO));
+            assert!(src.try_read().is_none());
         }
     }
 
@@ -874,6 +872,7 @@ mod tests {
                     src.fill(Some(Duration::ZERO)).unwrap();
                     src.fill(Some(Duration::ZERO)).unwrap();
                     assert!(src.try_read().is_none(), "{prefix:?}");
+                    assert_eq!(src.effective_timeout(None), None);
                     for fragment in [b"qqq".as_slice(), &ending[..ending.len() - 1]] {
                         if !fragment.is_empty() {
                             write_bytes(&tx, fragment);
@@ -896,6 +895,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn caller_timeout_preserves_an_idle_osc_reply() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+        write_bytes(&tx, b"\x1b]52;c;Zm9v");
+        assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+        assert!(!src.poll(Some(Duration::from_millis(2100))).unwrap());
+        assert!(src.try_read().is_none());
+        write_bytes(&tx, b"\x1b\\");
+        assert_eq!(
+            src.read().unwrap(),
+            Event::Clipboard {
+                selection: crate::event::ClipboardSelection::System,
+                content: "Zm9v".into(),
+            },
+        );
     }
 
     #[test]
@@ -938,13 +955,11 @@ mod tests {
     }
 
     #[test]
-    fn escape_sequence_interrupts_a_string_without_an_idle_timeout() {
+    fn escape_sequence_interrupts_a_string() {
         use crate::event::{Key, KeyModifiers};
 
         let (rx, tx) = make_pipe();
-        let mut src = new_reader(rx)
-            .with_esc_timeout(Duration::ZERO)
-            .with_string_idle_timeout(None);
+        let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
         write_bytes(&tx, b"\x1b]qqqq\x1b");
         src.fill(Some(Duration::ZERO)).unwrap();
         src.fill(Some(Duration::ZERO)).unwrap();
@@ -964,84 +979,10 @@ mod tests {
     }
 
     #[test]
-    fn string_idle_timeout_reports_whole_sequence_and_recovers() {
-        use crate::event::{Key, KeyModifiers};
-
-        for (introducer, c1) in [
-            (b']', 0x9d),
-            (b'P', 0x90),
-            (b'_', 0x9f),
-            (b'X', 0x98),
-            (b'^', 0x9e),
-        ] {
-            for prefix in [vec![0x1b, introducer], vec![c1]] {
-                let (rx, tx) = make_pipe();
-                let mut src = new_reader(rx)
-                    .with_string_idle_timeout(Some(Duration::ZERO))
-                    .with_paste_idle_timeout(None);
-                let wire = [prefix.as_slice(), b"qqqq"].concat();
-                write_bytes(&tx, &wire);
-                src.fill(Some(Duration::ZERO)).unwrap();
-                assert!(src.try_read().is_none());
-                assert_eq!(src.effective_timeout(None), Some(Duration::ZERO));
-                assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
-                assert_eq!(src.try_read(), Some(Event::Unknown(wire)));
-                assert!(src.try_read().is_none());
-                assert_eq!(src.effective_timeout(None), None);
-                write_byte(&tx, b'q');
-                assert_eq!(
-                    src.read().unwrap(),
-                    Event::KeyPress(Key::new(KeyCode::Char('q'), KeyModifiers::empty())),
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn ready_string_data_refreshes_idle_deadline() {
-        for overdue in [false, true] {
-            let (rx, tx) = make_pipe();
-            let mut src = new_reader(rx);
-            write_bytes(&tx, b"\x1b]q");
-            src.fill(Some(Duration::ZERO)).unwrap();
-            for _ in 0..3 {
-                let old = if overdue {
-                    Instant::now() - Duration::from_secs(1)
-                } else {
-                    Instant::now() + Duration::from_secs(60)
-                };
-                src.string_deadline = Some(old);
-                write_byte(&tx, b'q');
-                src.fill(Some(Duration::ZERO)).unwrap();
-                assert!(src.try_read().is_none());
-                let new = src.string_deadline.unwrap();
-                assert!(if overdue { new > old } else { new < old });
-            }
-            write_bytes(&tx, b"\x1b\\");
-            assert_eq!(src.read().unwrap(), Event::UnknownOsc(b"qqqq".to_vec()));
-            assert_eq!(src.effective_timeout(None), None);
-        }
-    }
-
-    #[test]
-    fn string_idle_timeout_can_be_disabled_during_a_string() {
-        let (rx, tx) = make_pipe();
-        let mut src = new_reader(rx).with_string_idle_timeout(Some(Duration::ZERO));
-        write_bytes(&tx, b"\x1b]q");
-        src.fill(Some(Duration::ZERO)).unwrap();
-        src.set_string_idle_timeout(None);
-        assert_eq!(src.effective_timeout(None), None);
-        assert!(!src.poll(Some(Duration::ZERO)).unwrap());
-        write_bytes(&tx, b"\x1b\\");
-        assert_eq!(src.read().unwrap(), Event::UnknownOsc(b"q".to_vec()));
-    }
-
-    #[test]
     fn paste_idle_timeout_synthesizes_paste_end() {
         let (rx, tx) = make_pipe();
         let mut src = EventSource::new(rx)
             .unwrap()
-            .with_string_idle_timeout(Some(Duration::ZERO))
             .with_paste_idle_timeout(Some(Duration::from_millis(40)));
         write_bytes(&tx, b"\x1b[200~hello");
         // Drain PasteStart + initial chunk.

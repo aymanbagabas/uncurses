@@ -131,7 +131,7 @@ pub(super) const READY_WINCH: usize = 2;
 /// control sequence.
 /// Fresh input resets the deadline while a sequence remains incomplete.
 /// Once bytes follow an OSC, DCS, APC, SOS, or PM introducer, the string waits
-/// for its terminator under [`DEFAULT_STRING_IDLE_TIMEOUT`].
+/// for its terminator or an interrupting Escape sequence.
 /// An introducer alone still uses the Escape timeout.
 /// A timed-out two-byte introducer such as `ESC ]` resolves to `Alt+]`.
 ///
@@ -148,13 +148,6 @@ pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 /// and clears the decoder's paste state. Guards against terminators
 /// that never arrive (truncated stream, malformed input).
 pub const DEFAULT_PASTE_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Default idle timeout for an OSC, DCS, APC, SOS, or PM body.
-///
-/// Fresh input resets this deadline. On expiry, the source emits the incomplete
-/// sequence, including its introducer, as [`Event::Unknown`] and resumes normal
-/// decoding. Bytes that arrive after recovery count as new input.
-pub const DEFAULT_STRING_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Cloneable handle that interrupts an in-progress [`EventSource::poll`] or
 /// [`EventSource::read`].
@@ -241,7 +234,7 @@ impl Waker {
 ///
 /// `EventSource` is the synchronous owner of terminal input. It stores pending
 /// bytes, a `Decoder`, an event queue, deadline state for ambiguous `ESC`
-/// prefixes, strings, and bracketed pastes, and the platform handles needed for
+/// prefixes and bracketed pastes, and the platform handles needed for
 /// wakeups and resize notifications.
 ///
 /// Construct it with [`EventSource::new`]. Use [`EventSource::poll`] to perform
@@ -274,8 +267,6 @@ where
     /// Wall-clock instant at which an open paste should be
     /// force-closed (synthesised `PasteEnd`).
     pub(super) paste_deadline: Option<Instant>,
-    pub(super) string_idle_timeout: Option<Duration>,
-    pub(super) string_deadline: Option<Instant>,
     #[cfg(feature = "async")]
     pub(super) deadline_wakers: Vec<std::sync::Weak<super::stream::DeadlineWake>>,
     pub(super) queue: VecDeque<Event>,
@@ -470,41 +461,6 @@ where
         }
     }
 
-    /// Set the idle timeout for an OSC, DCS, APC, SOS, or PM body.
-    ///
-    /// Fresh input resets the deadline. On expiry, the source emits the whole
-    /// incomplete sequence as [`Event::Unknown`] and resumes normal decoding.
-    /// Later bytes count as new input, even if they belong to the expired string.
-    ///
-    /// The default is `Some(`[`DEFAULT_STRING_IDLE_TIMEOUT`]`)`.
-    /// Passing `None` disables the idle timeout.
-    /// Changing this setting during a string restarts its idle wait.
-    pub fn with_string_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.set_string_idle_timeout(timeout);
-        self
-    }
-
-    /// Set the string idle timeout on an existing source.
-    ///
-    /// This applies the same policy as
-    /// [`with_string_idle_timeout`](Self::with_string_idle_timeout).
-    /// Changing it during a string restarts the idle wait; `None` disables it.
-    /// Live async streams refresh their readiness waits when the deadline changes.
-    pub fn set_string_idle_timeout(&mut self, timeout: Option<Duration>) {
-        #[cfg(feature = "async")]
-        let previous = self.string_deadline;
-        self.string_idle_timeout = timeout;
-        self.string_deadline = if self.parser.waiting_for_terminator() {
-            timeout.map(|t| Instant::now() + t)
-        } else {
-            None
-        };
-        #[cfg(feature = "async")]
-        if self.string_deadline != previous {
-            self.wake_deadline_waiters();
-        }
-    }
-
     #[cfg(feature = "async")]
     fn wake_deadline_waiters(&mut self) {
         self.deadline_wakers.retain(|weak| {
@@ -569,6 +525,7 @@ where
     /// handles resize notifications, and resolves any expired ESC or paste
     /// deadlines. `None` means block until an event or wake; `Some(Duration::ZERO)`
     /// means perform a non-blocking readiness pass.
+    /// A caller timeout preserves an incomplete control string for the next poll.
     ///
     /// A platform whose wait takes a whole number of milliseconds rounds a
     /// fractional millisecond up, so such a wait can return up to a
@@ -726,8 +683,8 @@ where
     /// currently in `pending`, pushing extracted events onto the
     /// queue and arming the appropriate timeout deadline.
     ///
-    /// Fresh input refreshes the deadline selected by the remaining decoder
-    /// state: paste idle, string idle, or Escape disambiguation.
+    /// Fresh input refreshes the paste idle or Escape disambiguation deadline.
+    /// Control string bodies wait for a terminator or an interrupting Escape.
     pub(super) fn drain_parser(&mut self) {
         loop {
             let (n, ev) = self.parser.parse_one(self.pending.slice());
@@ -746,7 +703,6 @@ where
             // In paste: only the paste-idle timer applies. Reset on
             // every drain (input has just arrived).
             self.esc_deadline = None;
-            self.string_deadline = None;
             self.paste_deadline = self.paste_idle_timeout.map(|t| Instant::now() + t);
             return;
         }
@@ -756,10 +712,8 @@ where
         self.paste_deadline = None;
         if self.parser.waiting_for_terminator() {
             self.esc_deadline = None;
-            self.string_deadline = self.string_idle_timeout.map(|t| Instant::now() + t);
             return;
         }
-        self.string_deadline = None;
         let Some(b0) = self.pending.first() else {
             self.esc_deadline = None;
             return;
@@ -834,23 +788,16 @@ where
 
     /// Resolve any decode deadline that has already elapsed.
     /// A buffered partial `ESC` past its window becomes a
-    /// bare `Esc`; idle pastes and strings past their windows are force-closed.
+    /// bare `Esc`; idle pastes past their windows are force-closed.
     /// Run before input for a lone Escape or paste, and after a wait that
     /// returned no input for other partial sequences.
     /// A no-op when no deadline is overdue;
-    /// paste, string, and Escape deadlines govern separate decoder states.
+    /// paste and Escape deadlines govern separate decoder states.
     pub(super) fn expire_elapsed(&mut self) {
         let now = Instant::now();
         if self.parser.in_paste() {
             if self.paste_deadline.is_some_and(|d| d <= now) {
                 self.expire_paste();
-            }
-        } else if self.parser.waiting_for_terminator() {
-            if self.string_deadline.is_some_and(|d| d <= now) {
-                let bytes = self.pending.slice().to_vec();
-                self.pending.clear();
-                self.drain_parser();
-                self.emit(Event::Unknown(bytes));
             }
         } else if self.esc_deadline.is_some_and(|d| d <= now) {
             self.expire_partial();
@@ -858,12 +805,12 @@ where
     }
 
     /// Effective wait for the next readiness poll: the caller's `timeout`
-    /// tightened to the nearest decode deadline (Escape, paste, or string)
+    /// tightened to the nearest decode deadline (Escape or paste)
     /// so a buffered partial sequence resolves promptly even when the caller
     /// asked to block longer.
     pub(super) fn effective_timeout(&self, timeout: Option<Duration>) -> Option<Duration> {
         let now = Instant::now();
-        let deadline = [self.esc_deadline, self.paste_deadline, self.string_deadline]
+        let deadline = [self.esc_deadline, self.paste_deadline]
             .into_iter()
             .flatten()
             .min();

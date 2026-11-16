@@ -466,13 +466,17 @@ fn child_wake_partial_input() {
         assert!(!source.poll(Some(Duration::ZERO)).unwrap());
         write_bytes(b"A");
         assert!(matches!(source.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Up));
-        source.set_string_idle_timeout(Some(Duration::ZERO));
         write_bytes(b"\x1b]unfinished");
         assert!(!source.poll(Some(Duration::ZERO)).unwrap());
         source.waker().wake().unwrap();
         assert_eq!(
+            source.read().unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        write_bytes(b"\x1b\\");
+        assert_eq!(
             source.read().unwrap(),
-            Event::Unknown(b"\x1b]unfinished".to_vec())
+            Event::UnknownOsc(b"unfinished".to_vec())
         );
     });
 }
