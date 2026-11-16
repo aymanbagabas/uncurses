@@ -53,7 +53,8 @@ use windows_sys::Win32::System::Threading::{
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT,
-    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
+    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, READY_INPUT, READY_SLOTS, READY_WAKE,
+    SourceFlags, Waker,
 };
 
 const READ_BATCH: usize = 64;
@@ -149,10 +150,9 @@ where
         // wait path relies on. `input_is_tty` is meaningless on Windows
         // and ignored by the poller there.
         use std::os::windows::io::RawHandle;
-        let fds = [
-            input_handle as *mut _ as RawHandle,
-            wake_event as *mut _ as RawHandle,
-        ];
+        let mut fds = [std::ptr::null_mut(); READY_SLOTS];
+        fds[READY_INPUT] = input_handle as RawHandle;
+        fds[READY_WAKE] = wake_event;
         let poller = super::poll::new_poller(&fds, false)?;
 
         Ok(Self {
@@ -185,14 +185,11 @@ where
         notification: &Waker,
     ) -> io::Result<Arc<dyn super::poll::Poller>> {
         use std::os::windows::io::AsRawHandle;
-        super::poll::new_poller(
-            &[
-                self.input.as_handle().as_raw_handle(),
-                self.waker.poll_fd(),
-                notification.poll_fd(),
-            ],
-            false,
-        )
+        let mut fds = [std::ptr::null_mut(); READY_SLOTS + 1];
+        fds[READY_INPUT] = self.input.as_handle().as_raw_handle();
+        fds[READY_WAKE] = self.waker.poll_fd();
+        fds[READY_SLOTS] = notification.poll_fd();
+        super::poll::new_poller(&fds, false)
     }
 
     /// Read ready console records and serialize them through the decoder.

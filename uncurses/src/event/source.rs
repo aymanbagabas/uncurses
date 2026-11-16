@@ -115,6 +115,9 @@ pub(super) const READY_SLOTS: usize = 2;
 /// Index of the input handle in the readiness slice.
 #[cfg(any(unix, windows))]
 pub(super) const READY_INPUT: usize = 0;
+/// Index of the wake handle in the readiness slice.
+#[cfg(any(unix, windows))]
+pub(super) const READY_WAKE: usize = 1;
 /// Index of the SIGWINCH pipe in the readiness slice (Unix only).
 #[cfg(unix)]
 pub(super) const READY_WINCH: usize = 2;
@@ -639,6 +642,7 @@ where
         let effective = self.effective_timeout(timeout);
         let mut ready = [false; READY_SLOTS];
         self.poller.poll(&mut ready, effective)?;
+        let wake_ready = ready[READY_WAKE];
 
         #[cfg(unix)]
         if ready[READY_WINCH] {
@@ -656,6 +660,7 @@ where
             // The wait was tightened to a decode deadline that has elapsed.
             self.expire_elapsed();
         }
+        // Also acknowledge wakes that arrive after the readiness snapshot.
         let woke = self.consume_wake()?;
         if !self.queue.is_empty() {
             return Ok(());
@@ -663,7 +668,7 @@ where
         if let Some(error) = self.pending_error.take() {
             return Err(error);
         }
-        if woke {
+        if wake_ready || woke {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
         }
         Ok(())

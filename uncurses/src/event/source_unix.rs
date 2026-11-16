@@ -42,7 +42,8 @@ use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT,
-    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
+    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, READY_INPUT, READY_SLOTS, READY_WAKE,
+    READY_WINCH, SourceFlags, Waker,
 };
 use crate::event::Event;
 use crate::terminal::get_window_size;
@@ -140,7 +141,10 @@ where
         // landed in this slot's pooled pipe just after it was leased to us.
         // `None` on a non-tty, where there is no size to compare against.
         let last_size = get_window_size(input.as_fd()).ok();
-        let fds: [PollFd; 3] = [input_fd, waker.poll_fd(), winch_sub.read_fd()];
+        let mut fds: [PollFd; READY_SLOTS] = [-1; READY_SLOTS];
+        fds[READY_INPUT] = input_fd;
+        fds[READY_WAKE] = waker.poll_fd();
+        fds[READY_WINCH] = winch_sub.read_fd();
         let poller = super::poll::new_poller(&fds, input_is_tty)?;
 
         Ok(Self {
@@ -172,12 +176,11 @@ where
         notification: &Waker,
     ) -> io::Result<Arc<dyn super::poll::Poller>> {
         let input_fd = self.input.as_fd().as_raw_fd();
-        let fds = [
-            input_fd,
-            self.waker.poll_fd(),
-            self.winch_sub.read_fd(),
-            notification.poll_fd(),
-        ];
+        let mut fds = [-1; READY_SLOTS + 1];
+        fds[READY_INPUT] = input_fd;
+        fds[READY_WAKE] = self.waker.poll_fd();
+        fds[READY_WINCH] = self.winch_sub.read_fd();
+        fds[READY_SLOTS] = notification.poll_fd();
         super::poll::new_poller(&fds, unsafe { libc::isatty(input_fd) } == 1)
     }
 
@@ -444,6 +447,53 @@ mod tests {
         }
         src.fill(Some(Duration::ZERO)).unwrap();
         assert!(src.try_read().is_none());
+    }
+
+    #[test]
+    fn wake_after_poll_snapshot_is_consumed() {
+        use super::super::poll::Poller;
+        use std::sync::Arc;
+
+        struct WakeAfterPoll {
+            poller: Arc<dyn Poller>,
+            waker: Waker,
+        }
+
+        impl Poller for WakeAfterPoll {
+            fn new(_: &[PollFd]) -> io::Result<Self> {
+                unreachable!("wrap an existing poller")
+            }
+
+            fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize> {
+                let count = self.poller.poll(ready, timeout)?;
+                assert!(!ready[READY_WAKE]);
+                self.waker.wake()?;
+                Ok(count)
+            }
+        }
+
+        for bytes in [b"".as_slice(), b"a"] {
+            let (rx, tx) = make_pipe();
+            let mut src = new_reader(rx);
+            write_bytes(&tx, bytes);
+            let poller = Arc::clone(&src.poller);
+            src.poller = Arc::new(WakeAfterPoll {
+                poller: Arc::clone(&poller),
+                waker: src.waker(),
+            });
+            let result = src.fill(Some(Duration::ZERO));
+            if bytes.is_empty() {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+            } else {
+                result.unwrap();
+                assert!(
+                    matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Char('a'))
+                );
+            }
+            src.poller = poller;
+            src.fill(Some(Duration::ZERO)).unwrap();
+            assert!(src.try_read().is_none());
+        }
     }
 
     #[test]
