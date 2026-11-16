@@ -500,10 +500,9 @@ mod tests {
     }
 
     #[test]
-    fn wake_only_retries_and_expired_string_still_arrives() {
+    fn wake_only_retries_and_string_still_arrives() {
         const CHILD: &str = "UNCURSES_WAKE_QUIET_CHILD";
-        const NAME: &str =
-            "event::stream::tests::wake_only_retries_and_expired_string_still_arrives";
+        const NAME: &str = "event::stream::tests::wake_only_retries_and_string_still_arrives";
         // Other tests raise process-wide SIGWINCH, which also wakes pipe sources.
         if std::env::var_os(CHILD).is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -520,9 +519,7 @@ mod tests {
             return;
         }
         let (rx, tx) = make_pipe();
-        let source = EventSource::new(rx)
-            .unwrap()
-            .with_string_idle_timeout(Some(Duration::ZERO));
+        let source = EventSource::new(rx).unwrap();
         let shared = Arc::new(Mutex::new(source));
         let mut stream = EventStream::from_shared(Arc::clone(&shared));
         let (started_tx, started_rx) = mpsc::sync_channel(1);
@@ -553,11 +550,13 @@ mod tests {
             source.waker().wake().unwrap();
         }
         wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert!(matches!(
-            Pin::new(&mut stream).poll_next(&mut cx),
-            Poll::Ready(Some(Ok(Event::Unknown(bytes)))) if bytes == b"\x1b]unfinished"
-        ));
+        assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
         assert!(!shared.lock().unwrap().waker.take().unwrap());
+        write_bytes(&tx, b"\x1b\\");
+        assert_eq!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::UnknownOsc(b"unfinished".to_vec()),
+        );
     }
 
     #[test]
@@ -602,20 +601,24 @@ mod tests {
         for (input, expected) in [
             (
                 b"\x1b[".as_slice(),
-                Event::KeyPress(Key::new(KeyCode::Char('['), KeyModifiers::ALT)),
+                Some(Event::KeyPress(Key::new(
+                    KeyCode::Char('['),
+                    KeyModifiers::ALT,
+                ))),
             ),
-            (b"\x1b]q", Event::Unknown(b"\x1b]q".to_vec())),
+            (b"\x1b]q", None),
         ] {
             let (rx, tx) = make_pipe();
             let mut source = EventSource::new(rx)
                 .unwrap()
-                .with_esc_timeout(Duration::ZERO)
-                .with_string_idle_timeout(Some(Duration::ZERO));
+                .with_esc_timeout(Duration::ZERO);
             source.feed_bytes(input);
             let mut stream = source.into_stream();
             drop(tx);
 
-            assert_eq!(next_blocking(&mut stream).unwrap().unwrap(), expected);
+            if let Some(expected) = expected {
+                assert_eq!(next_blocking(&mut stream).unwrap().unwrap(), expected);
+            }
             assert_eq!(
                 next_blocking(&mut stream).unwrap().unwrap_err().kind(),
                 io::ErrorKind::UnexpectedEof
@@ -676,44 +679,6 @@ mod tests {
     }
 
     #[test]
-    fn changing_a_parked_string_deadline_wakes_the_stream() {
-        for timeout in [None, Some(Duration::from_secs(60))] {
-            let (rx, _tx) = make_pipe();
-            let mut source = EventSource::new(rx)
-                .unwrap()
-                .with_string_idle_timeout(timeout);
-            source.feed_bytes(b"\x1b]qqqq");
-            let shared = Arc::new(Mutex::new(source));
-            let mut stream = EventStream::from_shared(Arc::clone(&shared));
-            let (started_tx, started_rx) = mpsc::sync_channel(1);
-            stream.wait_started = Some(started_tx);
-            let (wake_tx, wake_rx) = mpsc::sync_channel(1);
-            let waker = Waker::from(Arc::new(Notify(wake_tx)));
-            let mut cx = Context::from_waker(&waker);
-            assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
-            let captured = started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-            match timeout {
-                None => assert_eq!(captured, None),
-                Some(_) => assert!(captured.unwrap() > Duration::from_secs(30)),
-            }
-
-            shared
-                .lock()
-                .unwrap()
-                .set_string_idle_timeout(Some(Duration::ZERO));
-            wake_rx
-                .recv_timeout(Duration::from_secs(1))
-                .expect("deadline change must wake the parked stream without more input");
-            match Pin::new(&mut stream).poll_next(&mut cx) {
-                Poll::Ready(Some(Ok(event))) => {
-                    assert_eq!(event, Event::Unknown(b"\x1b]qqqq".to_vec()))
-                }
-                other => panic!("expected expired string, got {other:?}"),
-            }
-        }
-    }
-
-    #[test]
     fn changing_a_parked_paste_deadline_wakes_the_stream() {
         for (timeout, disable_first) in [
             (None, false),
@@ -767,8 +732,9 @@ mod tests {
     #[test]
     fn deadline_notifications_leave_sync_wake_behavior_intact() {
         let (rx, tx) = make_pipe();
-        let mut source = EventSource::new(rx).unwrap().with_string_idle_timeout(None);
-        source.feed_bytes(b"\x1b]qqqq");
+        let mut source = EventSource::new(rx).unwrap().with_paste_idle_timeout(None);
+        source.feed_bytes(b"\x1b[200~");
+        assert_eq!(source.try_read(), Some(Event::PasteStart));
         let shared = Arc::new(Mutex::new(source));
         let mut stream = EventStream::from_shared(Arc::clone(&shared));
         let (started_tx, started_rx) = mpsc::sync_channel(1);
@@ -783,11 +749,8 @@ mod tests {
 
         {
             let mut source = shared.lock().unwrap();
-            source.set_string_idle_timeout(Some(Duration::ZERO));
-            assert_eq!(
-                source.read().unwrap(),
-                Event::Unknown(b"\x1b]qqqq".to_vec())
-            );
+            source.set_paste_idle_timeout(Some(Duration::ZERO));
+            assert_eq!(source.read().unwrap(), Event::PasteEnd);
             source.waker().wake().unwrap();
             assert_eq!(
                 source.read().unwrap_err().kind(),
