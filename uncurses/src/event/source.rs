@@ -523,9 +523,16 @@ where
         self.waker.clone()
     }
 
-    /// Acknowledge a wake when Program returns an event from its own queue.
-    pub(crate) fn consume_wake(&self) -> io::Result<bool> {
-        self.waker.take()
+    /// Consume source wakes and preserve notification of async helpers.
+    pub(crate) fn consume_wake(&mut self) -> io::Result<bool> {
+        let woke = self.waker.take()?;
+        #[cfg(feature = "async")]
+        if woke {
+            // A helper may have captured its timeout before a shared reader
+            // changed the decoder deadline and consumed the source wake.
+            self.wake_deadline_waiters();
+        }
+        Ok(woke)
     }
 
     /// Return whether out-of-band resize handling is enabled.
@@ -576,7 +583,7 @@ where
     /// [`Self::try_read`] only pops events and leaves wakes untouched.
     pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
         if !self.queue.is_empty() {
-            self.waker.take()?;
+            self.consume_wake()?;
             return Ok(true);
         }
         let deadline = timeout.map(|t| Instant::now() + t);
@@ -621,11 +628,11 @@ where
             self.expire_elapsed();
         }
         if !self.queue.is_empty() {
-            self.waker.take()?;
+            self.consume_wake()?;
             return Ok(());
         }
         if self.pending_error.is_some() {
-            self.waker.take()?;
+            self.consume_wake()?;
             return Err(self.pending_error.take().unwrap());
         }
 
@@ -649,7 +656,7 @@ where
             // The wait was tightened to a decode deadline that has elapsed.
             self.expire_elapsed();
         }
-        let woke = self.waker.take()?;
+        let woke = self.consume_wake()?;
         if !self.queue.is_empty() {
             return Ok(());
         }
