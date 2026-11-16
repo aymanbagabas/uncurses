@@ -186,7 +186,8 @@ impl Default for Cursor {
 /// appropriate when another abstraction owns the output buffering but
 /// wants the same diff, cursor, style, and scroll planning.
 pub struct Renderer {
-    pub(crate) placements: super::placements::State,
+    /// Allocated when a placement first needs tracking.
+    pub(crate) placements: Option<Box<super::placements::State>>,
     pub(super) protected_rows: Vec<bool>,
     pub(super) invalid_rows: Vec<bool>,
     pub(super) pen_unknown: bool,
@@ -273,7 +274,7 @@ impl Renderer {
     /// Never panics.
     pub fn new() -> Self {
         Self {
-            placements: super::placements::State::default(),
+            placements: None,
             protected_rows: Vec::new(),
             invalid_rows: Vec::new(),
             pen_unknown: false,

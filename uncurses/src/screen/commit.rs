@@ -11,9 +11,8 @@ impl<W: Write> Screen<W> {
     /// Counts are clamped to the managed height. Fullscreen screens and zero
     /// counts leave pending cells and output unchanged.
     ///
-    /// Cell-backed placements may cross the boundary; their retained rows keep
-    /// the same placement ID. Opaque placements, including sized text, must fit
-    /// entirely on one side. A split returns `InvalidInput` before any output.
+    /// Placements, including sized text, must fit entirely on one side of the
+    /// boundary. A split returns `InvalidInput` before any output.
     ///
     /// Resources used by committed rows remain in the terminal after removal
     /// of retained placements and after program teardown. Terminal reset or

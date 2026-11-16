@@ -1,34 +1,39 @@
 //! Kitty Unicode placeholders as ordinary cells with explicit resources.
 
-use std::io::{self, Write};
+use std::io;
 use std::sync::Arc;
 
 use uncurses::buffer::{Buffer, SurfaceMut};
 use uncurses::cell::Cell;
-use uncurses::color::{Color, Profile};
+use uncurses::color::Color;
 use uncurses::layout::{Position, Size};
-use uncurses::screen::{PlacementOptions, Screen};
 use uncurses::style::Style;
 
-use crate::{Image, ImageOptions, invalid, native::KittyResource};
+use crate::{Image, ImageOptions, invalid};
 
 use super::kitty;
 
 use uncurses::ansi::graphics::KITTY_PLACEHOLDER_DIACRITICS as DIACRITICS;
 
-/// Ordinary image cells with shared placement resources.
+#[derive(Debug)]
+pub(crate) struct Resource {
+    pub id: u32,
+    pub upload: Vec<u8>,
+    pub delete: Vec<u8>,
+}
+
+/// Ordinary image cells with shared image resources.
 ///
-/// Pass [`placement`](Self::placement) to `Screen::set_placement`, then render.
-/// The screen owns movement, removal, uploads, and resource deletion.
-/// This value performs no terminal I/O.
+/// Compose [`cells`](Self::cells) through the ordinary buffer API.
+/// Upload before the cells reach the terminal. Delete the resource after
+/// its final cells are cleared. This value performs no terminal I/O.
 ///
-/// Kitty placeholders require [`Profile::TrueColor`] and underline-color support.
-/// For manual output, copy [`cells`](Self::cells), upload before rendering,
-/// and delete after clearing and rendering the cells.
+/// Kitty placeholders require [`uncurses::color::Profile::TrueColor`] and
+/// underline-color support.
 #[derive(Clone, Debug)]
 pub struct CellImage {
     cells: Arc<Buffer>,
-    resource: Arc<KittyResource>,
+    pub(crate) resource: Arc<Resource>,
 }
 
 impl CellImage {
@@ -44,35 +49,14 @@ impl CellImage {
 
     /// Raw upload bytes for manual output, including the virtual placement.
     ///
-    /// Screen placements already include these bytes.
     pub fn upload(&self) -> &[u8] {
-        self.resource.commands.upload()
+        &self.resource.upload
     }
 
     /// Raw deletion bytes for manual output after its cells are cleared.
     ///
-    /// Screen placements already manage resource deletion.
     pub fn delete(&self) -> &[u8] {
-        self.resource.commands.delete()
-    }
-
-    /// Prepare a cell placement under the destination screen's color profile.
-    ///
-    /// Requires true color to preserve encoded image identifiers.
-    /// The options share cells and resources with this image.
-    /// Preparation leaves the screen unchanged.
-    pub fn placement<W: Write>(&self, screen: &Screen<W>) -> io::Result<PlacementOptions> {
-        if screen.color_profile() != Profile::TrueColor {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Kitty placeholders require true color",
-            ));
-        }
-        Ok(PlacementOptions {
-            cells: Some(self.cells.clone()),
-            resource: Some(self.resource.commands.clone()),
-            ..Default::default()
-        })
+        &self.resource.delete
     }
 }
 
@@ -86,7 +70,8 @@ impl Image {
     /// Resource release deletes only this image's identifier.
     ///
     /// ```
-    /// use uncurses::{color::Profile, layout::Rect, screen::Screen};
+    /// use std::io::Write;
+    /// use uncurses::{buffer::Surface, color::Profile, screen::Screen};
     /// use uncurses_images::{Image, ImageOptions};
     ///
     /// let source = Image::from_rgb(1, 1, vec![255, 0, 0])?;
@@ -95,7 +80,8 @@ impl Image {
     /// )?;
     /// let mut screen = Screen::new(Vec::new(), (8, 4));
     /// screen.set_color_profile(Profile::TrueColor);
-    /// screen.set_placement(1, Rect::new(1, 1, 2, 1), &image.placement(&screen)?)?;
+    /// screen.write_all(image.upload())?;
+    /// image.cells().draw(&mut screen, (1, 1).into());
     /// screen.render()?;
     /// let output = String::from_utf8_lossy(screen.writer());
     /// assert!(output.contains("U=1"));
@@ -130,7 +116,11 @@ impl Image {
         )?;
         Ok(CellImage {
             cells: Arc::new(placeholder_cells(size, id)),
-            resource: Arc::new(KittyResource::new(id, upload)),
+            resource: Arc::new(Resource {
+                id,
+                upload,
+                delete: kitty::delete_resource(id),
+            }),
         })
     }
 }
@@ -172,6 +162,7 @@ mod tests {
     use super::*;
     use std::io::Write;
     use uncurses::buffer::Surface;
+    use uncurses::color::Profile;
     use uncurses::screen::Screen;
 
     fn image() -> Image {
@@ -257,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn dimensions_and_profiles_are_explicit() {
+    fn dimensions_are_explicit_and_clones_share_prepared_data() {
         for size in [(0, 1), (1, 0), (298, 1), (1, 298)] {
             assert!(
                 image()
@@ -268,41 +259,22 @@ mod tests {
         let cells = image()
             .kitty_placeholders((297, 1).into(), (1, 1).into(), &ImageOptions::default())
             .unwrap();
-        let mut screen = Screen::new(Vec::new(), (300, 1));
-        screen.set_color_profile(Profile::TrueColor);
-        let options = cells.placement(&screen).unwrap();
-        assert!(Arc::ptr_eq(options.cells.as_ref().unwrap(), &cells.cells));
-        assert_eq!(options.resource.as_ref(), Some(&cells.resource.commands));
-        for profile in [
-            Profile::Ansi256,
-            Profile::Ansi,
-            Profile::Ascii,
-            Profile::Disabled,
-        ] {
-            screen.set_color_profile(profile);
-            assert_eq!(
-                cells.placement(&screen).unwrap_err().kind(),
-                io::ErrorKind::Unsupported
-            );
-        }
-        assert!(screen.writer().is_empty());
+        let copy = cells.clone();
+        assert!(Arc::ptr_eq(&copy.cells, &cells.cells));
+        assert!(Arc::ptr_eq(&copy.resource, &cells.resource));
     }
 
     #[test]
-    fn cell_images_do_not_reserve_rows_and_release_after_cell_removal() {
+    fn manual_cells_use_ordinary_frames_and_explicit_resource_output() {
         use uncurses::text::TextSurface;
         let cells = image()
             .kitty_placeholders((2, 1).into(), (1, 1).into(), &ImageOptions::default())
             .unwrap();
         let mut screen = Screen::new(Vec::new(), (6, 2));
         screen.set_color_profile(Profile::TrueColor);
-        screen
-            .set_placement(
-                1,
-                uncurses::layout::Rect::new(0, 0, 2, 1),
-                &cells.placement(&screen).unwrap(),
-            )
-            .unwrap();
+        screen.set_grapheme_clusters(true);
+        screen.write_all(cells.upload()).unwrap();
+        cells.cells().draw(&mut screen, (0, 0).into());
         assert!(screen.writer().is_empty());
         screen.render().unwrap();
         screen.writer_mut().clear();
@@ -315,6 +287,8 @@ mod tests {
         screen.writer_mut().clear();
         screen.clear();
         screen.render().unwrap();
+        screen.write_all(cells.delete()).unwrap();
+        screen.flush().unwrap();
         let output = String::from_utf8_lossy(screen.writer());
         assert_eq!(output.matches("a=d,d=I,").count(), 1);
     }

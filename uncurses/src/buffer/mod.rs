@@ -309,6 +309,7 @@ impl Buffer {
     /// This is the implementation behind [`SurfaceMut::set_cell`] for
     /// `Buffer`. Use it instead of [`Buffer::cell_mut`] whenever the write
     /// might affect the width or role of neighboring cells.
+    #[inline(always)]
     pub fn set(&mut self, pos: impl Into<Position>, cell: &Cell) {
         let pos = pos.into();
         let y = pos.y as usize;

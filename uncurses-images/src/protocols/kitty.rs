@@ -57,6 +57,10 @@ pub(crate) fn encode(pixels: &RgbImage, id: u32) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub(crate) fn delete_resource(id: u32) -> Vec<u8> {
+    format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\").into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

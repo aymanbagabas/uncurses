@@ -265,22 +265,28 @@ impl RenderBuffer {
             existing.is_none_or(|e| e != cell) || u16::from(cell.width()) > self.width() - pos.x;
 
         if changed {
-            let new_width = cell.width().max(1) as u16;
-            let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
-            let width = new_width.max(prev_width);
-            let first_col = self.owned_from(pos);
-            // `Buffer::set` truncates a cell that does not fit, so the span
-            // must not claim a column the row does not have either. The
-            // saturating add is what keeps a row as wide as `u16` can
-            // describe from overflowing on the way to that clamp.
-            let end_col = pos
-                .x
-                .saturating_add(width - 1)
-                .min(self.width().saturating_sub(1));
-            let last_col = self.owned_through(Position::new(end_col, pos.y));
-            self.buffer.set(pos, cell);
-            self.touch_line(pos.y, first_col, last_col);
+            self.replace_cell(pos, cell, existing.map_or(0, Cell::width));
         }
+    }
+
+    /// Replace an in-bounds primary and record its full damage.
+    #[inline]
+    pub(super) fn replace_cell(&mut self, pos: Position, cell: &Cell, previous_width: u8) {
+        let new_width = cell.width().max(1) as u16;
+        let prev_width = previous_width.max(1) as u16;
+        let width = new_width.max(prev_width);
+        let first_col = self.owned_from(pos);
+        // `Buffer::set` truncates a cell that does not fit, so the span
+        // must not claim a column the row does not have either. The
+        // saturating add is what keeps a row as wide as `u16` can
+        // describe from overflowing on the way to that clamp.
+        let end_col = pos
+            .x
+            .saturating_add(width - 1)
+            .min(self.width().saturating_sub(1));
+        let last_col = self.owned_through(Position::new(end_col, pos.y));
+        self.buffer.set(pos, cell);
+        self.touch_line(pos.y, first_col, last_col);
     }
 
     /// Get the touched span for one row.
