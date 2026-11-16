@@ -367,17 +367,17 @@ fn run_wake_child(check: impl FnOnce(TtyInput, &mut EventSource<TtyInput>)) {
 }
 
 #[test]
-fn ready_input_consumes_wake_under_repeated_wakes() {
+fn ready_input_preserves_wake_under_repeated_wakes() {
     run_conpty("child_wake_input", &[]);
 }
 
 #[test]
-fn ready_resize_consumes_wake() {
+fn ready_resize_preserves_wake() {
     run_conpty("child_wake_resize", &[]);
 }
 
 #[test]
-#[ignore = "fixture launched inside a ConPTY by ready_input_consumes_wake_under_repeated_wakes"]
+#[ignore = "fixture launched inside a ConPTY by ready_input_preserves_wake_under_repeated_wakes"]
 fn child_wake_input() {
     run_wake_child(|input, source| {
         let records = (*b"ab").map(|byte| {
@@ -410,11 +410,15 @@ fn child_wake_input() {
                 Event::KeyPress(key) if key.code == KeyCode::Char(expected)
             ));
         }
+        assert_eq!(
+            source.read().unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
     });
 }
 
 #[test]
-#[ignore = "fixture launched inside a ConPTY by ready_resize_consumes_wake"]
+#[ignore = "fixture launched inside a ConPTY by ready_resize_preserves_wake"]
 fn child_wake_resize() {
     run_wake_child(|input, source| {
         let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
@@ -434,6 +438,10 @@ fn child_wake_resize() {
         ));
         assert!(
             matches!(source.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Char('x'))
+        );
+        assert_eq!(
+            source.read().unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
         );
     });
 }

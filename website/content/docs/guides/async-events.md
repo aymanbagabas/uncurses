@@ -133,8 +133,9 @@ For a synchronous reader, obtain a
 Set your request flag before calling `wake()`.
 Check that flag after each read result, including successful input and resize events.
 
-A ready event satisfies the wake request and consumes the pending notification.
-Otherwise, `read()` returns `Interrupted`, or `poll()` returns `false`.
+A ready or queued event takes priority and leaves the wake pending.
+When a later read finds no event, it clears the wake and returns `Interrupted`.
+The corresponding `poll()` returns `false`.
 Concurrent wakes may coalesce. Keep the requested work in a shared flag or queue.
 See the [`wake` example](https://github.com/aymanbagabas/uncurses/blob/main/examples/examples/wake.rs)
 for a complete synchronous loop.

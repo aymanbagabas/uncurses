@@ -37,18 +37,14 @@ use std::io::{self, Write};
 #[cfg(feature = "async")]
 use std::sync::Arc;
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::System::Console::{
     FOCUS_EVENT, GetNumberOfConsoleInputEvents, INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED,
     LEFT_CTRL_PRESSED, MENU_EVENT, MOUSE_EVENT, MOUSE_HWHEELED, MOUSE_MOVED, MOUSE_WHEELED,
     RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED,
     WINDOW_BUFFER_SIZE_EVENT,
 };
-use windows_sys::Win32::System::Threading::{
-    CreateEventW, ResetEvent, SetEvent, WaitForSingleObject,
-};
+use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
@@ -76,20 +72,11 @@ impl WindowsWakerInner {
         self.event
     }
 
-    pub(super) fn take(&self) -> io::Result<bool> {
-        match unsafe { WaitForSingleObject(self.event, 0) } {
-            WAIT_OBJECT_0 => {
-                if unsafe { ResetEvent(self.event) } == 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(true)
-            }
-            WAIT_TIMEOUT => Ok(false),
-            WAIT_FAILED => Err(io::Error::last_os_error()),
-            status => Err(io::Error::other(format!(
-                "wake wait returned unexpected status {status}"
-            ))),
+    pub(super) fn clear(&self) -> io::Result<()> {
+        if unsafe { ResetEvent(self.event) } == 0 {
+            return Err(io::Error::last_os_error());
         }
+        Ok(())
     }
 
     pub(super) fn wake(&self) -> io::Result<()> {
