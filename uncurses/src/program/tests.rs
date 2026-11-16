@@ -1567,11 +1567,13 @@ fn an_unread_event_is_not_observed_a_second_time() {
     assert_eq!(program.origin_queries_pending, 1);
 }
 
+#[cfg(unix)]
 #[test]
-fn unread_events_consume_wakes_in_poll_and_read() {
+fn unread_events_preserve_wakes_in_poll_and_read() {
     for use_poll in [false, true] {
+        let (reader, _writer) = std::io::pipe().unwrap();
         let buf = RefCell::new(Vec::new());
-        let mut program = Program::for_test(&buf, (10, 3));
+        let mut program = Program::for_test_with_input(&buf, (10, 3), reader);
         program.unread_event(Event::PasteStart);
         program.source.lock().unwrap().waker().wake().unwrap();
         let event = if use_poll {
@@ -1581,7 +1583,11 @@ fn unread_events_consume_wakes_in_poll_and_read() {
             program.read_event().unwrap()
         };
         assert_eq!(event, Event::PasteStart);
-        assert!(!program.source.lock().unwrap().consume_wake().unwrap());
+        assert_eq!(
+            program.read_event().unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
+        assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
     }
 }
 

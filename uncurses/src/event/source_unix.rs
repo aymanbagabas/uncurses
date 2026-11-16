@@ -67,7 +67,7 @@ impl UnixWakerInner {
         Ok(Self { tx, rx })
     }
 
-    pub(super) fn take(&self) -> io::Result<bool> {
+    pub(super) fn clear(&self) -> io::Result<()> {
         drain_pipe(self.read_fd())
     }
 
@@ -274,23 +274,20 @@ fn set_nonblock_cloexec(fd: i32) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn drain_pipe(fd: i32) -> io::Result<bool> {
+pub(super) fn drain_pipe(fd: i32) -> io::Result<()> {
     let mut buf = [0u8; 32];
-    let mut drained = false;
     loop {
         let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
-        if n > 0 {
-            drained = true;
-        } else if n == 0 {
+        if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "wake pipe closed",
             ));
-        } else {
+        } else if n < 0 {
             let error = io::Error::last_os_error();
             match error.kind() {
                 io::ErrorKind::Interrupted => continue,
-                io::ErrorKind::WouldBlock => return Ok(drained),
+                io::ErrorKind::WouldBlock => return Ok(()),
                 _ => return Err(error),
             }
         }
@@ -431,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_input_consumes_a_simultaneous_wake() {
+    fn ready_input_preserves_a_simultaneous_wake() {
         let (rx, tx) = make_pipe();
         let mut src = new_reader(rx);
         write_bytes(&tx, b"ab");
@@ -440,12 +437,16 @@ mod tests {
         for code in [KeyCode::Char('a'), KeyCode::Char('b')] {
             assert!(matches!(src.read().unwrap(), Event::KeyPress(key) if key.code == code));
         }
+        assert_eq!(
+            src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
         src.fill(Some(Duration::ZERO)).unwrap();
         assert!(src.try_read().is_none());
     }
 
     #[test]
-    fn wake_after_poll_snapshot_is_consumed() {
+    fn wake_after_poll_snapshot_waits_for_the_next_pass() {
         use super::super::poll::Poller;
         use std::sync::Arc;
 
@@ -477,22 +478,24 @@ mod tests {
                 waker: src.waker(),
             });
             let result = src.fill(Some(Duration::ZERO));
-            if bytes.is_empty() {
-                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
-            } else {
-                result.unwrap();
+            result.unwrap();
+            if !bytes.is_empty() {
                 assert!(
                     matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Char('a'))
                 );
             }
             src.poller = poller;
+            assert_eq!(
+                src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+                io::ErrorKind::Interrupted,
+            );
             src.fill(Some(Duration::ZERO)).unwrap();
             assert!(src.try_read().is_none());
         }
     }
 
     #[test]
-    fn ready_resize_consumes_a_simultaneous_wake() {
+    fn ready_resize_preserves_a_simultaneous_wake() {
         let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
             eprintln!("skipping resize/wake regression: no usable PTY");
             return;
@@ -503,6 +506,10 @@ mod tests {
         src.waker().wake().unwrap();
         assert!(src.poll(Some(Duration::ZERO)).unwrap());
         assert!(matches!(src.try_read(), Some(Event::Resize(_))));
+        assert_eq!(
+            src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
         src.fill(Some(Duration::ZERO)).unwrap();
         assert!(src.try_read().is_none());
     }
@@ -520,12 +527,16 @@ mod tests {
                 matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Char('x'))
             );
         }
+        assert_eq!(
+            src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
         src.fill(Some(Duration::ZERO)).unwrap();
         assert!(src.try_read().is_none());
     }
 
     #[test]
-    fn queued_events_consume_wakes_in_poll_and_read() {
+    fn queued_events_preserve_wakes_in_poll_and_read() {
         for use_poll in [false, true] {
             let (rx, tx) = make_pipe();
             let mut src = new_reader(rx);
@@ -542,6 +553,10 @@ mod tests {
             assert!(
                 matches!(src.try_read(), Some(Event::KeyPress(k)) if k.code == KeyCode::Char('b'))
             );
+            assert_eq!(
+                src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+                io::ErrorKind::Interrupted,
+            );
             src.fill(Some(Duration::ZERO)).unwrap();
 
             src.waker().wake().unwrap();
@@ -551,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_sequences_consume_wakes() {
+    fn expired_sequences_preserve_wakes() {
         let (rx, tx) = make_pipe();
         let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
         write_bytes(&tx, b"\x1b[");
@@ -560,6 +575,10 @@ mod tests {
         assert!(src.poll(Some(Duration::ZERO)).unwrap());
         assert!(src.try_read().is_some());
         while src.try_read().is_some() {}
+        assert_eq!(
+            src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
         src.fill(Some(Duration::ZERO)).unwrap();
     }
 
@@ -597,12 +616,11 @@ mod tests {
         assert!(src.poll(Some(Duration::ZERO)).unwrap());
         assert!(src.try_read().is_some());
         while src.try_read().is_some() {}
-        src.waker().wake().unwrap();
         assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
-        assert!(!src.waker.take().unwrap());
-        src.waker().wake().unwrap();
         assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
-        assert!(!src.waker.take().unwrap());
+        let mut ready = [false; READY_SLOTS];
+        src.poller.poll(&mut ready, Some(Duration::ZERO)).unwrap();
+        assert!(ready[READY_WAKE]);
     }
 
     #[test]
@@ -626,6 +644,10 @@ mod tests {
         assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
         assert!(matches!(src.try_read(), Some(Event::Resize(_))));
         assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('x')));
+        assert_eq!(
+            src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
         src.fill(Some(Duration::ZERO)).unwrap();
         assert!(src.try_read().is_none());
     }

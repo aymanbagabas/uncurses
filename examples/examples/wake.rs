@@ -1,8 +1,8 @@
 //! Wake a blocked reader from a worker thread.
 //!
 //! Run with `cargo run -p examples --example wake`. Type or resize while the
-//! worker runs. Its request completes after one second, even if a terminal
-//! event satisfies the wake instead of an interruption.
+//! worker runs. The loop checks the worker request after each read, including
+//! events that arrive alongside a wake.
 
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -59,7 +59,7 @@ fn read_loop(
             }
             Err(error) => return Err(error),
         }
-        // A successful input or resize event can satisfy the wake too.
+        // Ready events take priority over the wake interruption.
         if requested.load(Ordering::Acquire) {
             write!(out, "Worker request handled.\r\n")?;
             return out.flush();
