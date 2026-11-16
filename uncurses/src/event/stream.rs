@@ -447,7 +447,12 @@ mod tests {
 
     #[test]
     fn consumed_source_wake_refreshes_a_snapshotted_deadline() {
-        for consume_during_fill in [false, true] {
+        for (bytes, expected, consume_during_fill) in [
+            (b"a\x1b[".as_slice(), KeyCode::Char('['), false),
+            (b"a\x1b[".as_slice(), KeyCode::Char('['), true),
+            (b"a\x1b".as_slice(), KeyCode::Escape, false),
+            (b"a\x1b".as_slice(), KeyCode::Escape, true),
+        ] {
             let (rx, tx) = make_pipe();
             let source = EventSource::new(rx)
                 .unwrap()
@@ -469,7 +474,7 @@ mod tests {
             stream.before_wait = None;
             {
                 let mut source = shared.lock().unwrap();
-                write_bytes(&tx, b"a\x1b[");
+                write_bytes(&tx, bytes);
                 if consume_during_fill {
                     source.waker().wake().unwrap();
                 }
@@ -489,13 +494,31 @@ mod tests {
                 .expect("consumption must notify the helper despite its stale unbounded timeout");
             assert!(matches!(
                 Pin::new(&mut stream).poll_next(&mut cx),
-                Poll::Ready(Some(Ok(Event::KeyPress(key)))) if key.code == KeyCode::Char('[')
+                Poll::Ready(Some(Ok(Event::KeyPress(key)))) if key.code == expected
             ));
         }
     }
 
     #[test]
     fn wake_only_retries_and_expired_string_still_arrives() {
+        const CHILD: &str = "UNCURSES_WAKE_QUIET_CHILD";
+        const NAME: &str =
+            "event::stream::tests::wake_only_retries_and_expired_string_still_arrives";
+        // Other tests raise process-wide SIGWINCH, which also wakes pipe sources.
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([NAME, "--exact", "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .expect("re-exec wake test");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "isolated wake test failed or did not run:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let (rx, tx) = make_pipe();
         let source = EventSource::new(rx)
             .unwrap()
