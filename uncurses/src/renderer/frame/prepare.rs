@@ -25,7 +25,10 @@ impl Renderer {
         width: u16,
         height: u16,
     ) -> io::Result<bool> {
-        self.erase_placements(out, crate::layout::Size::new(width, height))?;
+        let has_placements = self.placements.is_some();
+        if has_placements {
+            self.erase_placements(out, crate::layout::Size::new(width, height))?;
+        }
         if self.pen_unknown {
             self.reset_pen(out)?;
         }
@@ -46,7 +49,7 @@ impl Renderer {
         // right place.
         let prev_width = self.last_width;
         let prev_height = self.last_height;
-        let protected = self.protected_rows.iter().any(|&row| row);
+        let protected = has_placements && self.protected_rows.iter().any(|&row| row);
         let resized = width != prev_width || height != prev_height;
         let inline_partial_clear =
             resized && !self.fullscreen && width == prev_width && height < prev_height;
@@ -72,7 +75,13 @@ impl Renderer {
         self.last_width = width;
         self.last_height = height;
 
-        self.invalid_rows.resize(height as usize, false);
+        if has_placements {
+            if protected {
+                self.invalid_rows.resize(height as usize, false);
+            } else {
+                self.invalid_rows.clear();
+            }
+        }
         if resized && !self.fullscreen && height < prev_height && protected {
             self.reset_pen(out)?;
             for row in height..prev_height {
@@ -99,7 +108,9 @@ impl Renderer {
                 self.new_hashes.clear();
             } else {
                 self.clear_update(out, new_buf)?;
-                self.invalid_rows.fill(false);
+                if has_placements {
+                    self.invalid_rows.fill(false);
+                }
             }
             self.force_clear = false;
         } else if !protected && self.scroll_optimize && self.sync_output && self.fullscreen {

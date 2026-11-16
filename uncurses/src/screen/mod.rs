@@ -251,15 +251,31 @@ impl<W: Write> Screen<W> {
     /// there at the end of the frame, inside the same hide/synchronized-output
     /// bracket as the cell diff, so it lands atomically and without flicker.
     pub fn render(&mut self) -> io::Result<()> {
-        self.render_frame(false)
+        if self.renderer.has_placement_work() {
+            return self.render_frame(false);
+        }
+        let changed = self.renderer.sync_front_text(&mut self.front_buf)?;
+        let start = self.out_buf.len();
+        if (changed || self.cursor_move_pending())
+            && let Err(error) = self.write_frame()
+        {
+            self.out_buf.truncate(start);
+            return Err(error);
+        }
+        self.flush()
     }
 
+    // Keep resource bookkeeping out of the ordinary frame's hot path.
+    #[inline(never)]
     fn render_frame(&mut self, release: bool) -> io::Result<()> {
         let changed = self
             .renderer
             .sync_frame(&mut self.front_buf, self.render_epoch, release)?;
         let start = self.out_buf.len();
-        self.renderer.upload_resources(&mut self.out_buf);
+        let placements = self.renderer.has_pending_placement_output();
+        if placements {
+            self.renderer.upload_resources(&mut self.out_buf);
+        }
         if (changed || self.cursor_move_pending())
             && let Err(error) = self.write_frame()
         {
@@ -267,11 +283,13 @@ impl<W: Write> Screen<W> {
             return Err(error);
         }
         self.flush()?;
-        self.renderer.complete_frame(self.render_epoch);
-        if self.renderer.delete_resources(&mut self.out_buf) {
-            self.flush()?;
+        if placements {
+            self.renderer.complete_frame(self.render_epoch);
+            if self.renderer.delete_resources(&mut self.out_buf) {
+                self.flush()?;
+            }
+            self.renderer.complete_resource_cleanup();
         }
-        self.renderer.complete_resource_cleanup();
         Ok(())
     }
 
@@ -352,7 +370,7 @@ impl<W: Write> Screen<W> {
         if content.is_empty() {
             return Ok(());
         }
-        if self.renderer.placements.has_output() {
+        if self.renderer.has_placement_output() {
             self.release_placements()?;
             let inserted = self.insert_above(content);
             self.invalidate();
@@ -1041,14 +1059,14 @@ impl<W: Write> Write for Screen<W> {
             };
             self.out_buf.drain(..written);
             if let Err(error) = result {
-                if self.renderer.placements.has_pending_output() {
+                if self.renderer.has_pending_placement_output() {
                     self.fail_frame();
                 }
                 return Err(error);
             }
         }
         if let Err(error) = self.writer.flush() {
-            if self.renderer.placements.has_pending_output() {
+            if self.renderer.has_pending_placement_output() {
                 self.fail_frame();
             }
             return Err(error);

@@ -20,8 +20,23 @@ fn source() -> Image {
     Image::from_rgb(1, 1, vec![255, 0, 0]).unwrap()
 }
 
-fn image_resource(renderer: &ImageRenderer, id: PlacementId) -> &PlacementResource {
-    renderer.cache[&id].placement.resource.as_ref().unwrap()
+fn image_commands(renderer: &ImageRenderer, id: PlacementId) -> (&[u8], &[u8]) {
+    match &renderer.cache[&id].output {
+        super::Output::Placeholders(image) => (image.upload(), image.delete()),
+        super::Output::Native(options) => {
+            let resource = options.resource.as_ref().unwrap();
+            (resource.upload(), resource.delete())
+        }
+        super::Output::Cells(_) => panic!("symbol cells have no image resource"),
+    }
+}
+
+fn image_cells(renderer: &ImageRenderer, id: PlacementId) -> &Buffer {
+    match &renderer.cache[&id].output {
+        super::Output::Placeholders(image) => image.cells(),
+        super::Output::Cells(cells) => cells,
+        super::Output::Native(_) => panic!("native output uses a placement"),
+    }
 }
 
 fn screen() -> Screen<Vec<u8>> {
@@ -61,9 +76,9 @@ fn selection_uses_each_priority_and_only_usable_protocols() {
     ] {
         let mut renderer = ImageRenderer::new(caps);
         assert_eq!(draw(&mut renderer, &mut screen, &source(), 1), expected);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         renderer.remove(&mut screen, 1);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         match expected {
             ImageProtocol::KittyPlaceholders => caps.kitty_placeholders = false,
             ImageProtocol::Kitty => caps.kitty = false,
@@ -139,7 +154,7 @@ fn iterm2_detection_accepts_supported_terminal_identities() {
             draw(&mut renderer, &mut screen, &source(), 1),
             ImageProtocol::Iterm2
         );
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         assert!(
             String::from_utf8_lossy(screen.writer()).contains("\x1b]1337;File="),
             "{name}"
@@ -223,7 +238,7 @@ fn term_infers_image_protocols_without_query_replies() {
         });
         let mut screen = screen();
         assert_eq!(draw(&mut renderer, &mut screen, &source(), 1), protocol);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         let output = String::from_utf8_lossy(screen.writer());
         assert_eq!(output.contains("\x1b_G"), native, "{term}");
         assert_eq!(output.contains('\u{10eeee}'), placeholders, "{term}");
@@ -288,7 +303,7 @@ fn term_inference_preserves_identity_precedence_and_exact_matching() {
 }
 
 #[test]
-fn tmux_wraps_resources_but_keeps_cells_and_lifetime_on_the_screen() {
+fn tmux_wraps_image_resources_and_keeps_cells_in_the_pane() {
     let mut renderer = ImageRenderer::new(ImageCapabilities {
         cell_pixels: Some(Size::new(16, 32)),
         ..all()
@@ -300,29 +315,29 @@ fn tmux_wraps_resources_but_keeps_cells_and_lifetime_on_the_screen() {
         draw(&mut renderer, &mut screen, &source, 1),
         ImageProtocol::KittyPlaceholders
     );
-    let upload = image_resource(&renderer, 1).upload().to_vec();
-    let delete = image_resource(&renderer, 1).delete().to_vec();
+    let upload = crate::protocols::kitty::wrap_tmux(image_commands(&renderer, 1).0).unwrap();
+    let delete = crate::protocols::kitty::wrap_tmux(image_commands(&renderer, 1).1).unwrap();
     let upload_text = String::from_utf8_lossy(&upload);
     let chunks = upload_text.matches("\x1bPtmux;").count();
     assert!(chunks > 2);
     assert!(!upload_text.contains('\u{10eeee}'));
     assert!(delete.starts_with(b"\x1bPtmux;\x1b\x1b_Ga=d,"));
     assert!(screen.writer().is_empty());
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     let output = String::from_utf8_lossy(screen.writer());
     assert_eq!(output.matches("\x1bPtmux;").count(), chunks);
     assert!(output.contains('\u{10eeee}'));
     screen.writer_mut().clear();
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert!(screen.writer().is_empty());
     screen.clear();
     draw(&mut renderer, &mut screen, &source, 8);
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert!(!String::from_utf8_lossy(screen.writer()).contains("\x1bPtmux;"));
     screen.writer_mut().clear();
-    drop(renderer);
-    screen.remove_placement(1);
-    screen.render().unwrap();
+    screen.clear();
+    renderer.remove(&mut screen, 1);
+    renderer.render(&mut screen).unwrap();
     assert!(screen.writer().ends_with(&delete));
 }
 
@@ -350,7 +365,7 @@ fn placeholders_are_preferred_for_rio_and_ghostty() {
             ImageProtocol::KittyPlaceholders,
             "{name}"
         );
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         let output = String::from_utf8_lossy(screen.writer());
         assert!(output.contains("U=1"), "{name}");
         assert!(output.contains('\u{10eeee}'), "{name}");
@@ -411,29 +426,27 @@ fn reports_distinguish_placeholder_version() {
 }
 
 #[test]
-fn screen_owns_image_lifetime_after_the_preparation_cache_is_dropped() {
-    for placeholders in [false, true] {
-        let mut screen = screen();
-        let mut renderer = ImageRenderer::new(ImageCapabilities {
-            kitty_placeholders: placeholders,
-            ..all()
-        });
-        draw(&mut renderer, &mut screen, &source(), 1);
-        let deletion = image_resource(&renderer, 1).delete().to_vec();
-        drop(renderer);
-        assert!(screen.writer().is_empty());
-        screen.render().unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(screen.writer())
-                .matches("a=t,")
-                .count(),
-            1
-        );
-        screen.writer_mut().clear();
-        screen.remove_placement(1);
-        screen.render().unwrap();
-        assert!(screen.writer().ends_with(&deletion));
-    }
+fn screen_owns_opaque_placements_after_the_preparation_cache_is_dropped() {
+    let mut screen = screen();
+    let mut renderer = ImageRenderer::new(ImageCapabilities {
+        kitty_placeholders: false,
+        ..all()
+    });
+    draw(&mut renderer, &mut screen, &source(), 1);
+    let deletion = image_commands(&renderer, 1).1.to_vec();
+    drop(renderer);
+    assert!(screen.writer().is_empty());
+    Screen::render(&mut screen).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(screen.writer())
+            .matches("a=t,")
+            .count(),
+        1
+    );
+    screen.writer_mut().clear();
+    screen.remove_placement(1);
+    Screen::render(&mut screen).unwrap();
+    assert!(screen.writer().ends_with(&deletion));
 }
 
 #[test]
@@ -449,29 +462,31 @@ fn cached_uploads_survive_movement_and_deletion_follows_removal() {
         assert!(screen.writer().is_empty());
         screen.flush().unwrap();
         assert!(screen.writer().is_empty());
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         let initial = String::from_utf8_lossy(screen.writer()).into_owned();
         assert_eq!(initial.matches("a=t,").count(), 1);
-        let resource = image_resource(&renderer, 1).delete().to_vec();
+        let resource = image_commands(&renderer, 1).1.to_vec();
         screen.writer_mut().clear();
         draw(&mut renderer, &mut screen, &source.clone(), 1);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         assert!(screen.writer().is_empty(), "{:?}", screen.writer());
+        screen.clear();
         draw(&mut renderer, &mut screen, &source, 8);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         let moved = String::from_utf8_lossy(screen.writer());
         assert!(!moved.contains("a=t,"));
         assert!(!moved.contains("d=I,"));
-        assert_eq!(image_resource(&renderer, 1).delete(), resource);
+        assert_eq!(image_commands(&renderer, 1).1, resource);
         screen.writer_mut().clear();
+        screen.clear();
         renderer.remove(&mut screen, 1);
         assert!(screen.writer().is_empty());
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         assert!(screen.writer().ends_with(&resource));
         assert!(screen.writer().len() > resource.len());
         screen.writer_mut().clear();
         renderer.remove(&mut screen, 1);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         assert!(screen.writer().is_empty());
     }
 }
@@ -482,9 +497,9 @@ fn replacements_and_failed_preparation_preserve_options_and_frame() {
     let mut screen = screen();
     let source = source();
     draw(&mut renderer, &mut screen, &source, 1);
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     screen.writer_mut().clear();
-    let old = image_resource(&renderer, 1).delete().to_vec();
+    let old = image_commands(&renderer, 1).1.to_vec();
     let cell = screen.cell((1, 1).into()).unwrap().clone();
     let options = ImageOptions {
         scale: f64::NAN,
@@ -496,7 +511,7 @@ fn replacements_and_failed_preparation_preserve_options_and_frame() {
             .is_err()
     );
     assert_eq!(screen.cell((1, 1).into()), Some(&cell));
-    assert_eq!(image_resource(&renderer, 1).delete(), old);
+    assert_eq!(image_commands(&renderer, 1).1, old);
     assert!(screen.writer().is_empty());
     for (id, area) in [
         (0, Rect::new(1, 1, 4, 2)),
@@ -518,14 +533,14 @@ fn replacements_and_failed_preparation_preserve_options_and_frame() {
     renderer
         .draw(&mut screen, 1, Rect::new(1, 1, 4, 2), &source, &options)
         .unwrap();
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert_eq!(saved, options);
     assert!(screen.writer().ends_with(&old));
-    assert_ne!(image_resource(&renderer, 1).delete(), old);
+    assert_ne!(image_commands(&renderer, 1).1, old);
 }
 
 #[test]
-fn removal_preserves_changed_overlays_and_clears_matching_wide_cells() {
+fn retiring_cell_preparation_preserves_the_ordinary_cell_grid() {
     for caps in [all(), ImageCapabilities::default()] {
         let mut screen = screen();
         let mut renderer = ImageRenderer::new(caps);
@@ -533,15 +548,17 @@ fn removal_preserves_changed_overlays_and_clears_matching_wide_cells() {
         renderer.symbols = "u2580".parse().unwrap();
         draw(&mut renderer, &mut screen, &source(), 1);
         screen.set_str((2, 1), "TOP", Style::new().bold());
+        let row: Vec<_> = (1..5)
+            .map(|x| screen.cell((x, 2).into()).unwrap().clone())
+            .collect();
         renderer.remove(&mut screen, 1);
         for (x, text) in [(2, "T"), (3, "O"), (4, "P")] {
             assert_eq!(screen.cell((x, 1).into()).unwrap().content(), text);
         }
         for x in 1..5 {
-            assert!(screen.cell((x, 2).into()).unwrap().is_blank());
-            assert_eq!(screen.cell((x, 2).into()).unwrap().style, Style::default());
+            assert_eq!(screen.cell((x, 2).into()), Some(&row[usize::from(x - 1)]));
         }
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
     }
 }
 
@@ -574,6 +591,7 @@ fn symbols_use_screen_policy_and_reported_sampling_geometry_without_mutation() {
     assert_eq!(screen.cell(Position::ORIGIN).unwrap().width(), 2);
     assert_eq!(options, saved);
     screen.resize((1, 1));
+    screen.clear();
     renderer.remove(&mut screen, 1);
     assert!(screen.cell(Position::ORIGIN).unwrap().is_blank());
 }
@@ -624,21 +642,22 @@ fn failed_output_keeps_uploads_and_deletion_pending_until_recovery() {
             ..all()
         });
         draw(&mut renderer, &mut screen, &source(), 1);
-        assert!(screen.render().is_err());
+        assert!(renderer.render(&mut screen).is_err());
         screen.writer_mut().fail_write = false;
         screen.writer_mut().fail_flush = None;
         screen.writer_mut().bytes.clear();
-        screen.invalidate();
-        screen.render().unwrap();
+        renderer.invalidate(&mut screen);
+        renderer.render(&mut screen).unwrap();
         assert!(String::from_utf8_lossy(&screen.writer().bytes).contains("a=t,"));
+        screen.clear();
         renderer.remove(&mut screen, 1);
         screen.writer_mut().fail_flush = Some(screen.writer().flushes + 2);
-        assert!(screen.render().is_err());
+        assert!(renderer.render(&mut screen).is_err());
         screen.writer_mut().fail_flush = None;
         screen.writer_mut().bytes.clear();
-        screen.invalidate();
+        renderer.invalidate(&mut screen);
         renderer.remove(&mut screen, 1);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         assert!(String::from_utf8_lossy(&screen.writer().bytes).contains("d=I,"));
     }
 }
@@ -649,7 +668,7 @@ fn configuration_changes_apply_on_the_next_draw() {
     let mut screen = screen();
     let mut renderer = ImageRenderer::new(all());
     draw(&mut renderer, &mut screen, &source, 1);
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     screen.writer_mut().clear();
     screen.set_color_profile(Profile::Ansi256);
     assert!(screen.writer().is_empty());
@@ -657,20 +676,20 @@ fn configuration_changes_apply_on_the_next_draw() {
         draw(&mut renderer, &mut screen, &source, 1),
         ImageProtocol::Kitty
     );
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     screen.writer_mut().clear();
     renderer.capabilities = ImageCapabilities::default();
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert!(screen.writer().is_empty());
     assert_eq!(
         draw(&mut renderer, &mut screen, &source, 1),
         ImageProtocol::Symbols
     );
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     screen.resize((2, 1));
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     renderer.remove(&mut screen, 1);
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
 }
 
 #[test]
@@ -689,11 +708,11 @@ fn copies_share_preparation_and_skip_unrendered_replacements() {
             )
             .unwrap();
     }
-    let first = image_resource(&renderer, 1).delete().to_vec();
-    let second = image_resource(&renderer, 2).delete().to_vec();
+    let first = image_commands(&renderer, 1).1.to_vec();
+    let second = image_commands(&renderer, 2).1.to_vec();
     assert_eq!(first, second);
     assert!(Arc::ptr_eq(&renderer.cache[&1], &renderer.cache[&2]));
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert_eq!(
         String::from_utf8_lossy(screen.writer())
             .matches("a=t,")
@@ -701,8 +720,9 @@ fn copies_share_preparation_and_skip_unrendered_replacements() {
         1
     );
     screen.writer_mut().clear();
+    screen.fill_rect(Rect::new(5, 1, 4, 2), &Cell::BLANK);
     renderer.remove(&mut screen, 1);
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert!(!screen.writer().ends_with(&first));
     assert!(
         !screen
@@ -711,6 +731,7 @@ fn copies_share_preparation_and_skip_unrendered_replacements() {
             .any(|bytes| bytes == second)
     );
     screen.writer_mut().clear();
+    screen.fill_rect(Rect::new(10, 1, 4, 2), &Cell::BLANK);
     renderer
         .draw(
             &mut screen,
@@ -720,7 +741,8 @@ fn copies_share_preparation_and_skip_unrendered_replacements() {
             &ImageOptions::default(),
         )
         .unwrap();
-    let intermediate = image_resource(&renderer, 2).delete().to_vec();
+    let intermediate = image_commands(&renderer, 2).1.to_vec();
+    screen.fill_rect(Rect::new(10, 1, 4, 2), &Cell::BLANK);
     renderer
         .draw(
             &mut screen,
@@ -730,7 +752,7 @@ fn copies_share_preparation_and_skip_unrendered_replacements() {
             &ImageOptions::default(),
         )
         .unwrap();
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     let output = String::from_utf8_lossy(screen.writer());
     assert_eq!(output.matches("a=t,").count(), 1);
     assert_eq!(output.matches("d=I,").count(), 1);
@@ -741,8 +763,9 @@ fn copies_share_preparation_and_skip_unrendered_replacements() {
             .windows(intermediate.len())
             .any(|bytes| bytes == intermediate)
     );
+    screen.clear();
     renderer.remove(&mut screen, 2);
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert!(renderer.cache.is_empty());
 }
 
@@ -756,17 +779,11 @@ fn placeholder_compression_saves_exact_metadata_bytes_and_preserves_public_cells
     compressed.set_optimizations(Optimizations::empty());
     let mut renderer = ImageRenderer::new(all());
     draw(&mut renderer, &mut compressed, &source(), 1);
-    let cells = renderer.cache[&1]
-        .placement
-        .cells
-        .as_ref()
-        .unwrap()
-        .as_ref()
-        .clone();
-    let upload_len = image_resource(&renderer, 1).upload().len();
+    let cells = image_cells(&renderer, 1).clone();
+    let upload_len = image_commands(&renderer, 1).0.len();
     cells.draw(&mut plain, (1, 1).into());
     plain.render().unwrap();
-    compressed.render().unwrap();
+    renderer.render(&mut compressed).unwrap();
     let mut saved = 0;
     for y in 0..2 {
         let anchor = cells.cell((0, y).into()).unwrap().content();
@@ -780,7 +797,10 @@ fn placeholder_compression_saves_exact_metadata_bytes_and_preserves_public_cells
             }
         }
     }
-    assert_eq!(plain.writer(), &compressed.writer()[upload_len..]);
+    assert_eq!(
+        plain.writer().len(),
+        compressed.writer().len() - upload_len + saved
+    );
     let diacritics = uncurses::ansi::graphics::KITTY_PLACEHOLDER_DIACRITICS;
     let emitted = String::from_utf8_lossy(compressed.writer())
         .chars()
@@ -795,7 +815,7 @@ fn placeholder_compression_saves_exact_metadata_bytes_and_preserves_public_cells
     assert_eq!(complete - emitted, saved);
     assert!(saved >= 24);
     compressed.writer_mut().clear();
-    compressed.render().unwrap();
+    renderer.render(&mut compressed).unwrap();
     assert!(compressed.writer().is_empty());
 }
 
@@ -804,34 +824,28 @@ fn partial_overlays_and_source_changes_reanchor_the_next_visible_cell() {
     let mut screen = screen();
     let mut renderer = ImageRenderer::new(all());
     draw(&mut renderer, &mut screen, &source(), 1);
-    let cells = renderer.cache[&1]
-        .placement
-        .cells
-        .as_ref()
-        .unwrap()
-        .as_ref()
-        .clone();
-    screen.render().unwrap();
+    let cells = image_cells(&renderer, 1).clone();
+    renderer.render(&mut screen).unwrap();
     for x in 0..3 {
         screen.writer_mut().clear();
         screen.set_str((1 + x, 2), "X", Style::EMPTY);
-        screen.render().unwrap();
+        renderer.render(&mut screen).unwrap();
         let next = cells.cell((x + 1, 1).into()).unwrap();
         assert!(String::from_utf8_lossy(screen.writer()).contains(next.content()));
         assert_eq!(screen.cell((x + 2, 2).into()), Some(next));
         assert_eq!(screen.cell((x + 1, 2).into()).unwrap().content(), "X");
     }
     cells.draw(&mut screen, (1, 1).into());
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     screen.writer_mut().clear();
     screen.set_cell((1, 2), cells.cell((2, 0).into()).unwrap());
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     let next = cells.cell((1, 1).into()).unwrap();
     assert!(String::from_utf8_lossy(screen.writer()).contains(next.content()));
     assert_eq!(screen.cell((1, 2).into()), cells.cell((2, 0).into()));
     assert_eq!(screen.cell((2, 2).into()), Some(next));
     screen.writer_mut().clear();
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     assert!(screen.writer().is_empty());
 }
 
@@ -847,14 +861,8 @@ fn failed_output_restores_full_placeholder_cells_before_recovery_or_removal() {
     screen.set_color_profile(Profile::TrueColor);
     let mut renderer = ImageRenderer::new(all());
     draw(&mut renderer, &mut screen, &source(), 1);
-    let cells = renderer.cache[&1]
-        .placement
-        .cells
-        .as_ref()
-        .unwrap()
-        .as_ref()
-        .clone();
-    assert!(screen.render().is_err());
+    let cells = image_cells(&renderer, 1).clone();
+    assert!(renderer.render(&mut screen).is_err());
     for y in 0..2 {
         for x in 0..4 {
             assert_eq!(
@@ -864,13 +872,218 @@ fn failed_output_restores_full_placeholder_cells_before_recovery_or_removal() {
         }
     }
     screen.writer_mut().fail_write = false;
-    screen.invalidate();
-    screen.render().unwrap();
+    renderer.invalidate(&mut screen);
+    renderer.render(&mut screen).unwrap();
+    screen.clear();
     renderer.remove(&mut screen, 1);
-    screen.render().unwrap();
+    renderer.render(&mut screen).unwrap();
     for y in 0..2 {
         for x in 0..4 {
             assert_eq!(screen.cell((x + 1, y + 1).into()), Some(&Cell::BLANK));
         }
     }
+}
+
+#[test]
+fn ordinary_image_cells_do_not_register_or_remove_core_placements() {
+    for caps in [all(), ImageCapabilities::default()] {
+        let mut screen = screen();
+        screen
+            .set_placement(
+                1,
+                Rect::new(0, 0, 6, 1),
+                &PlacementOptions {
+                    draw: b"OPAQUE".to_vec(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let marker = screen.cell((0, 0).into()).unwrap().clone();
+        let mut renderer = ImageRenderer::new(caps);
+        draw(&mut renderer, &mut screen, &source(), 1);
+        assert_eq!(screen.cell((0, 0).into()), Some(&marker));
+        renderer.render(&mut screen).unwrap();
+        assert!(String::from_utf8_lossy(screen.writer()).contains("OPAQUE"));
+
+        let cell = screen.cell((1, 1).into()).unwrap().clone();
+        renderer.remove(&mut screen, 1);
+        assert_eq!(screen.cell((1, 1).into()), Some(&cell));
+        assert_eq!(screen.cell((0, 0).into()), Some(&marker));
+    }
+}
+
+#[test]
+fn image_layer_commits_partial_placeholder_rows_and_releases_prepared_data() {
+    let mut screen = screen();
+    let mut renderer = ImageRenderer::new(all());
+    renderer
+        .draw(
+            &mut screen,
+            1,
+            Rect::new(1, 0, 4, 3),
+            &source(),
+            &ImageOptions::default(),
+        )
+        .unwrap();
+    let super::Output::Placeholders(image) = &renderer.cache[&1].output else {
+        panic!("expected ordinary placeholder cells");
+    };
+    let weak = Arc::downgrade(&image.resource);
+    let second_row = image.cells().cell((0, 1).into()).unwrap().clone();
+    renderer.commit_rows(&mut screen, 1).unwrap();
+    assert_eq!(screen.cell((1, 0).into()), Some(&second_row));
+    screen.writer_mut().clear();
+    renderer.invalidate(&mut screen);
+    renderer.render(&mut screen).unwrap();
+    assert!(String::from_utf8_lossy(screen.writer()).contains("a=t,"));
+    screen.writer_mut().clear();
+    screen.clear();
+    renderer.remove(&mut screen, 1);
+    renderer.render(&mut screen).unwrap();
+    assert!(!String::from_utf8_lossy(screen.writer()).contains("d=I,"));
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn prepared_cells_clip_normally_and_copies_keep_the_resource_visible() {
+    let image = source()
+        .kitty_placeholders((4, 2).into(), (2, 4).into(), &ImageOptions::default())
+        .unwrap();
+    let mut screen = screen();
+    let mut renderer = ImageRenderer::new(ImageCapabilities::default());
+    renderer.draw_cells(&mut screen, &image, (18, 7)).unwrap();
+    renderer.render(&mut screen).unwrap();
+    for x in 0..2 {
+        assert_eq!(
+            screen.cell((18 + x, 7).into()),
+            image.cells().cell((x, 0).into())
+        );
+    }
+
+    let copied = screen.cell((18, 7).into()).unwrap().clone();
+    screen.set_cell((0, 0), &copied);
+    screen.fill_rect(Rect::new(18, 7, 4, 2), &Cell::BLANK);
+    screen.writer_mut().clear();
+    renderer.render(&mut screen).unwrap();
+    assert!(!String::from_utf8_lossy(screen.writer()).contains("d=I,"));
+    screen.set_cell((0, 0), &Cell::BLANK);
+    screen.writer_mut().clear();
+    renderer.render(&mut screen).unwrap();
+    assert!(screen.writer().ends_with(image.delete()));
+}
+
+#[test]
+fn rejected_frames_and_commits_can_be_corrected_without_image_invalidation() {
+    for rejected_commit in [false, true] {
+        let mut screen = screen();
+        let mut renderer = ImageRenderer::new(all());
+        draw(&mut renderer, &mut screen, &source(), 10);
+        screen
+            .set_placement(
+                7,
+                Rect::new(0, 0, 2, 2),
+                &PlacementOptions {
+                    draw: b"OK".to_vec(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let error = if rejected_commit {
+            renderer.commit_rows(&mut screen, 1).unwrap_err()
+        } else {
+            screen.set_cell((1, 0), &Cell::new("\x07", 1));
+            renderer.render(&mut screen).unwrap_err()
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(screen.writer().is_empty());
+        screen.set_cell((1, 0), &Cell::new("X", 1));
+        renderer.render(&mut screen).unwrap();
+        assert!(String::from_utf8_lossy(screen.writer()).contains("a=t,"));
+    }
+}
+
+#[test]
+fn terminal_invalidation_restores_resources_in_each_screen_buffer() {
+    let mut screen = screen();
+    let mut renderer = ImageRenderer::new(all());
+    let source = source();
+    screen.set_fullscreen(true);
+    draw(&mut renderer, &mut screen, &source, 1);
+    renderer.render(&mut screen).unwrap();
+    screen.set_fullscreen(false);
+    renderer.invalidate(&mut screen);
+    renderer.render(&mut screen).unwrap();
+    screen.writer_mut().clear();
+    screen.set_fullscreen(true);
+    renderer.render(&mut screen).unwrap();
+    assert!(String::from_utf8_lossy(screen.writer()).contains("a=t,"));
+}
+
+#[test]
+fn alternate_screen_reentry_reuploads_its_discarded_images() {
+    let mut screen = screen();
+    let mut renderer = ImageRenderer::new(all());
+    let source = source();
+    for _ in 0..2 {
+        screen.set_fullscreen(true);
+        draw(&mut renderer, &mut screen, &source, 1);
+        screen.writer_mut().clear();
+        renderer.render(&mut screen).unwrap();
+        assert!(String::from_utf8_lossy(screen.writer()).contains("a=t,"));
+        screen.set_fullscreen(false);
+        renderer.render(&mut screen).unwrap();
+    }
+}
+
+#[test]
+fn mixed_frame_failure_does_not_confirm_a_discarded_placeholder_upload() {
+    let mut screen = Screen::new(
+        Output {
+            fail_write: true,
+            ..Default::default()
+        },
+        (20, 8),
+    );
+    screen.set_color_profile(Profile::TrueColor);
+    let mut renderer = ImageRenderer::new(all());
+    draw(&mut renderer, &mut screen, &source(), 1);
+    screen
+        .set_placement(
+            7,
+            Rect::new(10, 4, 2, 1),
+            &PlacementOptions {
+                draw: b"OK".to_vec(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(renderer.render(&mut screen).is_err());
+    screen.writer_mut().fail_write = false;
+    screen.writer_mut().bytes.clear();
+    screen.invalidate();
+    renderer.render(&mut screen).unwrap();
+    assert!(String::from_utf8_lossy(&screen.writer().bytes).contains("a=t,"));
+}
+
+#[test]
+fn committed_image_redrawn_after_an_empty_recovery_frame_is_uploaded() {
+    let mut screen = screen();
+    let mut renderer = ImageRenderer::new(all());
+    let source = source();
+    renderer
+        .draw(
+            &mut screen,
+            1,
+            Rect::new(0, 0, 4, 2),
+            &source,
+            &ImageOptions::default(),
+        )
+        .unwrap();
+    renderer.commit_rows(&mut screen, 2).unwrap();
+    renderer.invalidate(&mut screen);
+    renderer.render(&mut screen).unwrap();
+    screen.writer_mut().clear();
+    draw(&mut renderer, &mut screen, &source, 1);
+    renderer.render(&mut screen).unwrap();
+    assert!(String::from_utf8_lossy(screen.writer()).contains("a=t,"));
 }

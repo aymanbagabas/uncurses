@@ -1,12 +1,13 @@
 """Replay images_auto --dump-committed through Kitty's native parser."""
 
 import runpy
+import re
 import sys
 
 helpers = runpy.run_path("examples/tests/placements_native.py")
 Screen, feed, require = (helpers[name] for name in ("Screen", "feed", "require"))
 records = [record.rstrip("\n").split("\t") for record in sys.stdin]
-stages = ["shown", "committed", "reused ID", "removed", "invalidated", "new image",
+stages = ["shown", "committed", "committed recovery", "reused ID", "removed", "invalidated", "new image",
           "removed new image", "committed rest"]
 require([name for name, _ in records] == [
     f"{protocol} {stage}" for protocol in ("kitty", "placeholders") for stage in stages
@@ -14,9 +15,17 @@ require([name for name, _ in records] == [
 
 for index, protocol in enumerate(("kitty", "placeholders")):
     screen = Screen(None, 24, 40, 100, 8, 16)
-    for stage, (_, encoded) in zip(stages, records[index * 8:index * 8 + 8]):
+    initial_id = None
+    for stage, (_, encoded) in zip(stages, records[index * len(stages):(index + 1) * len(stages)]):
         payload = bytes.fromhex(encoded)
-        require((b"a=t," in payload) == (stage in ("shown", "new image")),
+        if stage == "shown":
+            initial_id = re.search(rb"\x1b_Ga=t,[^;]*?i=(\d+)", payload).group(1)
+        if stage == "committed recovery" and protocol == "placeholders":
+            feed(screen, b"\x1b_Ga=d,d=I,i=" + initial_id + b",q=2\x1b\\")
+            require(screen.grman.image_count == 0, "resource loss was not reproduced")
+        require((b"a=t," in payload) == (
+                    stage in ("shown", "new image")
+                    or (protocol == "placeholders" and stage == "committed recovery")),
                 (protocol, stage, "unexpected resource upload"))
         require((b"d=I," in payload) == (stage == "removed new image"),
                 (protocol, stage, "committed resource was deleted"))
@@ -31,7 +40,7 @@ for index, protocol in enumerate(("kitty", "placeholders")):
             right = round((rect["right"] + 1) * 20)
             bottom = round((1 - rect["bottom"]) * 12)
             visible.update((x, y) for y in range(top, bottom) for x in range(left, right))
-        bottom = 5 if protocol == "kitty" or stage in ("shown", "committed") else 3
+        bottom = 5 if protocol == "kitty" or stage in ("shown", "committed", "committed recovery") else 3
         expected = {(x, y) for y in range(1, bottom) for x in range(2, 14)}
         if stage in ("reused ID", "new image"):
             top = 6 if protocol == "kitty" else 4
@@ -42,4 +51,4 @@ for index, protocol in enumerate(("kitty", "placeholders")):
         if stage == "committed rest":
             require((screen.cursor.x, screen.cursor.y) == (0, 12),
                     (protocol, "incorrect final cursor", screen.cursor.x, screen.cursor.y))
-    print(f"Verified eight committed-image frames, including reused application IDs: {protocol}.")
+    print(f"Verified nine committed-image frames, including recovery and reused application IDs: {protocol}.")
