@@ -159,11 +159,14 @@ pub const DEFAULT_STRING_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 /// Cloneable handle that interrupts an in-progress [`EventSource::poll`] or
 /// [`EventSource::read`].
 ///
-/// A waker is bound to one source at construction time. Calling [`Waker::wake`]
-/// makes the source's readiness wait return `Interrupted`; multiple wake calls
-/// may coalesce into one interruption. Ready input events take priority and
-/// leave the wake pending for a later wait. The handle is cheap to clone and can be
-/// sent to other threads.
+/// A waker is bound to one source. A pending wake ends its next wait.
+/// Ready events, including resizes, take priority and consume the wake.
+/// Without an event, [`EventSource::read`] returns `Interrupted` and
+/// [`EventSource::poll`] returns `false`. Concurrent wake calls may coalesce.
+///
+/// For cancellation, set a shared flag before waking the source and check
+/// that flag after every read result, including successful events.
+/// The handle is cheap to clone and can be sent to other threads.
 #[derive(Clone)]
 pub struct Waker {
     #[cfg(unix)]
@@ -191,9 +194,10 @@ impl Waker {
         return self.inner.raw_handle();
     }
 
-    #[cfg(feature = "async")]
-    pub(super) fn clear(&self) -> io::Result<()> {
-        self.inner.clear()
+    /// Consume pending wakes without waiting. Calls that overlap this
+    /// operation may coalesce; a wake after consumption remains pending.
+    pub(super) fn take(&self) -> io::Result<bool> {
+        self.inner.take()
     }
 
     #[cfg(unix)]
@@ -206,18 +210,16 @@ impl Waker {
         Self { inner }
     }
 
-    /// Read end of the wake self-pipe. Lives behind the same `Arc` as the
-    /// write end so it is never closed while a writer survives.
-    #[cfg(unix)]
-    pub(super) fn pipe_read_fd(&self) -> std::os::fd::RawFd {
-        self.inner.read_fd()
-    }
-
     /// Interrupt the [`EventSource`] this waker is bound to.
     ///
-    /// A blocked [`EventSource::poll`] returns `Ok(false)` and a blocked
-    /// [`EventSource::read`] returns an [`io::ErrorKind::Interrupted`] error.
-    /// The wake does not enqueue an [`Event`] and does not mutate decoder state.
+    /// Ready events satisfy the request and consume the wake. Without an
+    /// event, [`EventSource::poll`] returns `Ok(false)` and [`EventSource::read`]
+    /// returns [`io::ErrorKind::Interrupted`]. Input errors still surface.
+    /// A wake before a wait remains pending until the source services it.
+    ///
+    /// The wake does not enqueue an [`Event`] or discard partial input.
+    /// `EventStream` retries after a wake; its next item is an event
+    /// or an error. Use a separate async signal for application cancellation.
     ///
     /// Returns any platform error produced while signalling the wake handle.
     pub fn wake(&self) -> io::Result<()> {
@@ -310,8 +312,6 @@ where
     /// state is mutated under a separate lock.
     #[cfg(windows)]
     pub(super) poller: Arc<dyn Poller>,
-    #[cfg(windows)]
-    pub(super) wake_event: windows_sys::Win32::Foundation::HANDLE,
     /// Pending high surrogate per key direction (0 = up, 1 = down).
     /// VT input delivers astral code points as two consecutive
     /// `KEY_EVENT` records, one per UTF-16 unit.
@@ -526,6 +526,18 @@ where
         self.waker.clone()
     }
 
+    /// Consume source wakes and preserve notification of async helpers.
+    pub(crate) fn consume_wake(&mut self) -> io::Result<bool> {
+        let woke = self.waker.take()?;
+        #[cfg(feature = "async")]
+        if woke {
+            // A helper may have captured its timeout before a shared reader
+            // changed the decoder deadline and consumed the source wake.
+            self.wake_deadline_waiters();
+        }
+        Ok(woke)
+    }
+
     /// Return whether out-of-band resize handling is enabled.
     ///
     /// On Unix, `true` means a readable SIGWINCH pipe can produce
@@ -569,10 +581,12 @@ where
     ///   the wait without producing an event;
     /// * `Err(_)` for fatal input or platform readiness errors.
     ///
-    /// When input and a wake are ready together, decoded events take priority.
-    /// The wake stays pending until a later poll produces no event.
+    /// Ready and already queued events take priority over a pending wake and
+    /// consume it. This includes resize and expired-sequence events.
+    /// [`Self::try_read`] only pops events and leaves wakes untouched.
     pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<bool> {
         if !self.queue.is_empty() {
+            self.consume_wake()?;
             return Ok(true);
         }
         let deadline = timeout.map(|t| Instant::now() + t);
@@ -606,8 +620,8 @@ where
 
     /// One read-decode cycle: resolve an overdue lone Escape or paste deadline,
     /// wait up to `timeout` for readiness, then service it. Winch surfaces a
-    /// [`Event::Resize`]; a [`Waker`] surfaces `Err(Interrupted)` without
-    /// touching decode state; ready input is drained and decoded; a wait
+    /// [`Event::Resize`]; a [`Waker`] surfaces `Err(Interrupted)` if no event
+    /// or input error is available; ready input is drained and decoded; a wait
     /// that returns with no input ready resolves the decode deadline it was
     /// tightened to. Fills [`Self::queue`].
     pub(super) fn fill(&mut self, timeout: Option<Duration>) -> io::Result<()> {
@@ -617,19 +631,22 @@ where
             self.expire_elapsed();
         }
         if !self.queue.is_empty() {
+            self.consume_wake()?;
             return Ok(());
         }
-        if let Some(error) = self.pending_error.take() {
-            return Err(error);
+        if self.pending_error.is_some() {
+            self.consume_wake()?;
+            return Err(self.pending_error.take().unwrap());
         }
 
         let effective = self.effective_timeout(timeout);
         let mut ready = [false; READY_SLOTS];
         self.poller.poll(&mut ready, effective)?;
+        let wake_ready = ready[READY_WAKE];
 
         #[cfg(unix)]
         if ready[READY_WINCH] {
-            self.handle_winch();
+            self.handle_winch()?;
         }
 
         if ready[READY_INPUT]
@@ -637,42 +654,41 @@ where
         {
             // A failed read supplies no continuation bytes.
             self.expire_elapsed();
-            if self.queue.is_empty() {
-                return Err(error);
-            }
             self.pending_error = Some(error);
-        }
-        if !self.queue.is_empty() {
-            // Keep the wake signaled until a pass produces no event.
-            return Ok(());
-        }
-        if ready[READY_WAKE] {
-            self.drain_wake();
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
         }
         if !ready[READY_INPUT] {
             // The wait was tightened to a decode deadline that has elapsed.
             self.expire_elapsed();
+        }
+        // Also acknowledge wakes that arrive after the readiness snapshot.
+        let woke = self.consume_wake()?;
+        if !self.queue.is_empty() {
+            return Ok(());
+        }
+        if let Some(error) = self.pending_error.take() {
+            return Err(error);
+        }
+        if wake_ready || woke {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
         }
         Ok(())
     }
 
     /// Block until the next event is available, then return it.
     ///
-    /// This repeatedly checks the queue and calls [`EventSource::poll`] with no
-    /// caller timeout. It returns the next [`Event`] on success.
+    /// This calls [`EventSource::poll`] with no caller timeout, then returns
+    /// the next event. A queued event also consumes a pending wake.
     ///
     /// Returns [`io::ErrorKind::Interrupted`] if a paired [`Waker`] fired while
     /// waiting, and propagates fatal input/readiness errors.
     pub fn read(&mut self) -> io::Result<Event> {
-        loop {
-            if let Some(ev) = self.queue.pop_front() {
-                return Ok(ev);
-            }
-            if !self.poll(None)? {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
-            }
+        if !self.poll(None)? {
+            return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
         }
+        Ok(self
+            .queue
+            .pop_front()
+            .expect("poll reported a queued event"))
     }
 
     /// Return an event to the front of the queue, so the next

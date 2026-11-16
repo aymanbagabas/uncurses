@@ -42,7 +42,8 @@ use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT,
-    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
+    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, READY_INPUT, READY_SLOTS, READY_WAKE,
+    READY_WINCH, SourceFlags, Waker,
 };
 use crate::event::Event;
 use crate::terminal::get_window_size;
@@ -67,10 +68,8 @@ impl UnixWakerInner {
         Ok(Self { tx, rx })
     }
 
-    #[cfg(feature = "async")]
-    pub(super) fn clear(&self) -> io::Result<()> {
-        drain_pipe(self.read_fd());
-        Ok(())
+    pub(super) fn take(&self) -> io::Result<bool> {
+        drain_pipe(self.read_fd())
     }
 
     pub(super) fn read_fd(&self) -> std::os::fd::RawFd {
@@ -142,7 +141,10 @@ where
         // landed in this slot's pooled pipe just after it was leased to us.
         // `None` on a non-tty, where there is no size to compare against.
         let last_size = get_window_size(input.as_fd()).ok();
-        let fds: [PollFd; 3] = [input_fd, waker.poll_fd(), winch_sub.read_fd()];
+        let mut fds: [PollFd; READY_SLOTS] = [-1; READY_SLOTS];
+        fds[READY_INPUT] = input_fd;
+        fds[READY_WAKE] = waker.poll_fd();
+        fds[READY_WINCH] = winch_sub.read_fd();
         let poller = super::poll::new_poller(&fds, input_is_tty)?;
 
         Ok(Self {
@@ -174,21 +176,12 @@ where
         notification: &Waker,
     ) -> io::Result<Arc<dyn super::poll::Poller>> {
         let input_fd = self.input.as_fd().as_raw_fd();
-        let fds = [
-            input_fd,
-            self.waker.poll_fd(),
-            self.winch_sub.read_fd(),
-            notification.poll_fd(),
-        ];
+        let mut fds = [-1; READY_SLOTS + 1];
+        fds[READY_INPUT] = input_fd;
+        fds[READY_WAKE] = self.waker.poll_fd();
+        fds[READY_WINCH] = self.winch_sub.read_fd();
+        fds[READY_SLOTS] = notification.poll_fd();
         super::poll::new_poller(&fds, unsafe { libc::isatty(input_fd) } == 1)
-    }
-
-    /// Drain pending wake bytes after a [`Waker`] fired.
-    ///
-    /// Platform hook for [`EventSource::fill`]. Multiple wake bytes may have
-    /// coalesced; draining them all lets a subsequent poll block again.
-    pub(super) fn drain_wake(&mut self) {
-        drain_pipe(self.waker.pipe_read_fd());
     }
 
     /// Read ready input bytes and run them through the decoder.
@@ -231,23 +224,24 @@ where
         Ok(())
     }
 
-    pub(super) fn handle_winch(&mut self) {
-        drain_pipe(self.winch_sub.read_fd());
+    pub(super) fn handle_winch(&mut self) -> io::Result<()> {
+        drain_pipe(self.winch_sub.read_fd())?;
         // When in-band resize reporting is enabled the host disables
         // this path; the terminal delivers resizes through the decoder
         // instead, so emitting here too would duplicate every event.
         if !self.handle_resize {
-            return;
+            return Ok(());
         }
         let new_size = match get_window_size(self.input.as_fd()) {
             Ok(sz) => sz,
-            Err(_) => return,
+            Err(_) => return Ok(()),
         };
         if Some(new_size) == self.last_size {
-            return;
+            return Ok(());
         }
         self.last_size = Some(new_size);
         self.emit(Event::Resize(new_size));
+        Ok(())
     }
 }
 
@@ -285,12 +279,25 @@ fn set_nonblock_cloexec(fd: i32) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn drain_pipe(fd: i32) {
+pub(super) fn drain_pipe(fd: i32) -> io::Result<bool> {
     let mut buf = [0u8; 32];
+    let mut drained = false;
     loop {
         let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
-        if n <= 0 {
-            break;
+        if n > 0 {
+            drained = true;
+        } else if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "wake pipe closed",
+            ));
+        } else {
+            let error = io::Error::last_os_error();
+            match error.kind() {
+                io::ErrorKind::Interrupted => continue,
+                io::ErrorKind::WouldBlock => return Ok(drained),
+                _ => return Err(error),
+            }
         }
     }
 }
@@ -429,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_input_preserves_a_simultaneous_wake() {
+    fn ready_input_consumes_a_simultaneous_wake() {
         let (rx, tx) = make_pipe();
         let mut src = new_reader(rx);
         write_bytes(&tx, b"ab");
@@ -438,14 +445,59 @@ mod tests {
         for code in [KeyCode::Char('a'), KeyCode::Char('b')] {
             assert!(matches!(src.read().unwrap(), Event::KeyPress(key) if key.code == code));
         }
-        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
         src.fill(Some(Duration::ZERO)).unwrap();
         assert!(src.try_read().is_none());
     }
 
     #[test]
-    fn ready_resize_preserves_a_simultaneous_wake() {
+    fn wake_after_poll_snapshot_is_consumed() {
+        use super::super::poll::Poller;
+        use std::sync::Arc;
+
+        struct WakeAfterPoll {
+            poller: Arc<dyn Poller>,
+            waker: Waker,
+        }
+
+        impl Poller for WakeAfterPoll {
+            fn new(_: &[PollFd]) -> io::Result<Self> {
+                unreachable!("wrap an existing poller")
+            }
+
+            fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize> {
+                let count = self.poller.poll(ready, timeout)?;
+                assert!(!ready[READY_WAKE]);
+                self.waker.wake()?;
+                Ok(count)
+            }
+        }
+
+        for bytes in [b"".as_slice(), b"a"] {
+            let (rx, tx) = make_pipe();
+            let mut src = new_reader(rx);
+            write_bytes(&tx, bytes);
+            let poller = Arc::clone(&src.poller);
+            src.poller = Arc::new(WakeAfterPoll {
+                poller: Arc::clone(&poller),
+                waker: src.waker(),
+            });
+            let result = src.fill(Some(Duration::ZERO));
+            if bytes.is_empty() {
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+            } else {
+                result.unwrap();
+                assert!(
+                    matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Char('a'))
+                );
+            }
+            src.poller = poller;
+            src.fill(Some(Duration::ZERO)).unwrap();
+            assert!(src.try_read().is_none());
+        }
+    }
+
+    #[test]
+    fn ready_resize_consumes_a_simultaneous_wake() {
         let Some((_master, slave)) = crate::testutil::open_pty_pair() else {
             eprintln!("skipping resize/wake regression: no usable PTY");
             return;
@@ -456,8 +508,6 @@ mod tests {
         src.waker().wake().unwrap();
         assert!(src.poll(Some(Duration::ZERO)).unwrap());
         assert!(matches!(src.try_read(), Some(Event::Resize(_))));
-        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
         src.fill(Some(Duration::ZERO)).unwrap();
         assert!(src.try_read().is_none());
     }
@@ -475,8 +525,118 @@ mod tests {
                 matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Char('x'))
             );
         }
-        let error = src.fill(Some(Duration::ZERO)).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert!(src.try_read().is_none());
+    }
+
+    #[test]
+    fn queued_events_consume_wakes_in_poll_and_read() {
+        for use_poll in [false, true] {
+            let (rx, tx) = make_pipe();
+            let mut src = new_reader(rx);
+            write_bytes(&tx, b"ab");
+            assert!(src.poll(Some(Duration::ZERO)).unwrap());
+            src.waker().wake().unwrap();
+            let event = if use_poll {
+                assert!(src.poll(Some(Duration::ZERO)).unwrap());
+                src.try_read().unwrap()
+            } else {
+                src.read().unwrap()
+            };
+            assert!(matches!(event, Event::KeyPress(k) if k.code == KeyCode::Char('a')));
+            assert!(
+                matches!(src.try_read(), Some(Event::KeyPress(k)) if k.code == KeyCode::Char('b'))
+            );
+            src.fill(Some(Duration::ZERO)).unwrap();
+
+            src.waker().wake().unwrap();
+            assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::Interrupted);
+            src.fill(Some(Duration::ZERO)).unwrap();
+        }
+    }
+
+    #[test]
+    fn expired_sequences_consume_wakes() {
+        for bytes in [b"\x1b[".as_slice(), b"\x1b]unfinished"] {
+            let (rx, tx) = make_pipe();
+            let mut src = new_reader(rx)
+                .with_esc_timeout(Duration::ZERO)
+                .with_string_idle_timeout(Some(Duration::ZERO));
+            write_bytes(&tx, bytes);
+            assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+            src.waker().wake().unwrap();
+            assert!(src.poll(Some(Duration::ZERO)).unwrap());
+            assert!(src.try_read().is_some());
+            while src.try_read().is_some() {}
+            src.fill(Some(Duration::ZERO)).unwrap();
+        }
+    }
+
+    #[test]
+    fn wakes_coalesce_and_try_read_leaves_them_pending() {
+        let (rx, _tx) = make_pipe();
+        let mut src = new_reader(rx);
+        for _ in 0..10 {
+            src.waker().wake().unwrap();
+        }
+        src.unread(Event::PasteStart);
+        assert_eq!(src.try_read(), Some(Event::PasteStart));
+        assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        src.fill(Some(Duration::ZERO)).unwrap();
+        src.waker().wake().unwrap();
+        assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        src.fill(Some(Duration::ZERO)).unwrap();
+    }
+
+    #[test]
+    fn eof_and_expired_input_take_priority_over_wakes() {
+        let (rx, tx) = make_pipe();
+        let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+        write_bytes(&tx, b"\x1b[");
+        assert!(!src.poll(Some(Duration::ZERO)).unwrap());
+        drop(tx);
+        // Concurrent fork tests can briefly retain the pipe's write end.
+        let eof = super::super::poll::new_poller(&[src.input.as_raw_fd()], false).unwrap();
+        assert_eq!(
+            eof.poll(&mut [false], Some(Duration::from_secs(2)))
+                .unwrap(),
+            1
+        );
+        src.waker().wake().unwrap();
+        assert!(src.poll(Some(Duration::ZERO)).unwrap());
+        assert!(src.try_read().is_some());
+        while src.try_read().is_some() {}
+        src.waker().wake().unwrap();
+        assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+        assert!(!src.waker.take().unwrap());
+        src.waker().wake().unwrap();
+        assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+        assert!(!src.waker.take().unwrap());
+    }
+
+    #[test]
+    fn ready_resize_and_input_both_survive_a_wake() {
+        let Some((master, slave)) = crate::testutil::open_pty_pair() else {
+            eprintln!("skipping resize/input/wake regression: no usable PTY");
+            return;
+        };
+        let mut raw = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut raw) }, 0);
+        unsafe { libc::cfmakeraw(&mut raw) };
+        assert_eq!(
+            unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &raw) },
+            0
+        );
+        let mut src = new_reader(slave);
+        src.last_size = None;
+        write_byte(&master, b'x');
+        assert_eq!(unsafe { libc::raise(libc::SIGWINCH) }, 0);
+        src.waker().wake().unwrap();
+        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        assert!(matches!(src.try_read(), Some(Event::Resize(_))));
+        assert!(matches!(src.read().unwrap(), Event::KeyPress(k) if k.code == KeyCode::Char('x')));
+        src.fill(Some(Duration::ZERO)).unwrap();
+        assert!(src.try_read().is_none());
     }
 
     #[test]

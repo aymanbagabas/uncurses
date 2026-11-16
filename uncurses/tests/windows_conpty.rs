@@ -340,15 +340,26 @@ fn run_wake_child(check: impl FnOnce(TtyInput, &mut EventSource<TtyInput>)) {
     let mut source = EventSource::new_with_flags(input, SourceFlags::VT_INPUT).unwrap();
     check(input, &mut source);
     assert!(source.try_read().is_none());
-    assert_eq!(
-        source.read().unwrap_err().kind(),
-        io::ErrorKind::Interrupted,
-        "the simultaneous wake must remain pending"
-    );
     let timeout = Duration::from_millis(20);
     let start = Instant::now();
     assert!(!source.poll(Some(timeout)).unwrap());
-    assert!(start.elapsed() >= timeout, "the wake must be consumed once");
+    assert!(
+        start.elapsed() >= timeout,
+        "a serviced wake must not interrupt a later wait"
+    );
+    for _ in 0..10 {
+        source.waker().wake().unwrap();
+    }
+    assert_eq!(
+        source.read().unwrap_err().kind(),
+        io::ErrorKind::Interrupted
+    );
+    let start = Instant::now();
+    assert!(!source.poll(Some(timeout)).unwrap());
+    assert!(
+        start.elapsed() >= timeout,
+        "coalesced wakes must be consumed once"
+    );
     terminal.restore().unwrap();
     let mut output = terminal.output();
     write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
@@ -356,17 +367,17 @@ fn run_wake_child(check: impl FnOnce(TtyInput, &mut EventSource<TtyInput>)) {
 }
 
 #[test]
-fn ready_input_preserves_wake_under_repeated_wakes() {
+fn ready_input_consumes_wake_under_repeated_wakes() {
     run_conpty("child_wake_input", &[]);
 }
 
 #[test]
-fn ready_resize_preserves_wake() {
+fn ready_resize_consumes_wake() {
     run_conpty("child_wake_resize", &[]);
 }
 
 #[test]
-#[ignore = "fixture launched inside a ConPTY by ready_input_preserves_wake_under_repeated_wakes"]
+#[ignore = "fixture launched inside a ConPTY by ready_input_consumes_wake_under_repeated_wakes"]
 fn child_wake_input() {
     run_wake_child(|input, source| {
         let records = (*b"ab").map(|byte| {
@@ -381,6 +392,8 @@ fn child_wake_input() {
             write_records(input, &records);
             source.waker().wake().unwrap();
             for expected in ['a', 'b'] {
+                // The second wake meets an event already in the source queue.
+                source.waker().wake().unwrap();
                 assert!(source.poll(Some(Duration::ZERO)).unwrap());
                 assert!(matches!(
                     source.try_read(),
@@ -388,22 +401,78 @@ fn child_wake_input() {
                 ));
             }
         }
+        write_records(input, &records);
+        assert!(source.poll(Some(Duration::ZERO)).unwrap());
+        for expected in ['a', 'b'] {
+            source.waker().wake().unwrap();
+            assert!(matches!(
+                source.read().unwrap(),
+                Event::KeyPress(key) if key.code == KeyCode::Char(expected)
+            ));
+        }
     });
 }
 
 #[test]
-#[ignore = "fixture launched inside a ConPTY by ready_resize_preserves_wake"]
+#[ignore = "fixture launched inside a ConPTY by ready_resize_consumes_wake"]
 fn child_wake_resize() {
     run_wake_child(|input, source| {
         let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
         record.EventType = WINDOW_BUFFER_SIZE_EVENT as u16;
         record.Event.WindowBufferSizeEvent.dwSize = COORD { X: 100, Y: 40 };
-        write_records(input, &[record]);
+        let mut key: INPUT_RECORD = unsafe { std::mem::zeroed() };
+        key.EventType = KEY_EVENT as u16;
+        key.Event.KeyEvent.bKeyDown = 1;
+        key.Event.KeyEvent.wRepeatCount = 1;
+        key.Event.KeyEvent.uChar.UnicodeChar = u16::from(b'x');
+        write_records(input, &[record, key]);
         source.waker().wake().unwrap();
         assert!(source.poll(Some(Duration::ZERO)).unwrap());
         assert!(matches!(
             source.try_read(),
             Some(Event::Resize(size)) if size.row == 40 && size.col == 100
         ));
+        assert!(
+            matches!(source.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Char('x'))
+        );
+    });
+}
+
+#[test]
+fn partial_input_and_deadlines_handle_wakes() {
+    run_conpty("child_wake_partial_input", &[]);
+}
+
+#[test]
+#[ignore = "fixture launched inside a ConPTY by partial_input_and_deadlines_handle_wakes"]
+fn child_wake_partial_input() {
+    run_wake_child(|input, source| {
+        let write_bytes = |bytes: &[u8]| {
+            let records: Vec<_> = bytes
+                .iter()
+                .map(|&byte| {
+                    let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
+                    record.EventType = KEY_EVENT as u16;
+                    record.Event.KeyEvent.bKeyDown = 1;
+                    record.Event.KeyEvent.wRepeatCount = 1;
+                    record.Event.KeyEvent.uChar.UnicodeChar = u16::from(byte);
+                    record
+                })
+                .collect();
+            write_records(input, &records);
+        };
+        write_bytes(b"\x1b[");
+        source.waker().wake().unwrap();
+        assert!(!source.poll(Some(Duration::ZERO)).unwrap());
+        write_bytes(b"A");
+        assert!(matches!(source.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Up));
+        source.set_string_idle_timeout(Some(Duration::ZERO));
+        write_bytes(b"\x1b]unfinished");
+        assert!(!source.poll(Some(Duration::ZERO)).unwrap());
+        source.waker().wake().unwrap();
+        assert_eq!(
+            source.read().unwrap(),
+            Event::Unknown(b"\x1b]unfinished".to_vec())
+        );
     });
 }

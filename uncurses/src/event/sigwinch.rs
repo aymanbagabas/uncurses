@@ -472,7 +472,10 @@ pub(crate) fn subscribe() -> std::io::Result<Subscription> {
         // A recycled pipe can still hold bytes written after the previous
         // lessee unsubscribed; left there they would surface as a spurious
         // resize on this source's first poll.
-        super::source_unix::drain_pipe(pipe.0.as_raw_fd());
+        if let Err(error) = super::source_unix::drain_pipe(pipe.0.as_raw_fd()) {
+            slot.store(FREE, Ordering::Release);
+            return Err(error);
+        }
         slot.store(pipe.1.as_raw_fd(), Ordering::Release);
         return Ok(Subscription { slot: i });
     }
