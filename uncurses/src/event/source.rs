@@ -607,6 +607,9 @@ where
         }
         if ready[READY_WAKE] {
             self.waker.clear()?;
+            // A shared reader can leave a new deadline behind after draining readiness.
+            #[cfg(feature = "async")]
+            self.wake_deadline_waiters();
             return Err(io::Error::new(io::ErrorKind::Interrupted, "wake"));
         }
         Ok(())

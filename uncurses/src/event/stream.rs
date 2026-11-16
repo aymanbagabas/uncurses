@@ -92,6 +92,8 @@ struct Wait {
     shutdown: Arc<AtomicBool>,
     #[cfg(test)]
     started: Option<SyncSender<Option<Duration>>>,
+    #[cfg(test)]
+    before_wait: Option<Arc<std::sync::Barrier>>,
 }
 
 /// A thread-backed [`futures_core::Stream`] of `io::Result<Event>` over a
@@ -123,6 +125,8 @@ pub struct EventStream<I: Input> {
     done: bool,
     #[cfg(test)]
     wait_started: Option<SyncSender<Option<Duration>>>,
+    #[cfg(test)]
+    before_wait: Option<Arc<std::sync::Barrier>>,
 }
 
 impl<I> EventSource<I>
@@ -179,6 +183,8 @@ where
             done: false,
             #[cfg(test)]
             wait_started: None,
+            #[cfg(test)]
+            before_wait: None,
         }
     }
 }
@@ -206,6 +212,8 @@ where
                 shutdown: Arc::clone(&self.shutdown),
                 #[cfg(test)]
                 started: self.wait_started.clone(),
+                #[cfg(test)]
+                before_wait: self.before_wait.clone(),
             });
         }
     }
@@ -304,6 +312,10 @@ fn waiter_loop<I: Input>(
                 #[cfg(test)]
                 if let Some(started) = &wait.started {
                     let _ = started.try_send(timeout);
+                }
+                #[cfg(test)]
+                if let Some(barrier) = &wait.before_wait {
+                    barrier.wait();
                 }
                 let mut ready = [false; READY_SLOTS + 1];
                 // Any return (readiness, elapsed deadline, wake, or error)
@@ -440,6 +452,51 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_shared_read_refreshes_a_snapshotted_deadline() {
+        for (bytes, expected) in [
+            (b"\x1b[".as_slice(), KeyCode::Char('[')),
+            (b"\x1b".as_slice(), KeyCode::Escape),
+        ] {
+            let (rx, tx) = make_pipe();
+            let source = EventSource::new(rx)
+                .unwrap()
+                .with_esc_timeout(Duration::ZERO);
+            let shared = Arc::new(Mutex::new(source));
+            let mut stream = EventStream::from_shared(Arc::clone(&shared));
+            let (started_tx, started_rx) = mpsc::sync_channel(1);
+            stream.wait_started = Some(started_tx);
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            stream.before_wait = Some(Arc::clone(&barrier));
+            let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+            let waker = Waker::from(Arc::new(Notify(wake_tx)));
+            let mut cx = Context::from_waker(&waker);
+            assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+            assert_eq!(
+                started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                None
+            );
+            stream.before_wait = None;
+            {
+                let mut source = shared.lock().unwrap();
+                write_bytes(&tx, bytes);
+                source.waker().wake().unwrap();
+                assert_eq!(
+                    source.read().unwrap_err().kind(),
+                    io::ErrorKind::Interrupted,
+                );
+            }
+            barrier.wait();
+            wake_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("the interrupted read must refresh the helper's stale timeout");
+            assert!(matches!(
+                Pin::new(&mut stream).poll_next(&mut cx),
+                Poll::Ready(Some(Ok(Event::KeyPress(key)))) if key.code == expected
+            ));
+        }
+    }
+
+    #[test]
     fn wake_only_retries_and_string_still_arrives() {
         const CHILD: &str = "UNCURSES_WAKE_QUIET_CHILD";
         const NAME: &str = "event::stream::tests::wake_only_retries_and_string_still_arrives";
@@ -468,6 +525,12 @@ mod tests {
         let waker = Waker::from(Arc::new(Notify(wake_tx)));
         let mut cx = Context::from_waker(&waker);
         shared.lock().unwrap().waker().wake().unwrap();
+        assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            None
+        );
+        wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
         assert_eq!(
             started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
