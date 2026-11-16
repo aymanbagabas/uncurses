@@ -639,6 +639,14 @@ mod tests {
         let mut src = new_reader(slave);
         src.last_size = None;
         write_byte(&master, b'x');
+        // A PTY write can return before the slave becomes readable.
+        let input = super::super::poll::new_poller(&[src.input.as_raw_fd()], true).unwrap();
+        assert_eq!(
+            input
+                .poll(&mut [false], Some(Duration::from_secs(2)))
+                .unwrap(),
+            1
+        );
         assert_eq!(unsafe { libc::raise(libc::SIGWINCH) }, 0);
         src.waker().wake().unwrap();
         assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
