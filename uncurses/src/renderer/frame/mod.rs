@@ -66,8 +66,8 @@ impl Renderer {
             && !self.size_changed(width, height)
             && !self
                 .placements
-                .frame
                 .as_ref()
+                .and_then(|state| state.frame.as_ref())
                 .is_some_and(|frame| frame.has_changes())
         {
             return Ok(());

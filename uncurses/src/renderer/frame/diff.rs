@@ -19,7 +19,32 @@ impl Renderer {
         width: u16,
         height: u16,
     ) -> io::Result<()> {
-        let placements = self.placements.frame.take();
+        if self.placements.is_some() {
+            return self.diff_placement_frame(out, new_buf, width, height);
+        }
+        let non_empty = self.clear_bottom(out, new_buf)?;
+        let last = width.saturating_sub(1);
+        for y in 0..(non_empty as u16).min(height) {
+            if new_buf.touched(y).is_some() {
+                self.transform_line(out, new_buf, y, 0, last)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn diff_placement_frame(
+        &mut self,
+        out: &mut Vec<u8>,
+        new_buf: &mut RenderBuffer,
+        width: u16,
+        height: u16,
+    ) -> io::Result<()> {
+        let has_placements = self.placements.is_some();
+        let placements = self
+            .placements
+            .as_mut()
+            .and_then(|state| state.frame.take());
         let result = (|| {
             // Clear trailing blank lines from the bottom (inline or
             // fullscreen). When new_buf has more trailing-blank rows
@@ -27,7 +52,7 @@ impl Renderer {
             // instead of repainting each row with blanks. The returned
             // `top` caps the per-row transform loop so rows below the
             // ED'd boundary aren't redundantly repainted.
-            let non_empty = if self.protected_rows.iter().any(|&row| row) {
+            let non_empty = if has_placements && self.protected_rows.iter().any(|&row| row) {
                 height as usize
             } else {
                 self.clear_bottom(out, new_buf)?
@@ -53,10 +78,10 @@ impl Renderer {
                     self.record_row(y, backing);
                     continue;
                 }
-                if self.row_protected(y) {
+                if has_placements && self.row_protected(y) {
                     continue;
                 }
-                if self.invalid_rows.get(y as usize) == Some(&true) {
+                if has_placements && self.invalid_rows.get(y as usize) == Some(&true) {
                     if let Some(line) = new_buf.line(y) {
                         self.paint_complete_row(out, y, line)?;
                         self.record_row(y, line);
@@ -72,7 +97,7 @@ impl Renderer {
                 for record in frame
                     .active
                     .iter()
-                    .filter(|r| r.options.cells.is_none() && frame.rows.contains_key(&r.area.y))
+                    .filter(|r| frame.rows.contains_key(&r.area.y))
                 {
                     self.write_placement_record(
                         out,
@@ -89,7 +114,9 @@ impl Renderer {
             }
             Ok(())
         })();
-        self.placements.frame = placements;
+        if let Some(state) = self.placements.as_mut() {
+            state.frame = placements;
+        }
         result
     }
 }

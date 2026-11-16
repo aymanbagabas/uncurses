@@ -93,8 +93,7 @@ pub struct Cell {
     /// run of identically-linked cells shares a single allocation
     /// without per-cell deep clones.
     pub style: Style,
-    /// Stored column footprint. Placement metadata also uses zero;
-    /// `width()` returns its one-column grid footprint.
+    /// Column footprint. Zero marks a continuation; placements occupy one column.
     width: u8,
 }
 
@@ -173,9 +172,9 @@ impl Cell {
     /// # Parameters
     ///
     /// - `content`: grapheme content to store in the cell.
-    /// - `width`: number of terminal columns the content occupies. Ordinary
-    ///   width-zero content makes a continuation placeholder. The `"\0p"`
-    ///   prefix at width zero is reserved for placement metadata.
+    /// - `width`: number of terminal columns the content occupies. Width-zero
+    ///   content makes a continuation placeholder. The `"\0p"` prefix at width
+    ///   one is reserved for private placement metadata.
     ///
     /// # Returns
     ///
@@ -234,7 +233,7 @@ impl Cell {
     ///
     /// # Returns
     ///
-    /// `true` for ordinary width-zero content, including the empty placeholder.
+    /// `true` when the stored width is zero.
     ///
     /// # Panics
     ///
@@ -246,7 +245,7 @@ impl Cell {
     /// occupy one grid position and resolve through the screen's registry.
     #[inline]
     pub fn is_continuation(&self) -> bool {
-        self.width == 0 && !self.is_placement()
+        self.width == 0
     }
 
     /// Test whether this cell is a single blank column.
@@ -337,7 +336,7 @@ impl Cell {
     /// continuation placeholder.
     #[inline]
     pub fn width(&self) -> u8 {
-        if self.is_placement() { 1 } else { self.width }
+        self.width
     }
 
     /// Return this cell with a replacement style.

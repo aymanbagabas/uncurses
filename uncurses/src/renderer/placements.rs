@@ -81,8 +81,7 @@ impl Frame {
 impl State {
     pub(super) fn validate_commit_rows(&self, front: &RenderBuffer, count: u16) -> io::Result<()> {
         for record in self.desired.values() {
-            if record.options.cells.is_some()
-                || record.area.y >= count
+            if record.area.y >= count
                 || record.area.bottom() <= count
                 || record.area.right() > front.width()
                 || record.area.bottom() > front.height()
@@ -106,20 +105,15 @@ impl State {
     }
 
     pub(super) fn commit_rows(&mut self, front: &RenderBuffer, count: u16) {
-        let committed = self
-            .displayed
-            .iter()
-            .enumerate()
-            .filter(|(index, record)| {
-                (record.area.y..record.area.bottom().min(count)).any(|y| {
-                    (record.area.x..record.area.right()).any(|x| {
-                        record
-                            .owns_visible(front, &self.displayed[index + 1..], x, y)
-                            .expect("render validated placement references")
-                    })
+        let committed = self.displayed.iter().filter(|record| {
+            (record.area.y..record.area.bottom().min(count)).any(|y| {
+                (record.area.x..record.area.right()).any(|x| {
+                    record
+                        .owns(front, x, y)
+                        .expect("render validated placement references")
                 })
             })
-            .map(|(_, record)| record);
+        });
         for resource in resources(committed) {
             let key = resource.key();
             if !self.committed.contains(&key) {
@@ -129,15 +123,6 @@ impl State {
         self.desired.retain(|_, record| {
             if record.area.bottom() <= count {
                 return false;
-            }
-            let removed = count.saturating_sub(record.area.y);
-            if removed > 0 {
-                let options = Arc::make_mut(&mut record.options);
-                let cells =
-                    Arc::make_mut(options.cells.as_mut().expect("opaque splits were rejected"));
-                cells.delete_lines(0, removed, record.area.height, &Cell::BLANK);
-                record.area.height -= removed;
-                cells.resize(record.area.width, record.area.height);
             }
             record.area.y = record.area.y.saturating_sub(count);
             true
@@ -166,14 +151,8 @@ impl State {
         !self.displayed.is_empty() || !self.uncertain.is_empty() || !self.retired.is_empty()
     }
 
-    fn above(&self, id: PlacementId) -> Vec<Record> {
-        self.order
-            .iter()
-            .skip_while(|&&other| other != id)
-            .skip(1)
-            .filter_map(|other| self.desired.get(other))
-            .cloned()
-            .collect()
+    fn is_empty(&self) -> bool {
+        !self.has_work() && self.frame.is_none() && self.committed.is_empty()
     }
 
     fn prepare(
@@ -248,7 +227,7 @@ impl State {
                 if fits {
                     for y in record.area.y..record.area.bottom() {
                         for x in record.area.x..record.area.right() {
-                            if record.owns_visible(front, &active, x, y)? {
+                            if record.owns(front, x, y)? {
                                 count += 1;
                             }
                         }
@@ -259,7 +238,7 @@ impl State {
                         && count
                             != usize::from(record.area.width) * usize::from(record.area.height))
                 {
-                    clear_record(front, record, &active);
+                    clear_cells(front, record.reference, record.area);
                 } else if count > 0 {
                     active.push(record.clone());
                 }
@@ -273,7 +252,7 @@ impl State {
         let changed = renderer.sync_front(front);
         let mut owned = vec![false; height as usize];
         let mut repaint = vec![false; height as usize];
-        for record in active.iter().filter(|r| r.options.cells.is_none()) {
+        for record in &active {
             owned[record.area.y as usize..record.area.bottom() as usize].fill(true);
         }
         let mut coverage = BTreeMap::new();
@@ -293,22 +272,10 @@ impl State {
         }
         let reordered = !active
             .iter()
-            .filter(|r| r.options.cells.is_none())
             .map(|r| r.id)
-            .eq(self
-                .displayed
-                .iter()
-                .filter(|r| r.options.cells.is_none())
-                .map(|r| r.id));
-        let previous = self
-            .displayed
-            .iter()
-            .chain(&self.uncertain)
-            .filter(|r| r.options.cells.is_none());
-        for record in previous
-            .clone()
-            .chain(active.iter().filter(|r| r.options.cells.is_none()))
-        {
+            .eq(self.displayed.iter().map(|r| r.id));
+        let previous = self.displayed.iter().chain(&self.uncertain);
+        for record in previous.clone().chain(&active) {
             if invalidated
                 || reordered
                 || !self.uncertain.is_empty()
@@ -323,10 +290,7 @@ impl State {
         // Whole-row erasure also damages every placement crossing those rows.
         loop {
             let mut extended = false;
-            for record in previous
-                .clone()
-                .chain(active.iter().filter(|r| r.options.cells.is_none()))
-            {
+            for record in previous.clone().chain(&active) {
                 let rows =
                     record.area.y.min(height) as usize..record.area.bottom().min(height) as usize;
                 if repaint[rows.clone()].iter().any(|&r| r) {
@@ -347,11 +311,6 @@ impl State {
                 continue;
             }
             let mut overlay = front.line(y as u16).unwrap().to_vec();
-            for x in (0..overlay.len()).rev() {
-                if let Some(cell) = super::placeholders::compressed(&overlay, x) {
-                    overlay[x] = cell;
-                }
-            }
             let mut x = 0;
             while x < overlay.len() {
                 let width = usize::from(overlay[x].width());
@@ -378,7 +337,7 @@ impl State {
         };
         let erase = previous.filter(|r| damaged(r)).cloned().collect();
         for record in &mut active {
-            if !rows.contains_key(&record.area.y) || record.options.cells.is_some() {
+            if !rows.contains_key(&record.area.y) {
                 continue;
             }
             record.output = if let Some(encoder) = &record.options.encoder {
@@ -469,38 +428,11 @@ impl State {
 }
 
 impl Record {
-    fn owns_cell(&self, front: &RenderBuffer, x: u16, y: u16) -> bool {
-        let Some(cells) = &self.options.cells else {
-            return false;
-        };
-        self.area.contains((x, y))
-            && front.cell((x, y).into()).is_some_and(|cell| {
-                !cell.is_continuation()
-                    && cells.cell((x - self.area.x, y - self.area.y).into()) == Some(cell)
-            })
-    }
-
     fn owns(&self, front: &RenderBuffer, x: u16, y: u16) -> io::Result<bool> {
         let Some(cell) = front.cell((x, y).into()) else {
             return Ok(false);
         };
-        if self.options.cells.is_some() {
-            Ok(self.owns_cell(front, x, y))
-        } else {
-            Ok(cell.placement_ref()? == Some(self.reference))
-        }
-    }
-
-    fn owns_visible(
-        &self,
-        front: &RenderBuffer,
-        above: &[Record],
-        x: u16,
-        y: u16,
-    ) -> io::Result<bool> {
-        Ok(self.owns(front, x, y)?
-            && (self.options.cells.is_none()
-                || !above.iter().any(|record| record.owns_cell(front, x, y))))
+        Ok(cell.placement_ref()? == Some(self.reference))
     }
 
     fn visible_regions(&self, front: &RenderBuffer) -> io::Result<Vec<Rect>> {
@@ -551,38 +483,6 @@ fn resources_from_records(records: &[Record]) -> Vec<PlacementResource> {
     resources(records.iter())
 }
 
-fn clear_record(front: &mut RenderBuffer, record: &Record, above: &[Record]) {
-    if let Some(cells) = &record.options.cells {
-        for y in record.area.y..record.area.bottom().min(front.height()) {
-            let mut x = record.area.x;
-            while x < record.area.right().min(front.width()) {
-                let source = cells
-                    .cell((x - record.area.x, y - record.area.y).into())
-                    .unwrap();
-                let width = u16::from(source.width()).max(1).min(front.width() - x);
-                if !source.is_continuation()
-                    && (0..width).all(|offset| {
-                        front.cell((x + offset, y).into())
-                            == cells.cell((x + offset - record.area.x, y - record.area.y).into())
-                    })
-                    && !(0..width).any(|offset| {
-                        above
-                            .iter()
-                            .any(|other| other.owns_cell(front, x + offset, y))
-                    })
-                {
-                    for offset in 0..width {
-                        front.set_cell((x + offset, y), &Cell::BLANK);
-                    }
-                }
-                x += width;
-            }
-        }
-    } else {
-        clear_cells(front, record.reference, record.area);
-    }
-}
-
 fn clear_cells(front: &mut RenderBuffer, reference: u64, area: Rect) {
     for y in area.y..area.bottom().min(front.height()) {
         for x in area.x..area.right().min(front.width()) {
@@ -597,6 +497,39 @@ fn clear_cells(front: &mut RenderBuffer, reference: u64, area: Rect) {
 }
 
 impl Renderer {
+    #[inline]
+    pub(crate) fn has_placement_work(&self) -> bool {
+        self.placements
+            .as_ref()
+            .is_some_and(|state| state.has_work() || state.has_pending_output())
+    }
+
+    #[inline]
+    pub(crate) fn has_placement_output(&self) -> bool {
+        self.placements
+            .as_ref()
+            .is_some_and(|state| state.has_output())
+    }
+
+    #[inline]
+    pub(crate) fn has_pending_placement_output(&self) -> bool {
+        self.placements
+            .as_ref()
+            .is_some_and(|state| state.has_pending_output())
+    }
+
+    pub(super) fn discard_unused_placements(&mut self) {
+        if self
+            .placements
+            .as_ref()
+            .is_some_and(|state| state.is_empty())
+        {
+            self.placements = None;
+            self.protected_rows.clear();
+            self.invalid_rows.clear();
+        }
+    }
+
     pub(crate) fn set_placement(
         &mut self,
         front: &mut RenderBuffer,
@@ -614,34 +547,16 @@ impl Renderer {
                 "placement requires a nonzero ID and an in-bounds rectangle",
             ));
         }
-        if let Some(cells) = &options.cells
-            && (cells.width() != area.width
-                || cells.height() != area.height
-                || !options.draw.is_empty()
-                || !options.erase.is_empty()
-                || options.encoder.is_some()
-                || options.erase_on_overwrite)
-        {
-            return Err(invalid(
-                "cell placements require matching dimensions and cell overwrite behavior",
-            ));
-        }
         if options.encoder.is_some() && (!options.draw.is_empty() || !options.erase.is_empty()) {
             return Err(invalid("encoded placements require empty static payloads"));
         }
-        if let Some(cells) = &options.cells {
-            for y in 0..cells.height() {
-                if cells.line(y).unwrap().iter().any(Cell::is_placement) {
-                    return Err(invalid("cell placements require ordinary cells"));
-                }
-            }
-        }
-        if let Some(old) = self.placements.desired.get(&id)
-            && (old.area != area || old.options.cells.is_some() != options.cells.is_some())
+        let placements = self.placements.get_or_insert_with(Box::default);
+        if let Some(old) = placements.desired.get(&id)
+            && old.area != area
         {
-            clear_record(front, old, &self.placements.above(id));
+            clear_cells(front, old.reference, old.area);
         }
-        let reference = if let Some(old) = self.placements.desired.get_mut(&id) {
+        let reference = if let Some(old) = placements.desired.get_mut(&id) {
             old.area = area;
             if old.options.as_ref() != options {
                 old.options = Arc::new(options.clone());
@@ -649,7 +564,7 @@ impl Renderer {
             old.reference
         } else {
             let reference = next_reference()?;
-            self.placements.desired.insert(
+            placements.desired.insert(
                 id,
                 Record {
                     id,
@@ -662,12 +577,8 @@ impl Renderer {
             );
             reference
         };
-        self.placements.order.retain(|previous| *previous != id);
-        self.placements.order.push(id);
-        if let Some(cells) = &options.cells {
-            cells.draw(front, (area.x, area.y).into());
-            return Ok(());
-        }
+        placements.order.retain(|previous| *previous != id);
+        placements.order.push(id);
         let mut cell = Cell::placement(reference);
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
@@ -679,11 +590,14 @@ impl Renderer {
     }
 
     pub(crate) fn remove_placement(&mut self, front: &mut RenderBuffer, id: PlacementId) {
-        let above = self.placements.above(id);
-        if let Some(old) = self.placements.desired.remove(&id) {
-            self.placements.order.retain(|previous| *previous != id);
-            clear_record(front, &old, &above);
+        let Some(placements) = self.placements.as_mut() else {
+            return;
+        };
+        if let Some(old) = placements.desired.remove(&id) {
+            placements.order.retain(|previous| *previous != id);
+            clear_cells(front, old.reference, old.area);
         }
+        self.discard_unused_placements();
     }
 
     pub(crate) fn sync_frame(
@@ -692,12 +606,15 @@ impl Renderer {
         epoch: u64,
         release: bool,
     ) -> io::Result<bool> {
-        if !self.placements.has_work() {
+        let Some(mut placements) = self.placements.take() else {
             return self.sync_front_text(front);
-        }
-        let mut placements = std::mem::take(&mut self.placements);
-        let result = placements.prepare(self, front, epoch, release);
-        self.placements = placements;
+        };
+        let result = if placements.has_work() {
+            placements.prepare(self, front, epoch, release)
+        } else {
+            self.sync_front_text(front)
+        };
+        self.placements = Some(placements);
         if result.is_err() {
             front.touch_all();
         }
@@ -705,32 +622,44 @@ impl Renderer {
     }
 
     pub(crate) fn complete_frame(&mut self, epoch: u64) {
-        if let Some(frame) = self.placements.frame.take() {
-            self.protected_rows.resize(self.last_height as usize, false);
-            for y in 0..self.last_height {
-                let owned = frame.coverage.contains_key(&y);
-                self.protected_rows[y as usize] = owned;
-                if owned {
-                    self.invalid_rows[y as usize] = true;
+        let Some(placements) = self.placements.as_mut() else {
+            return;
+        };
+        if let Some(frame) = placements.frame.take() {
+            if frame.coverage.is_empty() {
+                self.protected_rows.clear();
+                self.invalid_rows.clear();
+            } else {
+                self.protected_rows.resize(self.last_height as usize, false);
+                for y in 0..self.last_height {
+                    let owned = frame.coverage.contains_key(&y);
+                    self.protected_rows[y as usize] = owned;
+                    if owned {
+                        self.invalid_rows[y as usize] = true;
+                    }
                 }
             }
             for record in &frame.active {
-                if let Some(desired) = self.placements.desired.get_mut(&record.id) {
+                if let Some(desired) = placements.desired.get_mut(&record.id) {
                     desired.output_area = record.output_area;
                     desired.output = record.output.clone();
                 }
             }
-            self.placements.displayed = frame.active;
-            self.placements.retired = frame.retired;
-            self.placements.coverage = frame.coverage;
-            self.placements.uncertain.clear();
-            self.placements.epoch = epoch;
-            self.placements.failure_epoch = None;
+            placements.displayed = frame.active;
+            placements.retired = frame.retired;
+            placements.coverage = frame.coverage;
+            placements.uncertain.clear();
+            placements.epoch = epoch;
+            placements.failure_epoch = None;
         }
     }
 
     pub(crate) fn upload_resources(&self, out: &mut Vec<u8>) {
-        if let Some(frame) = &self.placements.frame {
+        if let Some(frame) = self
+            .placements
+            .as_ref()
+            .and_then(|state| state.frame.as_ref())
+        {
             for resource in &frame.uploads {
                 out.extend_from_slice(resource.upload());
             }
@@ -739,36 +668,51 @@ impl Renderer {
 
     pub(crate) fn delete_resources(&self, out: &mut Vec<u8>) -> bool {
         let start = out.len();
-        for resource in &self.placements.retired {
-            out.extend_from_slice(resource.delete());
+        if let Some(placements) = &self.placements {
+            for resource in &placements.retired {
+                out.extend_from_slice(resource.delete());
+            }
         }
         out.len() != start
     }
 
     pub(crate) fn complete_resource_cleanup(&mut self) {
-        self.placements.retired.clear();
+        if let Some(placements) = self.placements.as_mut() {
+            placements.retired.clear();
+        }
+        self.discard_unused_placements();
     }
 
     pub(crate) fn discard_frame(&mut self) {
-        if let Some(frame) = self.placements.frame.take() {
+        if let Some(frame) = self
+            .placements
+            .as_mut()
+            .and_then(|state| state.frame.take())
+        {
             self.restore_staged_frame(frame.checkpoint);
         }
     }
 
     pub(crate) fn output_failed(&mut self, epoch: u64) {
-        if let Some(frame) = self.placements.frame.take() {
+        let mut placements = self.placements.take();
+        if let Some(state) = placements.as_mut()
+            && let Some(frame) = state.frame.take()
+        {
             self.protect_failed_frame(frame.checkpoint);
             for record in frame.active {
-                if !self.placements.uncertain.contains(&record) {
-                    self.placements.uncertain.push(record);
+                if !state.uncertain.contains(&record) {
+                    state.uncertain.push(record);
                 }
             }
         }
         self.invalidate_cursor();
         self.pen_unknown = true;
-        if self.placements.has_work() {
-            self.placements.failure_epoch = Some(epoch);
+        if let Some(state) = placements.as_mut()
+            && state.has_work()
+        {
+            state.failure_epoch = Some(epoch);
         }
+        self.placements = placements;
     }
 
     pub(super) fn erase_placements(
@@ -776,7 +720,10 @@ impl Renderer {
         out: &mut Vec<u8>,
         size: crate::layout::Size,
     ) -> io::Result<()> {
-        let frame = self.placements.frame.take();
+        let frame = self
+            .placements
+            .as_mut()
+            .and_then(|state| state.frame.take());
         let result = (|| {
             if let Some(frame) = &frame {
                 for record in &frame.erase {
@@ -785,7 +732,9 @@ impl Renderer {
             }
             Ok(())
         })();
-        self.placements.frame = frame;
+        if let Some(placements) = self.placements.as_mut() {
+            placements.frame = frame;
+        }
         result
     }
 
