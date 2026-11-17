@@ -88,6 +88,7 @@ pub struct Decoder {
     backspace_mode: bool,
     /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
     pub(super) in_paste: bool,
+    pub(super) in_clipboard: bool,
     waiting_for_terminator: bool,
     /// When `true`, raw mouse coordinates after `CSI M` are decoded as UTF-8
     /// codepoints (mode 1005) instead of single bytes.
@@ -128,6 +129,7 @@ impl Decoder {
             flags,
             backspace_mode: false,
             in_paste: false,
+            in_clipboard: false,
             waiting_for_terminator: false,
             utf8_mouse: false,
             expired: false,
@@ -147,7 +149,7 @@ impl Decoder {
     /// [`Decoder::drain`] to resolve the partial sequence.
     #[cfg(test)]
     pub(crate) fn has_pending(&self) -> bool {
-        if self.buf.is_empty() || self.in_paste || self.waiting_for_terminator {
+        if self.buf.is_empty() || self.in_paste || self.waiting_for_terminator() {
             return false;
         }
         let b0 = self.buf[0];
@@ -221,7 +223,9 @@ impl Decoder {
     /// The parser does **not** retain `data` between calls. Any unconsumed
     /// bytes remain the caller's responsibility. Inside a bracketed
     /// paste, paste content streams as [`Event::PasteChunk`] — large
-    /// pastes split across multiple calls naturally.
+    /// pastes split across multiple calls naturally. OSC 52 replies similarly
+    /// stream as [`Event::ClipboardStart`], [`Event::ClipboardChunk`], and
+    /// [`Event::ClipboardEnd`].
     ///
     /// Escape-sequence timeout is **not** handled here; if `data`
     /// begins with `0x1B` and no continuation byte is available, this
@@ -240,11 +244,17 @@ impl Decoder {
         if self.in_paste {
             return self.parse_paste_chunk(data);
         }
+        if self.in_clipboard {
+            return self.parse_clipboard_chunk(data);
+        }
 
         match self.try_parse(data) {
             ParseResult::Event(event, consumed) => {
                 if matches!(event, Event::PasteStart) {
                     self.in_paste = true;
+                }
+                if matches!(event, Event::ClipboardStart { .. }) {
+                    self.in_clipboard = true;
                 }
                 match event {
                     Event::Multi(group) => {
@@ -282,11 +292,11 @@ impl Decoder {
     }
 
     pub(crate) fn waiting_for_terminator(&self) -> bool {
-        self.waiting_for_terminator
+        self.waiting_for_terminator || self.in_clipboard
     }
 
     /// Force-exit bracketed paste mode. If the decoder was inside a
-    /// paste, the flag is cleared and `Some(Event::PasteEnd)` is
+    /// paste, the flag is cleared and `Some(Event::PasteEnd { complete: false })` is
     /// returned for the caller to enqueue. Returns `None` when the
     /// decoder was not in paste.
     ///
@@ -296,7 +306,7 @@ impl Decoder {
     pub fn end_paste(&mut self) -> Option<Event> {
         if self.in_paste {
             self.in_paste = false;
-            Some(Event::PasteEnd)
+            Some(Event::PasteEnd { complete: false })
         } else {
             None
         }
@@ -390,13 +400,13 @@ impl Decoder {
                         continue;
                     }
                     match self.try_parse(&self.buf[scan..]) {
-                        ParseResult::Event(Event::PasteEnd, consumed) => {
+                        ParseResult::Event(Event::PasteEnd { complete: true }, consumed) => {
                             if scan > 0 {
                                 events.push(Event::PasteChunk(self.buf[..scan].to_vec()));
                             }
                             self.buf.drain(..scan + consumed);
                             self.in_paste = false;
-                            events.push(Event::PasteEnd);
+                            events.push(Event::PasteEnd { complete: true });
                             terminated = true;
                             break;
                         }
@@ -423,9 +433,22 @@ impl Decoder {
                 break;
             }
 
+            if self.in_clipboard {
+                let bytes = std::mem::take(&mut self.buf);
+                let (consumed, event) = self.parse_clipboard_chunk(&bytes);
+                self.buf = bytes;
+                self.buf.drain(..consumed);
+                if let Some(event) = event {
+                    events.push(event);
+                    continue;
+                }
+                break;
+            }
+
             match self.try_parse(&self.buf) {
                 ParseResult::Event(event, consumed) => {
                     let is_paste_start = matches!(event, Event::PasteStart);
+                    self.in_clipboard = matches!(event, Event::ClipboardStart { .. });
                     // Flatten `Event::Multi` into individual events so callers
                     // that match by enum variant don't miss anything.
                     match event {
@@ -1112,7 +1135,7 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
         assert_eq!(events[1], Event::PasteChunk(b"hello world".to_vec()));
-        assert_eq!(events[2], Event::PasteEnd);
+        assert_eq!(events[2], Event::PasteEnd { complete: true });
     }
 
     #[test]
@@ -1126,7 +1149,10 @@ mod tests {
         let e2 = parser.parse(b"world\x1b[201~");
         assert_eq!(
             e2,
-            vec![Event::PasteChunk(b"world".to_vec()), Event::PasteEnd]
+            vec![
+                Event::PasteChunk(b"world".to_vec()),
+                Event::PasteEnd { complete: true }
+            ]
         );
     }
 
@@ -1139,7 +1165,7 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
         assert_eq!(events[1], Event::PasteChunk(b"a\x1b[Ab".to_vec()));
-        assert_eq!(events[2], Event::PasteEnd);
+        assert_eq!(events[2], Event::PasteEnd { complete: true });
     }
 
     #[test]
@@ -1176,7 +1202,7 @@ mod tests {
         let events = parser.parse(&wire);
 
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd));
+        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
 
         let mut assembled = Vec::new();
         for ev in &events {
@@ -1200,7 +1226,7 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
         assert_eq!(events[1], Event::PasteChunk(b"hello".to_vec()));
-        assert_eq!(events[2], Event::PasteEnd);
+        assert_eq!(events[2], Event::PasteEnd { complete: true });
     }
 
     #[test]
@@ -1223,11 +1249,11 @@ mod tests {
         let joined: Vec<u8> = chunks.concat();
         assert_eq!(joined, b"hello\xd1\x9b201~world");
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd));
+        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
         assert_eq!(
             events
                 .iter()
-                .filter(|e| matches!(e, Event::PasteEnd))
+                .filter(|e| matches!(e, Event::PasteEnd { complete: true }))
                 .count(),
             1,
             "exactly one PasteEnd; the 8-bit `\\x9b201~` substring must \
@@ -1270,11 +1296,11 @@ mod tests {
             .collect();
         assert_eq!(chunks, b"hello\xd1\x9b201~world");
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd));
+        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
         assert_eq!(
             events
                 .iter()
-                .filter(|e| matches!(e, Event::PasteEnd))
+                .filter(|e| matches!(e, Event::PasteEnd { complete: true }))
                 .count(),
             1,
         );
@@ -1291,7 +1317,7 @@ mod tests {
         assert!(parser.in_paste());
 
         let synth = parser.end_paste();
-        assert_eq!(synth, Some(Event::PasteEnd));
+        assert_eq!(synth, Some(Event::PasteEnd { complete: false }));
         assert!(!parser.in_paste());
 
         // Subsequent bytes are no longer treated as paste content.
@@ -1401,13 +1427,16 @@ mod tests {
             ] {
                 let mut expected = vec![Event::Unknown(interrupted.clone())];
                 expected.extend(Decoder::default().parse(next));
-                assert_eq!(expected.len(), 2);
                 let wire = [interrupted.as_slice(), next].concat();
                 for split in 0..=wire.len() {
                     let mut decoder = Decoder::default();
                     let mut events = decoder.parse(&wire[..split]);
                     events.extend(decoder.parse(&wire[split..]));
-                    assert_eq!(events, expected, "wire={wire:?}, split={split}");
+                    assert_eq!(
+                        crate::event::decode_safety_tests::normalize(events),
+                        expected,
+                        "wire={wire:?}, split={split}"
+                    );
                 }
             }
         }
@@ -1682,14 +1711,16 @@ mod tests {
     fn test_parse_osc_clipboard() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b]52;c;SGVsbG8=\x07");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            Event::Clipboard { selection, content } => {
-                assert_eq!(*selection, ClipboardSelection::System);
-                assert_eq!(content, "SGVsbG8=");
-            }
-            other => panic!("Expected Clipboard, got {:?}", other),
-        }
+        assert_eq!(
+            events,
+            [
+                Event::ClipboardStart {
+                    selection: ClipboardSelection::System
+                },
+                Event::ClipboardChunk(b"SGVsbG8=".to_vec()),
+                Event::ClipboardEnd { complete: true },
+            ]
+        );
     }
 
     #[test]
@@ -2140,15 +2171,15 @@ mod tests {
                 ),
                 (
                     "200~\x1b[201~",
-                    Some(vec![Event::PasteStart, Event::PasteEnd]),
+                    Some(vec![Event::PasteStart, Event::PasteEnd { complete: true }]),
                 ),
-                ("201~", Some(vec![Event::PasteEnd])),
+                ("201~", Some(vec![Event::PasteEnd { complete: true }])),
                 (
                     "200~a\x1b[201;1~b\x1b[201~",
                     Some(vec![
                         Event::PasteStart,
                         Event::PasteChunk(b"a\x1b[201;1~b".to_vec()),
-                        Event::PasteEnd,
+                        Event::PasteEnd { complete: true },
                     ]),
                 ),
                 ("27~", None),
@@ -2587,7 +2618,7 @@ mod tests {
         // Drain the queued PasteEnd.
         let (n, ev) = p.parse_one(b"");
         assert_eq!(n, 0);
-        assert!(matches!(ev, Some(Event::PasteEnd)));
+        assert!(matches!(ev, Some(Event::PasteEnd { complete: true })));
     }
 
     #[test]
@@ -2707,7 +2738,7 @@ mod tests {
         // events in between whose concatenation matches the original
         // content exactly, regardless of UTF-8 byte boundaries.
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd));
+        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
         let mut chunk_count = 0;
         let mut buf = Vec::new();
         for ev in &events {

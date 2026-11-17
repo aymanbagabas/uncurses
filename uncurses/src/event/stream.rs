@@ -419,6 +419,31 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_stream_delivers_chunks_before_termination_and_reports_eof() {
+        let (rx, tx) = make_pipe();
+        let mut stream = EventSource::new(rx).unwrap().into_stream();
+        write_bytes(&tx, b"\x1b]52;c;QQ==");
+        assert!(matches!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::ClipboardStart { .. }
+        ));
+        assert_eq!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::ClipboardChunk(b"QQ==".to_vec())
+        );
+        drop(tx);
+        assert_eq!(
+            next_blocking(&mut stream).unwrap().unwrap(),
+            Event::ClipboardEnd { complete: false }
+        );
+        assert_eq!(
+            next_blocking(&mut stream).unwrap().unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        assert!(next_blocking(&mut stream).is_none());
+    }
+
+    #[test]
     fn queued_event_preserves_wake_even_with_a_wait_in_flight() {
         let (rx, _tx) = make_pipe();
         let shared = Arc::new(Mutex::new(EventSource::new(rx).unwrap()));
@@ -435,12 +460,12 @@ mod tests {
         {
             let mut source = shared.lock().unwrap();
             source.unread(Event::PasteStart);
-            source.unread(Event::PasteEnd);
+            source.unread(Event::PasteEnd { complete: true });
             source.waker().wake().unwrap();
         }
         assert!(matches!(
             Pin::new(&mut stream).poll_next(&mut cx),
-            Poll::Ready(Some(Ok(Event::PasteEnd)))
+            Poll::Ready(Some(Ok(Event::PasteEnd { complete: true })))
         ));
         let mut source = shared.lock().unwrap();
         assert_eq!(source.try_read(), Some(Event::PasteStart));
@@ -675,18 +700,19 @@ mod tests {
     }
 
     #[test]
-    fn changing_a_parked_paste_deadline_wakes_the_stream() {
-        for (timeout, disable_first) in [
-            (None, false),
-            (Some(Duration::from_secs(60)), false),
-            (Some(Duration::from_secs(60)), true),
-        ] {
+    fn explicit_end_wakes_a_parked_transfer_stream() {
+        for clipboard in [false, true] {
             let (rx, _tx) = make_pipe();
             let mut source = EventSource::new(rx)
                 .unwrap()
-                .with_paste_idle_timeout(timeout);
-            source.feed_bytes(b"\x1b[200~");
-            assert_eq!(source.try_read(), Some(Event::PasteStart));
+                .with_paste_idle_timeout(None)
+                .with_clipboard_idle_timeout(None);
+            source.feed_bytes(if clipboard {
+                b"\x1b]52;c;"
+            } else {
+                b"\x1b[200~"
+            });
+            assert!(source.try_read().is_some());
             let shared = Arc::new(Mutex::new(source));
             let mut stream = EventStream::from_shared(Arc::clone(&shared));
             let (started_tx, started_rx) = mpsc::sync_channel(1);
@@ -695,33 +721,99 @@ mod tests {
             let waker = Waker::from(Arc::new(Notify(wake_tx)));
             let mut cx = Context::from_waker(&waker);
             assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
-            let captured = started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-            match timeout {
-                None => assert_eq!(captured, None),
-                Some(_) => assert!(captured.unwrap() > Duration::from_secs(30)),
+            assert_eq!(
+                started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                None
+            );
+            if clipboard {
+                shared.lock().unwrap().end_clipboard();
+            } else {
+                shared.lock().unwrap().end_paste();
             }
-
-            if disable_first {
-                shared.lock().unwrap().set_paste_idle_timeout(None);
-                wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-                assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
-                assert_eq!(
-                    started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-                    None
-                );
-            }
-
-            shared
-                .lock()
-                .unwrap()
-                .set_paste_idle_timeout(Some(Duration::ZERO));
             wake_rx
                 .recv_timeout(Duration::from_secs(1))
-                .expect("deadline change must wake the parked stream without more input");
-            assert!(matches!(
-                Pin::new(&mut stream).poll_next(&mut cx),
-                Poll::Ready(Some(Ok(Event::PasteEnd)))
-            ));
+                .expect("explicit recovery must wake the stream without more input");
+            let end = if clipboard {
+                Event::ClipboardEnd { complete: false }
+            } else {
+                Event::PasteEnd { complete: false }
+            };
+            assert!(matches!(Pin::new(&mut stream).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(event))) if event == end));
+        }
+    }
+
+    #[test]
+    fn changing_a_parked_transfer_deadline_wakes_the_stream() {
+        for clipboard in [false, true] {
+            for (timeout, disable_first) in [
+                (None, false),
+                (Some(Duration::from_secs(60)), false),
+                (Some(Duration::from_secs(60)), true),
+            ] {
+                let (rx, _tx) = make_pipe();
+                let mut source = EventSource::new(rx)
+                    .unwrap()
+                    .with_paste_idle_timeout(timeout)
+                    .with_clipboard_idle_timeout(timeout);
+                source.feed_bytes(if clipboard {
+                    b"\x1b]52;c;"
+                } else {
+                    b"\x1b[200~"
+                });
+                assert!(source.try_read().is_some());
+                let shared = Arc::new(Mutex::new(source));
+                let mut stream = EventStream::from_shared(Arc::clone(&shared));
+                let (started_tx, started_rx) = mpsc::sync_channel(1);
+                stream.wait_started = Some(started_tx);
+                let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+                let waker = Waker::from(Arc::new(Notify(wake_tx)));
+                let mut cx = Context::from_waker(&waker);
+                assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+                let captured = started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                match timeout {
+                    None => assert_eq!(captured, None),
+                    Some(_) => assert!(captured.unwrap() > Duration::from_secs(30)),
+                }
+
+                if disable_first {
+                    if clipboard {
+                        shared.lock().unwrap().set_clipboard_idle_timeout(None);
+                    } else {
+                        shared.lock().unwrap().set_paste_idle_timeout(None);
+                    }
+                    wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                    assert!(Pin::new(&mut stream).poll_next(&mut cx).is_pending());
+                    assert_eq!(
+                        started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+                        None
+                    );
+                }
+
+                if clipboard {
+                    shared
+                        .lock()
+                        .unwrap()
+                        .set_clipboard_idle_timeout(Some(Duration::ZERO));
+                } else {
+                    shared
+                        .lock()
+                        .unwrap()
+                        .set_paste_idle_timeout(Some(Duration::ZERO));
+                }
+                wake_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("deadline change must wake the parked stream without more input");
+                let end = if clipboard {
+                    Event::ClipboardEnd { complete: false }
+                } else {
+                    Event::PasteEnd { complete: false }
+                };
+                assert!(matches!(
+                    Pin::new(&mut stream).poll_next(&mut cx),
+                    Poll::Ready(Some(Ok(event))) if event == end
+                ));
+            }
         }
     }
 
@@ -746,7 +838,7 @@ mod tests {
         {
             let mut source = shared.lock().unwrap();
             source.set_paste_idle_timeout(Some(Duration::ZERO));
-            assert_eq!(source.read().unwrap(), Event::PasteEnd);
+            assert_eq!(source.read().unwrap(), Event::PasteEnd { complete: false });
             source.waker().wake().unwrap();
             assert_eq!(
                 source.read().unwrap_err().kind(),

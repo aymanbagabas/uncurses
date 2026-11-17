@@ -11,7 +11,7 @@
 //! input fd / HANDLE ─┬─▶ Poller ── ready ──▶ read bytes ──▶ Decoder
 //! wake handle ───────┤                         │              │
 //! SIGWINCH pipe ─────┘                         └──────────────┴─▶ queue
-//!      (Unix only)        deadlines: ESC timeout and paste idle timeout
+//!      (Unix only)        deadlines: ESC, paste idle, clipboard idle
 //! ```
 //!
 //! ## Key types
@@ -88,8 +88,8 @@ pub trait Input: Read + AsHandle + Send {}
 #[cfg(windows)]
 impl<T: Read + AsHandle + Send> Input for T {}
 
-/// Default read buffer capacity. This is the hard cap on any single
-/// sequence; the backing buffer is allocated once at construction.
+/// Default read buffer capacity. Paste and clipboard bodies stream through it;
+/// other sequences must fit. The buffer is allocated once at construction.
 pub(super) const DEFAULT_BUFFER_CAPACITY: usize = 8192;
 
 /// Readiness slots the platform poller reports, in fixed index order.
@@ -119,6 +119,7 @@ pub(super) const READY_WINCH: usize = 2;
 /// Fresh input resets the deadline while a sequence remains incomplete.
 /// Once bytes follow an OSC, DCS, APC, SOS, or PM introducer, the string waits
 /// for its terminator or an interrupting Escape sequence.
+/// Recognized clipboard headers switch to the separate clipboard idle timeout.
 /// An introducer alone still uses the Escape timeout.
 /// A timed-out two-byte introducer such as `ESC ]` resolves to `Alt+]`.
 ///
@@ -130,11 +131,17 @@ pub const DEFAULT_ESC_TIMEOUT: Duration = Duration::from_millis(50);
 /// Default bracketed-paste idle timeout.
 ///
 /// When a paste has been opened (a `PasteStart` was emitted) and no
-/// further input arrives within this window, the source synthesises a
-/// `PasteEnd`, flushes any held-back bytes as a final `PasteChunk`,
+/// further input arrives within this window, the source flushes retained bytes
+/// as a final `PasteChunk`, then emits `PasteEnd { complete: false }`
 /// and clears the decoder's paste state. Guards against terminators
 /// that never arrive (truncated stream, malformed input).
 pub const DEFAULT_PASTE_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Default OSC 52 clipboard idle timeout.
+///
+/// After a recognized header, two seconds without input ends the reply with
+/// `ClipboardEnd { complete: false }`. Retained bytes precede that event.
+pub const DEFAULT_CLIPBOARD_IDLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Cloneable handle that interrupts an in-progress [`EventSource::poll`] or
 /// [`EventSource::read`].
@@ -220,7 +227,7 @@ impl Waker {
 ///
 /// `EventSource` is the synchronous owner of terminal input. It stores pending
 /// bytes, a `Decoder`, an event queue, deadline state for ambiguous `ESC`
-/// prefixes and bracketed pastes, and the platform handles needed for
+/// prefixes, bracketed pastes, and clipboard replies, and the platform handles for
 /// wakeups and resize notifications.
 ///
 /// Construct it with [`EventSource::new`]. Use [`EventSource::poll`] to perform
@@ -240,7 +247,7 @@ where
     pub(super) parser: Decoder,
     /// Bounded read buffer. The unread slice is `pending.slice()`; new
     /// input is written into `pending.spare_mut()`. `pending.capacity()`
-    /// is the hard cap on any single sequence and is never resized.
+    /// bounds retained input and is never resized.
     pub(super) pending: Pending,
     pub(super) esc_timeout: Duration,
     /// Wall-clock instant at which a buffered partial escape sequence
@@ -252,6 +259,8 @@ where
     /// Wall-clock instant at which an open paste should be
     /// force-closed (synthesised `PasteEnd`).
     pub(super) paste_deadline: Option<Instant>,
+    pub(super) clipboard_idle_timeout: Option<Duration>,
+    pub(super) clipboard_deadline: Option<Instant>,
     #[cfg(feature = "async")]
     pub(super) deadline_wakers: Vec<std::sync::Weak<super::stream::DeadlineWake>>,
     pub(super) queue: VecDeque<Event>,
@@ -394,8 +403,9 @@ where
     ///
     /// If no further input arrives before `timeout`, the source flushes any
     /// held bytes as a final [`Event::PasteChunk`], synthesizes
-    /// [`Event::PasteEnd`], and leaves paste mode. Passing `None` disables this
-    /// safety net and waits indefinitely for a real terminator. The default is
+    /// [`Event::PasteEnd`] with `complete: false`, and leaves paste mode.
+    /// Passing `None` disables this safety net and waits for a real terminator.
+    /// The default is
     /// `Some(`[`DEFAULT_PASTE_IDLE_TIMEOUT`]`)`.
     ///
     /// Changing this setting during a paste restarts its idle wait.
@@ -421,6 +431,40 @@ where
         };
         #[cfg(feature = "async")]
         if self.paste_deadline != previous {
+            self.wake_deadline_waiters();
+        }
+    }
+
+    /// Set the idle timeout for an OSC 52 clipboard reply.
+    ///
+    /// After its header, new input restarts the idle wait. Expiry flushes
+    /// retained bytes as a final [`Event::ClipboardChunk`], then emits
+    /// [`Event::ClipboardEnd`] with `complete: false` and leaves clipboard mode.
+    /// The default is `Some(`[`DEFAULT_CLIPBOARD_IDLE_TIMEOUT`]`)`.
+    /// `None` disables idle recovery.
+    ///
+    /// This is a recovery heuristic: keys before expiry can become payload,
+    /// and delayed payload after expiry can become keys.
+    pub fn with_clipboard_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.set_clipboard_idle_timeout(timeout);
+        self
+    }
+
+    /// Change the clipboard idle timeout, restarting the wait in an active reply.
+    ///
+    /// `None` disables idle recovery. Live async streams refresh their waits
+    /// when the deadline changes. See [`Self::with_clipboard_idle_timeout`].
+    pub fn set_clipboard_idle_timeout(&mut self, timeout: Option<Duration>) {
+        #[cfg(feature = "async")]
+        let previous = self.clipboard_deadline;
+        self.clipboard_idle_timeout = timeout;
+        self.clipboard_deadline = if self.parser.in_clipboard() {
+            timeout.map(|t| Instant::now() + t)
+        } else {
+            None
+        };
+        #[cfg(feature = "async")]
+        if self.clipboard_deadline != previous {
             self.wake_deadline_waiters();
         }
     }
@@ -525,7 +569,7 @@ where
         self.queue.pop_front()
     }
 
-    /// One read-decode cycle: resolve an overdue lone Escape or paste deadline,
+    /// One read-decode cycle: resolve overdue lone Escape or transfer deadlines,
     /// wait up to `timeout` for readiness, then service it. Winch surfaces a
     /// [`Event::Resize`]; a [`Waker`] surfaces `Err(Interrupted)` if no event
     /// or input error is available; ready input is drained and decoded; a wait
@@ -534,7 +578,8 @@ where
     pub(super) fn fill(&mut self, timeout: Option<Duration>) -> io::Result<()> {
         // A late key must not join an expired lone Escape. Partial sequences
         // get a readiness check first, since continuation bytes may be queued.
-        if self.pending.slice() == b"\x1b" || self.parser.in_paste() {
+        // Idle transfers end before new input can join their payload.
+        if self.pending.slice() == b"\x1b" || self.parser.in_paste() || self.parser.in_clipboard() {
             self.expire_elapsed();
         }
         if !self.queue.is_empty() {
@@ -553,11 +598,16 @@ where
             self.handle_winch()?;
         }
 
+        if ready[READY_INPUT] && (self.parser.in_paste() || self.parser.in_clipboard()) {
+            self.expire_elapsed();
+        }
         if ready[READY_INPUT]
             && let Err(error) = self.drain_input()
         {
             // A failed read supplies no continuation bytes.
             self.expire_elapsed();
+            self.expire_paste();
+            self.expire_clipboard();
             self.pending_error = Some(error);
         }
         if !ready[READY_INPUT] {
@@ -632,8 +682,8 @@ where
     /// currently in `pending`, pushing extracted events onto the
     /// queue and arming the appropriate timeout deadline.
     ///
-    /// Fresh input refreshes the paste idle or Escape disambiguation deadline.
-    /// Control string bodies wait for a terminator or an interrupting Escape.
+    /// Fresh input refreshes the active transfer or Escape deadline.
+    /// Other control strings wait for a terminator or an interrupting Escape.
     pub(super) fn drain_parser(&mut self) {
         loop {
             let (n, ev) = self.parser.parse_one(self.pending.slice());
@@ -648,6 +698,11 @@ where
             }
         }
 
+        self.clipboard_deadline = if self.parser.in_clipboard() {
+            self.clipboard_idle_timeout.map(|t| Instant::now() + t)
+        } else {
+            None
+        };
         if self.parser.in_paste() {
             // In paste: only the paste-idle timer applies. Reset on
             // every drain (input has just arrived).
@@ -705,7 +760,7 @@ where
 
     /// Force-close a stuck bracketed paste. Flushes any leftover
     /// pending bytes as a final `PasteChunk`, then enqueues
-    /// `PasteEnd` and clears the decoder's paste state.
+    /// `PasteEnd { complete: false }` and clears the decoder's paste state.
     ///
     /// Called from `pump` when the paste-idle deadline elapses, and
     /// from the public [`EventSource::end_paste`] escape hatch.
@@ -727,26 +782,63 @@ where
     /// Force-exit bracketed paste mode.
     ///
     /// If the decoder is currently inside a paste, this flushes any pending
-    /// bytes as a [`Event::PasteChunk`], queues [`Event::PasteEnd`], and clears
-    /// paste state so subsequent bytes parse as ordinary input. Use it when an
+    /// bytes as a [`Event::PasteChunk`], queues [`Event::PasteEnd`] with
+    /// `complete: false`, and clears paste state so later bytes parse as input.
+    /// Use it when an
     /// embedding application enforces a paste size cap, user cancellation, or a
     /// custom watchdog. It has no effect outside paste mode and never panics.
+    /// An active async stream wakes to deliver the queued events.
     pub fn end_paste(&mut self) {
-        self.expire_paste();
+        if self.parser.in_paste() {
+            self.expire_paste();
+            #[cfg(feature = "async")]
+            self.wake_deadline_waiters();
+        }
+    }
+
+    fn expire_clipboard(&mut self) {
+        self.clipboard_deadline = None;
+        if let Some(end) = self.parser.end_clipboard() {
+            if !self.pending.is_empty() {
+                let bytes = self.pending.slice().to_vec();
+                self.pending.clear();
+                self.emit(Event::ClipboardChunk(bytes));
+            }
+            self.emit(end);
+        }
+    }
+
+    /// Force-exit an OSC 52 reply.
+    ///
+    /// Flushes retained bytes as a final [`Event::ClipboardChunk`], then queues
+    /// [`Event::ClipboardEnd`] with `complete: false`. Later input is decoded
+    /// normally. Use this for a size cap, cancellation, or custom recovery.
+    /// This has no effect outside a reply. An active async stream wakes to
+    /// deliver the queued events.
+    pub fn end_clipboard(&mut self) {
+        if self.parser.in_clipboard() {
+            self.expire_clipboard();
+            #[cfg(feature = "async")]
+            self.wake_deadline_waiters();
+        }
     }
 
     /// Resolve any decode deadline that has already elapsed.
     /// A buffered partial `ESC` past its window becomes a
-    /// bare `Esc`; idle pastes past their windows are force-closed.
-    /// Run before input for a lone Escape or paste, and after a wait that
+    /// bare `Esc`; idle transfers past their windows are force-closed.
+    /// Run before input for a lone Escape or transfer, and after a wait that
     /// returned no input for other partial sequences.
     /// A no-op when no deadline is overdue;
-    /// paste and Escape deadlines govern separate decoder states.
+    /// transfer and Escape deadlines govern separate decoder states.
     pub(super) fn expire_elapsed(&mut self) {
         let now = Instant::now();
         if self.parser.in_paste() {
             if self.paste_deadline.is_some_and(|d| d <= now) {
                 self.expire_paste();
+            }
+        } else if self.parser.in_clipboard() {
+            if self.clipboard_deadline.is_some_and(|d| d <= now) {
+                self.expire_clipboard();
             }
         } else if self.esc_deadline.is_some_and(|d| d <= now) {
             self.expire_partial();
@@ -754,15 +846,19 @@ where
     }
 
     /// Effective wait for the next readiness poll: the caller's `timeout`
-    /// tightened to the nearest decode deadline (Escape or paste)
+    /// tightened to the nearest decode deadline (Escape, paste, or clipboard)
     /// so a buffered partial sequence resolves promptly even when the caller
     /// asked to block longer.
     pub(super) fn effective_timeout(&self, timeout: Option<Duration>) -> Option<Duration> {
         let now = Instant::now();
-        let deadline = [self.esc_deadline, self.paste_deadline]
-            .into_iter()
-            .flatten()
-            .min();
+        let deadline = [
+            self.esc_deadline,
+            self.paste_deadline,
+            self.clipboard_deadline,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let internal = deadline.map(|d| d.saturating_duration_since(now));
         match (timeout, internal) {
             (Some(t), Some(i)) => Some(t.min(i)),

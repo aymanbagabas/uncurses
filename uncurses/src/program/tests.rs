@@ -169,7 +169,10 @@ fn shared_source_paste_timeout_can_change_during_a_paste() {
         program.read_event().unwrap(),
         Event::PasteChunk(b"\x1b[20".to_vec()),
     );
-    assert_eq!(program.read_event().unwrap(), Event::PasteEnd);
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::PasteEnd { complete: false }
+    );
 
     writer.write_all(b"x").unwrap();
     assert!(matches!(
