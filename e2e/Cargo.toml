@@ -1,0 +1,18 @@
+[package]
+name = "e2e"
+description = "Terminal-level tests for uncurses, driven through a real pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+uncurses = { path = "../uncurses" }
+
+[dev-dependencies]
+# `ghostty` is left off: its backend in this release does not compile
+# against the `libghostty-vt 0.2.1` it pins, and building that also wants
+# Zig 0.15 while current Homebrew ships 0.16. Add it to this list once the
+# backend builds, and it joins the matrix without another change.
+tui-test-rs = { version = "0.1.0-beta.3", features = ["rio", "xtermjs"] }
