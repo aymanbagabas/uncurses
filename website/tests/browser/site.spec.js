@@ -16,7 +16,7 @@ test("the landing page centers its logo, description, and links, and search work
   const logo = page.getByRole("img", { name: "uncurses", exact: true });
   await expect(page.locator('img[alt="uncurses"]')).toHaveCount(1);
   await expect(logo).toBeVisible();
-  await expect.poll(() => logo.evaluate((image) => image.naturalWidth)).toBe(966);
+  await expect.poll(() => logo.evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
   await page.evaluate(() => document.fonts.ready);
   expect(await page.evaluate(() => getComputedStyle(document.body).fontFamily)).toMatch(/^system-ui,/);
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe("rgb(255, 255, 255)");

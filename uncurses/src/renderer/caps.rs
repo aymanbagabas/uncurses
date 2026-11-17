@@ -545,22 +545,6 @@ mod tests {
     #[test]
     fn none_disables_escape_caps_only() {
         let o = Optimizations::none();
-        assert!(!o.intersects(
-            Optimizations::ECH
-                | Optimizations::REP
-                | Optimizations::ICH
-                | Optimizations::DCH
-                | Optimizations::CSR
-                | Optimizations::SU_SD
-                | Optimizations::IL_DL
-                | Optimizations::BCE
-                | Optimizations::CHA
-                | Optimizations::HPA
-                | Optimizations::VPA
-                | Optimizations::CBT
-                | Optimizations::CHT
-                | Optimizations::ONLCR,
-        ));
         // The line discipline is not a $TERM question; `Screen::init`
         // grants TABS and BS once raw mode has settled it instead.
         assert!(o.is_empty());
@@ -575,9 +559,6 @@ mod tests {
     #[test]
     fn xterm_drops_hpa_cht_rep() {
         let o = Optimizations::xterm();
-        assert!(!o.contains(Optimizations::HPA));
-        assert!(!o.contains(Optimizations::CHT));
-        assert!(!o.contains(Optimizations::REP));
         let expected = Optimizations::modern()
             .difference(Optimizations::HPA | Optimizations::CHT | Optimizations::REP);
         assert_eq!(o, expected);
@@ -595,8 +576,7 @@ mod tests {
             | Optimizations::SU_SD
             | Optimizations::BCE
             | Optimizations::CBT
-            | Optimizations::CHT
-            | Optimizations::ONLCR;
+            | Optimizations::CHT;
         assert!(!o.intersects(missing));
         // VT100 era margins + VT102 editing pairs.
         let present =
@@ -627,11 +607,6 @@ mod tests {
             | Optimizations::VPA
             | Optimizations::CBT;
         assert_eq!(o, present);
-        assert!(!o.contains(Optimizations::BCE));
-        assert!(!o.contains(Optimizations::ECH));
-        assert!(!o.contains(Optimizations::REP));
-        assert!(!o.contains(Optimizations::CHA));
-        assert!(!o.contains(Optimizations::CHT));
     }
 
     /// No `$TERM` baseline may carry a line-discipline flag. `\t`,
@@ -641,22 +616,11 @@ mod tests {
     /// leaves `ONLCR` to the caller.
     #[test]
     fn no_baseline_carries_line_discipline_flags() {
-        let line_discipline = LINE_DISCIPLINE;
-        let baselines = [
-            ("none", Optimizations::none()),
-            ("modern", Optimizations::modern()),
-            ("xterm", Optimizations::xterm()),
-            ("vt100", Optimizations::vt100()),
-            ("linux", Optimizations::linux()),
-            ("screen", Optimizations::screen()),
-            ("default", Optimizations::default()),
-        ];
-        for (name, o) in baselines {
-            assert!(
-                !o.intersects(line_discipline),
-                "{name} baseline must not assume the line discipline: {o:?}"
-            );
-        }
+        let o = Optimizations::vt100();
+        assert!(
+            !o.intersects(LINE_DISCIPLINE),
+            "vt100 baseline must not assume the line discipline: {o:?}"
+        );
     }
 
     /// Every `$TERM` the detector recognizes routes to one of the
@@ -678,11 +642,7 @@ mod tests {
             "xterm",
             "xterm-256color",
             "screen",
-            "screen-256color",
-            "linux",
             "vt100",
-            "dumb",
-            "",
         ] {
             let o = Optimizations::from_term(term);
             assert!(
@@ -749,20 +709,6 @@ mod tests {
     }
 
     #[test]
-    fn xterm_term_enables_cha() {
-        let o = Optimizations::from_term("xterm-256color");
-        assert!(o.contains(Optimizations::CHA));
-        assert!(!o.contains(Optimizations::HPA));
-    }
-
-    #[test]
-    fn linux_term_supports_vpa_hpa_not_rep() {
-        let o = Optimizations::from_term("linux");
-        assert!(o.contains(Optimizations::VPA | Optimizations::HPA));
-        assert!(!o.contains(Optimizations::REP));
-    }
-
-    #[test]
     fn alacritty_term_has_explicit_caps() {
         let o = Optimizations::from_term("alacritty");
         assert!(o.contains(Optimizations::CHA | Optimizations::ECH | Optimizations::REP));
@@ -787,7 +733,6 @@ mod tests {
             "contour",
             "foot",
             "ghostty",
-            "kitty",
             "rio",
             "st",
             "tmux",

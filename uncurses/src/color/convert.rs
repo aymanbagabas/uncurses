@@ -97,19 +97,13 @@ mod tests {
     #[test]
     fn test_white_to_256() {
         let c = rgb_to_ansi256((255, 255, 255));
-        // Should be index 231 (cube 5,5,5) or 255 (gray) — both are white
-        matches!(c, Color::Indexed(231) | Color::Indexed(255));
+        assert_eq!(c, Color::Indexed(231));
     }
 
     #[test]
     fn test_gray_to_256() {
         let c = rgb_to_ansi256((128, 128, 128));
-        // Should pick a grayscale index
-        if let Color::Indexed(idx) = c {
-            assert!((232..=255).contains(&idx) || (16..=231).contains(&idx));
-        } else {
-            panic!("expected indexed color");
-        }
+        assert_eq!(c, Color::Indexed(244));
     }
 
     #[test]

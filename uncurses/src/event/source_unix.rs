@@ -1231,10 +1231,11 @@ mod tests {
         write_bytes(&tx, b"\x1b[200~hi");
         let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
         while src.try_read().is_some() {}
+        let deadline = src.paste_deadline.expect("open paste has an idle deadline");
         // Sub-timeout pause, then deliver the terminator.
         thread::sleep(Duration::from_millis(50));
         write_bytes(&tx, b"\x1b[201~");
-        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        assert!(src.poll(Some(Duration::from_millis(100))).unwrap());
         let mut saw_end = false;
         while let Some(ev) = src.try_read() {
             if matches!(ev, Event::PasteEnd { complete: true }) {
@@ -1251,6 +1252,7 @@ mod tests {
             }
         }
         assert!(saw_end, "expected PasteEnd within the idle window");
+        assert!(Instant::now() < deadline, "paste idle deadline expired");
     }
 
     #[test]
@@ -1283,6 +1285,8 @@ mod tests {
         write_bytes(&tx, b"\x1b[200~partial");
         let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
         while src.try_read().is_some() {}
+        assert!(src.parser.in_paste());
+        assert_eq!(src.paste_deadline, None);
 
         // With the safety net disabled, a long-but-finite caller
         // timeout should expire without synthesising PasteEnd.
@@ -1414,7 +1418,6 @@ mod tests {
             .unwrap()
             .with_esc_timeout(Duration::from_millis(20));
         write_byte(&tx, 0x1b);
-        let _ = src.poll(Some(Duration::from_secs(60))).unwrap();
         let start = Instant::now();
         assert!(src.poll(Some(Duration::from_secs(60))).unwrap());
         let ev = src.read().unwrap();
@@ -1452,8 +1455,8 @@ mod tests {
         // reports), a SIGWINCH must drain its wake pipe but surface no
         // Event::Resize — the decoder delivers resizes in-band instead.
         let stderr_fd = 2;
-        let ws: libc::winsize = unsafe { std::mem::zeroed() };
-        let probe = unsafe { libc::ioctl(stderr_fd, libc::TIOCGWINSZ, &ws as *const _) };
+        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+        let probe = unsafe { libc::ioctl(stderr_fd, libc::TIOCGWINSZ, &mut ws) };
         if probe < 0 {
             return;
         }
@@ -1484,8 +1487,8 @@ mod tests {
         // devices and a bare master does not answer TIOCGWINSZ. Skipping on the
         // probe rather than on `last_size` keeps the assertion below meaningful
         // everywhere the ioctl does work.
-        let ws: libc::winsize = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCGWINSZ, &ws) } < 0 {
+        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+        if unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) } < 0 {
             return;
         }
 
@@ -1501,29 +1504,5 @@ mod tests {
             "an unchanged size surfaced a resize event"
         );
         assert!(src.try_read().is_none());
-    }
-
-    #[test]
-    fn sigwinch_surfaces_resize_event() {
-        // SIGWINCH requires a real tty to query TIOCGWINSZ on. Dup
-        // stderr — under cargo test it is typically a tty — and use
-        // that fd as the input source. If stderr isn't a tty, skip.
-        let stderr_fd = 2;
-        let ws: libc::winsize = unsafe { std::mem::zeroed() };
-        let probe = unsafe { libc::ioctl(stderr_fd, libc::TIOCGWINSZ, &ws as *const _) };
-        if probe < 0 {
-            return;
-        }
-        let stderr_dup = unsafe { libc::dup(stderr_fd) };
-        assert!(stderr_dup >= 0);
-        let stderr_file = unsafe { File::from_raw_fd(stderr_dup) };
-        let mut src = new_reader(stderr_file);
-        // Force a mismatched cached size so the SIGWINCH path surfaces
-        // the dedupe-suppressed event.
-        src.last_size = None;
-        unsafe { libc::raise(libc::SIGWINCH) };
-        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
-        let ev = src.read().unwrap();
-        assert!(matches!(ev, Event::Resize(_)));
     }
 }

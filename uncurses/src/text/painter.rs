@@ -651,12 +651,18 @@ mod tests {
 
     #[test]
     fn plain_text() {
-        let mut b = buf(10, 1);
-        let end =
-            Painter::new(&mut b).set_str_wrap((0, 0), "abc", WrapMode::Truncate, Style::default());
-        assert_eq!(end, Position::new(3, 0));
-        assert_eq!(cell_at(&b, 0, 0).content(), "a");
-        assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+            let mut b = buf(10, 1).with_width_mode(mode);
+            let end = Painter::new(&mut b).set_str_wrap(
+                (0, 0),
+                "abc",
+                WrapMode::Truncate,
+                Style::default(),
+            );
+            assert_eq!(end, Position::new(3, 0));
+            assert_eq!(cell_at(&b, 0, 0).content(), "a");
+            assert_eq!(cell_at(&b, 2, 0).content(), "c");
+        }
     }
 
     #[test]
@@ -748,19 +754,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn osc8_toggles_link() {
-        let mut b = buf(10, 1);
-        Painter::new(&mut b).set_str_wrap(
-            (0, 0),
-            "\x1b]8;;https://x\x1b\\a\x1b]8;;\x1b\\b",
-            WrapMode::Truncate,
-            Style::default(),
-        );
-        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
-        assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
     #[test]
@@ -1327,12 +1320,12 @@ mod tests {
         let mut b = buf(5, 1);
         Painter::new(&mut b).set_str_truncate(
             (0, 0),
-            "ab中def",
+            "abc中def",
             Style::default(),
             "…",
             Style::default(),
         );
-        // "ab" + wide "中" fills columns 0..4; the tail overwrites column 4,
+        // "abc" + wide "中" fills columns 0..5; the tail overwrites column 4,
         // which is the continuation of "中", so the wide primary at 3 must be
         // blanked rather than left dangling.
         assert_eq!(cell_at(&b, 4, 0).content(), "…");

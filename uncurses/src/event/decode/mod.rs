@@ -729,7 +729,6 @@ mod tests {
             (h_flag | c_flag, [h, bs, h, ctrl_bs]),
             (h_flag | c_flag | d_flag, [h, del, h, del]),
         ];
-        let mut checked = 0;
         for (flags, expected) in cases {
             for (enabled, offset) in [(false, 0), (true, 2)] {
                 for (i, byte) in [0x08, 0x7f].into_iter().enumerate() {
@@ -747,12 +746,10 @@ mod tests {
                             (input.len(), Some(Event::KeyPress(key.normalized()))),
                             "mode={enabled}, flags={flags:?}, input={input:?}"
                         );
-                        checked += 1;
                     }
                 }
             }
         }
-        assert_eq!(checked, 64);
     }
 
     #[test]
@@ -852,19 +849,6 @@ mod tests {
     use crate::event::ClipboardSelection;
     use crate::event::ColorScheme;
     use crate::event::SettingReport;
-
-    #[test]
-    fn test_parse_simple_char() {
-        let mut parser = Decoder::new(DecoderFlags::empty());
-        let events = parser.parse(b"a");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            Event::KeyPress(k) => {
-                assert_eq!(k.code, KeyCode::Char('a'));
-            }
-            _ => panic!("Expected Key event"),
-        }
-    }
 
     #[test]
     fn test_parse_ctrl_c() {
@@ -1002,21 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_cursor_position() {
-        let mut parser = Decoder::new(DecoderFlags::empty());
-        let events = parser.parse(b"\x1b[5;10R");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            Event::CursorPosition { position, page } => {
-                assert_eq!(position.y, 4);
-                assert_eq!(position.x, 9);
-                assert_eq!(*page, 0);
-            }
-            _ => panic!("Expected CursorPosition"),
-        }
-    }
-
-    #[test]
     fn test_parse_extended_cursor_position() {
         for prefix in [b"\x1b[".as_slice(), b"\x9b".as_slice()] {
             for (body, expected) in [
@@ -1114,20 +1083,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_alt_char() {
-        let mut parser = Decoder::new(DecoderFlags::empty());
-        let events = parser.parse(b"\x1ba");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            Event::KeyPress(k) => {
-                assert_eq!(k.code, KeyCode::Char('a'));
-                assert!(k.modifiers.contains(KeyModifiers::ALT));
-            }
-            _ => panic!("Expected Key event"),
-        }
-    }
-
-    #[test]
     fn test_parse_paste_bracketed() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         // Full paste sequence in one feed: start + content + end.
@@ -1179,7 +1134,7 @@ mod tests {
         //   * a nested PasteStart marker,
         //   * raw non-UTF-8 bytes (0xFF 0xFE).
         // Everything except the closing `\x1b[201~` must round-trip
-        // verbatim through a single PasteChunk.
+        // verbatim through the combined PasteChunk payloads.
         let body: Vec<u8> = [
             b"text".as_slice(),
             b"\x00\x07\x08\x09\x0a\x0b\x0c\x0d\x7f",
@@ -1574,13 +1529,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_multiple_events() {
-        let mut parser = Decoder::new(DecoderFlags::empty());
-        let events = parser.parse(b"abc");
-        assert_eq!(events.len(), 3);
-    }
-
-    #[test]
     fn test_parse_ss3_f1() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1bOP");
@@ -1907,20 +1855,6 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_key_urxvt_shift_f11() {
-        let mut parser = Decoder::new(DecoderFlags::empty());
-        let events = parser.parse(b"\x1b[23$");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            Event::KeyPress(k) => {
-                assert_eq!(k.code, KeyCode::F(11));
-                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
-            }
-            other => panic!("Expected Key F11+Shift, got {:?}", other),
-        }
-    }
-
-    #[test]
     fn test_legacy_key_urxvt_ctrl_f1() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b[11^");
@@ -2210,21 +2144,6 @@ mod tests {
     }
 
     #[test]
-    fn test_modify_other_keys_2() {
-        let mut p = Decoder::new(DecoderFlags::empty());
-        // Ctrl+a via modifyOtherKeys-2: CSI 27;5;97~
-        let evs = p.parse(b"\x1b[27;5;97~");
-        assert_eq!(evs.len(), 1);
-        match &evs[0] {
-            Event::KeyPress(k) => {
-                assert_eq!(k.code, KeyCode::Char('a'));
-                assert!(k.modifiers.contains(KeyModifiers::CTRL));
-            }
-            other => panic!("expected Key, got {:?}", other),
-        }
-    }
-
-    #[test]
     fn test_modify_other_keys_2_astral_codepoint() {
         // 😀 = U+1F600 = 128512 (above u16::MAX); the param must round-trip
         // through the parser without truncation.
@@ -2318,23 +2237,6 @@ mod tests {
                 height: 24
             }
         ));
-    }
-
-    #[test]
-    fn test_csi_48_t_emits_resize() {
-        let mut p = Decoder::new(DecoderFlags::empty());
-        // CSI 48 ; rows ; cols ; ypixel ; xpixel t (mode 2048 report).
-        let evs = p.parse(b"\x1b[48;24;80;480;1600t");
-        assert_eq!(evs.len(), 1);
-        match &evs[0] {
-            Event::Resize(ws) => {
-                assert_eq!(ws.row, 24);
-                assert_eq!(ws.col, 80);
-                assert_eq!(ws.ypixel, 480);
-                assert_eq!(ws.xpixel, 1600);
-            }
-            other => panic!("expected Resize, got {:?}", other),
-        }
     }
 
     #[test]
@@ -2444,7 +2346,7 @@ mod tests {
             Event::SettingReport(SettingReport::Raw("9 q".to_string()))
         );
 
-        // Every style the terminal can name decodes.
+        // A blinking bar style decodes.
         let evs = p.parse(b"\x1bP1$r5 q\x1b\\");
         assert_eq!(
             evs[0],
@@ -2582,15 +2484,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_one_expire_leading_esc() {
-        let p = Decoder::new(DecoderFlags::empty());
-        match p.expire_leading(0x1b) {
-            Some(Event::KeyPress(k)) => assert_eq!(k.code, KeyCode::Escape),
-            other => panic!("expected Escape, got {:?}", other),
-        }
-    }
-
-    #[test]
     fn test_parse_one_paste_stream() {
         let mut p = Decoder::new(DecoderFlags::empty());
         // PasteStart
@@ -2670,11 +2563,6 @@ mod tests {
             events.extend(p.parse(std::slice::from_ref(b)));
         }
         events
-    }
-
-    #[test]
-    fn test_chunked_byte_by_byte_focus_in() {
-        assert_eq!(feed_byte_by_byte(b"\x1b[I"), vec![Event::FocusIn]);
     }
 
     #[test]

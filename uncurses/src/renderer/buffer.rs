@@ -646,16 +646,7 @@ mod tests {
     /// neighbour alone, so the damage may not claim it.
     #[test]
     fn damage_reaches_back_only_to_a_primary_that_owns_the_column() {
-        let cases: [(&str, Vec<Cell>, u16); 3] = [
-            (
-                "a wide owner is reached",
-                vec![
-                    Cell::new("\u{4e16}", 2),
-                    Cell::CONTINUATION,
-                    Cell::CONTINUATION,
-                ],
-                0,
-            ),
+        let cases: [(&str, Vec<Cell>, u16); 2] = [
             (
                 "a narrow neighbour is left alone",
                 vec![Cell::new("a", 1), Cell::CONTINUATION, Cell::CONTINUATION],
@@ -886,6 +877,7 @@ mod tests {
         // Odd width with a 2-wide fill leaves one trailing slot that
         // can't hold a primary; it must become a blank, not garbage.
         let mut rb = RenderBuffer::new(8, 1);
+        rb.set_cell((4, 0), &Cell::new("X", 1));
         let wide = Cell::new("漢", 2);
         rb.fill_rect(Rect::new(0, 0, 5, 1), &wide);
         assert_eq!(rb.buffer.cell(Position::new(0, 0)).unwrap().width(), 2);

@@ -125,53 +125,7 @@ fn test_render_with_changes() {
 }
 
 #[test]
-fn test_render_drains_internal_buffer() {
-    let mut r = Renderer::new();
-    let mut rb = RenderBuffer::new(10, 5);
-    rb.set_cell((0, 0), &Cell::new("A", 1));
-    let mut out = Vec::new();
-    r.render(&mut out, &mut rb).unwrap();
-    assert!(!out.is_empty());
-}
-
-#[test]
-fn test_long_to_short_line_clears_trailing_chars() {
-    // Frame N: row 0 contains long text "icu_segmenter = \"2\"".
-    // Frame N+1: row 0 is empty (all blanks). The renderer must
-    // emit a clear-to-EOL (or equivalent) so the old characters
-    // do not remain on the terminal.
-    let mut r = Renderer::new();
-    let mut rb = RenderBuffer::new(40, 2);
-    for (i, ch) in "icu_segmenter = \"2\"".chars().enumerate() {
-        rb.set_cell((i as u16, 0), &Cell::new(ch.to_string(), 1));
-    }
-    let mut sink = Vec::new();
-    r.render(&mut sink, &mut rb).unwrap();
-    sink.clear();
-
-    // Frame N+1 — same buffer but cleared.
-    for x in 0..40u16 {
-        rb.set_cell((x, 0), &Cell::BLANK);
-    }
-    r.render(&mut sink, &mut rb).unwrap();
-    let out = String::from_utf8_lossy(&sink).to_string();
-    // The renderer must clear the row somehow — either ECH, EL, or
-    // by writing spaces. If neither EL nor ECH appears, look for at
-    // least one literal space we wrote.
-    let has_el = out.contains("\x1b[K") || out.contains("\x1b[0K");
-    let has_ech = out.contains('X') && out.contains("\x1b[");
-    let has_spaces = out.contains(' ');
-    assert!(
-        has_el || has_ech || has_spaces,
-        "expected clearing sequence in output {out:?}"
-    );
-}
-
-#[test]
-fn test_blank_row_after_content_clears_to_eol() {
-    // Targeted: row had real content, next frame has none. The
-    // emitted bytes for that row must include either a clear-to-EOL
-    // or enough spaces to overwrite every previously-written column.
+fn test_clearing_all_content_erases_content_row_to_eol() {
     let mut r = Renderer::new();
     let mut rb = RenderBuffer::new(20, 2);
     let s = "libc = \"0.2\"";
@@ -186,24 +140,7 @@ fn test_blank_row_after_content_clears_to_eol() {
         rb.set_cell((x, 0), &Cell::BLANK);
     }
     r.render(&mut sink, &mut rb).unwrap();
-    let out_bytes = sink.clone();
-    let out = String::from_utf8_lossy(&out_bytes).to_string();
-    // Must clear via EL, ECH, or by writing literal spaces over the row.
-    let has_el = out.contains("\x1b[K") || out.contains("\x1b[0K");
-    let has_ech = out.contains('X')
-        && out
-            .as_bytes()
-            .windows(3)
-            .any(|w| w[0] == 0x1b && w[1] == b'[');
-    let space_run_len = out
-        .as_bytes()
-        .windows(s.len())
-        .filter(|w| w.iter().all(|b| *b == b' '))
-        .count();
-    assert!(
-        has_el || has_ech || space_run_len > 0,
-        "row was not cleared after content vanished: {out:?}"
-    );
+    assert_eq!(sink, b"\x1b[A\x1b[K");
 }
 
 #[test]

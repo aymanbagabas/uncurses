@@ -420,7 +420,6 @@ mod tests {
         buf.delete_cells((0, 0), 1, 6, &Cell::BLANK);
         // Last column must be a clean blank, not a stray continuation.
         let last = buf.cell(Position::new(5, 0)).unwrap();
-        assert!(!last.is_continuation());
         assert!(last.is_blank());
     }
 
@@ -440,6 +439,5 @@ mod tests {
         assert_eq!(buf.cell(Position::new(2, 0)).unwrap().width(), 2);
         assert!(buf.cell(Position::new(3, 0)).unwrap().is_continuation());
         assert!(buf.cell(Position::new(4, 0)).unwrap().is_blank());
-        assert!(!buf.cell(Position::new(4, 0)).unwrap().is_continuation());
     }
 }

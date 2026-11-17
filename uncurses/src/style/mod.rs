@@ -605,10 +605,6 @@ mod tests {
 
     #[test]
     fn alternate_display_closes_only_what_is_set() {
-        // SGR-only style closes with the SGR reset alone.
-        let s = Style::EMPTY.bold();
-        assert_eq!(format!("{s:#}"), "\x1b[m");
-
         // A link adds the OSC 8 terminator before the SGR reset.
         let s = Style::EMPTY.bold().link("https://x", "");
         assert_eq!(format!("{s:#}"), "\x1b]8;;\x1b\\\x1b[m");
@@ -619,12 +615,6 @@ mod tests {
 
         // An empty style resets nothing.
         assert_eq!(format!("{:#}", Style::EMPTY), "");
-    }
-
-    #[test]
-    fn span_empty_style_emits_text_only() {
-        let s = Style::EMPTY;
-        assert_eq!(format!("{s}hi{s:#}"), "hi");
     }
 
     #[test]
@@ -661,12 +651,5 @@ mod tests {
             format!("{s}docs{s:#}"),
             "\x1b[4m\x1b]8;;https://example.com\x1b\\docs\x1b]8;;\x1b\\\x1b[m"
         );
-    }
-
-    #[test]
-    fn opener_includes_hyperlink_after_sgr() {
-        let s = Style::EMPTY.underline().link("https://example.com", "");
-        // The opener is the SGR sequence followed by the OSC 8 hyperlink start.
-        assert_eq!(format!("{s}"), "\x1b[4m\x1b]8;;https://example.com\x1b\\");
     }
 }

@@ -879,11 +879,15 @@ mod drag_drop_tests {
         let mut source = EventSource::new(reader).unwrap();
         let payload = vec![b'A'; 4096];
         let body = [b"72;t=r:x=1;".as_slice(), &payload].concat();
-        writer.write_all(b"\x1b]").unwrap();
-        writer.write_all(&body).unwrap();
-        writer.write_all(b"\x1b\\").unwrap();
+        let writer = std::thread::spawn(move || -> io::Result<()> {
+            writer.write_all(b"\x1b]")?;
+            writer.write_all(&body)?;
+            writer.write_all(b"\x1b\\")
+        });
+        let event = source.read();
+        writer.join().unwrap().unwrap();
         assert_eq!(
-            source.read().unwrap(),
+            event.unwrap(),
             Event::DragDrop {
                 options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
                 payload,

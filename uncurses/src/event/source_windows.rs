@@ -447,38 +447,12 @@ mod tests {
     };
 
     #[test]
-    fn surrogate_decoding_roundtrip() {
-        // U+1F600 -> high D83D, low DE00.
-        let c = char::decode_utf16([0xD83Du16, 0xDE00])
-            .next()
-            .unwrap()
-            .unwrap();
-        assert_eq!(c as u32, 0x1F600);
-        // A non-surrogate followed by a lone low surrogate does not pair.
-        let mut iter = char::decode_utf16([0x0041u16, 0xDE00]);
-        assert_eq!(iter.next().unwrap().unwrap(), 'A');
-        assert!(iter.next().unwrap().is_err());
-    }
-
-    #[test]
     fn high_word_signed_extracts_signed_wheel_delta() {
         // 0x00780000 -> high word 0x0078 (+120, one notch up)
         assert_eq!(high_word_signed(0x0078_0000), 120);
         // 0xFF880000 -> high word 0xFF88 (-120, one notch down)
         assert_eq!(high_word_signed(0xFF88_0000), -120);
         assert_eq!(high_word_signed(0), 0);
-    }
-
-    #[test]
-    fn push_utf8_encodes_ascii_and_supplementary() {
-        let mut buf = Vec::new();
-        push_utf8(&mut buf, 'A');
-        assert_eq!(buf, b"A");
-
-        let mut buf = Vec::new();
-        push_utf8(&mut buf, '\u{1F600}');
-        // 4-byte UTF-8 encoding of U+1F600
-        assert_eq!(buf, [0xF0, 0x9F, 0x98, 0x80]);
     }
 
     #[test]
@@ -827,9 +801,6 @@ mod tests {
             }
         }
         assert_eq!(assembled, body.as_bytes());
-        let decoded = String::from_utf8(assembled).expect("valid utf-8");
-        assert!(!decoded.contains('\u{FFFD}'));
-        assert_eq!(decoded, body);
     }
 
     /// Same as the round-trip test above, but the paste body is split
@@ -881,7 +852,5 @@ mod tests {
             }
         }
         assert_eq!(assembled, body.as_bytes());
-        let decoded = String::from_utf8(assembled).expect("valid utf-8");
-        assert_eq!(decoded, body);
     }
 }

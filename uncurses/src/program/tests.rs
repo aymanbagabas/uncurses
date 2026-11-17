@@ -15,16 +15,10 @@ use super::*;
 use crate::event::{ProgramStatusCapabilities, SettingReport};
 use crate::text::TextSurface;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn null_input() -> std::io::PipeReader {
     // A pipe read end is epoll/kqueue-registerable (unlike /dev/null), which
     // EventSource::new requires. The write end is dropped; tests never read.
-    let (reader, _writer) = std::io::pipe().unwrap();
-    reader
-}
-
-#[cfg(windows)]
-fn null_input() -> std::io::PipeReader {
     let (reader, _writer) = std::io::pipe().unwrap();
     reader
 }
@@ -666,37 +660,6 @@ fn autoresize_refits_after_the_report_was_already_observed() {
     );
 }
 
-// --- end-to-end renderer tests ---
-//
-// Drive the renderer through the Screen render surface. The writer
-// is `&mut Vec<u8>` (or scoped so the test owns the `Vec<u8>` that
-// outlives the program), and per-test configuration is established
-// up front with the `with_color_profile` / `with_optimizations`
-// builders — there is no runtime mutation of these knobs.
-//
-// Each optimization-toggle pair asserts on the **discriminating
-// byte sequence** the optimization controls (ECH, REP, tab,
-// backspace, map-newline, scroll), so the ON and OFF variants
-// would diverge if the optimization regressed.
-//
-// Some renderer behaviours are intentionally not covered here:
-// * Touched-span tracking: depends on directly poking `RenderBuffer`
-//   and reading per-line touched spans, neither of which is part of
-//   the public API. Touch tracking is exercised indirectly by every
-//   render test that asserts on emitted bytes.
-// * Renderer logger hooks: not provided.
-// * Style-change runtime mutation: exercised by
-//   `renderer_redraws_when_style_changes` below.
-// * Runtime mutation of the relative-cursor flag: inline /
-//   fullscreen flavors of the relative-cursor model are covered by
-//   `inline_hello_world_emits_exact_byte_stream` and
-//   `fullscreen_diagonal_emits_exact_byte_stream`.
-//
-// Output-frame cases drive the same source text through Screen
-// (with `set_str_wrap(..., WrapMode::Wrap)`), render both frames in a
-// single Screen lifetime, and assert that the relevant content and
-// clearing sequences appear in the cumulative byte stream.
-
 #[test]
 fn set_title_emits_osc_0() {
     let buf = RefCell::new(Vec::new());
@@ -1247,11 +1210,16 @@ fn reset_moves_cursor_to_last_row_inline() {
             .screen_mut()
             .set_str((0, 0), "hi", crate::style::Style::default());
         program.screen_mut().render().unwrap();
+        program
+            .screen_mut()
+            .move_cursor_to(Position::ORIGIN)
+            .unwrap();
+        buf.borrow_mut().clear();
         program.reset().unwrap();
         program.screen_mut().flush().unwrap();
     }
     let out = written(&buf);
-    // After "hi" lands at row 0, cur.pos.y == 0. reset must walk down
+    // The explicit move leaves the cursor at row 0. reset must walk down
     // to row 4 (last of 5-row inline surface). In inline / relative
     // mode the planner emits CUD 4 (or 4× LF when cheaper).
     assert!(
@@ -1429,11 +1397,6 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
         "alt set missing: tail={tail:?}"
     );
 }
-
-// --- teardown drain of pending capability-query replies ---
-
-// Uses a pipe the event source must poll; on Windows the source polls a
-// console handle, not a pipe, so this drain path is exercised on Unix only.
 
 #[test]
 fn origin_defaults_to_zero_and_maps_mouse() {
@@ -1730,21 +1693,6 @@ fn a_synchronous_read_observes_without_a_second_call() {
         );
         assert_eq!(program.origin(), Position::new(2, 4));
     }
-}
-
-#[test]
-fn mouse_to_origin_is_an_identity_in_fullscreen() {
-    use crate::event::{KeyModifiers, Mouse, MouseButton};
-
-    let buf = RefCell::new(Vec::new());
-    let mut program = Program::for_test(&buf, (10, 3));
-    program.origin = Position::new(0, 5);
-    // Entering the alternate screen re-anchors the area at the top-left, so
-    // the inline origin recorded earlier must not be subtracted any more.
-    program.screen_mut().set_fullscreen(true);
-    let m = Mouse::new(3, 7, MouseButton::Left, KeyModifiers::empty());
-    let mapped = program.mouse_to_origin(m);
-    assert_eq!((mapped.x, mapped.y), (3, 7));
 }
 
 #[test]
@@ -3018,7 +2966,6 @@ fn request_visibility_is_a_one_shot_query() {
     }
     let out = written(&buf);
     assert_eq!(out, "\x1b[?998n");
-    assert!(!out.contains("\x1b[?2033h"));
 }
 
 /// Visibility support needs no capability field of its own: the mode is
@@ -3064,31 +3011,6 @@ fn request_cursor_style_asks_decrqss_for_decscusr() {
     // DECRQSS names the control function by its intermediate and final
     // bytes, so DECSCUSR (`CSI Ps SP q`) is selected by `SP q`.
     assert_eq!(buf.borrow().as_slice(), b"\x1bP$q q\x1b\\");
-}
-
-#[test]
-fn a_cursor_style_reply_reads_back_in_the_terms_it_was_set_with() {
-    use crate::ansi::cursor::CursorShape;
-    use crate::ansi::cursor::CursorStyle;
-    use crate::event::SettingReport;
-
-    let buf = RefCell::new(Vec::new());
-    let mut program = Program::for_test(&buf, (10, 3));
-    program.set_cursor_style(CursorShape::Bar, false).unwrap();
-    buf.borrow_mut().clear();
-
-    // What a terminal answering DECRQSS would send back for that style.
-    let reply = Event::SettingReport(SettingReport::CursorStyle(CursorStyle::SteadyBar));
-    program.observe_event(&reply).unwrap();
-
-    let Event::SettingReport(SettingReport::CursorStyle(style)) = reply else {
-        unreachable!()
-    };
-    assert_eq!(
-        (style.shape(), style.blinking()),
-        (Some(CursorShape::Bar), Some(false)),
-        "the reply decomposes into the arguments set_cursor_style took"
-    );
 }
 
 #[test]

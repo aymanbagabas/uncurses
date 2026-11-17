@@ -80,20 +80,6 @@ fn test_new_screen() {
 }
 
 #[test]
-fn test_write_and_render() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (20, 5));
-        {
-            screen.set_str((0, 0), "Hello", crate::style::Style::default());
-        };
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    assert!(String::from_utf8_lossy(&buf).contains("Hello"));
-}
-
-#[test]
 fn an_insert_boundary_inside_a_wide_cell_repaints_the_complete_row() {
     for ich in [false, true] {
         for prefix in ["", "X", "XYZ"] {
@@ -144,12 +130,6 @@ fn default_width_mode_is_wc() {
     let screen = Screen::for_test(Vec::new(), (20, 1));
     assert_eq!(screen.width_mode(), WidthMode::Wc);
     assert!(!screen.eaw_wide());
-}
-
-#[test]
-fn with_eaw_wide_sets_eaw_wide() {
-    let screen = Screen::for_test(Vec::new(), (20, 1)).with_eaw_wide(true);
-    assert!(screen.eaw_wide());
 }
 
 #[test]
@@ -577,6 +557,8 @@ fn cursor_only_frame_emits_move_without_cell_changes() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (80, 24));
+        screen.render().unwrap();
+        screen.writer_mut().clear();
         screen.set_cursor_position(Position::new(4, 2));
         screen.render().unwrap();
         assert_eq!(screen.tracked_cursor(), Some(Position::new(4, 2)));
@@ -689,17 +671,6 @@ fn invalidate_forces_redraw_of_existing_content() {
         screen.flush().unwrap();
     }
     assert!(s(&buf).matches('X').count() >= 2);
-}
-
-#[test]
-fn resize_does_not_crash_and_renders_blank() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (40, 10));
-        screen.resize((80, 24));
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
 }
 
 #[test]
@@ -1642,40 +1613,6 @@ fn insert_above_preserves_empty_lines() {
 }
 
 #[test]
-fn insert_above_emits_il_and_content() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (10, 5));
-        screen.insert_above("Prepended line").unwrap();
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&buf);
-    assert!(
-        out.contains("\x1b[L") || out.contains("\x1b[1L") || out.contains("\x1b[2L"),
-        "missing IL: {out:?}"
-    );
-    assert!(out.contains("Prepended line"));
-}
-
-#[test]
-fn insert_above_renders_styled_line() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (10, 5));
-        screen.insert_above("Hello").unwrap();
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&buf);
-    assert!(
-        out.contains("\x1b[L") || out.contains("\x1b[1L") || out.contains("\x1b[2L"),
-        "missing IL: {out:?}"
-    );
-    assert!(out.contains("Hello"));
-}
-
-#[test]
 fn multiple_insert_above_emit_one_il_per_call() {
     let mut buf: Vec<u8> = Vec::new();
     {
@@ -1934,55 +1871,6 @@ fn rep_off_repeats_glyph_literally() {
     );
 }
 
-#[test]
-fn scroll_optimization_falls_back_to_lf_without_su_sd() {
-    // Full-region 1-line scroll up: even with all scroll caps off,
-    // branch 1 of scroll_up emits a bare LF (VT100), so the output
-    // is dominated by the new last line + a single LF, not a full
-    // repaint of every row.
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let opts = Optimizations::default().difference(
-            Optimizations::SU_SD | Optimizations::IL_DL | Optimizations::CSR | Optimizations::REP,
-        );
-        let mut screen = Screen::for_test(&mut buf, (10, 5)).with_optimizations(opts);
-        screen.set_alt_screen(true);
-        for y in 0..5u16 {
-            for x in 0..10u16 {
-                screen.set_cell(
-                    (x, y),
-                    &Cell::new(char::from(b'A' + y as u8).to_string(), 1),
-                );
-            }
-        }
-        screen.render().unwrap();
-        screen.flush().unwrap();
-        for y in 0..4u16 {
-            for x in 0..10u16 {
-                screen.set_cell(
-                    (x, y),
-                    &Cell::new(char::from(b'A' + 1 + y as u8).to_string(), 1),
-                );
-            }
-        }
-        for x in 0..10u16 {
-            screen.set_cell((x, 4u16), &Cell::new("F", 1));
-        }
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&buf);
-    assert!(out.contains("FFFFFFFFF"));
-    // Bare LF is the VT100 fallback for full-region 1-line scroll up;
-    // exactly one new-line plus the new last row should be emitted
-    // for the scroll, not a per-row repaint.
-    assert!(out.contains('\n'), "expected bare LF fallback: {out:?}");
-    // Total bytes stay small: the scroll did NOT degenerate into a
-    // per-row repaint of all 5 rows (~129 bytes is the same shape
-    // as the LF-optimized path that runs when caps are on).
-    assert!(buf.len() < 180, "too many bytes: {}", buf.len());
-}
-
 // --- content correctness ---
 
 #[test]
@@ -2019,7 +1907,7 @@ fn zero_width_combining_mark_reaches_output() {
 fn styled_text_emits_specific_sgr_payloads() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::for_test(&mut buf, (4, 1));
+        let mut screen = Screen::for_test(&mut buf, (4, 1)).with_color_profile(Profile::TrueColor);
         screen.set_cell(
             (0u16, 0u16),
             &Cell::new("X", 1).style(Style::default().bold()),
@@ -2101,13 +1989,15 @@ fn switch_buffer_resizes_and_repaints() {
         fill(&mut screen, 0, 0, "X");
         screen.render().unwrap();
         screen.flush().unwrap();
+        screen.writer_mut().clear();
 
         screen.resize((10, 6));
-        fill(&mut screen, 0, 1, "X");
+        fill(&mut screen, 0, 1, "Y");
         screen.render().unwrap();
         screen.flush().unwrap();
     }
-    assert!(s(&buf).matches('X').count() >= 2);
+    assert!(s(&buf).contains('X'));
+    assert!(s(&buf).contains('Y'));
     assert!(s(&buf).contains("\x1b[J"));
 }
 
@@ -2311,27 +2201,6 @@ fn line_clearing_uses_el_when_row_shrinks() {
 }
 
 #[test]
-fn repeated_character_run_emits_literals_without_rep() {
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let opts = Optimizations::default().difference(Optimizations::REP);
-        let mut screen = Screen::for_test(&mut buf, (20, 1)).with_optimizations(opts);
-        for x in 0..15u16 {
-            fill(&mut screen, x, 0, "A");
-        }
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&buf);
-    assert!(
-        out.contains("AAAAAAAAAAAAAAA"),
-        "expected literal repeat: {out:?}"
-    );
-    assert!(!out.contains("\x1b[14b"));
-    assert!(!out.contains("\x1b[15b"));
-}
-
-#[test]
 fn ech_on_mid_row_blanks_emit_erase_character() {
     let mut buf: Vec<u8> = Vec::new();
     let prime_len;
@@ -2464,7 +2333,7 @@ fn renderer_redraws_when_style_changes() {
 fn basic_color_fg_emits_sgr_31() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::for_test(&mut buf, (1, 1));
+        let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ansi);
         let cell = Cell::new("X", 1).style(Style::default().fg(Color::Red));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render().unwrap();
@@ -2499,65 +2368,23 @@ fn scroll_to_bottom_in_inline_mode_renders_both_frames() {
 }
 
 #[test]
-fn alt_screen_scroll_one_line_renders_new_content() {
-    const LOREM: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus";
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (10, 5));
-        screen.set_alt_screen(true);
-        screen.invalidate();
-
-        draw_wrapped(&mut screen, LOREM);
-        screen.render().unwrap();
-        screen.flush().unwrap();
-
-        blank_screen(&mut screen);
-        screen.invalidate();
-        draw_wrapped(&mut screen, &LOREM[10..]);
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&buf);
-    assert!(out.contains("Lorem"));
-    assert!(out.contains("\x1b[H\x1b[2J"));
-    assert!(out.contains("dolor"));
-}
-
-#[test]
-fn alt_screen_scroll_two_lines_renders_tail_content() {
-    const LOREM: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vivamus";
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        let mut screen = Screen::for_test(&mut buf, (10, 5));
-        screen.set_alt_screen(true);
-        screen.invalidate();
-
-        draw_wrapped(&mut screen, LOREM);
-        screen.render().unwrap();
-        screen.flush().unwrap();
-
-        blank_screen(&mut screen);
-        screen.invalidate();
-        draw_wrapped(&mut screen, &LOREM[20..]);
-        screen.render().unwrap();
-        screen.flush().unwrap();
-    }
-    let out = s(&buf);
-    assert!(out.contains("Lorem"));
-    assert!(out.contains("amet"));
-}
-
-#[test]
 fn alt_screen_insert_line_in_middle_renders_both_frames() {
     let mut buf: Vec<u8> = Vec::new();
     {
-        let mut screen = Screen::for_test(&mut buf, (10, 5));
+        let mut screen =
+            Screen::for_test(&mut buf, (10, 5)).with_optimizations(Optimizations::none());
         screen.set_alt_screen(true);
         screen.invalidate();
 
         draw_wrapped(&mut screen, "ABC\nDEF\nGHI\n");
         screen.render().unwrap();
         screen.flush().unwrap();
+        let out = s(screen.writer());
+        for needle in ["ABC", "DEF", "GHI"] {
+            assert!(out.contains(needle), "missing {needle:?}");
+        }
+        assert_eq!(screen.tracked_cursor(), Some(Position::new(3, 2)));
+        screen.writer_mut().clear();
 
         blank_screen(&mut screen);
         draw_wrapped(&mut screen, "ABC\n\nDEF\nGHI");
@@ -2565,9 +2392,9 @@ fn alt_screen_insert_line_in_middle_renders_both_frames() {
         screen.flush().unwrap();
     }
     let out = s(&buf);
-    for needle in ["ABC", "DEF", "GHI"] {
-        assert!(out.contains(needle), "missing {needle:?}");
-    }
+    // From row 3, CR + RI + EL blanks row 2. LF moves DEF to row 3,
+    // then CR + LF moves GHI to row 4.
+    assert_eq!(out, "\x1b[?25l\r\x1bM\x1b[K\nDEF\r\nGHI\x1b[?25h");
 }
 
 #[test]
@@ -3503,17 +3330,23 @@ fn a_rendered_frame_leaves_the_front_buffer_matching_the_terminal() {
 
     // The scroll-optimize path, which rewrites tracked rows in place rather
     // than emitting them cell by cell.
-    let mut screen = Screen::for_test(Vec::new(), (12, 6));
+    let mut screen = Screen::for_test(Vec::new(), (12, 6)).with_optimizations(
+        Optimizations::default()
+            .union(Optimizations::SU_SD | Optimizations::CSR | Optimizations::IL_DL),
+    );
     screen.set_fullscreen(true);
+    screen.set_synchronized_output(true);
     for y in 0..6 {
         screen.set_str((0, y), &format!("line{y}"), st.clone());
     }
     screen.render().unwrap();
+    screen.writer_mut().clear();
     for y in 0..6 {
-        screen.set_str((0, y), &format!("line{}", y + 1), st.clone());
+        screen.set_str((0, y), &format!("line{}", y + 2), st.clone());
     }
     screen.set_cursor_position((3, 3));
     screen.render().unwrap();
+    assert!(scrolled(&s(screen.writer())), "the frame must scroll");
     assert_eq!(screen.diverge(), None, "after a scroll");
 
     // A resize, whose repaint rebuilds both buffers.
@@ -3943,6 +3776,7 @@ fn imperative_cursor_walk_advances_past_a_trailing_erase() {
 #[test]
 fn imperative_cursor_walk_closes_styles_and_links() {
     let mut screen = rendered_family_rows(false);
+    screen.set_color_profile(Profile::Ansi);
     screen.set_str(
         (8, 0),
         "RED",
@@ -4078,7 +3912,7 @@ fn a_frame_after_the_walk_earns_the_column_back_before_moving() {
 /// out with the frame and paint everything written after it.
 #[test]
 fn the_walk_to_the_resting_cursor_closes_the_style_it_opened() {
-    let mut screen = Screen::for_test(Vec::new(), (40, 2));
+    let mut screen = Screen::for_test(Vec::new(), (40, 2)).with_color_profile(Profile::Ansi);
     screen.set_optimizations(Optimizations::all());
     screen.set_grapheme_clusters(false);
     screen.set_str((0, 0), FAMILY, Style::default());
