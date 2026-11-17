@@ -9,7 +9,8 @@
 //! ## CSI conventions
 //!
 //! Counted operations use the terminal default parameter where possible: for
-//! example `n <= 1` emits `ESC [ X` for ECH and `ESC [ L` for IL. Erase
+//! example `n == 1` emits `ESC [ X` for ECH and `ESC [ L` for IL, and `n == 0`
+//! emits nothing at all. Erase
 //! operations use parameter `0` as the omitted default.
 //!
 //! ## Mode interaction
@@ -23,45 +24,49 @@ use std::io::{self, Write};
 
 /// Erase `n` character cells at the cursor with ECH.
 ///
-/// `n <= 1` emits `ESC [ X`; larger counts emit `ESC [ <n> X`. Erased cells are replaced with blank cells using the active rendition.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ X`; larger counts emit `ESC [ <n> X`. Erased cells are replaced with blank cells using the active rendition.
 pub fn write_ech<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[X")
-    } else {
-        write!(w, "\x1b[{n}X")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[X"),
+        _ => write!(w, "\x1b[{n}X"),
     }
 }
 
 /// Repeat the preceding printable character with REP.
 ///
-/// `n <= 1` emits `ESC [ b`; larger counts emit `ESC [ <n> b`. Use only when the terminal supports REP and the preceding character is repeatable.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ b`; larger counts emit `ESC [ <n> b`. Use only when the terminal supports REP and the preceding character is repeatable.
 pub fn write_rep<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[b")
-    } else {
-        write!(w, "\x1b[{n}b")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[b"),
+        _ => write!(w, "\x1b[{n}b"),
     }
 }
 
 /// Insert `n` blank character cells at the cursor with ICH.
 ///
-/// `n <= 1` emits `ESC [ @`; larger counts emit `ESC [ <n> @`. Existing cells shift right within the line.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ @`; larger counts emit `ESC [ <n> @`. Existing cells shift right within the line.
 pub fn write_ich<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[@")
-    } else {
-        write!(w, "\x1b[{n}@")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[@"),
+        _ => write!(w, "\x1b[{n}@"),
     }
 }
 
 /// Delete `n` character cells at the cursor with DCH.
 ///
-/// `n <= 1` emits `ESC [ P`; larger counts emit `ESC [ <n> P`. Cells to the right shift left and blanks are inserted at the right edge.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ P`; larger counts emit `ESC [ <n> P`. Cells to the right shift left and blanks are inserted at the right edge.
 pub fn write_dch<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[P")
-    } else {
-        write!(w, "\x1b[{n}P")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[P"),
+        _ => write!(w, "\x1b[{n}P"),
     }
 }
 
@@ -122,45 +127,49 @@ pub fn write_erase_screen<W: Write>(w: &mut W) -> io::Result<()> {
 
 /// Insert `n` blank lines with IL.
 ///
-/// `n <= 1` emits `ESC [ L`; larger counts emit `ESC [ <n> L`. Lines below shift downward within the scrolling region.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ L`; larger counts emit `ESC [ <n> L`. Lines below shift downward within the scrolling region.
 pub fn write_insert_lines<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[L")
-    } else {
-        write!(w, "\x1b[{n}L")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[L"),
+        _ => write!(w, "\x1b[{n}L"),
     }
 }
 
 /// Delete `n` lines with DL.
 ///
-/// `n <= 1` emits `ESC [ M`; larger counts emit `ESC [ <n> M`. Lines below shift upward within the scrolling region.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ M`; larger counts emit `ESC [ <n> M`. Lines below shift upward within the scrolling region.
 pub fn write_delete_lines<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[M")
-    } else {
-        write!(w, "\x1b[{n}M")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[M"),
+        _ => write!(w, "\x1b[{n}M"),
     }
 }
 
 /// Scroll up by `n` lines with SU.
 ///
-/// `n <= 1` emits `ESC [ S`; larger counts emit `ESC [ <n> S`.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ S`; larger counts emit `ESC [ <n> S`.
 pub fn write_scroll_up<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[S")
-    } else {
-        write!(w, "\x1b[{n}S")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[S"),
+        _ => write!(w, "\x1b[{n}S"),
     }
 }
 
 /// Scroll down by `n` lines with SD.
 ///
-/// `n <= 1` emits `ESC [ T`; larger counts emit `ESC [ <n> T`.
+/// `n == 0` emits nothing, since an absent parameter means one rather than
+/// none; `n == 1` emits `ESC [ T`; larger counts emit `ESC [ <n> T`.
 pub fn write_scroll_down<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
-    if n <= 1 {
-        w.write_all(b"\x1b[T")
-    } else {
-        write!(w, "\x1b[{n}T")
+    match n {
+        0 => Ok(()),
+        1 => w.write_all(b"\x1b[T"),
+        _ => write!(w, "\x1b[{n}T"),
     }
 }
 

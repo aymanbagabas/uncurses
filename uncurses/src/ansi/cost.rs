@@ -41,9 +41,13 @@ pub const fn digit_count(n: u16) -> usize {
 /// (the writer emits `ESC [ X` instead of `ESC [ 1 X`). Final byte
 /// contributes 1.
 ///
-/// Shape: `\x1b[X` for `n <= 1`, `\x1b[{n}X` otherwise.
+/// Shape: nothing for `n == 0`, `\x1b[X` for `n == 1`, `\x1b[{n}X` otherwise.
 const fn csi_optional_param_cost(n: u16) -> usize {
-    if n <= 1 {
+    // A numeric parameter of zero has no sequence, so it costs nothing.
+    // Pricing an absent sequence would let the planner reject a free move.
+    if n == 0 {
+        0
+    } else if n == 1 {
         CSI_LEN + 1
     } else {
         CSI_LEN + digit_count(n) + 1
