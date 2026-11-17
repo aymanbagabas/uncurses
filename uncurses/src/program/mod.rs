@@ -1294,17 +1294,20 @@ where
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn lock_source_for_mode_change<'a, I: Input>(
     source: &'a Mutex<EventSource<I>>,
     waker: &crate::event::Waker,
 ) -> io::Result<std::sync::MutexGuard<'a, EventSource<I>>> {
-    match source.try_lock() {
-        Err(std::sync::TryLockError::WouldBlock) => {
-            waker.wake()?;
-            Ok(source.lock().unwrap())
+    // A retrying reader can consume a wake and keep or reacquire the lock.
+    loop {
+        match source.try_lock() {
+            Err(std::sync::TryLockError::WouldBlock) => {
+                waker.wake()?;
+                std::thread::yield_now();
+            }
+            result => return Ok(result.unwrap()),
         }
-        result => Ok(result.unwrap()),
     }
 }
 

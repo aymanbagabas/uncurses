@@ -1596,6 +1596,74 @@ fn unread_events_preserve_wakes_in_poll_and_read() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn mode_changes_keep_interrupting_retrying_and_competing_readers() {
+    use std::sync::mpsc;
+
+    for use_poll in [false, true] {
+        for competing in [false, true] {
+            let (input, mut output) = std::io::pipe().unwrap();
+            let source = Arc::new(Mutex::new(EventSource::new(input).unwrap()));
+            let waker = source.lock().unwrap().waker();
+            let (started, waiting) = mpsc::sync_channel(0);
+            let (acquired, finished) = mpsc::sync_channel(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    let mut source = source.lock().unwrap();
+                    started.send(()).unwrap();
+                    let mut results = Vec::new();
+                    for _ in 0..2 {
+                        let result = if use_poll {
+                            source.poll(None).map(|ready| !ready)
+                        } else {
+                            source.read().map(|_| false).or_else(|error| {
+                                if error.kind() == io::ErrorKind::Interrupted {
+                                    Ok(true)
+                                } else {
+                                    Err(error)
+                                }
+                            })
+                        };
+                        results.push(result.unwrap());
+                    }
+                    results
+                });
+                waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+                let competitor = competing.then(|| {
+                    scope.spawn(|| {
+                        for _ in 0..2 {
+                            if let Err(error) = source.lock().unwrap().read() {
+                                assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+                            }
+                        }
+                    })
+                });
+                let transition = scope.spawn(|| {
+                    let _source = lock_source_for_mode_change(&source, &waker).unwrap();
+                    acquired.send(()).unwrap();
+                });
+                let result = finished.recv_timeout(Duration::from_secs(2));
+                // Release all readers even when the transition loses its only wake.
+                output.write_all(b"xxxx").unwrap();
+                let interrupted = reader.join().unwrap();
+                if let Some(competitor) = competitor {
+                    competitor.join().unwrap();
+                }
+                if result.is_err() {
+                    finished.recv_timeout(Duration::from_secs(2)).unwrap();
+                }
+                transition.join().unwrap();
+                assert!(
+                    result.is_ok(),
+                    "mode change blocked after a reader consumed its wake"
+                );
+                assert_eq!(interrupted, [true, true]);
+            });
+        }
+    }
+}
+
 /// Pixel-to-cell mapping has to scale across the whole grid. Dividing by a
 /// truncated cell width reports columns past the last one whenever the pixel
 /// width is not an exact multiple of the column count.

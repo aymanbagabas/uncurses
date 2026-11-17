@@ -418,13 +418,15 @@ fn child_mode_change_readers() {
             let reader = std::thread::spawn(move || {
                 let mut source = reader_source.lock().unwrap();
                 started.send(()).unwrap();
-                if use_poll {
-                    assert!(!source.poll(None).unwrap());
-                } else {
-                    assert_eq!(
-                        source.read().unwrap_err().kind(),
-                        io::ErrorKind::Interrupted
-                    );
+                for _ in 0..2 {
+                    if use_poll {
+                        assert!(!source.poll(None).unwrap());
+                    } else {
+                        assert_eq!(
+                            source.read().unwrap_err().kind(),
+                            io::ErrorKind::Interrupted
+                        );
+                    }
                 }
             });
             waiting.recv_timeout(TIMEOUT).unwrap();
