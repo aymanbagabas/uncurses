@@ -207,22 +207,6 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_simple_char() {
-        let ev = decode(&[&[97]]);
-        let key = ev.as_key().unwrap();
-        assert_eq!(key.code, KeyCode::Char('a'));
-        assert_eq!(key.modifiers, KeyModifiers::empty());
-    }
-
-    #[test]
-    fn test_decode_with_modifiers() {
-        let ev = decode(&[&[97], &[5]]);
-        let key = ev.as_key().unwrap();
-        assert_eq!(key.code, KeyCode::Char('a'));
-        assert!(key.modifiers.contains(KeyModifiers::CTRL));
-    }
-
-    #[test]
     fn test_decode_release() {
         let ev = decode(&[&[97], &[1, 3]]);
         assert!(matches!(ev, Event::KeyRelease(_)));
@@ -256,6 +240,7 @@ mod tests {
         let ev = decode(&[&[97]]);
         let key = ev.as_key().unwrap();
         assert_eq!(key.code, KeyCode::Char('a'));
+        assert_eq!(key.modifiers, KeyModifiers::empty());
         assert_eq!(key.text.as_deref(), Some("a"));
     }
 

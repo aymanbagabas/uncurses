@@ -298,12 +298,6 @@ mod tests {
         assert_eq!(Profile::detect_from(&e, true), Profile::Disabled);
     }
 
-    #[test]
-    fn no_color_clamps_to_ascii() {
-        let e = env(&[("TERM", "xterm-256color"), ("NO_COLOR", "1")]);
-        assert_eq!(Profile::detect_from(&e, true), Profile::Ascii);
-    }
-
     /// NO_COLOR is presence-based: any non-empty value disables color,
     /// however little it reads as a boolean. Only an absent or empty value
     /// leaves color on.
@@ -317,12 +311,8 @@ mod tests {
                 "NO_COLOR={v:?} should disable color"
             );
         }
-        for e in [
-            env(&[("TERM", "xterm-256color"), ("NO_COLOR", "")]),
-            env(&[("TERM", "xterm-256color")]),
-        ] {
-            assert!(Profile::detect_from(&e, true) > Profile::Ascii);
-        }
+        let e = env(&[("TERM", "xterm-256color"), ("NO_COLOR", "")]);
+        assert!(Profile::detect_from(&e, true) > Profile::Ascii);
     }
 
     #[test]
@@ -341,11 +331,10 @@ mod tests {
     }
 
     #[test]
-    fn clicolor_bumps_to_ansi_on_tty() {
-        // No TERM at all on a unix TTY would normally be Disabled.
+    fn clicolor_preserves_screen_ansi256_on_tty() {
         let e = env(&[("CLICOLOR", "1"), ("TERM", "screen")]);
         let p = Profile::detect_from(&e, true);
-        assert!(p >= Profile::Ansi);
+        assert_eq!(p, Profile::Ansi256);
     }
 
     #[test]

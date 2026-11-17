@@ -176,22 +176,26 @@ mod tests {
 
     #[test]
     fn sync_only_walks_touched_spans() {
-        // Writing a single cell must not propagate other rows or
-        // columns to back_buf — verified by leaving back_buf in a
-        // distinct state outside the span and confirming it survives.
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 3);
-        // Pre-seed back_buf row 2 with content via a full sync.
+        fill_row(&mut front, 0, "preset");
         fill_row(&mut front, 2, "preset");
         r.sync_front(&mut front);
         r.back_buf.clear_touched();
 
-        // Now write one cell on row 0; row 2 of front is blank-but-
-        // untouched, so sync must not visit row 2.
+        // A fresh buffer leaves blank cells untouched. Only its explicit
+        // write may replace the content from the previous buffer.
+        let mut front = RenderBuffer::new(10, 3);
         front.set_cell((3, 0), &cell("X"));
         r.sync_front(&mut front);
         assert!(r.back_buf.touched(0).is_some());
         assert!(r.back_buf.touched(2).is_none());
+        assert_eq!(r.back_buf.cell((3, 0).into()).unwrap().content(), "X");
+        assert_eq!(
+            r.back_buf.cell((0, 0).into()).unwrap().content(),
+            "p",
+            "columns outside the touched span must keep their content"
+        );
         assert_eq!(
             r.back_buf.cell((0, 2).into()).unwrap().content(),
             "p",
@@ -202,8 +206,12 @@ mod tests {
     #[test]
     fn sync_reports_force_clear_even_with_no_changes() {
         let mut r = Renderer::new();
-        r.force_clear = true;
         let mut front = RenderBuffer::new(10, 3);
+        assert!(r.sync_front(&mut front));
+        r.render_back(&mut Vec::new()).unwrap();
+        assert!(!r.sync_front(&mut front));
+
+        r.request_clear();
         assert!(r.sync_front(&mut front));
     }
 

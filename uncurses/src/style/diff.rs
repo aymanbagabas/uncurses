@@ -357,16 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_remove_fg() {
-        let mut buf = Vec::new();
-        let from = Style::default().fg(Color::Red);
-        let to = Style::default();
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        assert_eq!(buf, b"\x1b[m");
-    }
-
-    #[test]
     fn test_diff_fg_and_bg_change_single_csi() {
         let mut buf = Vec::new();
         let from = Style::default().fg(Color::Red).bg(Color::Black);

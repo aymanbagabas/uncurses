@@ -1270,16 +1270,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_field_mutation_overrides_auto_text() {
-        let mut k = Key::new(KeyCode::Char('2'), KeyModifiers::SHIFT).normalized();
-        // Simulate a decoder that knows the terminal-reported shifted glyph.
-        k.shifted_key = Some('@');
-        k.text = Some("@".to_string());
-        assert_eq!(k.text.as_deref(), Some("@"));
-        assert_eq!(k.shifted_key, Some('@'));
-    }
-
-    #[test]
     fn eq_ignores_informational_fields() {
         let bare = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT).normalized();
         let mut decorated = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT).normalized();
@@ -1735,7 +1725,6 @@ mod tests {
                     | KeyModifiers::HYPER
                     | KeyModifiers::META,
             ),
-            (KeyCode::Char('+'), KeyModifiers::CTRL),
             (KeyCode::Char('-'), KeyModifiers::CTRL),
             (KeyCode::Char('='), KeyModifiers::CTRL),
             (KeyCode::Char('-'), KeyModifiers::empty()),

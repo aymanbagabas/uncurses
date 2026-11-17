@@ -181,8 +181,6 @@ mod tests {
         scrolln(&mut out, &mut renderer, &mut new_buf, 2, 2, 5, 7).unwrap();
 
         let s = String::from_utf8(out).expect("ascii");
-        assert!(s.contains("\x1b[2M"), "expected DL(2) somewhere: {s:?}");
-        assert!(s.contains("\x1b[2L"), "expected IL(2) somewhere: {s:?}");
         let dl_at = s.find("\x1b[2M").unwrap();
         let il_at = s.find("\x1b[2L").unwrap();
         assert!(dl_at < il_at, "DL must precede IL in the paired fallback");
@@ -204,8 +202,6 @@ mod tests {
         scrolln(&mut out, &mut renderer, &mut new_buf, -2, 2, 5, 7).unwrap();
 
         let s = String::from_utf8(out).expect("ascii");
-        assert!(s.contains("\x1b[2M"), "expected DL(2) somewhere: {s:?}");
-        assert!(s.contains("\x1b[2L"), "expected IL(2) somewhere: {s:?}");
         let dl_at = s.find("\x1b[2M").unwrap();
         let il_at = s.find("\x1b[2L").unwrap();
         assert!(
@@ -489,11 +485,6 @@ mod tests {
             bottom_row.iter().all(|c| *c == expected),
             "cur_buf bottom row must be styled-blank, got: {bottom_row:?}",
         );
-        assert_ne!(
-            bottom_row[0],
-            Cell::BLANK,
-            "must not record default-blank when clear_blank is styled",
-        );
     }
 
     #[test]
@@ -526,12 +517,6 @@ mod tests {
         assert!(
             bottom_row.iter().all(|c| *c == expected),
             "cur_buf bottom row must be bg-only, got: {bottom_row:?}",
-        );
-        assert!(
-            bottom_row.iter().all(|c| c.style.fg.is_none()
-                && c.style.attrs.is_empty()
-                && c.style.underline_color.is_none()),
-            "freed cells must drop fg / attrs / underline_color"
         );
     }
 

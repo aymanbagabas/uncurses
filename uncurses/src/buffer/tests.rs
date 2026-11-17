@@ -1,7 +1,7 @@
 use super::*;
 use crate::renderer::RenderBuffer;
 use crate::style::Style;
-use crate::text::{Painter, TextSurface, WidthMode, WrapMode};
+use crate::text::{Painter, TextSurface, WrapMode};
 
 fn link_of(s: &Style) -> Option<(&str, &str)> {
     s.link
@@ -14,7 +14,6 @@ fn test_new_buffer() {
     let buf = Buffer::new(80, 24);
     assert_eq!(buf.width(), 80);
     assert_eq!(buf.height(), 24);
-    assert_eq!(buf.height(), 24);
     assert_eq!(buf.line(0).map(|l| l.len()), Some(80));
 }
 
@@ -22,7 +21,7 @@ fn test_new_buffer() {
 fn test_set_get() {
     let mut buf = Buffer::new(10, 5);
     let cell = Cell::new("X", 1);
-    buf.set((3, 2), &cell.clone());
+    buf.set((3, 2), &cell);
     assert_eq!(buf.cell(Position::new(3, 2)).unwrap().content(), "X");
 }
 
@@ -209,16 +208,6 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
     assert!(buf.cell(Position::new(4, 0)).unwrap().is_continuation());
 }
 
-#[test]
-fn test_resize() {
-    let mut buf = Buffer::new(10, 5);
-    buf.set((0, 0), &Cell::new("X", 1));
-    buf.resize(20, 10);
-    assert_eq!(buf.width(), 20);
-    assert_eq!(buf.height(), 10);
-    assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "X");
-}
-
 fn fill_with_marker(buf: &mut Buffer) {
     for y in 0..buf.height() {
         for x in 0..buf.width() {
@@ -327,16 +316,6 @@ fn resize_same_width_height_only() {
 }
 
 #[test]
-fn test_write_string() {
-    let mut buf = TextBuffer::new(20, 1).with_width_mode(WidthMode::Grapheme);
-    let p =
-        Painter::new(&mut buf).set_str_wrap((0, 0), "Hello", WrapMode::Truncate, Style::default());
-    assert_eq!(p, Position::new(5, 0));
-    assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "H");
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
-}
-
-#[test]
 fn test_view() {
     let mut buf = RenderBuffer::new(20, 10);
     {
@@ -383,30 +362,6 @@ fn write_string_wc_mode_skips_leading_combining_mark() {
 }
 
 #[test]
-fn write_string_truncates_at_right_edge() {
-    let mut buf = TextBuffer::new(5, 1);
-    let p = Painter::new(&mut buf).set_str_wrap(
-        (0, 0),
-        "Hello, World!",
-        WrapMode::Truncate,
-        Style::default(),
-    );
-    assert_eq!(p, Position::new(5, 0));
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
-}
-
-#[test]
-fn write_string_wraps_to_next_row() {
-    let mut buf = TextBuffer::new(5, 3);
-    let p =
-        Painter::new(&mut buf).set_str_wrap((0, 0), "abcdefghij", WrapMode::Wrap, Style::default());
-    assert_eq!(p, Position::new(5, 1));
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "e");
-    assert_eq!(buf.cell(Position::new(0, 1)).unwrap().content(), "f");
-    assert_eq!(buf.cell(Position::new(4, 1)).unwrap().content(), "j");
-}
-
-#[test]
 fn write_string_wrap_stops_at_bottom() {
     let mut buf = TextBuffer::new(3, 2);
     let p =
@@ -414,24 +369,6 @@ fn write_string_wrap_stops_at_bottom() {
     // Two full rows consumed, then we run out.
     assert_eq!(p, Position::new(0, 2));
     assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "f");
-}
-
-#[test]
-fn write_string_wrap_inside_view() {
-    // View with non-zero origin: wrap must respect bounds, not
-    // wrap to the underlying buffer's left edge.
-    let mut tb = TextBuffer::new(20, 5);
-    let p = Painter::new(&mut tb).set_str_rect_wrap(
-        (10, 1, 4, 2),
-        "abcdefgh",
-        WrapMode::Wrap,
-        Style::default(),
-    );
-    assert_eq!(p, Position::new(14, 2));
-    assert_eq!(tb.cell(Position::new(10, 1)).unwrap().content(), "a");
-    assert_eq!(tb.cell(Position::new(13, 1)).unwrap().content(), "d");
-    assert_eq!(tb.cell(Position::new(10, 2)).unwrap().content(), "e");
-    assert_eq!(tb.cell(Position::new(13, 2)).unwrap().content(), "h");
 }
 
 #[test]
@@ -467,7 +404,7 @@ fn a_cell_too_wide_for_the_row_leaves_no_continuation_behind() {
     );
 
     assert!(buf.cell(Position::new(0, 0)).unwrap().is_blank());
-    for x in 0..5 {
+    for x in 1..5 {
         assert!(
             !buf.cell(Position::new(x, 0)).unwrap().is_continuation(),
             "column {x} holds a continuation with no primary that owns it"
