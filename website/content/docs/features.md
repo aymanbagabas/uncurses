@@ -15,6 +15,7 @@ Use [capability queries]({{< relref "guides/querying-the-terminal.md" >}}) when 
 | Feature | Documentation |
 | --- | --- |
 | Diff rendering compares frames and updates the terminal. | [Screen]({{< relref "concepts/screen.md" >}}) |
+| ANSI placements combine opaque output and text in one frame. | [Placements]({{< relref "guides/placements.md" >}}) |
 | Draw inline or on the alt screen, with pause and resume. | [Inline rendering]({{< relref "guides/inline-rendering.md" >}}), [pause and resume]({{< relref "guides/pause-and-resume.md" >}}) |
 | Truecolor adapts to 256 colors, ANSI colors, or monochrome. | [Color profiles]({{< relref "concepts/color.md#profiles-and-downsampling" >}}) |
 | Styled underlines include curly, dotted, dashed, and double shapes. | [Building a style]({{< relref "guides/styling-text.md#building-a-style" >}}) |
