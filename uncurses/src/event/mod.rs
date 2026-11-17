@@ -28,13 +28,15 @@
 //! chord, so matching a shortcut is plain equality.
 //!
 //! ```no_run
-//! use uncurses::event::{Event, EventSource, Key, SourceFlags};
+//! use uncurses::event::{Event, EventSource, Key};
 //! use uncurses::terminal::Terminal;
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut term = Terminal::stdio();
 //! term.make_raw()?;
-//! let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
+//! let mut events = EventSource::new(term.input())?;
+//! #[cfg(windows)]
+//! events.set_vt_input(true);
 //!
 //! let quit: Key = "ctrl+c".parse().unwrap();
 //! loop {
@@ -86,9 +88,7 @@ mod stream;
 pub use decode::DecoderFlags;
 pub use key::{Key, KeyCode, KeyModifiers, ParseKeyError};
 pub use mouse::{Mouse, MouseButton, mouse_pixel_to_cell};
-pub use source::{
-    DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
-};
+pub use source::{DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, Waker};
 #[cfg(feature = "async")]
 pub use stream::EventStream;
 

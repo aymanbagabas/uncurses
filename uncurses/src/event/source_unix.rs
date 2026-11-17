@@ -42,7 +42,7 @@ use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
-    READY_INPUT, READY_SLOTS, READY_WAKE, READY_WINCH, SourceFlags, Waker,
+    READY_INPUT, READY_SLOTS, READY_WAKE, READY_WINCH, Waker,
 };
 use crate::event::Event;
 use crate::terminal::get_window_size;
@@ -118,11 +118,9 @@ where
     /// `SIGWINCH` that does not actually change the size produces no
     /// [`Event::Resize`].
     ///
-    /// `flags` selects the input source behavior.
-    ///
     /// Returns any OS error from pipe creation, fd configuration, SIGWINCH
     /// subscription, or poller construction. It does not read from `input`.
-    pub fn new_with_flags(input: I, flags: SourceFlags) -> io::Result<Self> {
+    pub fn new(input: I) -> io::Result<Self> {
         let winch_sub = winch::subscribe()?;
         let waker = Waker::new()?;
 
@@ -146,7 +144,6 @@ where
 
         Ok(Self {
             input,
-            flags,
             parser: Decoder::new(DecoderFlags::empty()),
             pending: Pending::with_capacity(DEFAULT_BUFFER_CAPACITY),
             esc_timeout: DEFAULT_ESC_TIMEOUT,
@@ -328,19 +325,6 @@ mod tests {
         EventSource::new(input)
             .unwrap()
             .with_esc_timeout(Duration::from_millis(50))
-    }
-
-    #[test]
-    fn source_flags_are_separate_from_decoder_flags() {
-        let (rx, _tx) = make_pipe();
-        assert_eq!(EventSource::new(rx).unwrap().flags(), SourceFlags::empty());
-        let (rx, _tx) = make_pipe();
-        let mut src = EventSource::new_with_flags(rx, SourceFlags::VT_INPUT).unwrap();
-        assert_eq!(src.flags(), SourceFlags::VT_INPUT);
-        src.set_decoder_flags(DecoderFlags::LF_IS_ENTER);
-        src.set_flags(SourceFlags::empty());
-        assert_eq!(src.flags(), SourceFlags::empty());
-        assert_eq!(src.decoder_flags(), DecoderFlags::LF_IS_ENTER);
     }
 
     #[test]

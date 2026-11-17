@@ -81,8 +81,6 @@ use bitflags::bitflags;
 use crate::ansi::{mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
-#[cfg(windows)]
-use crate::event::SourceFlags;
 use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
@@ -1228,6 +1226,16 @@ where
         // back, and a failed write to it is not a reason to keep it raw.
         let teardown = self.teardown();
         let restore = self.terminal.restore();
+        #[cfg(windows)]
+        let restore = restore.and_then(|()| {
+            use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
+            let state = self.terminal.get_state()?;
+            self.source
+                .lock()
+                .unwrap()
+                .set_vt_input(state.input & ENABLE_VIRTUAL_TERMINAL_INPUT != 0);
+            Ok(())
+        });
         teardown.and(restore)
     }
 
@@ -1252,11 +1260,7 @@ where
     fn enter_raw_mode(&mut self) -> io::Result<()> {
         self.terminal.make_raw()?;
         #[cfg(windows)]
-        {
-            let mut source = self.source.lock().unwrap();
-            let flags = source.flags() | SourceFlags::VT_INPUT;
-            source.set_flags(flags);
-        }
+        self.source.lock().unwrap().set_vt_input(true);
         Ok(())
     }
 

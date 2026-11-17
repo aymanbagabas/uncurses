@@ -12,7 +12,7 @@ use std::ptr::{null, null_mut};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use uncurses::event::{Event, EventSource, KeyCode, KeyModifiers, SourceFlags};
+use uncurses::event::{Event, EventSource, KeyCode, KeyModifiers};
 use uncurses::program::{Program, ProgramOptions};
 use uncurses::terminal::{Terminal, TtyInput, TtyOutput};
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
@@ -293,6 +293,81 @@ fn non_bmp_input_cp437() {
 }
 
 #[test]
+fn pause_restores_source_serialization() {
+    run_conpty("child_pause_serialization", &[]);
+}
+
+#[test]
+#[ignore = "fixture launched inside a ConPTY by pause_restores_source_serialization"]
+fn child_pause_serialization() {
+    let terminal = Terminal::open().unwrap();
+    let input = terminal.input();
+    let original_mode = input_mode(input);
+    for vt_input in [false, true] {
+        let mode = if vt_input {
+            original_mode | ENABLE_VIRTUAL_TERMINAL_INPUT
+        } else {
+            original_mode & !ENABLE_VIRTUAL_TERMINAL_INPUT
+        };
+        assert_ne!(unsafe { SetConsoleMode(input.as_raw_handle(), mode) }, 0);
+        let mut program = Program::open().unwrap();
+        program.init().unwrap();
+        check_up_key(&program, input, true);
+        program.pause().unwrap();
+        assert_eq!(input_mode(input), mode);
+        check_up_key(&program, input, vt_input);
+        program.resume().unwrap();
+        check_up_key(&program, input, true);
+        program.finish().unwrap();
+    }
+    assert_ne!(
+        unsafe { SetConsoleMode(input.as_raw_handle(), original_mode) },
+        0
+    );
+    let mut output = terminal.output();
+    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
+    output.flush().unwrap();
+}
+
+fn check_up_key(program: &Program<TtyInput, TtyOutput>, input: TtyInput, vt_input: bool) {
+    let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
+    record.EventType = KEY_EVENT as u16;
+    record.Event.KeyEvent.bKeyDown = 1;
+    record.Event.KeyEvent.wRepeatCount = 1;
+    if vt_input {
+        let records = (*b"\x1b[A").map(|byte| {
+            let mut record = record;
+            record.Event.KeyEvent.wVirtualKeyCode = u16::from(byte);
+            record.Event.KeyEvent.uChar.UnicodeChar = u16::from(byte);
+            record
+        });
+        write_records(input, &records);
+    } else {
+        record.Event.KeyEvent.wVirtualKeyCode = 0x26;
+        record.Event.KeyEvent.wVirtualScanCode = 0x48;
+        write_records(input, &[record]);
+    }
+    let source = program.event_source();
+    let mut source = source.lock().unwrap();
+    assert_eq!(source.vt_input(), vt_input);
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        assert!(
+            source
+                .poll(Some(deadline.saturating_duration_since(Instant::now())))
+                .unwrap(),
+            "missing Up key with VT input {vt_input}"
+        );
+        match source.read().unwrap() {
+            Event::Resize(_) => continue,
+            Event::KeyPress(key) => assert_eq!(key.code, KeyCode::Up),
+            event => panic!("expected Up key, got {event:?}"),
+        }
+        break;
+    }
+}
+
+#[test]
 fn non_bmp_input_cp65001() {
     run_conpty("child_cp65001", INPUT_MARKERS);
 }
@@ -337,7 +412,8 @@ fn run_wake_child(check: impl FnOnce(TtyInput, &mut EventSource<TtyInput>)) {
         "FlushConsoleInputBuffer: {}",
         io::Error::last_os_error()
     );
-    let mut source = EventSource::new_with_flags(input, SourceFlags::VT_INPUT).unwrap();
+    let mut source = EventSource::new(input).unwrap();
+    source.set_vt_input(true);
     check(input, &mut source);
     assert!(source.try_read().is_none());
     let timeout = Duration::from_millis(20);

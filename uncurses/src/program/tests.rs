@@ -1873,14 +1873,7 @@ fn failed_raw_mode_entry_does_not_enable_vt_input() {
             program.init()
         };
         assert!(result.is_err());
-        assert!(
-            !program
-                .source
-                .lock()
-                .unwrap()
-                .flags()
-                .contains(SourceFlags::VT_INPUT)
-        );
+        assert!(!program.source.lock().unwrap().vt_input());
     }
 }
 
