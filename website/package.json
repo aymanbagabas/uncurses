@@ -1,0 +1,18 @@
+{
+  "name": "uncurses-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "hugo --gc --minify",
+    "dev": "hugo server --bind 127.0.0.1 --disableFastRender",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "mermaid": "12.3.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.58.2"
+  }
+}

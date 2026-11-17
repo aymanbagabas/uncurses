@@ -39,16 +39,23 @@
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut program = Program::stdio()?;
-//! program.init()?; // raw mode
+//! let result = (|| {
+//!     program.init()?;
 //!
-//! let style = Style::default().bold().fg(Color::Green);
-//! let screen = program.screen_mut();
-//! screen.set_str((0, 0), "Hello, terminal!", style);
-//! screen.render()?; // stage the diff and flush it
+//!     let style = Style::default().bold().fg(Color::Green);
+//!     let screen = program.screen_mut();
+//!     screen.set_str((0, 0), "Hello, terminal!", style);
+//!     screen.render()?;
+//!     Ok(())
+//! })();
 //!
-//! program.finish() // tear down modes and restore the terminal
+//! let finish = program.finish();
+//! result.and(finish)
 //! # }
 //! ```
+//!
+//! The final call attempts terminal restoration after success or an error,
+//! including an initialization error.
 //!
 //! # Quick start with `TextBuffer`
 //!
@@ -76,7 +83,8 @@
 //!
 //! | Module | What lives there |
 //! | --- | --- |
-//! | [`screen`] | The self-managing [`Screen`](screen::Screen) facade and its diffing renderer. |
+//! | [`program`] | The interactive [`Program`](program::Program): session lifecycle, terminal modes, input observation, and access to its screen. |
+//! | [`screen`] | The standalone [`Screen`](screen::Screen) diffing renderer, cell grid, and output writer. |
 //! | [`buffer`] | Cell-grid storage ([`Buffer`](buffer::Buffer), [`TextBuffer`](buffer::TextBuffer), [`Window`](buffer::Window)) and the [`Surface`](buffer::Surface) / [`SurfaceMut`](buffer::SurfaceMut) traits every drawable shares. |
 //! | [`text`] | Text shaping, width measurement, the [`TextSurface`](text::TextSurface) painting trait that adds `set_str` to any surface, and the [`Encode`](text::Encode) trait that serializes a surface to escapes. |
 //! | [`style`] | [`Style`](style::Style), colors, attributes, and SGR plus hyperlink (OSC 8) encoding. |

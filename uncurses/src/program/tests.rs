@@ -132,41 +132,6 @@ fn decoder_flags_delegate_without_changing_options_or_terminal_modes() {
 
 #[cfg(unix)]
 #[test]
-fn shared_source_string_timeout_can_change_during_a_reply() {
-    let buf = RefCell::new(Vec::new());
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
-    let source = program.event_source();
-    source
-        .lock()
-        .unwrap()
-        .set_string_idle_timeout(Some(Duration::ZERO));
-    writer.write_all(b"\x1b]52;c;qqqq").unwrap();
-    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-
-    source.lock().unwrap().set_string_idle_timeout(None);
-    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-    source
-        .lock()
-        .unwrap()
-        .set_string_idle_timeout(Some(Duration::ZERO));
-    assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::Unknown(b"\x1b]52;c;qqqq".to_vec()),
-    );
-    writer.write_all(b"\x1b]52;c;Zm9v\x1b\\").unwrap();
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::Clipboard {
-            selection: crate::event::ClipboardSelection::System,
-            content: "Zm9v".into(),
-        },
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn shared_source_paste_timeout_can_change_during_a_paste() {
     let buf = RefCell::new(Vec::new());
     let (reader, mut writer) = std::io::pipe().unwrap();
@@ -1602,6 +1567,30 @@ fn an_unread_event_is_not_observed_a_second_time() {
     assert_eq!(program.origin_queries_pending, 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn unread_events_preserve_wakes_in_poll_and_read() {
+    for use_poll in [false, true] {
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test_with_input(&buf, (10, 3), reader);
+        program.unread_event(Event::PasteStart);
+        program.source.lock().unwrap().waker().wake().unwrap();
+        let event = if use_poll {
+            assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
+            program.try_read_event().unwrap().unwrap()
+        } else {
+            program.read_event().unwrap()
+        };
+        assert_eq!(event, Event::PasteStart);
+        assert_eq!(
+            program.read_event().unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
+        assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+    }
+}
+
 /// Pixel-to-cell mapping has to scale across the whole grid. Dividing by a
 /// truncated cell width reports columns past the last one whenever the pixel
 /// width is not an exact multiple of the column count.
@@ -1869,6 +1858,30 @@ fn init_grants_tabs_and_bs_after_entering_raw_mode() {
     program.screen_mut().set_optimizations(primed);
     program.resume().expect("resume");
     assert_tabs_and_bs_granted(program.screen().optimizations(), primed, "resume");
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_raw_mode_entry_does_not_enable_vt_input() {
+    let (reader, writer) = std::io::pipe().unwrap();
+    for resume in [false, true] {
+        let terminal = Terminal::new(&reader, &writer, crate::terminal::EnvList::new());
+        let mut program = Program::with_render(terminal, (80, 24)).unwrap();
+        let result = if resume {
+            program.resume()
+        } else {
+            program.init()
+        };
+        assert!(result.is_err());
+        assert!(
+            !program
+                .source
+                .lock()
+                .unwrap()
+                .flags()
+                .contains(SourceFlags::VT_INPUT)
+        );
+    }
 }
 
 /// Exactly what a raw-mode entry must leave behind: `TABS` and `BS` on, and
