@@ -48,8 +48,8 @@ use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
-    READY_INPUT, READY_SLOTS, READY_WAKE, Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_CLIPBOARD_IDLE_TIMEOUT, DEFAULT_ESC_TIMEOUT,
+    DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, READY_INPUT, READY_SLOTS, READY_WAKE, Waker,
 };
 
 const READ_BATCH: usize = 64;
@@ -111,9 +111,10 @@ where
     /// Resize events arrive as `WINDOW_BUFFER_SIZE_EVENT` records on the input
     /// handle, so no separate signal or resize pipe is needed.
     ///
-    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and [`DEFAULT_PASTE_IDLE_TIMEOUT`].
-    /// Override them with [`EventSource::with_esc_timeout`] and
-    /// [`EventSource::with_paste_idle_timeout`].
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`], [`DEFAULT_PASTE_IDLE_TIMEOUT`],
+    /// and [`DEFAULT_CLIPBOARD_IDLE_TIMEOUT`]. Override them with
+    /// [`EventSource::with_esc_timeout`], [`EventSource::with_paste_idle_timeout`],
+    /// and [`EventSource::with_clipboard_idle_timeout`].
     ///
     /// Native console key serialization is the default. Call
     /// [`Self::set_vt_input`] with `true` when the console uses
@@ -150,6 +151,8 @@ where
             esc_deadline: None,
             paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
+            clipboard_idle_timeout: Some(DEFAULT_CLIPBOARD_IDLE_TIMEOUT),
+            clipboard_deadline: None,
             #[cfg(feature = "async")]
             deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
@@ -812,7 +815,10 @@ mod tests {
         let mut decoder = Decoder::new(DecoderFlags::empty());
         let events = decoder.parse(&bytes);
         assert!(matches!(events.first(), Some(Event::PasteStart)));
-        assert!(matches!(events.last(), Some(Event::PasteEnd)));
+        assert!(matches!(
+            events.last(),
+            Some(Event::PasteEnd { complete: true })
+        ));
 
         let mut assembled = Vec::new();
         for ev in &events {
@@ -863,7 +869,10 @@ mod tests {
         let mut events = decoder.parse(&prefix);
         events.extend(decoder.parse(&suffix));
         assert!(matches!(events.first(), Some(Event::PasteStart)));
-        assert!(matches!(events.last(), Some(Event::PasteEnd)));
+        assert!(matches!(
+            events.last(),
+            Some(Event::PasteEnd { complete: true })
+        ));
 
         let mut assembled = Vec::new();
         for ev in &events {

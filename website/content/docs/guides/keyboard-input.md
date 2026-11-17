@@ -141,15 +141,19 @@ New bytes reset the deadline while a key sequence remains incomplete.
 The source checks for ready continuation bytes before it expires that sequence.
 
 Once bytes follow an OSC, DCS, APC, SOS, or PM introducer, the decoder treats
-them as a string body. It waits for the terminator instead of applying the
-Escape timeout. The existing input buffer limit still applies.
+them as a string body. The Escape timeout then stops applying.
+OSC 52 replies stream through clipboard events with a separate idle timeout.
+See [clipboard replies]({{< relref "querying-the-terminal.md#read-a-clipboard-reply" >}})
+for recovery controls.
+Other string bodies wait for their terminator and must fit the input buffer.
 
 The timeout passed to `EventSource::poll` limits the caller's wait.
-An incomplete string remains buffered for subsequent reads.
+An incomplete buffered string remains available for subsequent reads.
 
 A new Escape sequence also interrupts an unfinished CSI or control string.
-If the sequence already has a body, the source reports the interrupted bytes
+For buffered sequences with a body, the source reports the interrupted bytes
 as `Event::Unknown`, then decodes the new sequence.
+Clipboard streams instead emit `ClipboardEnd { complete: false }`.
 A trailing Escape in a string waits for another byte, so a split
 `ESC \` still terminates the string normally, including an empty string.
 

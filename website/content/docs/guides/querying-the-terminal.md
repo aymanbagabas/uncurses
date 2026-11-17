@@ -156,6 +156,64 @@ The reply arrives as `Event::CursorPosition { position, page }`.
 `request_cursor_position()` requests standard CPR.
 Run `cargo run --example query -- --extended` to try the extended request.
 
+## Read a clipboard reply
+
+Call `program.request_system_clipboard()?` or
+`program.request_primary_clipboard()?`.
+The terminal decides whether its access policy permits a reply.
+Use a caller deadline if your application must stop the wait.
+
+The reply arrives through `ClipboardStart`, zero or more `ClipboardChunk`
+events, and `ClipboardEnd`.
+Keep the selection from the start event when your application needs it.
+Process each chunk as it arrives to keep memory use independent of the total
+payload size.
+Chunks contain raw wire bytes, normally base64.
+Chunk boundaries can split a base64 group, so retain partial groups if you
+decode the payload incrementally.
+
+This current-source fragment counts bytes without retaining clipboard contents:
+
+```rust
+use uncurses::event::Event;
+
+fn observe_clipboard(event: Event, bytes: &mut usize) {
+    match event {
+        Event::ClipboardStart { .. } => *bytes = 0,
+        Event::ClipboardChunk(chunk) => *bytes += chunk.len(),
+        Event::ClipboardEnd { complete } => {
+            println!("Clipboard: {bytes} wire bytes; complete: {complete}");
+        }
+        _ => {}
+    }
+}
+```
+
+Treat `complete: false` as an interrupted transfer.
+The source ends an active reply after two seconds without new input.
+It delivers retained bytes before the incomplete end event.
+Use `EventSource::with_clipboard_idle_timeout` to choose another idle timeout.
+Use `set_clipboard_idle_timeout` on an existing source.
+Pass `None` to preserve framing through long pauses.
+The setter restarts the idle wait during a reply and refreshes active async waits.
+
+Call `EventSource::end_clipboard()` for explicit recovery.
+It delivers retained bytes before an incomplete end and wakes active async readers.
+Later bytes count as ordinary input.
+Idle recovery is a heuristic: keys before expiry can become payload, and delayed
+payload after expiry can become keys.
+
+Caller timeouts and wakes preserve a reply, subject to its independent idle timeout.
+A fatal input or readiness error can end your read loop.
+Discard any unfinished transfer when your application stops that loop.
+See the [`ClipboardEnd` contract](/api/uncurses/event/enum.Event.html#variant.ClipboardEnd)
+for framing and input-error details.
+
+Run `cargo run --example clipboard` for a complete example with a caller
+deadline and terminal cleanup.
+It reports the byte and chunk counts, rather than clipboard contents.
+Add `-- --no-idle-timeout` to disable idle recovery in that example.
+
 ## Extra queries in the capability batch
 
 If you want your own query to share the Primary DA sentinel, pass its bytes as

@@ -477,7 +477,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
         return Some(Event::PasteStart);
     }
     if code == 201 && count == 1 {
-        return Some(Event::PasteEnd);
+        return Some(Event::PasteEnd { complete: true });
     }
     let key_code = u16::try_from(code)
         .ok()

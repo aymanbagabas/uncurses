@@ -41,8 +41,9 @@ use super::pending::Pending;
 use super::poll::PollFd;
 use super::sigwinch as winch;
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
-    READY_INPUT, READY_SLOTS, READY_WAKE, READY_WINCH, Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_CLIPBOARD_IDLE_TIMEOUT, DEFAULT_ESC_TIMEOUT,
+    DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, READY_INPUT, READY_SLOTS, READY_WAKE,
+    READY_WINCH, Waker,
 };
 use crate::event::Event;
 use crate::terminal::get_window_size;
@@ -110,9 +111,10 @@ where
     /// subscribes to the shared SIGWINCH fan-out, and registers the input, wake,
     /// and resize fds with the selected poll backend.
     ///
-    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and [`DEFAULT_PASTE_IDLE_TIMEOUT`].
-    /// Override them with [`EventSource::with_esc_timeout`] and
-    /// [`EventSource::with_paste_idle_timeout`].
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`], [`DEFAULT_PASTE_IDLE_TIMEOUT`],
+    /// and [`DEFAULT_CLIPBOARD_IDLE_TIMEOUT`]. Override them with
+    /// [`EventSource::with_esc_timeout`], [`EventSource::with_paste_idle_timeout`],
+    /// and [`EventSource::with_clipboard_idle_timeout`].
     ///
     /// Resize deduplication starts from the size `input` reports here, so a
     /// `SIGWINCH` that does not actually change the size produces no
@@ -150,6 +152,8 @@ where
             esc_deadline: None,
             paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
+            clipboard_idle_timeout: Some(DEFAULT_CLIPBOARD_IDLE_TIMEOUT),
+            clipboard_deadline: None,
             #[cfg(feature = "async")]
             deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
@@ -912,21 +916,211 @@ mod tests {
     }
 
     #[test]
+    fn large_clipboard_reply_keeps_payload_out_of_keyboard_events() {
+        use std::io::Write;
+
+        let (rx, mut tx) = make_pipe();
+        let mut src = new_reader(rx);
+        let writer = thread::spawn(move || -> io::Result<()> {
+            tx.write_all(b"\x1b]52;c;")?;
+            tx.write_all(&vec![b'A'; 1024 * 1024])?;
+            tx.write_all(b"\x1b\\x")
+        });
+        assert_eq!(
+            src.read().unwrap(),
+            Event::ClipboardStart {
+                selection: crate::event::ClipboardSelection::System,
+            }
+        );
+        let mut bytes = 0;
+        let mut chunks = 0;
+        loop {
+            match src.read().unwrap() {
+                Event::ClipboardChunk(chunk) => {
+                    assert!(chunk.iter().all(|&b| b == b'A'));
+                    bytes += chunk.len();
+                    chunks += 1;
+                }
+                Event::ClipboardEnd { complete: true } => break,
+                event => panic!("unexpected clipboard event: {event:?}"),
+            }
+        }
+        assert_eq!(bytes, 1024 * 1024);
+        assert!(chunks > 1);
+        assert!(
+            matches!(src.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Char('x'))
+        );
+        writer.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn transfer_eof_delivers_remaining_bytes_and_incomplete_end_before_error() {
+        for clipboard in [false, true] {
+            for tail in [b"".as_slice(), b"\x1b", b"\xf0\x9f"] {
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+                let header = if clipboard {
+                    b"\x1b]52;c;".as_slice()
+                } else {
+                    b"\x1b[200~"
+                };
+                write_bytes(&tx, &[header, b"QQ==", tail].concat());
+                drop(tx);
+                let start = src.read().unwrap();
+                assert!(if clipboard {
+                    matches!(start, Event::ClipboardStart { .. })
+                } else {
+                    start == Event::PasteStart
+                });
+                let mut payload = Vec::new();
+                loop {
+                    match src.read().unwrap() {
+                        Event::ClipboardChunk(bytes) if clipboard => payload.extend(bytes),
+                        Event::PasteChunk(bytes) if !clipboard => payload.extend(bytes),
+                        Event::ClipboardEnd { complete: false } if clipboard => break,
+                        Event::PasteEnd { complete: false } if !clipboard => break,
+                        event => panic!("unexpected transfer event: {event:?}"),
+                    }
+                }
+                assert_eq!(payload, [b"QQ==".as_slice(), tail].concat());
+                assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+            }
+        }
+    }
+
+    #[test]
+    fn transfer_recovery_flushes_retained_bytes_before_new_keys() {
+        for clipboard in [false, true] {
+            for manual in [false, true] {
+                let (rx, tx) = make_pipe();
+                let mut src = new_reader(rx)
+                    .with_paste_idle_timeout(None)
+                    .with_clipboard_idle_timeout(None);
+                let header = if clipboard {
+                    b"\x1b]52;c;".as_slice()
+                } else {
+                    b"\x1b[200~"
+                };
+                src.feed_bytes(&[header, b"data\x1b"].concat());
+                assert!(src.try_read().is_some());
+                let chunk = if clipboard {
+                    Event::ClipboardChunk(b"data".to_vec())
+                } else {
+                    Event::PasteChunk(b"data".to_vec())
+                };
+                assert_eq!(src.try_read(), Some(chunk));
+                assert!(src.try_read().is_none());
+                match (clipboard, manual) {
+                    (true, true) => src.end_clipboard(),
+                    (false, true) => src.end_paste(),
+                    (true, false) => src.set_clipboard_idle_timeout(Some(Duration::ZERO)),
+                    (false, false) => src.set_paste_idle_timeout(Some(Duration::ZERO)),
+                }
+                write_bytes(&tx, b"x");
+                let chunk = if clipboard {
+                    Event::ClipboardChunk(b"\x1b".to_vec())
+                } else {
+                    Event::PasteChunk(b"\x1b".to_vec())
+                };
+                let end = if clipboard {
+                    Event::ClipboardEnd { complete: false }
+                } else {
+                    Event::PasteEnd { complete: false }
+                };
+                assert_eq!(src.read().unwrap(), chunk);
+                assert_eq!(src.read().unwrap(), end);
+                assert!(matches!(src.read().unwrap(), Event::KeyPress(key)
+                            if key.code == KeyCode::Char('x')));
+                src.end_clipboard();
+                src.end_paste();
+                assert!(src.try_read().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn transfer_expiry_during_readiness_wait_precedes_new_keys() {
+        use crate::event::poll::Poller;
+        use std::sync::Arc;
+
+        struct InputAfterTimeout {
+            poller: Arc<dyn Poller>,
+            writer: File,
+        }
+
+        impl Poller for InputAfterTimeout {
+            fn new(_: &[PollFd]) -> io::Result<Self> {
+                unreachable!("wrap an existing poller")
+            }
+
+            fn poll(&self, ready: &mut [bool], timeout: Option<Duration>) -> io::Result<usize> {
+                // Simulate input arriving as the timed wait returns to its caller.
+                thread::sleep(timeout.expect("active transfer deadline"));
+                write_bytes(&self.writer, b"x");
+                self.poller.poll(ready, Some(Duration::ZERO))
+            }
+        }
+
+        for clipboard in [false, true] {
+            let (rx, tx) = make_pipe();
+            let timeout = Some(Duration::from_millis(40));
+            let mut src = new_reader(rx)
+                .with_paste_idle_timeout(timeout)
+                .with_clipboard_idle_timeout(timeout);
+            src.poller = Arc::new(InputAfterTimeout {
+                poller: Arc::clone(&src.poller),
+                writer: tx,
+            });
+            src.feed_bytes(if clipboard {
+                b"\x1b]52;c;"
+            } else {
+                b"\x1b[200~"
+            });
+            assert!(src.try_read().is_some());
+            src.fill(Some(Duration::from_secs(1))).unwrap();
+            let end = if clipboard {
+                Event::ClipboardEnd { complete: false }
+            } else {
+                Event::PasteEnd { complete: false }
+            };
+            assert_eq!(src.try_read(), Some(end));
+            assert!(matches!(src.try_read(), Some(Event::KeyPress(key))
+                if key.code == KeyCode::Char('x')));
+            assert!(src.try_read().is_none());
+        }
+    }
+
+    #[test]
+    fn clipboard_idle_deadline_bounds_a_blocking_wait_after_the_header() {
+        let (rx, _tx) = make_pipe();
+        let mut src = new_reader(rx).with_clipboard_idle_timeout(Some(Duration::from_millis(40)));
+        src.feed_bytes(b"\x1b]52;c;");
+        assert!(matches!(src.try_read(), Some(Event::ClipboardStart { .. })));
+        assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        assert_eq!(
+            src.try_read(),
+            Some(Event::ClipboardEnd { complete: false })
+        );
+        assert!(src.try_read().is_none());
+        assert_eq!(src.effective_timeout(None), None);
+    }
+
+    #[test]
     fn caller_timeout_preserves_an_idle_osc_reply() {
         let (rx, tx) = make_pipe();
-        let mut src = new_reader(rx).with_esc_timeout(Duration::ZERO);
+        let mut src = new_reader(rx)
+            .with_esc_timeout(Duration::ZERO)
+            .with_clipboard_idle_timeout(None);
         write_bytes(&tx, b"\x1b]52;c;Zm9v");
+        assert!(matches!(src.read().unwrap(), Event::ClipboardStart { .. }));
+        assert_eq!(src.read().unwrap(), Event::ClipboardChunk(b"Zm9v".to_vec()));
+        src.waker().wake().unwrap();
+        assert_eq!(src.read().unwrap_err().kind(), io::ErrorKind::Interrupted);
         assert!(!src.poll(Some(Duration::ZERO)).unwrap());
         assert!(!src.poll(Some(Duration::from_millis(2100))).unwrap());
         assert!(src.try_read().is_none());
         write_bytes(&tx, b"\x1b\\");
-        assert_eq!(
-            src.read().unwrap(),
-            Event::Clipboard {
-                selection: crate::event::ClipboardSelection::System,
-                content: "Zm9v".into(),
-            },
-        );
+        assert_eq!(src.read().unwrap(), Event::ClipboardEnd { complete: true },);
     }
 
     #[test]
@@ -935,14 +1129,7 @@ mod tests {
             for ending in [b"\x1b\\".as_slice(), b"\x07", b"\x9c"] {
                 for (body, expected) in [
                     (
-                        b"52;c;qqqq".as_slice(),
-                        Event::Clipboard {
-                            selection: crate::event::ClipboardSelection::System,
-                            content: "qqqq".into(),
-                        },
-                    ),
-                    (
-                        b"72;t=r:x=1;qqqq",
+                        b"72;t=r:x=1;qqqq".as_slice(),
                         Event::DragDrop {
                             options: vec![("t".into(), "r".into()), ("x".into(), "1".into())],
                             payload: b"qqqq".to_vec(),
@@ -1027,7 +1214,7 @@ mod tests {
         assert!(src.poll(Some(Duration::from_secs(5))).unwrap());
         let ev = src.read().unwrap();
         let elapsed = start.elapsed();
-        assert_eq!(ev, Event::PasteEnd);
+        assert_eq!(ev, Event::PasteEnd { complete: false });
         assert!(
             elapsed < Duration::from_millis(500),
             "elapsed = {:?}",
@@ -1050,7 +1237,7 @@ mod tests {
         assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
         let mut saw_end = false;
         while let Some(ev) = src.try_read() {
-            if matches!(ev, Event::PasteEnd) {
+            if matches!(ev, Event::PasteEnd { complete: true }) {
                 saw_end = true;
             }
         }
@@ -1058,7 +1245,7 @@ mod tests {
             // Drain another pump cycle if necessary.
             let _ = src.poll(Some(Duration::from_millis(50))).unwrap();
             while let Some(ev) = src.try_read() {
-                if matches!(ev, Event::PasteEnd) {
+                if matches!(ev, Event::PasteEnd { complete: true }) {
                     saw_end = true;
                 }
             }
@@ -1077,7 +1264,7 @@ mod tests {
         // No terminator will arrive; force-exit.
         src.end_paste();
         let ev = src.try_read().expect("PasteEnd should be queued");
-        assert_eq!(ev, Event::PasteEnd);
+        assert_eq!(ev, Event::PasteEnd { complete: false });
 
         // Subsequent bytes parse as normal input again.
         write_bytes(&tx, b"a");
@@ -1213,7 +1400,7 @@ mod tests {
         assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
         let mut saw_end = false;
         while let Some(ev) = src.try_read() {
-            if matches!(ev, Event::PasteEnd) {
+            if matches!(ev, Event::PasteEnd { complete: true }) {
                 saw_end = true;
             }
         }
@@ -1253,7 +1440,10 @@ mod tests {
         assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
         assert!(matches!(src.read().unwrap(), Event::PasteStart));
         assert!(matches!(src.read().unwrap(), Event::PasteChunk(ref b) if b == b"hello"));
-        assert!(matches!(src.read().unwrap(), Event::PasteEnd));
+        assert!(matches!(
+            src.read().unwrap(),
+            Event::PasteEnd { complete: true }
+        ));
     }
 
     #[test]

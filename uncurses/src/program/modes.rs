@@ -1071,7 +1071,9 @@ impl<I: Input, O: Write> Program<I, O> {
     }
 
     /// Request the system clipboard contents (`OSC 52 ; c ; ?`). Reply:
-    /// [`Event::Clipboard`](crate::event::Event::Clipboard).
+    /// [`Event::ClipboardStart`](crate::event::Event::ClipboardStart), raw
+    /// [`Event::ClipboardChunk`](crate::event::Event::ClipboardChunk) bytes,
+    /// then [`Event::ClipboardEnd`](crate::event::Event::ClipboardEnd).
     pub fn request_system_clipboard(&mut self) -> io::Result<()> {
         crate::ansi::clipboard::write_request_clipboard(
             &mut self.screen,
@@ -1081,7 +1083,9 @@ impl<I: Input, O: Write> Program<I, O> {
     }
 
     /// Request the primary selection contents (`OSC 52 ; p ; ?`). Reply:
-    /// [`Event::Clipboard`](crate::event::Event::Clipboard).
+    /// [`Event::ClipboardStart`](crate::event::Event::ClipboardStart), raw
+    /// [`Event::ClipboardChunk`](crate::event::Event::ClipboardChunk) bytes,
+    /// then [`Event::ClipboardEnd`](crate::event::Event::ClipboardEnd).
     pub fn request_primary_clipboard(&mut self) -> io::Result<()> {
         crate::ansi::clipboard::write_request_clipboard(
             &mut self.screen,

@@ -15,7 +15,7 @@
 //!
 //! ## Gotchas
 //!
-//! Adjacent [`Event::PasteChunk`] values are merged before comparison because
+//! Adjacent paste or clipboard chunks are merged before comparison because
 //! chunk granularity is not semantic; reassembled bytes are.
 #![cfg(test)]
 
@@ -46,22 +46,16 @@ fn parse_split_at(data: &[u8], i: usize) -> Vec<Event> {
     events
 }
 
-/// Merge adjacent `PasteChunk` events so that chunk granularity does
-/// not artificially differ under different feeding strategies. The
-/// parser legitimately emits one `PasteChunk` per `parse()` call that
-/// sees paste-mode bytes, so the *content* (not the boundary) is the
-/// invariant we care about across feed strategies.
-fn normalize(events: Vec<Event>) -> Vec<Event> {
+/// Merge adjacent chunks so comparisons depend on content, not input splits.
+pub(super) fn normalize(events: Vec<Event>) -> Vec<Event> {
     let mut out: Vec<Event> = Vec::with_capacity(events.len());
     for ev in events {
-        if let Event::PasteChunk(bytes) = ev {
-            if let Some(Event::PasteChunk(prev)) = out.last_mut() {
+        match (out.last_mut(), ev) {
+            (Some(Event::PasteChunk(prev)), Event::PasteChunk(bytes))
+            | (Some(Event::ClipboardChunk(prev)), Event::ClipboardChunk(bytes)) => {
                 prev.extend(bytes);
-                continue;
             }
-            out.push(Event::PasteChunk(bytes));
-        } else {
-            out.push(ev);
+            (_, ev) => out.push(ev),
         }
     }
     out
@@ -147,6 +141,12 @@ fn corpus() -> Vec<(&'static str, &'static [u8])> {
             b"\x1b]10;rgb:abcd/ef01/2345\x07",
         ),
         ("osc clipboard query", b"\x1b]52;c;?\x07"),
+        ("osc clipboard payload", b"\x1b]52;c;YWJjZA==\x1b\\"),
+        ("escape before clipboard", b"\x1b\x1b]52;c;YWJjZA==\x07"),
+        (
+            "clipboard inside paste",
+            b"\x1b[200~\x1b]52;c;YWJjZA==\x07\x1b[201~",
+        ),
         // ----- DCS ----------------------------------------------------
         ("dcs xtversion", b"\x1bP>|uncurses 0.1.0\x1b\\"),
         ("dcs tertiary DA", b"\x1bP!|00000000\x1b\\"),

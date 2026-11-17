@@ -88,7 +88,10 @@ mod stream;
 pub use decode::DecoderFlags;
 pub use key::{Key, KeyCode, KeyModifiers, ParseKeyError};
 pub use mouse::{Mouse, MouseButton, mouse_pixel_to_cell};
-pub use source::{DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, Waker};
+pub use source::{
+    DEFAULT_CLIPBOARD_IDLE_TIMEOUT, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource,
+    Input, Waker,
+};
 #[cfg(feature = "async")]
 pub use stream::EventStream;
 
@@ -260,7 +263,13 @@ pub enum Event {
     /// Bracketed paste started.
     PasteStart,
     /// Bracketed paste ended.
-    PasteEnd,
+    ///
+    /// Idle recovery, explicit recovery, and input read failures produce an
+    /// incomplete end after any retained payload bytes.
+    PasteEnd {
+        /// Whether the terminal sent the paste terminator.
+        complete: bool,
+    },
     /// Streaming chunk of pasted bytes emitted between [`Event::PasteStart`]
     /// and [`Event::PasteEnd`]. Pastes that exceed the source's read
     /// buffer are split across multiple chunks; reassembly and any
@@ -387,12 +396,30 @@ pub enum Event {
     ProgramStatus(ProgramStatusCapabilities),
 
     // -- Clipboard / graphics ------------------------------------------------
-    /// OSC 52 clipboard content reply.
-    Clipboard {
+    /// Start of an OSC 52 clipboard reply, after its header.
+    ///
+    /// Every recognized reply starts with this event, including empty replies.
+    /// Zero or more chunks follow with the wire payload, normally base64.
+    ClipboardStart {
         /// Clipboard selection that was reported.
         selection: ClipboardSelection,
-        /// Clipboard content.
-        content: String,
+    },
+    /// Raw OSC 52 payload bytes, excluding the header and terminator.
+    ///
+    /// Chunk boundaries follow input availability, not base64 groups or text
+    /// boundaries. Callers can consume chunks incrementally or assemble them.
+    ClipboardChunk(Vec<u8>),
+    /// End of an OSC 52 clipboard reply.
+    ///
+    /// Caller timeouts and wakes preserve an active reply, subject to the
+    /// source's independent clipboard idle timeout. Idle or explicit recovery
+    /// flushes retained bytes and ends the reply with `complete: false`.
+    /// An interrupting escape sequence ends it before that sequence is decoded.
+    /// An input read failure flushes retained bytes and ends it before the error.
+    /// Readiness errors propagate directly and can leave a reply unfinished.
+    ClipboardEnd {
+        /// Whether BEL or ST terminated the reply normally.
+        complete: bool,
     },
     /// Kitty graphics response (APC `G ...` payload).
     KittyGraphics {
