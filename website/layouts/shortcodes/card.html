@@ -1,0 +1,5 @@
+{{- $link := .Get "link" -}}
+{{- $target := .Page.GetPage $link -}}
+{{- $url := $link | relURL -}}
+{{- with $target }}{{ $url = .RelPermalink }}{{ end -}}
+<a class="doc-card" href="{{ $url }}"><span class="doc-card-title">{{ .Get "title" }}</span><span class="doc-card-description">{{ .Get "subtitle" }}</span></a>

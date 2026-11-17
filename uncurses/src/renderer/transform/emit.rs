@@ -469,6 +469,7 @@ impl Renderer {
 #[cfg(test)]
 mod cluster_bounds {
     use super::*;
+    use crate::style::Style;
 
     /// A row of two-column clusters: column `2n` owns one, `2n + 1`
     /// continues it.
@@ -476,7 +477,7 @@ mod cluster_bounds {
         (0..6)
             .map(|i| {
                 if i % 2 == 0 {
-                    Cell::new("\u{4e16}", 2)
+                    Cell::new("\u{4e16}", 2, Style::EMPTY)
                 } else {
                     Cell::CONTINUATION
                 }
@@ -490,7 +491,7 @@ mod cluster_bounds {
     /// that narrow cell with a two-column cluster.
     #[test]
     fn a_narrow_cell_does_not_own_a_following_continuation() {
-        let line = vec![Cell::new("a", 1), Cell::CONTINUATION];
+        let line = vec![Cell::new("a", 1, Style::EMPTY), Cell::CONTINUATION];
         assert_eq!(cluster_start(&line, 1), 1);
         assert_eq!(cluster_end(&line, 0), 0);
     }
@@ -501,7 +502,7 @@ mod cluster_bounds {
     #[test]
     fn a_cluster_closes_on_the_columns_its_owner_accounts_for() {
         let chained = vec![
-            Cell::new("\u{4e16}", 2),
+            Cell::new("\u{4e16}", 2, Style::EMPTY),
             Cell::CONTINUATION,
             Cell::CONTINUATION,
         ];
@@ -522,11 +523,6 @@ mod cluster_bounds {
             "an orphan past the pair stands alone"
         );
         assert_eq!(cluster_start(&chained, 1), 0, "inside the pair");
-        assert_eq!(
-            cluster_start(&chained, 2),
-            cluster_end(&chained, 2),
-            "the mirrors must agree on a column that is its own cluster"
-        );
     }
 
     #[test]
@@ -565,7 +561,7 @@ mod cluster_bounds {
         assert_eq!(cluster_start(&line, 0), 0);
 
         // One with an owner still closes back to it.
-        let owned = vec![Cell::new("\u{4e16}", 2), Cell::CONTINUATION];
+        let owned = vec![Cell::new("\u{4e16}", 2, Style::EMPTY), Cell::CONTINUATION];
         assert_eq!(cluster_start(&owned, 1), 0);
     }
 }

@@ -179,6 +179,11 @@ the editable block inline, and on commit push the finished text up with
 
 ```mermaid
 flowchart TB
+  accTitle: Committed lines and the live inline block
+  accDescr {
+    Committed lines stay in scrollback above the live inline block.
+    The block grows as needed, with the cursor at the next input position.
+  }
   scroll["scrollback (committed lines via insert_above)"]
   scroll --> live["live inline block (resized as it grows)"]
   live --> prompt["cursor / next input"]

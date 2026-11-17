@@ -19,6 +19,11 @@ byte language remains.
 
 ```mermaid
 flowchart TB
+  accTitle: Hardware terminals and terminal emulators
+  accDescr {
+    Hardware terminals connect a keyboard and screen to a computer through a serial cable.
+    A terminal emulator provides that terminal interface to a program.
+  }
   subgraph then["Then"]
     direction LR
     hw["Keyboard + screen"] <-->|serial cable| big["Computer"]
@@ -42,6 +47,11 @@ sees the slave as a normal terminal device.
 
 ```mermaid
 flowchart TB
+  accTitle: The input and output path
+  accDescr {
+    A key passes through the emulator and the PTY line discipline to the program.
+    Output returns through the PTY to the emulator, which draws the screen.
+  }
   you["You press a key"] --> emu["Emulator"]
   emu --> tty["PTY + line discipline"]
   tty --> app["Program reads input"]
@@ -62,6 +72,11 @@ So it flips the tty into *raw* mode, telling the line discipline to step aside.
 
 ```mermaid
 flowchart TB
+  accTitle: Cooked mode and raw mode
+  accDescr {
+    Cooked mode sends complete input lines to the program through the line discipline.
+    Raw mode sends each input byte to the program.
+  }
   subgraph cooked["Cooked mode"]
     direction TB
     k1["Keys"] --> ld1["Line discipline"] --> p1["Program (whole lines)"]

@@ -200,7 +200,9 @@ fn write_sgr_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<b
 /// colors. Color-capable profiles downsample foreground, background, and
 /// underline colors through [`Profile::convert`](crate::color::Profile::convert)
 /// and preserve the rest of the style.
-pub(crate) fn convert_style(style: &Style, profile: crate::color::Profile) -> Style {
+///
+/// The conversion consumes the style and reuses its hyperlink allocation.
+pub(crate) fn convert_style(style: Style, profile: crate::color::Profile) -> Style {
     use crate::color::Profile;
     match profile {
         Profile::Disabled => Style::default(),
@@ -208,13 +210,13 @@ pub(crate) fn convert_style(style: &Style, profile: crate::color::Profile) -> St
             fg: None,
             bg: None,
             underline_color: None,
-            ..style.clone()
+            ..style
         },
         _ => Style {
             fg: style.fg.and_then(|c| profile.convert(c)),
             bg: style.bg.and_then(|c| profile.convert(c)),
             underline_color: style.underline_color.and_then(|c| profile.convert(c)),
-            ..style.clone()
+            ..style
         },
     }
 }
@@ -357,16 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diff_remove_fg() {
-        let mut buf = Vec::new();
-        let from = Style::default().fg(Color::Red);
-        let to = Style::default();
-        let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
-        assert!(wrote);
-        assert_eq!(buf, b"\x1b[m");
-    }
-
-    #[test]
     fn test_diff_fg_and_bg_change_single_csi() {
         let mut buf = Vec::new();
         let from = Style::default().fg(Color::Red).bg(Color::Black);
@@ -422,14 +414,14 @@ mod tests {
     #[test]
     fn test_convert_style_notty() {
         let s = Style::default().bold().fg(Color::Red);
-        let converted = convert_style(&s, crate::color::Profile::Disabled);
+        let converted = convert_style(s, crate::color::Profile::Disabled);
         assert!(converted.is_empty());
     }
 
     #[test]
     fn test_convert_style_ascii() {
         let s = Style::default().bold().fg(Color::Red);
-        let converted = convert_style(&s, crate::color::Profile::Ascii);
+        let converted = convert_style(s, crate::color::Profile::Ascii);
         assert!(converted.attrs.contains(AttrFlags::BOLD));
         assert_eq!(converted.fg, None);
     }

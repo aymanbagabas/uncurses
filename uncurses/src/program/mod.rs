@@ -20,7 +20,7 @@
 //! unless you ask: call [`Program::query_capabilities`] for that. Teardown is
 //! explicit: there is **no** `Drop`.
 //! Hand the terminal back to the shell with [`Program::finish`] (consume),
-//! [`Program::pause`] (keep, e.g. to shell out), or [`Program::suspend`]
+//! [`Program::pause`] (keep, e.g. to shell out), or Unix `Program::suspend`
 //! (pause, then stop the process with `SIGTSTP`); resume a
 //! paused/suspended program with [`Program::resume`].
 //!
@@ -51,9 +51,9 @@
 //! choose whether to enable bracketed paste and mouse tracking at startup.
 //! Those take effect immediately at init.
 //!
-//! The three `prefer_*` fields are discovery-driven instead: they enable
-//! grapheme-cluster mode, in-band resize, and synchronized output only once
-//! the terminal reports the mode as available. Since a program never probes
+//! The `prefer_*` fields are discovery-driven instead: they enable
+//! grapheme-cluster mode, in-band resize, synchronized output, and keyboard
+//! enhancements once the terminal reports support. Since a program never probes
 //! on its own, that means calling
 //! [`query_capabilities`](Program::query_capabilities) and
 //! reading the replies (see [`capabilities`](Program::capabilities)).
@@ -67,7 +67,7 @@ mod state;
 mod tests;
 
 pub use crate::ansi::program_status::{ProgramStatus, ProgramStatusKind, ProgramStatusState};
-pub use state::Capabilities;
+pub use state::{Capabilities, State};
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -76,16 +76,14 @@ use std::time::Duration;
 
 use bitflags::bitflags;
 
-use crate::ansi::{mode, progress};
+use crate::ansi::{kitty::KittyKeyboardFlags, mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
-#[cfg(windows)]
-use crate::event::SourceFlags;
 use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
 use crate::screen::Screen;
-use crate::terminal::Terminal;
+use crate::terminal::{AsTerminalHandle, Terminal};
 
 /// An interactive terminal session composing a [`Terminal`], an
 /// [`EventSource`], and a [`Screen`] to render with. See
@@ -114,12 +112,18 @@ where
     /// Held in an `Arc<Mutex<_>>`; the lock is uncontended in the common
     /// single-reader case.
     source: Arc<Mutex<EventSource<I>>>,
+    /// Interrupts a shared reader without acquiring its source lock.
+    #[cfg(windows)]
+    source_waker: crate::event::Waker,
     /// Events handed back by [`Self::unread_event`], which the read path
     /// drains before the source. Kept here rather than in `source` because
     /// these were already observed: routing them back through the source
     /// would observe them a second time, and a reply counts once.
     unread: VecDeque<Event>,
     state: state::State,
+    /// Keep discovery bookkeeping separate from selected state. Repeated
+    /// reports must preserve a later frame-level choice.
+    synchronized_output_discovered: bool,
     /// Terminal capabilities, recorded by intercepting replies as they pass
     /// through the read path. Empty until [`Self::query_capabilities`] is
     /// called and the replies are read.
@@ -205,6 +209,14 @@ pub struct ProgramOptions {
     ///
     /// [`Screen::set_synchronized_output`]: crate::screen::Screen::set_synchronized_output
     pub prefer_synchronized_output: bool,
+    /// Apply these Kitty keyboard flags once the terminal reports support.
+    ///
+    /// Defaults to `Some(DISAMBIGUATE_ESCAPE_CODES)`. `None` leaves keyboard
+    /// enhancements unchanged. An empty flag set explicitly disables them.
+    /// Call [`Program::query_capabilities`] or
+    /// [`Program::request_kitty_keyboard`] and read the reply to adopt them.
+    /// An explicit [`Program::set_kitty_keyboard`] call takes precedence.
+    pub prefer_kitty_keyboard: Option<KittyKeyboardFlags>,
     /// Include Backarrow mode (DECBKM) in [`Program::query_capabilities`].
     ///
     /// Defaults to `false`. Initialization sends no queries.
@@ -303,6 +315,7 @@ impl Default for ProgramOptions {
             prefer_grapheme_clusters: true,
             prefer_in_band_resize: true,
             prefer_synchronized_output: true,
+            prefer_kitty_keyboard: Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES),
             query_backspace_mode: false,
             query_foreground_color: false,
             query_background_color: false,
@@ -510,6 +523,15 @@ where
         &self.caps
     }
 
+    /// Borrow the session choices tracked at this point in event processing.
+    ///
+    /// Clone this value for an owned snapshot. Reading it sends no output and
+    /// waits for no input. Use [`capabilities`](Self::capabilities) for the
+    /// terminal's reported state.
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
     /// Last observed full terminal size in cells, or `None` before the first
     /// observation. This is the whole terminal, which inline differs from the
     /// managed area returned by [`Screen::size`].
@@ -670,12 +692,12 @@ where
     /// you to match against what you asked.
     ///
     /// Observing is otherwise passive, with one class of exception: a mode
-    /// report proving support for grapheme clusters or in-band resize enables
-    /// that mode when the matching
-    /// [`ProgramOptions`] `prefer_*` field is set, which writes to the
-    /// terminal. That adoption happens only while the application has taken no
-    /// position of its own: calling the mode's `enable_*` or `disable_*`
-    /// method, in either direction and at any point, settles it for good, and
+    /// report proving support for grapheme clusters, in-band resize, or Kitty
+    /// keyboard enhancements applies the matching [`ProgramOptions`]
+    /// preference, which writes to the terminal. That adoption happens only
+    /// while the application has taken no position of its own. Calling
+    /// [`set_kitty_keyboard`](Self::set_kitty_keyboard) or the mode's `enable_*`
+    /// or `disable_*` method settles it for good, and
     /// adoption itself counts as settling it. So each mode is adopted at most
     /// once, and never against an explicit choice.
     ///
@@ -725,11 +747,11 @@ where
                         // understands them is all it takes. Turn it off for the
                         // session with `prefer_synchronized_output`, or per
                         // frame with [`Screen::set_synchronized_output`].
-                        Mode::SYNCHRONIZED_OUTPUT => {
+                        Mode::SYNCHRONIZED_OUTPUT if !self.synchronized_output_discovered => {
                             if self.options.prefer_synchronized_output {
                                 self.screen.set_synchronized_output(true);
                             }
-                            self.state.chosen.insert(mode);
+                            self.synchronized_output_discovered = true;
                         }
                         Mode::UNICODE_CORE if self.options.prefer_grapheme_clusters => {
                             self.enable_grapheme_clusters()?;
@@ -741,7 +763,14 @@ where
                     }
                 }
             }
-            Event::KittyKeyboardEnhancements(flags) => self.caps.kitty_keyboard = Some(flags),
+            Event::KittyKeyboardEnhancements(flags) => {
+                self.caps.kitty_keyboard = Some(flags);
+                if !self.state.kitty_keyboard_chosen
+                    && let Some(preferred) = self.options.prefer_kitty_keyboard
+                {
+                    self.set_kitty_keyboard(Some(preferred))?;
+                }
+            }
             // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
             // query, so a reply means the terminal recognizes the feature.
             Event::ModifyOtherKeys(mode) => self.caps.modify_other_keys = Some(mode),
@@ -941,11 +970,17 @@ where
     I: Input + Copy,
     O: Write + Copy,
 {
-    /// Build the screen and event source over `terminal`, sizing the managed
-    /// area to `size`. The color profile and renderer optimizations are
-    /// detected from the terminal's environment. The terminal is
-    /// left as-is.
+    /// Build the screen and input source without changing the terminal.
     fn with_render(terminal: Terminal<I, O>, size: (u16, u16)) -> io::Result<Self> {
+        let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
+        Ok(Self::render_with_source(terminal, size, source))
+    }
+
+    fn render_with_source(
+        terminal: Terminal<I, O>,
+        size: (u16, u16),
+        source: Arc<Mutex<EventSource<I>>>,
+    ) -> Self {
         let env = terminal.env();
         // Provisional profile; init_with reapplies it with the real
         // output-is-tty signal via apply_env_color_profile.
@@ -955,13 +990,17 @@ where
         screen.set_color_profile(color_profile);
         screen.set_optimizations(optimizations);
 
-        let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
-        Ok(Self {
+        #[cfg(windows)]
+        let source_waker = source.lock().unwrap().waker();
+        Self {
             terminal,
             screen,
             source,
+            #[cfg(windows)]
+            source_waker,
             unread: VecDeque::new(),
             state: state::State::default(),
+            synchronized_output_discovered: false,
             caps: Capabilities::default(),
             options: ProgramOptions::default(),
             window_cells: None,
@@ -969,7 +1008,7 @@ where
             cell_pixels: None,
             origin: Position::ORIGIN,
             origin_queries_pending: 0,
-        })
+        }
     }
 
     /// Probe the terminal for its capabilities, then flush.
@@ -1106,11 +1145,10 @@ where
     }
 }
 
-#[cfg(unix)]
 impl<I, O> Program<I, O>
 where
-    I: Input + Copy + std::os::fd::AsFd,
-    O: Write + Copy + std::os::fd::AsFd,
+    I: Input + Copy,
+    O: Write + Copy + AsTerminalHandle,
 {
     /// Construct a program over `terminal` without touching the terminal:
     /// size the screen to it and create an [`EventSource`] on its input
@@ -1119,6 +1157,43 @@ where
     pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
         let ws = terminal.get_window_size()?;
         Self::with_render(terminal, (ws.col, ws.row))
+    }
+
+    /// Construct a program over the same terminal input as a previous program.
+    ///
+    /// Use the previous program's [`Self::event_source`] to keep queued
+    /// events and incomplete input sequences across a hand-off. The source
+    /// must read from the same terminal as `terminal`. Pause the previous
+    /// program first and resume it only after this program finishes: read
+    /// from the shared source through one program at a time.
+    ///
+    /// Like [`Self::new`], this leaves the terminal modes unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the terminal size cannot be read.
+    ///
+    /// ```no_run
+    /// # fn main() -> std::io::Result<()> {
+    /// use uncurses::{program::Program, terminal::Terminal};
+    ///
+    /// let mut main = Program::open()?;
+    /// main.init()?;
+    /// main.pause()?;
+    /// let mut dialog = Program::with_event_source(Terminal::open()?, main.event_source())?;
+    /// dialog.init()?;
+    /// // Draw the dialog and read its input.
+    /// dialog.finish()?;
+    /// main.resume()?;
+    /// main.finish()
+    /// # }
+    /// ```
+    pub fn with_event_source(
+        terminal: Terminal<I, O>,
+        source: Arc<Mutex<EventSource<I>>>,
+    ) -> io::Result<Self> {
+        let ws = terminal.get_window_size()?;
+        Ok(Self::render_with_source(terminal, (ws.col, ws.row), source))
     }
 
     /// Begin a session with the default [`ProgramOptions`]. See
@@ -1139,8 +1214,12 @@ where
         self.options = options;
         // The decoder is the only thing that can act on this, and it is
         // behind the source, so the option is carried there as it is taken.
+        #[cfg(windows)]
+        lock_source_for_mode_change(&self.source, &self.source_waker)?
+            .set_decoder_flags(self.options.legacy_keys);
+        #[cfg(not(windows))]
         self.set_decoder_flags(self.options.legacy_keys);
-        self.terminal.make_raw()?;
+        self.enter_raw_mode()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
@@ -1159,8 +1238,8 @@ where
         Ok(())
     }
 
-    /// Query the current terminal window size (output half first, input as
-    /// fallback). This is a live query; the cached
+    /// Query the current terminal window size through [`Terminal::get_window_size`].
+    /// This is a live query; the cached
     /// [`window_cells`](Self::window_cells) /
     /// [`window_pixels`](Self::window_pixels) accessors return the
     /// last-observed values without I/O.
@@ -1216,13 +1295,7 @@ where
     /// broken pipe cannot leave the terminal in raw mode. The teardown error is
     /// still returned.
     pub fn finish(mut self) -> io::Result<()> {
-        // Restore even when teardown fails. Teardown writes to the output
-        // half, so a broken pipe or a closed terminal fails it routinely, and
-        // returning early there would leave the terminal raw. `finish` consumes
-        // the program, so there would be nothing left to retry with.
-        let teardown = self.teardown();
-        let restore = self.terminal.restore();
-        teardown.and(restore)
+        self.pause()
     }
 
     /// Hand the terminal back to the shell without consuming the program,
@@ -1230,15 +1303,27 @@ where
     /// [`Self::finish`] but keeps the program so the session can continue, and
     /// likewise restores the terminal even when the teardown writes fail.
     pub fn pause(&mut self) -> io::Result<()> {
-        // Restore even when teardown fails, for the same reason as `finish`:
-        // the caller asked for the terminal back, and a failed write to it is
-        // not a reason to keep it raw.
+        // Restore even when teardown fails: the caller asked for the terminal
+        // back, and a failed write to it is not a reason to keep it raw.
         let teardown = self.teardown();
+        #[cfg(not(windows))]
         let restore = self.terminal.restore();
+        #[cfg(windows)]
+        let restore = {
+            use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
+            let source = Arc::clone(&self.source);
+            let mut source = lock_source_for_mode_change(&source, &self.source_waker);
+            let restore = self.terminal.restore_with_input(|mode| {
+                if let Ok(source) = source.as_mut() {
+                    source.set_vt_input(mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0);
+                }
+            });
+            source.map(|_| ()).and(restore)
+        };
         teardown.and(restore)
     }
 
-    /// Re-acquire the terminal after a [`Self::pause`] or [`Self::suspend`]:
+    /// Re-acquire the terminal after a [`Self::pause`] or Unix `suspend`:
     /// re-enter raw mode, refit the managed area to the current viewport, re-apply
     /// the saved render state and modes, and force a full repaint.
     ///
@@ -1246,7 +1331,7 @@ where
     /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
     /// whatever ran while paused may have disturbed both.
     pub fn resume(&mut self) -> io::Result<()> {
-        self.terminal.make_raw()?;
+        self.enter_raw_mode()?;
         self.enable_tabs_and_bs();
         self.reset_lnm()?;
         self.autoresize()?;
@@ -1256,9 +1341,26 @@ where
         self.screen.flush()
     }
 
+    fn enter_raw_mode(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        let source = Arc::clone(&self.source);
+        #[cfg(windows)]
+        let mut source = lock_source_for_mode_change(&source, &self.source_waker)?;
+        self.terminal.make_raw()?;
+        #[cfg(windows)]
+        source.set_vt_input(true);
+        #[cfg(unix)]
+        self.source
+            .lock()
+            .unwrap()
+            .set_handle_resize(!self.state.in_band_resize);
+        Ok(())
+    }
+
     /// Suspend the process: [`pause`](Self::pause) the program, then stop
     /// the process with `SIGTSTP`. Returns once the process is
     /// foregrounded again; the caller should then call [`Self::resume`].
+    #[cfg(unix)]
     pub fn suspend(&mut self) -> io::Result<()> {
         self.pause()?;
         // SAFETY: raise is async-signal-safe.
@@ -1267,155 +1369,20 @@ where
     }
 }
 
-#[cfg(windows)]
-impl<I, O> Program<I, O>
-where
-    I: Input + Copy + std::os::windows::io::AsHandle,
-    O: Write + Copy + std::os::windows::io::AsHandle,
-{
-    /// Construct a program over `terminal` without touching the terminal:
-    /// size the screen to it and create an [`EventSource`] on its input
-    /// half. The terminal is left as-is; call [`Self::init`] to enter raw
-    /// mode and begin a session.
-    pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
-        let ws = terminal.get_window_size()?;
-        Self::with_render(terminal, (ws.col, ws.row))
-    }
-
-    /// Begin a session with the default [`ProgramOptions`]. See
-    /// [`Self::init_with`].
-    pub fn init(&mut self) -> io::Result<()> {
-        self.init_with(ProgramOptions::default())
-    }
-
-    /// Begin a session: enter raw mode and apply the initialization settings
-    /// from `options`. Store query choices and mode preferences for later use.
-    ///
-    /// The `query_*` options take effect when you call
-    /// [`query_capabilities`](Self::query_capabilities).
-    /// The `prefer_*` options apply when reported capabilities confirm mode support.
-    ///
-    /// Call once after [`Self::new`], before rendering.
-    pub fn init_with(&mut self, options: ProgramOptions) -> io::Result<()> {
-        self.options = options;
-        // The decoder is the only thing that can act on this, and it is
-        // behind the source, so the option is carried there as it is taken.
-        self.set_decoder_flags(self.options.legacy_keys);
-        self.terminal.make_raw()?;
-        {
-            let mut source = self.source.lock().unwrap();
-            let flags = source.flags() | SourceFlags::VT_INPUT;
-            source.set_flags(flags);
+#[cfg(any(windows, test))]
+fn lock_source_for_mode_change<'a, I: Input>(
+    source: &'a Mutex<EventSource<I>>,
+    waker: &crate::event::Waker,
+) -> io::Result<std::sync::MutexGuard<'a, EventSource<I>>> {
+    // A retrying reader can consume a wake and keep or reacquire the lock.
+    loop {
+        match source.try_lock() {
+            Err(std::sync::TryLockError::WouldBlock) => {
+                waker.wake()?;
+                std::thread::yield_now();
+            }
+            result => return Ok(result.unwrap()),
         }
-        self.enable_tabs_and_bs();
-        self.reset_lnm()?;
-        self.autoresize()?;
-        // Apply the env color profile on every path so output downsamples
-        // correctly even when capability queries are skipped. Disable color
-        // when the output is not a terminal (redirected to a file or pipe).
-        let is_tty = self.terminal.is_terminal().1;
-        self.apply_env_color_profile(is_tty);
-        self.reset_tab_stops()?;
-        if self.options.bracketed_paste {
-            self.enable_bracketed_paste()?;
-        }
-        if let Some(tracking) = self.options.mouse {
-            self.enable_mouse(tracking)?;
-        }
-        Ok(())
-    }
-
-    /// Query the current terminal window size (output half first, input as
-    /// fallback). This is a live query; the cached
-    /// [`window_cells`](Self::window_cells) /
-    /// [`window_pixels`](Self::window_pixels) accessors return the
-    /// last-observed values without I/O.
-    pub fn get_window_size(&self) -> io::Result<crate::terminal::Winsize> {
-        self.terminal.get_window_size()
-    }
-
-    /// Re-query the terminal size and resize the managed area to fit: the full
-    /// terminal size when fullscreen, or the terminal width with the current
-    /// managed height preserved when inline. Refreshes the cached
-    /// [`window_cells`](Self::window_cells), and
-    /// [`window_pixels`](Self::window_pixels) when the platform reports pixel
-    /// dimensions. Nothing is asked of the terminal: this reads the size the
-    /// operating system already knows. On platforms whose size query carries
-    /// no pixel dimensions (the Windows console), refresh those with
-    /// [`request_window_pixel_size`](Self::request_window_pixel_size).
-    ///
-    /// When the managed area already fits the queried size, this returns
-    /// without resizing and without repainting, so it is safe to call on every
-    /// resize report. Terminals send a report per pixel of a window drag while
-    /// the cell grid only changes at cell boundaries, so most reports ask for a
-    /// size the area already has. To re-establish the area whatever the size,
-    /// call [`Screen::resize`](crate::screen::Screen::resize) instead.
-    pub fn autoresize(&mut self) -> io::Result<()> {
-        let Ok(ws) = self.terminal.get_window_size() else {
-            // Keep the current size when the query fails rather than
-            // collapsing the managed area to zero.
-            return Ok(());
-        };
-        self.cache_window_size(ws);
-        let height = match self.screen.fullscreen() {
-            true => ws.row,
-            false => self.screen.size().height,
-        };
-        // Terminals report resizes for changes that leave the cell grid alone
-        // (a font change that keeps rows and columns, a window move on some
-        // terminals). This runs on every one of them, and `Screen::resize`
-        // repaints unconditionally, so skip the ones that change nothing
-        // rather than flickering on each. A caller that wants the repaint
-        // anyway calls `Screen::resize` directly.
-        if self.screen.size() == crate::layout::Size::new(ws.col, height) {
-            return Ok(());
-        }
-        self.screen.resize((ws.col, height));
-        Ok(())
-    }
-
-    /// Consume the program and hand the terminal back to the shell: tear down
-    /// every staged mode, reset the managed area, flush, and restore the
-    /// terminal's prior state.
-    ///
-    /// The terminal state is restored even when the teardown writes fail, so a
-    /// broken pipe cannot leave the terminal in raw mode. The teardown error is
-    /// still returned.
-    pub fn finish(mut self) -> io::Result<()> {
-        let teardown = self.teardown();
-        let restore = self.terminal.restore();
-        teardown.and(restore)
-    }
-
-    /// Hand the terminal back to the shell without consuming the program,
-    /// e.g. to run a child process. Re-enter with [`Self::resume`].
-    pub fn pause(&mut self) -> io::Result<()> {
-        let teardown = self.teardown();
-        let restore = self.terminal.restore();
-        teardown.and(restore)
-    }
-
-    /// Re-acquire the terminal after a [`Self::pause`]: re-enter raw mode,
-    /// refit the managed area to the current viewport, re-apply the saved
-    /// render state and modes, and force a full repaint.
-    ///
-    /// Re-enables [`TABS`](Optimizations::TABS) and
-    /// [`BS`](Optimizations::BS) and resets the hardware tab stops, since
-    /// whatever ran while paused may have disturbed both.
-    pub fn resume(&mut self) -> io::Result<()> {
-        self.terminal.make_raw()?;
-        {
-            let mut source = self.source.lock().unwrap();
-            let flags = source.flags() | SourceFlags::VT_INPUT;
-            source.set_flags(flags);
-        }
-        self.enable_tabs_and_bs();
-        self.reset_lnm()?;
-        self.autoresize()?;
-        self.reset_tab_stops()?;
-        self.restore()?;
-        self.screen.invalidate();
-        self.screen.flush()
     }
 }
 

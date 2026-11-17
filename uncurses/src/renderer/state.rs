@@ -123,7 +123,7 @@ impl Cursor {
     /// lazily on first access after a pen change.
     pub(super) fn current_blank(&mut self) -> &Cell {
         if self.blank_dirty {
-            self.blank = Cell::BLANK.style(self.style.clone());
+            self.blank.set_style(&self.style);
             self.blank_dirty = false;
         }
         &self.blank
@@ -138,11 +138,12 @@ impl Cursor {
         if self.bce_blank_key != Some((bce, want_bg)) {
             self.bce_blank = match want_bg {
                 Some(bg) => {
-                    let s = Style {
+                    let mut blank = Cell::BLANK;
+                    blank.set_style(Style {
                         bg: Some(bg),
                         ..Style::default()
-                    };
-                    Cell::BLANK.style(s)
+                    });
+                    blank
                 }
                 None => Cell::BLANK,
             };

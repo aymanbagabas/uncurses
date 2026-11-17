@@ -261,7 +261,8 @@ impl App {
                         p.extend_from_slice(&bytes);
                     }
                 }
-                Event::PasteEnd => {
+                // Retain partial pastes after recovery too.
+                Event::PasteEnd { .. } => {
                     if let Some(p) = self.paste.take() {
                         let text = String::from_utf8_lossy(&p).into_owned();
                         self.buffer.insert_str(&text);

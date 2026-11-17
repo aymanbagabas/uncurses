@@ -66,31 +66,6 @@ impl RenderBuffer {
         self.buffer.height()
     }
 
-    /// Mark one cell position as touched.
-    ///
-    /// Expands the row's existing touched span to include `pos.x`.
-    /// Out-of-bounds rows are ignored.
-    #[allow(dead_code)]
-    pub fn touch(&mut self, pos: impl Into<Position>) {
-        let pos = pos.into();
-        let y = pos.y as usize;
-        if y >= self.touched.len() {
-            return;
-        }
-        match &mut self.touched[y] {
-            Some(span) => {
-                span.first = span.first.min(pos.x);
-                span.last = span.last.max(pos.x);
-            }
-            None => {
-                self.touched[y] = Some(TouchedSpan {
-                    first: pos.x,
-                    last: pos.x,
-                });
-            }
-        }
-    }
-
     /// Mark an inclusive column range on one row as touched.
     ///
     /// # Parameters
@@ -260,6 +235,13 @@ impl RenderBuffer {
         }
 
         let existing = self.buffer.cell(pos);
+        if cell.width() == 1 && existing.is_some_and(|old| old.width() == 1) {
+            if existing != Some(cell) {
+                self.buffer.cell_mut(pos).unwrap().clone_from(cell);
+                self.touch_line(pos.y, pos.x, pos.x);
+            }
+            return;
+        }
         // Resize can preserve an equal primary whose columns no longer fit.
         let changed =
             existing.is_none_or(|e| e != cell) || u16::from(cell.width()) > self.width() - pos.x;
@@ -337,10 +319,26 @@ impl RenderBuffer {
     /// - `width`: new column count.
     /// - `height`: new row count.
     ///
-    /// Existing contents are preserved according to [`Buffer::resize`];
-    /// newly exposed cells are blank.
+    /// Existing contents are preserved according to [`Buffer::resize`].
+    /// Newly exposed cells extend retained wide primaries with
+    /// continuations; other new cells are blank.
     pub fn resize(&mut self, width: u16, height: u16) {
+        let old_width = self.width();
+        let retained_height = height.min(self.height());
         self.buffer.resize(width, height);
+        if old_width > 0 && width > old_width {
+            for y in 0..retained_height {
+                let owner = usize::from(self.owned_from(Position::new(old_width - 1, y)));
+                let line = self.buffer.line_mut(y).unwrap();
+                let end = (owner + usize::from(line[owner].width())).min(usize::from(width));
+                if end > usize::from(old_width) {
+                    // Restore ownership before writes can replace newly exposed columns.
+                    let mut continuation = Cell::CONTINUATION;
+                    continuation.copy_style_from(&line[owner]);
+                    line[usize::from(old_width)..end].fill(continuation);
+                }
+            }
+        }
         self.touched.resize(height as usize, None);
         self.touch_all();
     }
@@ -558,10 +556,11 @@ impl SurfaceMut for RenderBuffer {
 
 #[cfg(test)]
 mod tests {
+    use crate::style::Style;
     #[test]
     fn resize_height_preserves_marks_and_reuses_storage() {
         let mut buffer = super::RenderBuffer::new(4, 5);
-        buffer.set_cell((1, 1), &crate::cell::Cell::new("a", 1));
+        buffer.set_cell((1, 1), &crate::cell::Cell::new("a", 1, Style::EMPTY));
         let storage = buffer.touched.as_ptr();
         buffer.resize_height(3);
         buffer.resize_height(5);
@@ -615,12 +614,12 @@ mod tests {
     #[test]
     fn damage_reaches_a_primary_blanked_through_chained_continuations() {
         let mut rb = RenderBuffer::new(6, 1);
-        rb.set_cell((0, 0), &Cell::new("\u{4e16}", 2));
+        rb.set_cell((0, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
         rb.buffer.line_mut(0).unwrap()[2] = Cell::CONTINUATION;
         rb.clear_touched();
 
         let before = rb.buffer.cell(Position::new(0, 0)).unwrap().clone();
-        rb.set_cell((2, 0), &Cell::new("A", 1));
+        rb.set_cell((2, 0), &Cell::new("A", 1, Style::EMPTY));
         let after = rb.buffer.cell(Position::new(0, 0)).unwrap().clone();
         let span = rb.touched(0).expect("row 0 touched");
 
@@ -636,23 +635,23 @@ mod tests {
         let mut rb = RenderBuffer::new(6, 1);
         // Fill the row with continuations so the back-walk would run if the
         // guard above it ever let an out-of-bounds position through.
-        rb.set_cell((0, 0), &Cell::new("\u{4e16}", 2));
+        rb.set_cell((0, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
         for x in 2..6 {
             rb.buffer.line_mut(0).unwrap()[x] = Cell::CONTINUATION;
         }
         rb.clear_touched();
 
         // x past the right edge, y in bounds: the exact shape the review names.
-        rb.set_cell((6, 0), &Cell::new("A", 1));
-        rb.set_cell((100, 0), &Cell::new("A", 1));
-        rb.set_cell((u16::MAX, 0), &Cell::new("A", 1));
+        rb.set_cell((6, 0), &Cell::new("A", 1, Style::EMPTY));
+        rb.set_cell((100, 0), &Cell::new("A", 1, Style::EMPTY));
+        rb.set_cell((u16::MAX, 0), &Cell::new("A", 1, Style::EMPTY));
         assert!(
             !rb.has_changes(),
             "an out-of-bounds write must change nothing"
         );
 
         // y past the bottom edge too.
-        rb.set_cell((0, 9), &Cell::new("A", 1));
+        rb.set_cell((0, 9), &Cell::new("A", 1, Style::EMPTY));
         assert!(!rb.has_changes());
     }
 
@@ -662,12 +661,12 @@ mod tests {
     #[test]
     fn a_span_stops_at_the_last_column_of_the_row() {
         let mut rb = RenderBuffer::new(6, 1);
-        rb.set_cell((5, 0), &Cell::new("\u{4e16}", 2));
+        rb.set_cell((5, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
         let span = rb.touched(0).expect("row 0 touched");
         assert_eq!(span.last, 5, "the span must stop at the last column");
 
         let mut rb = RenderBuffer::new(u16::MAX, 1);
-        rb.set_cell((u16::MAX - 1, 0), &Cell::new("\u{4e16}", 2));
+        rb.set_cell((u16::MAX - 1, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
         let span = rb.touched(0).expect("row 0 touched");
         assert_eq!(span.last, u16::MAX - 1);
     }
@@ -677,19 +676,14 @@ mod tests {
     /// neighbour alone, so the damage may not claim it.
     #[test]
     fn damage_reaches_back_only_to_a_primary_that_owns_the_column() {
-        let cases: [(&str, Vec<Cell>, u16); 3] = [
+        let cases: [(&str, Vec<Cell>, u16); 2] = [
             (
-                "a wide owner is reached",
+                "a narrow neighbour is left alone",
                 vec![
-                    Cell::new("\u{4e16}", 2),
+                    Cell::new("a", 1, Style::EMPTY),
                     Cell::CONTINUATION,
                     Cell::CONTINUATION,
                 ],
-                0,
-            ),
-            (
-                "a narrow neighbour is left alone",
-                vec![Cell::new("a", 1), Cell::CONTINUATION, Cell::CONTINUATION],
                 2,
             ),
             (
@@ -704,7 +698,7 @@ mod tests {
                 rb.buffer.line_mut(0).unwrap()[x] = c.clone();
             }
             rb.clear_touched();
-            rb.set_cell((2, 0), &Cell::new("A", 1));
+            rb.set_cell((2, 0), &Cell::new("A", 1, Style::EMPTY));
             let span = rb.touched(0).expect("row 0 touched");
             assert_eq!(span.first, want_first, "{name}");
         }
@@ -717,11 +711,11 @@ mod tests {
     #[test]
     fn damage_reaches_the_continuation_a_wide_neighbour_owns() {
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((3, 0), &Cell::new("\u{6f22}", 2));
+        rb.set_cell((3, 0), &Cell::new("\u{6f22}", 2, Style::EMPTY));
         rb.clear_touched();
 
         let before = rb.line(0).expect("row 0").to_vec();
-        rb.set_cell((2, 0), &Cell::new("\u{4e16}", 2));
+        rb.set_cell((2, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
         let after = rb.line(0).expect("row 0").to_vec();
         let span = rb.touched(0).expect("row 0 must be dirty");
 
@@ -744,7 +738,7 @@ mod tests {
     #[test]
     fn test_set_cell_touches() {
         let mut rb = RenderBuffer::new(10, 5);
-        rb.set_cell((3, 2), &Cell::new("X", 1));
+        rb.set_cell((3, 2), &Cell::new("X", 1, Style::EMPTY));
         assert!(rb.has_changes());
         assert!(rb.touched(2).is_some());
         assert!(rb.touched(0).is_none());
@@ -766,7 +760,7 @@ mod tests {
             for x in [0, 3] {
                 for remaining in 1..u16::from(width) {
                     for style in [Style::default(), Style::EMPTY.bg(Color::Red).bold()] {
-                        let cell = Cell::new(text, width).style(style);
+                        let cell = Cell::new(text, width, style);
                         let mut rb = RenderBuffer::new(x + u16::from(width) + 1, 1);
                         rb.set_cell((x, 0), &cell);
                         rb.resize(x + remaining, 1);
@@ -780,7 +774,8 @@ mod tests {
                         rb.set_cell((x, 0), &cell);
 
                         assert_eq!(rb.line(0), expected.line(0));
-                        let blank = Cell::BLANK.style(cell.style.clone());
+                        let mut blank = Cell::BLANK;
+                        blank.set_style(cell.style());
                         for col in x..rb.width() {
                             assert_eq!(rb.buffer.cell(Position::new(col, 0)), Some(&blank));
                         }
@@ -802,7 +797,7 @@ mod tests {
     fn equal_wide_cell_that_still_fits_after_shrink_is_untouched() {
         for width in [1, 2, 8] {
             for x in [0, 3] {
-                let cell = Cell::new("W", width);
+                let cell = Cell::new("W", width, Style::EMPTY);
                 let mut rb = RenderBuffer::new(x + u16::from(width) + 1, 1);
                 rb.set_cell((x, 0), &cell);
                 rb.resize(x + u16::from(width), 1);
@@ -820,8 +815,8 @@ mod tests {
     #[test]
     fn test_touched_span_expansion() {
         let mut rb = RenderBuffer::new(10, 5);
-        rb.set_cell((2, 0), &Cell::new("A", 1));
-        rb.set_cell((7, 0), &Cell::new("B", 1));
+        rb.set_cell((2, 0), &Cell::new("A", 1, Style::EMPTY));
+        rb.set_cell((7, 0), &Cell::new("B", 1, Style::EMPTY));
         let span = rb.touched(0).unwrap();
         assert_eq!(span.first, 2);
         assert_eq!(span.last, 7);
@@ -830,7 +825,7 @@ mod tests {
     #[test]
     fn test_clear_touched() {
         let mut rb = RenderBuffer::new(10, 5);
-        rb.set_cell((0, 0), &Cell::new("X", 1));
+        rb.set_cell((0, 0), &Cell::new("X", 1, Style::EMPTY));
         assert!(rb.has_changes());
         rb.clear_touched();
         assert!(!rb.has_changes());
@@ -852,10 +847,10 @@ mod tests {
         // primary to learn how far the blanking goes.
         let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
         let mut rb = RenderBuffer::new(12, 1);
-        rb.set_cell((0, 0), &Cell::new(fam, 8));
+        rb.set_cell((0, 0), &Cell::new(fam, 8, Style::EMPTY));
         rb.clear_touched();
 
-        rb.fill_rect(Rect::new(2, 0, 2, 1), &Cell::new("x", 1));
+        rb.fill_rect(Rect::new(2, 0, 2, 1), &Cell::new("x", 1, Style::EMPTY));
         let (_, span) = rb.touched_lines().next().expect("the row changed");
         assert_eq!(span.first, 0, "the primary blanked with the fill");
         assert_eq!(span.last, 7, "so did every column it owned");
@@ -885,7 +880,7 @@ mod tests {
         // route every write through `set_cell` so dirty tracking sees
         // the change.
         let mut rb = RenderBuffer::new(10, 5);
-        rb.fill_rect(Rect::new(2, 1, 3, 2), &Cell::new("X", 1));
+        rb.fill_rect(Rect::new(2, 1, 3, 2), &Cell::new("X", 1, Style::EMPTY));
         assert!(rb.touched(0).is_none());
         let r1 = rb.touched(1).expect("row 1 should be dirty");
         assert_eq!((r1.first, r1.last), (2, 4));
@@ -901,7 +896,7 @@ mod tests {
         // continuation marker, walks back, blanks the just-written
         // primary, then writes its own primary.
         let mut rb = RenderBuffer::new(8, 1);
-        let wide = Cell::new("漢", 2);
+        let wide = Cell::new("漢", 2, Style::EMPTY);
         rb.fill_rect(Rect::new(0, 0, 6, 1), &wide);
         for x in (0..6).step_by(2) {
             let p = rb.buffer.cell(Position::new(x, 0)).unwrap();
@@ -917,7 +912,8 @@ mod tests {
         // Odd width with a 2-wide fill leaves one trailing slot that
         // can't hold a primary; it must become a blank, not garbage.
         let mut rb = RenderBuffer::new(8, 1);
-        let wide = Cell::new("漢", 2);
+        rb.set_cell((4, 0), &Cell::new("X", 1, Style::EMPTY));
+        let wide = Cell::new("漢", 2, Style::EMPTY);
         rb.fill_rect(Rect::new(0, 0, 5, 1), &wide);
         assert_eq!(rb.buffer.cell(Position::new(0, 0)).unwrap().width(), 2);
         assert_eq!(rb.buffer.cell(Position::new(2, 0)).unwrap().width(), 2);
@@ -930,7 +926,7 @@ mod tests {
     fn clear_via_trait_default_marks_every_row() {
         let mut rb = RenderBuffer::new(4, 3);
         // Stage a non-blank background so clear() has real work to do.
-        rb.fill_rect(Rect::new(0, 0, 4, 3), &Cell::new("X", 1));
+        rb.fill_rect(Rect::new(0, 0, 4, 3), &Cell::new("X", 1, Style::EMPTY));
         rb.clear_touched();
         rb.clear();
         for y in 0..3 {
@@ -946,7 +942,7 @@ mod tests {
         // continuation but the bulk-fill path must also blank the
         // primary at col 2 so no half-wide cell is left behind.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((2, 0), &Cell::new("漢", 2));
+        rb.set_cell((2, 0), &Cell::new("漢", 2, Style::EMPTY));
         assert!(
             rb.buffer
                 .cell(Position::new(3, 0))
@@ -970,7 +966,7 @@ mod tests {
         // has to reach it: recording only the rect leaves the diff blind to a
         // column the write changed, and the stale glyph survives the frame.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((2, 0), &Cell::new("漢", 2));
+        rb.set_cell((2, 0), &Cell::new("漢", 2, Style::EMPTY));
         rb.clear_touched();
 
         rb.fill_rect(Rect::new(3, 0, 3, 1), &Cell::BLANK);
@@ -995,7 +991,7 @@ mod tests {
         // blind to a column the fill rewrote, and the stale half of the
         // cluster survives the frame.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((5, 0), &Cell::new("\u{6f22}", 2));
+        rb.set_cell((5, 0), &Cell::new("\u{6f22}", 2, Style::EMPTY));
         rb.clear_touched();
 
         let before = rb.line(0).expect("row 0").to_vec();
@@ -1026,7 +1022,7 @@ mod tests {
         // the primary but the bulk-fill path must also blank the
         // continuation at col 6 sitting just past `hi`.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((5, 0), &Cell::new("漢", 2));
+        rb.set_cell((5, 0), &Cell::new("漢", 2, Style::EMPTY));
         assert!(
             rb.buffer
                 .cell(Position::new(6, 0))
@@ -1055,7 +1051,7 @@ mod tests {
         // its own bytes never change, so only the damage can tell the diff to
         // repaint it.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((2, 0), &Cell::new("\u{6f22}", 2));
+        rb.set_cell((2, 0), &Cell::new("\u{6f22}", 2, Style::EMPTY));
         rb.clear_touched();
 
         let before = rb.line(0).expect("row 0").to_vec();
@@ -1091,7 +1087,7 @@ mod tests {
         // owned stays put outside the region, so the damage has to reach one
         // column past `bounds_right`.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((5, 0), &Cell::new("\u{6f22}", 2));
+        rb.set_cell((5, 0), &Cell::new("\u{6f22}", 2, Style::EMPTY));
         rb.clear_touched();
 
         let before = rb.line(0).expect("row 0").to_vec();
@@ -1121,7 +1117,7 @@ mod tests {
         // does, and the primary it strands is just as invisible to a diff
         // that only reads the region asked for.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((2, 0), &Cell::new("\u{6f22}", 2));
+        rb.set_cell((2, 0), &Cell::new("\u{6f22}", 2, Style::EMPTY));
         rb.clear_touched();
 
         let before = rb.line(0).expect("row 0").to_vec();
@@ -1152,7 +1148,7 @@ mod tests {
         // cannot reach it. Nothing but the damage says that column now holds
         // half of a cluster whose other half moved.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((5, 0), &Cell::new("\u{6f22}", 2));
+        rb.set_cell((5, 0), &Cell::new("\u{6f22}", 2, Style::EMPTY));
         rb.clear_touched();
 
         let before = rb.line(0).expect("row 0").to_vec();

@@ -141,37 +141,30 @@ New bytes reset the deadline while a key sequence remains incomplete.
 The source checks for ready continuation bytes before it expires that sequence.
 
 Once bytes follow an OSC, DCS, APC, SOS, or PM introducer, the decoder treats
-them as a string body. It waits for the terminator instead of applying the
-Escape timeout. The existing input buffer limit still applies.
+them as a string body. The Escape timeout then stops applying.
+OSC 52 replies stream through clipboard events with a separate idle timeout.
+See [clipboard replies]({{< relref "querying-the-terminal.md#read-a-clipboard-reply" >}})
+for recovery controls.
+Other string bodies wait for their terminator and must fit the input buffer.
 
-`EventSource::with_string_idle_timeout` sets a separate idle timeout.
-The default is two seconds, and each read resets the deadline.
-On expiry, the source emits the incomplete sequence as `Event::Unknown`,
-including its introducer, then resumes normal input decoding.
-Pass `None` to disable the idle timeout.
-
-For an existing `Program`, configure its shared source with
-`program.event_source().lock().unwrap().set_string_idle_timeout(timeout)`.
-The setter restarts the idle wait if a string is in progress.
-An active async stream also refreshes its wait to use the new deadline.
+The timeout passed to `EventSource::poll` limits the caller's wait.
+An incomplete buffered string remains available for subsequent reads.
 
 A new Escape sequence also interrupts an unfinished CSI or control string.
-If the sequence already has a body, the source reports the interrupted bytes
+For buffered sequences with a body, the source reports the interrupted bytes
 as `Event::Unknown`, then decodes the new sequence.
+Clipboard streams instead emit `ClipboardEnd { complete: false }`.
 A trailing Escape in a string waits for another byte, so a split
 `ESC \` still terminates the string normally, including an empty string.
 
-Bytes that arrive after recovery count as new input.
-Late payload bytes can therefore become keys after the idle timeout.
-Choose a longer timeout for transports with long pauses.
-
-This rule reflects a limit of legacy input: Alt+] followed quickly by text
+An unterminated string can absorb ordinary keystrokes until a terminator or
+another Escape sequence arrives.
+This reflects a limit of legacy input: Alt+] followed quickly by text
 can have the same bytes as an OSC string. The Kitty keyboard protocol provides
 distinct key encodings.
 
 Run `cargo run --example legacy_keys` and press Alt+[ or Alt+].
 The example displays the decoded key and its Alt modifier.
-Press F3 to enable or disable the string idle timeout.
 
 ## Presses, repeats, and releases
 

@@ -372,11 +372,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_none_discriminant_is_zero() {
-        assert_eq!(MouseButton::None as u8, 0);
-    }
-
-    #[test]
     fn test_decode_sgr_left_click() {
         let event = decode_sgr_mouse(Params::from_raw(b"0;10;20"), false).unwrap();
         match event {

@@ -315,10 +315,10 @@ impl State {
             while x < overlay.len() {
                 let width = usize::from(overlay[x].width());
                 if width == 0 {
-                    overlay[x] = Cell::BLANK.style(overlay[x].style.clone());
+                    overlay[x] = Cell::new(" ", 1, overlay[x].style());
                     x += 1;
                 } else if width > overlay.len() - x {
-                    let blank = Cell::BLANK.style(overlay[x].style.clone());
+                    let blank = Cell::new(" ", 1, overlay[x].style());
                     overlay[x..].fill(blank);
                     break;
                 } else {
@@ -489,7 +489,7 @@ fn clear_cells(front: &mut RenderBuffer, reference: u64, area: Rect) {
             if let Some(cell) = front.cell((x, y).into())
                 && cell.placement_ref().ok().flatten() == Some(reference)
             {
-                let blank = Cell::BLANK.style(&cell.style);
+                let blank = Cell::new(" ", 1, cell.style());
                 front.set_cell((x, y), &blank);
             }
         }
@@ -582,7 +582,7 @@ impl Renderer {
         let mut cell = Cell::placement(reference);
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
-                cell.style = front.cell((x, y).into()).unwrap().style.clone();
+                cell.copy_style_from(front.cell((x, y).into()).unwrap());
                 front.set_cell((x, y), &cell);
             }
         }
