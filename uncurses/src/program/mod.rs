@@ -81,8 +81,6 @@ use bitflags::bitflags;
 use crate::ansi::{mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
-#[cfg(windows)]
-use crate::event::SourceFlags;
 use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
@@ -116,6 +114,9 @@ where
     /// Held in an `Arc<Mutex<_>>`; the lock is uncontended in the common
     /// single-reader case.
     source: Arc<Mutex<EventSource<I>>>,
+    /// Interrupts a shared reader without acquiring its source lock.
+    #[cfg(windows)]
+    source_waker: crate::event::Waker,
     /// Events handed back by [`Self::unread_event`], which the read path
     /// drains before the source. Kept here rather than in `source` because
     /// these were already observed: routing them back through the source
@@ -957,10 +958,14 @@ where
         screen.set_optimizations(optimizations);
 
         let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
+        #[cfg(windows)]
+        let source_waker = source.lock().unwrap().waker();
         Ok(Self {
             terminal,
             screen,
             source,
+            #[cfg(windows)]
+            source_waker,
             unread: VecDeque::new(),
             state: state::State::default(),
             caps: Capabilities::default(),
@@ -1139,6 +1144,10 @@ where
         self.options = options;
         // The decoder is the only thing that can act on this, and it is
         // behind the source, so the option is carried there as it is taken.
+        #[cfg(windows)]
+        lock_source_for_mode_change(&self.source, &self.source_waker)?
+            .set_decoder_flags(self.options.legacy_keys);
+        #[cfg(not(windows))]
         self.set_decoder_flags(self.options.legacy_keys);
         self.enter_raw_mode()?;
         self.enable_tabs_and_bs();
@@ -1227,7 +1236,20 @@ where
         // Restore even when teardown fails: the caller asked for the terminal
         // back, and a failed write to it is not a reason to keep it raw.
         let teardown = self.teardown();
+        #[cfg(not(windows))]
         let restore = self.terminal.restore();
+        #[cfg(windows)]
+        let restore = {
+            use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
+            let source = Arc::clone(&self.source);
+            let mut source = lock_source_for_mode_change(&source, &self.source_waker);
+            let restore = self.terminal.restore_with_input(|mode| {
+                if let Ok(source) = source.as_mut() {
+                    source.set_vt_input(mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0);
+                }
+            });
+            source.map(|_| ()).and(restore)
+        };
         teardown.and(restore)
     }
 
@@ -1250,13 +1272,13 @@ where
     }
 
     fn enter_raw_mode(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        let source = Arc::clone(&self.source);
+        #[cfg(windows)]
+        let mut source = lock_source_for_mode_change(&source, &self.source_waker)?;
         self.terminal.make_raw()?;
         #[cfg(windows)]
-        {
-            let mut source = self.source.lock().unwrap();
-            let flags = source.flags() | SourceFlags::VT_INPUT;
-            source.set_flags(flags);
-        }
+        source.set_vt_input(true);
         Ok(())
     }
 
@@ -1269,6 +1291,23 @@ where
         // SAFETY: raise is async-signal-safe.
         unsafe { libc::raise(libc::SIGTSTP) };
         Ok(())
+    }
+}
+
+#[cfg(any(windows, test))]
+fn lock_source_for_mode_change<'a, I: Input>(
+    source: &'a Mutex<EventSource<I>>,
+    waker: &crate::event::Waker,
+) -> io::Result<std::sync::MutexGuard<'a, EventSource<I>>> {
+    // A retrying reader can consume a wake and keep or reacquire the lock.
+    loop {
+        match source.try_lock() {
+            Err(std::sync::TryLockError::WouldBlock) => {
+                waker.wake()?;
+                std::thread::yield_now();
+            }
+            result => return Ok(result.unwrap()),
+        }
     }
 }
 

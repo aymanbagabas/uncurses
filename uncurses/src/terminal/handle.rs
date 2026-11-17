@@ -24,7 +24,7 @@
 //! ```rust,ignore
 //! use std::io::Write;
 //! use uncurses::buffer::TextBuffer;
-//! use uncurses::event::{EventSource, SourceFlags};
+//! use uncurses::event::EventSource;
 //! use uncurses::terminal::Terminal;
 //! use uncurses::text::Encode;
 //!
@@ -32,7 +32,9 @@
 //! let _saved = term.make_raw()?;
 //! let size = term.get_window_size()?;
 //! let mut frame = TextBuffer::new(size.col, size.row);
-//! let mut source = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
+//! let mut source = EventSource::new(term.input())?;
+//! #[cfg(windows)]
+//! source.set_vt_input(true);
 //!
 //! // Paint `frame`, read events from `source`.
 //! frame.encode(&mut term.output())?;
@@ -365,8 +367,22 @@ impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
     ///
     /// This method does not intentionally panic.
     pub fn restore(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        return self.restore_with_input(|_| {});
+
+        #[cfg(not(windows))]
         if let Some(state) = self.saved.as_ref() {
             raw::set_state(&self.input, &self.output, state)?;
+            self.saved = None;
+        }
+        #[cfg(not(windows))]
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn restore_with_input(&mut self, on_input: impl FnOnce(u32)) -> io::Result<()> {
+        if let Some(state) = self.saved.as_ref() {
+            raw::set_state_with_input(&self.input, &self.output, state, on_input)?;
             self.saved = None;
         }
         Ok(())

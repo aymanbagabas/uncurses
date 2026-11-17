@@ -168,25 +168,33 @@ over the input half, and turn it into an [`EventStream`](/api/uncurses/event/str
 
 ```rust
 use tokio_stream::StreamExt;
-use uncurses::event::{Event, EventSource, Key, SourceFlags};
+use uncurses::event::{Event, EventSource, Key};
 use uncurses::terminal::Terminal;
 
 async fn run() -> std::io::Result<()> {
     let mut term = Terminal::stdio();
     term.make_raw()?;
 
-    let quit: Key = "ctrl+c".parse().unwrap();
-    let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?.into_stream();
+    let result = async {
+        let quit: Key = "ctrl+c".parse().unwrap();
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut source = EventSource::new(term.input())?;
+        #[cfg(windows)]
+        source.set_vt_input(true);
+        let mut events = source.into_stream();
 
-    while let Some(event) = events.next().await {
-        match event? {
-            Event::KeyPress(ref k) if *k == quit => break,
-            _ => {}
+        while let Some(event) = events.next().await {
+            match event? {
+                Event::KeyPress(ref k) if *k == quit => break,
+                _ => {}
+            }
+            // React and repaint through your own output half.
         }
-        // React and repaint through your own output half.
+        Ok(())
     }
-
-    term.restore()
+    .await;
+    let restore = term.restore();
+    result.and(restore)
 }
 ```
 

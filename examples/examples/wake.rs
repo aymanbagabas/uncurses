@@ -9,14 +9,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use uncurses::event::{EventSource, Input, SourceFlags};
+use uncurses::event::{EventSource, Input};
 use uncurses::terminal::Terminal;
 
 fn main() -> io::Result<()> {
     let mut terminal = Terminal::stdio();
     terminal.make_raw()?;
     let result = (|| {
-        let mut source = EventSource::new_with_flags(terminal.input(), SourceFlags::VT_INPUT)?;
+        let mut source = EventSource::new(terminal.input())?;
+        #[cfg(windows)]
+        source.set_vt_input(true);
         run(&mut source, &mut terminal.output())
     })();
     let restore = terminal.restore();

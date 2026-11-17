@@ -166,14 +166,16 @@ terminal input into types you can match on. It is exactly what `Program` uses
 under the hood to read events.
 
 ```rust
-use uncurses::event::{Event, EventSource, SourceFlags};
+use uncurses::event::{Event, EventSource};
 use uncurses::terminal::Terminal;
 
 fn main() -> std::io::Result<()> {
     let mut term = Terminal::stdio();
     let result = (|| {
         term.make_raw()?;
-        let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
+        let mut events = EventSource::new(term.input())?;
+        #[cfg(windows)]
+        events.set_vt_input(true);
         if let Event::KeyPress(key) = events.read()? {
             let _ = key;
         }

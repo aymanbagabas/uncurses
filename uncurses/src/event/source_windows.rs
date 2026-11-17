@@ -20,8 +20,8 @@
 //! ## Key types
 //!
 //! [`WindowsWakerInner`] owns the Win32 event used by
-//! [`Waker`](crate::event::Waker). The [`EventSource`] also stores VT-input
-//! mode detection, pending surrogate halves, last window size, and last mouse
+//! [`Waker`](crate::event::Waker). The [`EventSource`] also stores the VT-input
+//! setting, pending surrogate halves, last window size, and last mouse
 //! button state needed to translate console records accurately.
 //!
 //! ## Gotchas
@@ -49,7 +49,7 @@ use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
     DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
-    READY_INPUT, READY_SLOTS, READY_WAKE, SourceFlags, Waker,
+    READY_INPUT, READY_SLOTS, READY_WAKE, Waker,
 };
 
 const READ_BATCH: usize = 64;
@@ -115,13 +115,15 @@ where
     /// Override them with [`EventSource::with_esc_timeout`] and
     /// [`EventSource::with_paste_idle_timeout`].
     ///
-    /// `flags` selects the input source behavior. Set [`SourceFlags::VT_INPUT`]
-    /// when the console uses virtual-terminal input.
+    /// Native console key serialization is the default. Call
+    /// [`Self::set_vt_input`] with `true` when the console uses
+    /// `ENABLE_VIRTUAL_TERMINAL_INPUT`, including after
+    /// [`Terminal::make_raw`](crate::terminal::Terminal::make_raw).
     ///
     /// Returns any OS error from wake-event creation or poller construction. It
     /// does not read console records until [`EventSource::poll`] or
     /// [`EventSource::read`] is called.
-    pub fn new_with_flags(input: I, flags: SourceFlags) -> io::Result<Self> {
+    pub fn new(input: I) -> io::Result<Self> {
         let input_handle = {
             use std::os::windows::io::AsRawHandle;
             input.as_handle().as_raw_handle() as HANDLE
@@ -141,7 +143,7 @@ where
 
         Ok(Self {
             input,
-            flags,
+            vt_input: false,
             parser: Decoder::new(DecoderFlags::empty()),
             pending: super::pending::Pending::with_capacity(DEFAULT_BUFFER_CAPACITY),
             esc_timeout: DEFAULT_ESC_TIMEOUT,
@@ -159,6 +161,28 @@ where
             last_size: None,
             last_mouse_buttons: 0,
         })
+    }
+
+    /// Return whether VT input serialization is enabled.
+    pub fn vt_input(&self) -> bool {
+        self.vt_input
+    }
+
+    /// Select how console key records are serialized.
+    ///
+    /// Set `enabled` to match the console's `ENABLE_VIRTUAL_TERMINAL_INPUT` bit.
+    /// The default is `false`, which serializes native console keys through the
+    /// win32-input decoder. With `true`, character records supply VT input.
+    ///
+    /// [`Terminal::make_raw`](crate::terminal::Terminal::make_raw) enables VT input.
+    /// Update this setting after a successful console mode change and before
+    /// the next read. This method changes only serialization, not console modes
+    /// or decoder flags. A change discards incomplete UTF-16 pairs.
+    pub fn set_vt_input(&mut self, enabled: bool) {
+        if self.vt_input != enabled {
+            self.pending_high_surrogate = [None, None];
+        }
+        self.vt_input = enabled;
     }
 
     #[cfg(feature = "async")]
@@ -226,12 +250,7 @@ where
         match record.EventType as u32 {
             KEY_EVENT => {
                 let kev = unsafe { record.Event.KeyEvent };
-                serialize_key_event(
-                    &kev,
-                    self.flags.contains(SourceFlags::VT_INPUT),
-                    &mut self.pending_high_surrogate,
-                    buf,
-                );
+                serialize_key_event(&kev, self.vt_input, &mut self.pending_high_surrogate, buf);
             }
             MOUSE_EVENT => {
                 let mev = unsafe { record.Event.MouseEvent };
@@ -511,21 +530,21 @@ mod tests {
     }
 
     #[test]
-    fn serialize_record_uses_current_source_flags() {
+    fn serialize_record_uses_current_vt_input_setting() {
         let (reader, _writer) = io::pipe().unwrap();
-        let mut source = EventSource::new_with_flags(reader, SourceFlags::VT_INPUT).unwrap();
-        assert_eq!(source.flags(), SourceFlags::VT_INPUT);
+        let mut source = EventSource::new(reader).unwrap();
+        assert!(!source.vt_input);
         let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
         record.EventType = KEY_EVENT as u16;
         record.Event.KeyEvent = key_record(true, 0x41, 0x1E, b'A' as u16, 0, 1);
 
-        for (flags, expected) in [
-            (SourceFlags::VT_INPUT, b"A".as_slice()),
-            (SourceFlags::empty(), b"\x1b[65;30;65;1;0;1_".as_slice()),
-            (SourceFlags::VT_INPUT, b"A".as_slice()),
+        for (enabled, expected) in [
+            (false, b"\x1b[65;30;65;1;0;1_".as_slice()),
+            (true, b"A".as_slice()),
+            (false, b"\x1b[65;30;65;1;0;1_".as_slice()),
+            (true, b"A".as_slice()),
         ] {
-            source.set_flags(flags);
-            assert_eq!(source.flags(), flags);
+            source.set_vt_input(enabled);
             let mut buf = Vec::new();
             source.serialize_record(&record, &mut buf);
             assert_eq!(buf, expected);
@@ -533,24 +552,24 @@ mod tests {
     }
 
     #[test]
-    fn source_flags_reset_surrogates_on_vt_input_changes() {
+    fn vt_input_changes_reset_surrogates() {
         let (reader, _writer) = io::pipe().unwrap();
-        let mut source = EventSource::new_with_flags(reader, SourceFlags::VT_INPUT).unwrap();
+        let mut source = EventSource::new(reader).unwrap();
         let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
         record.EventType = KEY_EVENT as u16;
         let mut buf = Vec::new();
 
-        for (flags, key_down, ch) in [
-            (SourceFlags::VT_INPUT, true, 0xD83D),
-            (SourceFlags::VT_INPUT, true, 0xDE80),
-            (SourceFlags::VT_INPUT, true, 0xD83D),
-            (SourceFlags::VT_INPUT, false, 0xD83D),
-            (SourceFlags::empty(), true, b'a' as u16),
-            (SourceFlags::VT_INPUT, true, 0xDE80),
-            (SourceFlags::VT_INPUT, false, 0xDE80),
+        for (enabled, key_down, ch) in [
+            (true, true, 0xD83D),
+            (true, true, 0xDE80),
+            (true, true, 0xD83D),
+            (true, false, 0xD83D),
+            (false, true, b'a' as u16),
+            (true, true, 0xDE80),
+            (true, false, 0xDE80),
         ] {
-            source.set_flags(flags);
-            if flags.is_empty() {
+            source.set_vt_input(enabled);
+            if !enabled {
                 assert_eq!(source.pending_high_surrogate, [None, None]);
             }
             record.Event.KeyEvent = key_record(key_down, 0, 0, ch, 0, 1);

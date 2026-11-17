@@ -520,6 +520,9 @@ impl<I: Input, O: Write> Program<I, O> {
 
     fn write_backspace_mode(&mut self, enabled: bool) -> io::Result<()> {
         // Keep async decoding in step with the terminal mode change.
+        #[cfg(windows)]
+        let mut source = super::lock_source_for_mode_change(&self.source, &self.source_waker)?;
+        #[cfg(not(windows))]
         let mut source = self.source.lock().unwrap();
         if enabled {
             mode::Mode::BACKARROW_KEY.set(&mut self.screen)?;

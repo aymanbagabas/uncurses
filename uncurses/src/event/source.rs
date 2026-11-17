@@ -25,7 +25,7 @@
 //!
 //! ## Lifecycle
 //!
-//! Construct with [`EventSource::new`] or [`EventSource::new_with_flags`]. Call
+//! Construct with [`EventSource::new`]. Call
 //! [`EventSource::poll`] to wait up to a timeout, drain queued events with
 //! [`EventSource::try_read`], or call [`EventSource::read`] to block until one
 //! event arrives. [`EventSource::unread`] can put an unrelated event back while
@@ -42,8 +42,6 @@ use std::io;
 use std::io::Read;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use bitflags::bitflags;
 
 #[cfg(unix)]
 use std::os::fd::AsFd;
@@ -89,17 +87,6 @@ impl<T: Read + AsFd + Send> Input for T {}
 pub trait Input: Read + AsHandle + Send {}
 #[cfg(windows)]
 impl<T: Read + AsHandle + Send> Input for T {}
-
-bitflags! {
-    /// Input source configuration, separate from [`DecoderFlags`].
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-    pub struct SourceFlags: u8 {
-        /// On Windows, serialize console key records as VT input.
-        ///
-        /// Set this flag when the console uses `ENABLE_VIRTUAL_TERMINAL_INPUT`.
-        const VT_INPUT = 1 << 0;
-    }
-}
 
 /// Default read buffer capacity. This is the hard cap on any single
 /// sequence; the backing buffer is allocated once at construction.
@@ -250,7 +237,6 @@ where
     #[cfg_attr(windows, allow(dead_code))]
     pub(super) input: I,
 
-    pub(super) flags: SourceFlags,
     pub(super) parser: Decoder,
     /// Bounded read buffer. The unread slice is `pending.slice()`; new
     /// input is written into `pending.spare_mut()`. `pending.capacity()`
@@ -296,6 +282,8 @@ where
     pub(super) last_size: Option<Winsize>,
 
     // --- Windows-only state ---
+    #[cfg(windows)]
+    pub(super) vt_input: bool,
     /// Shared readiness poller watching `[input_handle, wake_event]` (in
     /// that index order). Held behind `Arc` so an [`super::EventStream`]
     /// reader thread can wait on it lock-free while the source's decode
@@ -325,29 +313,6 @@ impl<I> EventSource<I>
 where
     I: Input,
 {
-    /// Build an event source for `input` with empty source flags.
-    ///
-    /// See [`Self::new_with_flags`] for platform requirements and construction errors.
-    pub fn new(input: I) -> io::Result<Self> {
-        Self::new_with_flags(input, SourceFlags::empty())
-    }
-
-    /// Return the input source flags.
-    pub fn flags(&self) -> SourceFlags {
-        self.flags
-    }
-
-    /// Set the input source flags without changing terminal modes or decoder flags.
-    ///
-    /// On Windows, a [`SourceFlags::VT_INPUT`] change discards incomplete UTF-16 pairs.
-    pub fn set_flags(&mut self, flags: SourceFlags) {
-        #[cfg(windows)]
-        if (self.flags ^ flags).contains(SourceFlags::VT_INPUT) {
-            self.pending_high_surrogate = [None, None];
-        }
-        self.flags = flags;
-    }
-
     /// Return the configured escape-sequence timeout.
     ///
     /// This is the duration used to disambiguate a physical Escape key from an
