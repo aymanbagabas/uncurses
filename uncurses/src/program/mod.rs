@@ -11,10 +11,8 @@
 //! - the [`Capabilities`] the terminal has reported, recorded from replies as
 //!   they pass through the read path.
 //!
-//! Drawing is not on `Program`. Reach the renderer with
-//! [`screen_mut`](Program::screen_mut) and call
-//! [`render`](Screen::render) on it — that is the only `render` in the crate,
-//! and the only `flush`.
+//! Draw through [`screen_mut`](Program::screen_mut). Call
+//! [`render`](Screen::render) on the screen to emit the frame.
 //!
 //! Construction is inert: [`Program::new`] (and the [`stdio`](Program::stdio)
 //! / [`open`](Program::open) shortcuts) only build the program. Begin a
@@ -932,8 +930,9 @@ where
     /// Hand the terminal back: reset every staged mode and the managed area to defaults, and flush. The
     /// caller restores the saved raw-mode state afterward.
     fn teardown(&mut self) -> io::Result<()> {
-        self.reset()?;
-        self.screen.flush()
+        let placements = self.screen.release_placements();
+        let reset = self.reset().and_then(|()| self.screen.flush());
+        placements.and(reset)
     }
 }
 

@@ -70,6 +70,8 @@
 
 use compact_str::CompactString;
 
+mod placement;
+
 use crate::style::Style;
 
 /// A single terminal-grid cell.
@@ -91,8 +93,7 @@ pub struct Cell {
     /// run of identically-linked cells shares a single allocation
     /// without per-cell deep clones.
     pub style: Style,
-    /// Column footprint. `0` marks a continuation placeholder; `1` or more
-    /// marks a primary owning that many columns.
+    /// Column footprint. Zero marks a continuation; placements occupy one column.
     width: u8,
 }
 
@@ -171,9 +172,9 @@ impl Cell {
     /// # Parameters
     ///
     /// - `content`: grapheme content to store in the cell.
-    /// - `width`: number of terminal columns the content occupies. Width `0`
-    ///   makes a continuation placeholder whatever the content, so use
-    ///   [`Cell::CONTINUATION`] when that is what you mean.
+    /// - `width`: number of terminal columns the content occupies. Width-zero
+    ///   content makes a continuation placeholder. The `"\0p"` prefix at width
+    ///   one is reserved for private placement metadata.
     ///
     /// # Returns
     ///
@@ -232,7 +233,7 @@ impl Cell {
     ///
     /// # Returns
     ///
-    /// `true` when [`Cell::width`] is `0`.
+    /// `true` when the stored width is zero.
     ///
     /// # Panics
     ///
@@ -240,10 +241,8 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// Width alone decides, as it does for [`Cell::is_wide`]: a cell that
-    /// claims no column has none to draw in, so whatever it stores is never
-    /// reached. Width `0`, `1`, and `2` or more partition every cell into a
-    /// continuation, a narrow cell, and a wide one.
+    /// Ordinary width-zero content is skipped. Placement markers instead
+    /// occupy one grid position and resolve through the screen's registry.
     #[inline]
     pub fn is_continuation(&self) -> bool {
         self.width == 0
@@ -311,8 +310,8 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// This returns the stored content exactly; it does not derive or append
-    /// the neighboring continuations for multi-column cells.
+    /// This returns the stored content exactly. For a placement cell this
+    /// is metadata; use the screen to render its referenced content.
     #[inline]
     pub fn content(&self) -> &str {
         self.content.as_str()
@@ -323,8 +322,8 @@ impl Cell {
     /// # Returns
     ///
     /// The number of terminal columns owned by this cell: `0` for a
-    /// continuation placeholder, otherwise the width passed to
-    /// [`Cell::new`].
+    /// continuation, `1` for a placement fragment, otherwise the width passed
+    /// to [`Cell::new`].
     ///
     /// # Panics
     ///

@@ -8,8 +8,7 @@
 //! when the destination cell actually differs. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
-//! Only the cells inside `front_buf.touched(y)` spans are read — no
-//! full-buffer scan.
+//! Only cells inside touched spans participate in synchronization.
 
 use crate::renderer::Renderer;
 use crate::renderer::buffer::RenderBuffer;
@@ -37,6 +36,18 @@ impl Renderer {
     /// continuation cells, steps by wide-cell width, and clears
     /// `front`'s touched flags before returning.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
+        self.sync_front_impl::<true>(front)
+            .expect("placement metadata is accepted")
+    }
+
+    pub(crate) fn sync_front_text(&mut self, front: &mut RenderBuffer) -> std::io::Result<bool> {
+        self.sync_front_impl::<false>(front)
+    }
+
+    fn sync_front_impl<const PLACEMENTS: bool>(
+        &mut self,
+        front: &mut RenderBuffer,
+    ) -> std::io::Result<bool> {
         let width = front.width();
         let height = front.height();
         if self.back_buf.width() != width || self.back_buf.height() != height {
@@ -57,21 +68,30 @@ impl Renderer {
                     x += 1;
                     continue;
                 };
-                // Skip continuation columns. Copying the primary places
-                // the continuation on the far side as part of the same
-                // write, so the column is already carrying the value this
-                // loop would ask for. `Buffer::set` ignores a continuation
-                // offered on its own, so passing one on would be a wasted
-                // call rather than a wrong one, and stepping over it keeps
-                // the walk in step with the widths it advances by.
+                // Skip continuation columns. The primary write already copies them.
                 if new_cell.is_continuation() {
                     x += 1;
                     continue;
                 }
-                // `RenderBuffer::set_cell` does a value-equality
-                // check before writing, so unchanged cells pay no
-                // clone and no touch.
-                self.back_buf.set_cell(pos, new_cell);
+                let existing = self.back_buf.cell(pos).unwrap();
+                let previous_width = existing.width();
+                let changed = existing != new_cell || u16::from(new_cell.width()) > width - x;
+                if !changed {
+                    x = x.saturating_add(u16::from(new_cell.width()));
+                    continue;
+                }
+                if new_cell.is_placement() {
+                    if !PLACEMENTS {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "unregistered placement cell",
+                        ));
+                    }
+                    self.back_buf
+                        .set_cell(pos, &crate::cell::Cell::BLANK.style(&new_cell.style));
+                } else {
+                    self.back_buf.replace_cell(pos, new_cell, previous_width);
+                }
                 // Step over any continuation columns owned by the cell
                 // we just wrote so we don't try to re-copy them.
                 let step = (new_cell.width() as u16).max(1);
@@ -80,7 +100,7 @@ impl Renderer {
         }
         front.clear_touched();
 
-        self.force_clear || self.back_buf.has_changes() || self.size_changed(width, height)
+        Ok(self.force_clear || self.back_buf.has_changes() || self.size_changed(width, height))
     }
 
     pub(super) fn size_changed(&self, width: u16, height: u16) -> bool {
@@ -105,12 +125,44 @@ mod tests {
     }
 
     #[test]
+    fn sync_placement_preserves_style_in_backing_blank() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(2, 1);
+        let style = crate::style::Style::new()
+            .bold()
+            .bg(crate::color::Color::Blue)
+            .link("https://example.com", "");
+        front.set_cell((0, 0), &Cell::placement(1).style(&style));
+        renderer.sync_front(&mut front);
+        assert_eq!(
+            renderer.back_buf.cell((0, 0).into()),
+            Some(&Cell::BLANK.style(style))
+        );
+    }
+
+    #[test]
     fn sync_lazy_resizes_back_buf() {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 3);
         r.sync_front(&mut front);
         assert_eq!(r.back_buf.width(), 10);
         assert_eq!(r.back_buf.height(), 3);
+    }
+
+    #[test]
+    fn sync_normalizes_an_equal_wide_primary_clipped_by_resize() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(3, 1);
+        let style = crate::style::Style::new().bold();
+        front.set_cell((1, 0), &Cell::new("\u{754c}", 2).style(&style));
+        renderer.sync_front(&mut front);
+
+        front.resize(2, 1);
+        renderer.sync_front(&mut front);
+        assert_eq!(
+            renderer.back_buf.cell((1, 0).into()),
+            Some(&Cell::BLANK.style(style))
+        );
     }
 
     #[test]

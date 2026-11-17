@@ -74,6 +74,8 @@ mod cursor_planner_tests;
 pub(crate) mod frame;
 pub(crate) mod hash;
 pub(crate) mod pen;
+pub(crate) mod placements;
+pub(crate) mod rows;
 pub(crate) mod scroll;
 pub(crate) mod state;
 pub(crate) mod sync;

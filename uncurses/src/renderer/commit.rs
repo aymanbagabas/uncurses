@@ -3,6 +3,17 @@ use crate::cell::Cell;
 use super::{RenderBuffer, Renderer};
 
 impl Renderer {
+    pub(crate) fn validate_commit_rows(
+        &self,
+        front: &RenderBuffer,
+        count: u16,
+    ) -> std::io::Result<()> {
+        if let Some(placements) = &self.placements {
+            placements.validate_commit_rows(front, count)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn commit_rows(&mut self, front: &mut RenderBuffer, count: u16) {
         let width = front.width();
         let old_height = front.height();
@@ -11,6 +22,13 @@ impl Renderer {
             return;
         }
         let height = old_height - count;
+        if let Some(placements) = self.placements.as_mut() {
+            placements.commit_rows(front, count);
+        }
+        self.discard_unused_placements();
+        for rows in [&mut self.protected_rows, &mut self.invalid_rows] {
+            rows.drain(..usize::from(count).min(rows.len()));
+        }
         for buffer in [Some(front), self.cur_buf.as_mut(), Some(&mut self.back_buf)]
             .into_iter()
             .flatten()

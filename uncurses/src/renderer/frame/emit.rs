@@ -133,6 +133,9 @@ impl Renderer {
         x: u16,
         pen: PenPolicy,
     ) -> io::Result<()> {
+        if self.pen_unknown {
+            self.reset_pen(out)?;
+        }
         let mut y = y;
         let mut x = x;
 
