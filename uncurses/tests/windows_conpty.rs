@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use uncurses::event::{Event, EventSource, Input, KeyCode, KeyModifiers};
+use uncurses::event::{DecoderFlags, Event, EventSource, Input, KeyCode, KeyModifiers};
 use uncurses::program::{Program, ProgramOptions};
 use uncurses::terminal::{Terminal, TtyInput, TtyOutput};
 use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, WAIT_OBJECT_0};
@@ -388,10 +388,26 @@ fn child_mode_change_readers() {
         },
         0
     );
-    for action in ["pause", "resume", "finish"] {
+    for (action, backspace_mode) in [
+        ("init", None),
+        ("pause", None),
+        ("resume", None),
+        ("finish", None),
+        ("pause", Some(false)),
+        ("pause", Some(true)),
+        ("resume", Some(false)),
+        ("resume", Some(true)),
+        ("finish", Some(false)),
+        ("finish", Some(true)),
+    ] {
         for use_poll in [false, true] {
             let mut program = Program::open().unwrap();
-            program.init().unwrap();
+            if action != "init" {
+                program.init().unwrap();
+            }
+            if let Some(enabled) = backspace_mode {
+                program.set_backspace_mode(enabled).unwrap();
+            }
             if action == "resume" {
                 program.pause().unwrap();
             }
@@ -413,6 +429,17 @@ fn child_mode_change_readers() {
             });
             waiting.recv_timeout(TIMEOUT).unwrap();
             match action {
+                "init" => {
+                    program
+                        .init_with(ProgramOptions {
+                            legacy_keys: DecoderFlags::LF_IS_ENTER,
+                            ..ProgramOptions::default()
+                        })
+                        .unwrap();
+                    assert_eq!(program.decoder_flags(), DecoderFlags::LF_IS_ENTER);
+                    check_up_key(&program, input, true);
+                    program.finish().unwrap();
+                }
                 "pause" => {
                     program.pause().unwrap();
                     check_up_key(&program, input, false);

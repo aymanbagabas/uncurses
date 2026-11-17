@@ -1144,6 +1144,10 @@ where
         self.options = options;
         // The decoder is the only thing that can act on this, and it is
         // behind the source, so the option is carried there as it is taken.
+        #[cfg(windows)]
+        lock_source_for_mode_change(&self.source, &self.source_waker)?
+            .set_decoder_flags(self.options.legacy_keys);
+        #[cfg(not(windows))]
         self.set_decoder_flags(self.options.legacy_keys);
         self.enter_raw_mode()?;
         self.enable_tabs_and_bs();
