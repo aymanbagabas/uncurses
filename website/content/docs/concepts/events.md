@@ -16,6 +16,11 @@ The path from a keystroke to something you can match on has three stops.
 
 ```mermaid
 flowchart TB
+  accTitle: From input bytes to events
+  accDescr {
+    Input bytes pass from the tty through the decoder.
+    The decoder returns complete events to the application event loop.
+  }
   bytes["Raw bytes from the tty"] --> decoder["Decoder: parse escape sequences"]
   decoder --> event["Event: KeyPress, MouseClick, Resize, ..."]
   event --> loop["Your event loop"]

@@ -28,6 +28,11 @@ Linux, macOS, and Windows.
 
 Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
 
+The [uncurses skill](skills/README.md) helps coding assistants write uncurses
+applications and find relevant examples.
+
+For repository development, read the [contributor guide](CONTRIBUTING.md).
+
 ## Features
 
 Nothing is read from terminfo. `Program` asks the terminal what it supports,
@@ -72,17 +77,25 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    program.init()?;
-    program.enter_alt_screen()?; // take over the full screen
+    let result = (|| {
+        program.init()?;
+        program.enter_alt_screen()?;
 
-    let screen = program.screen_mut();
-    screen.set_str((0, 0), "hello, uncurses!", Style::new());
-    screen.render()?;
+        let screen = program.screen_mut();
+        screen.set_str((0, 0), "hello, uncurses!", Style::new());
+        screen.render()?;
 
-    while !matches!(program.read_event()?, Event::KeyPress(_)) {} // wait for a key
-    program.finish() // restores the main screen
+        while !matches!(program.read_event()?, Event::KeyPress(_)) {}
+        Ok(())
+    })();
+    let finish = program.finish();
+    result.and(finish)
 }
 ```
+
+The closure records the session result. `finish()` runs after success or an
+error, including an initialization error. See the executable
+[`hello_world` example](examples/examples/hello_world.rs).
 
 Only need output? A `Screen` stands alone over any `Write`, with no terminal
 session at all:
@@ -106,6 +119,11 @@ Per-crate guides and more examples:
 ### Examples
 
 A curated few, each `cargo run -p examples --example <name>`:
+
+**`session_state`**
+
+Inspect owned session choices and terminal reports separately. Select keyboard
+flags and paste modes, then carry the choices between screen buffers.
 
 **`drag_drop`**
 
@@ -167,12 +185,18 @@ For more, browse the [`examples/`](examples/examples) directory.
 
 ## Install
 
-Not on crates.io yet, so depend on it straight from git:
+Install v0.0.9 from [crates.io](https://crates.io/crates/uncurses):
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses = "0.0.9"
 ```
+
+Use the [v0.0.9 API reference](https://docs.rs/uncurses/0.0.9).
+Checkout examples follow their source revision. Use a matching git dependency
+for unreleased APIs.
+See [installation](https://uncurses.org/docs/getting-started/installation/)
+for feature choices and supported platforms.
 
 Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
 the latest stable Rust (currently 1.88 or newer).

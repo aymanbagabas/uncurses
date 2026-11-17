@@ -1,0 +1,11 @@
+<dialog class="search-dialog" aria-labelledby="search-title" data-index="{{ "search.json" | relURL }}">
+  <div class="search-heading">
+    <h2 id="search-title">Search documentation</h2>
+    <button type="button" class="quiet-button" data-search-close aria-label="Close search">Close <kbd>esc</kbd></button>
+  </div>
+  <label class="sr-only" for="search-input">Search documentation</label>
+  <input id="search-input" type="search" placeholder="Search cells, events, guides..." autocomplete="off" spellcheck="false">
+  <p class="search-status" role="status">Type to search the documentation.</p>
+  <ul class="search-results" aria-label="Search results"></ul>
+  <div class="search-footer">DOCUMENTATION INDEX <span>Use Tab to select a result.</span></div>
+</dialog>

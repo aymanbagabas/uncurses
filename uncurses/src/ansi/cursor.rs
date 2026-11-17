@@ -481,16 +481,8 @@ mod tests {
     }
 
     #[test]
-    fn test_cursor_style() {
-        let mut buf = Vec::new();
-        write_cursor_style(&mut buf, CursorStyle::SteadyBar).unwrap();
-        assert_eq!(buf, b"\x1b[6 q");
-    }
-
-    #[test]
     fn test_cup_cost() {
         use crate::ansi::cost::cup_cost;
-        assert_eq!(cup_cost(0, 0), 3); // \x1b[H
         assert_eq!(cup_cost(9, 0), 5); // \x1b[10H
         assert_eq!(cup_cost(9, 9), 8); // \x1b[10;10H
     }

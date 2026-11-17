@@ -18,6 +18,7 @@ use test::{Bencher, black_box};
 use crate::buffer::SurfaceMut;
 use crate::cell::Cell;
 use crate::renderer::{RenderBuffer, Renderer};
+use crate::style::Style;
 
 const WIDTH: u16 = 80;
 const HEIGHT: u16 = 24;
@@ -102,7 +103,7 @@ fn filled_buffer(offset: u8) -> RenderBuffer {
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
             let ch = char::from(b'a' + ((x as u8 + y as u8 + offset) % 26));
-            buf.set_cell((x, y), &Cell::new(ch.to_string(), 1));
+            buf.set_cell((x, y), &Cell::new(ch.to_string(), 1, Style::EMPTY));
         }
     }
     buf
@@ -114,7 +115,7 @@ fn shifted_up_buffer() -> RenderBuffer {
         for x in 0..WIDTH {
             let source_y = (y + 1) % HEIGHT;
             let ch = char::from(b'a' + ((x as u8 + source_y as u8) % 26));
-            buf.set_cell((x, y), &Cell::new(ch.to_string(), 1));
+            buf.set_cell((x, y), &Cell::new(ch.to_string(), 1, Style::EMPTY));
         }
     }
     buf
@@ -183,8 +184,8 @@ fn single_cell_change(b: &mut Bencher) {
     let mut second = first.clone();
     first.clear_touched();
     second.clear_touched();
-    first.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::new("0", 1));
-    second.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::new("1", 1));
+    first.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::new("0", 1, Style::EMPTY));
+    second.set_cell((WIDTH / 2, HEIGHT / 2), &Cell::new("1", 1, Style::EMPTY));
 
     bench_swap_render(b, Renderer::new(), first, second, |_| {});
 }

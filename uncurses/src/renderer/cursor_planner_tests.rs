@@ -105,7 +105,6 @@ fn cup_fast_path_skipped_in_relative_mode() {
 
     let actual = planned_move(&mut r, Position { x: 0, y: 0 }, Position { x: 60, y: 20 });
 
-    assert!(!actual.windows(9).any(|w| w == b"\x1b[21;61H"));
     assert_bytes_eq(&actual, b"\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\x1b[60C");
 }
 
@@ -137,7 +136,6 @@ fn planner_with_tabs_only() {
     let actual = planned_move(&mut r, Position { x: 0, y: 0 }, Position { x: 8, y: 0 });
 
     assert_bytes_eq(&actual, b"\t");
-    assert!(!actual.contains(&b'\x08'));
 }
 
 #[test]
@@ -149,7 +147,6 @@ fn planner_with_backspace_only() {
     let actual = planned_move(&mut r, Position { x: 10, y: 0 }, Position { x: 8, y: 0 });
 
     assert_bytes_eq(&actual, b"\x08\x08");
-    assert!(!actual.contains(&b'\t'));
 }
 
 #[test]
@@ -203,8 +200,8 @@ fn styled_overwrite_beats_cuf() {
     let style = Style::default().bold();
     r.cur.set_style(style.clone());
     let mut line = vec![Cell::BLANK; 80];
-    line[0] = Cell::new("A", 1).style(style.clone());
-    line[1] = Cell::new("B", 1).style(style);
+    line[0] = Cell::new("A", 1, style.clone());
+    line[1] = Cell::new("B", 1, style);
 
     let actual = relative_move(
         &mut r,

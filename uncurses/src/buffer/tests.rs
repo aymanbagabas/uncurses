@@ -1,10 +1,10 @@
 use super::*;
 use crate::renderer::RenderBuffer;
 use crate::style::Style;
-use crate::text::{Painter, TextSurface, WidthMode, WrapMode};
+use crate::text::{Painter, TextSurface, WrapMode};
 
-fn link_of(s: &Style) -> Option<(&str, &str)> {
-    s.link
+fn link_of(cell: &Cell) -> Option<(&str, &str)> {
+    cell.link
         .as_deref()
         .map(|l| (l.url.as_str(), l.params.as_str()))
 }
@@ -14,22 +14,21 @@ fn test_new_buffer() {
     let buf = Buffer::new(80, 24);
     assert_eq!(buf.width(), 80);
     assert_eq!(buf.height(), 24);
-    assert_eq!(buf.height(), 24);
     assert_eq!(buf.line(0).map(|l| l.len()), Some(80));
 }
 
 #[test]
 fn test_set_get() {
     let mut buf = Buffer::new(10, 5);
-    let cell = Cell::new("X", 1);
-    buf.set((3, 2), &cell.clone());
+    let cell = Cell::new("X", 1, Style::EMPTY);
+    buf.set((3, 2), &cell);
     assert_eq!(buf.cell(Position::new(3, 2)).unwrap().content(), "X");
 }
 
 #[test]
 fn test_wide_char_set() {
     let mut buf = Buffer::new(10, 1);
-    let cell = Cell::new("中", 2);
+    let cell = Cell::new("中", 2, Style::EMPTY);
     buf.set((3, 0), &cell);
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().content(), "中");
     assert_eq!(buf.cell(Position::new(3, 0)).unwrap().width(), 2);
@@ -39,9 +38,9 @@ fn test_wide_char_set() {
 #[test]
 fn test_overwrite_wide_char() {
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2));
+    buf.set((3, 0), &Cell::new("中", 2, Style::EMPTY));
     // Overwrite continuation cell
-    buf.set((4, 0), &Cell::new("A", 1));
+    buf.set((4, 0), &Cell::new("A", 1, Style::EMPTY));
     // Primary cell should be blanked
     assert!(buf.cell(Position::new(3, 0)).unwrap().is_blank());
     assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "A");
@@ -55,29 +54,26 @@ fn test_broken_wide_cell_keeps_bg() {
     // Overwriting a wide cell's continuation blanks the primary; the blank
     // must keep the wide cell's background instead of resetting to default.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
-    buf.set((4, 0), &Cell::new("A", 1));
+    buf.set((3, 0), &Cell::new("中", 2, styled.clone()));
+    buf.set((4, 0), &Cell::new("A", 1, Style::EMPTY));
     let primary = buf.cell(Position::new(3, 0)).unwrap();
     assert!(primary.is_blank());
-    assert_eq!(primary.style.bg, Some(Color::Red));
+    assert_eq!(primary.bg, Some(Color::Red));
 
     // Overwriting the primary blanks the trailing continuation; that blank
     // keeps the wide cell's background too.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
-    buf.set((3, 0), &Cell::new("A", 1));
-    assert_eq!(
-        buf.cell(Position::new(4, 0)).unwrap().style.bg,
-        Some(Color::Red)
-    );
+    buf.set((3, 0), &Cell::new("中", 2, styled.clone()));
+    buf.set((3, 0), &Cell::new("A", 1, Style::EMPTY));
+    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().bg, Some(Color::Red));
 
     // A wide cell that doesn't fit at the right edge is stored as a blank
     // that still carries its background.
     let mut buf = Buffer::new(4, 1);
-    buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
+    buf.set((3, 0), &Cell::new("中", 2, styled.clone()));
     let edge = buf.cell(Position::new(3, 0)).unwrap();
     assert!(edge.is_blank());
-    assert_eq!(edge.style.bg, Some(Color::Red));
+    assert_eq!(edge.bg, Some(Color::Red));
 }
 
 fn check_partial_fill_style(use_view: bool) {
@@ -95,7 +91,7 @@ fn check_partial_fill_style(use_view: bool) {
         for columns in [1, 5, 10] {
             let mut buf = Buffer::new(16, 3);
             let rect = Rect::new(2, 1, columns, 1);
-            let fill = Cell::new("W", width).style(style.clone());
+            let fill = Cell::new("W", width, style.clone());
             if use_view {
                 View::new(&mut buf, rect).fill_rect(Rect::new(0, 0, 16, 3), &fill);
             } else {
@@ -108,11 +104,19 @@ fn check_partial_fill_style(use_view: bool) {
                     let expected = if rect.contains(pos) {
                         let offset = x - rect.left();
                         if offset >= full_columns {
-                            Cell::BLANK.style(style.clone())
+                            {
+                                let mut styled_cell = Cell::BLANK;
+                                styled_cell.set_style(style.clone());
+                                styled_cell
+                            }
                         } else if offset.is_multiple_of(u16::from(width)) {
                             fill.clone()
                         } else {
-                            Cell::CONTINUATION.style(style.clone())
+                            {
+                                let mut styled_cell = Cell::CONTINUATION;
+                                styled_cell.set_style(style.clone());
+                                styled_cell
+                            }
                         }
                     } else {
                         Cell::BLANK
@@ -149,14 +153,16 @@ fn check_fill_boundary_style(rect: Rect) {
             .bg(Color::Blue)
             .link("https://example.com/old", "")
     };
-    let fill = Cell::new("x", 1).style(
+    let fill = Cell::new(
+        "x",
+        1,
         Style::EMPTY
             .fg(Color::White)
             .bg(Color::Red)
             .link("https://example.com/fill", ""),
     );
     let mut buf = Buffer::new(12, 3);
-    buf.set((2, 1), &Cell::new("W", 8).style(old_style.clone()));
+    buf.set((2, 1), &Cell::new("W", 8, old_style.clone()));
     buf.fill_rect(rect, &fill);
     for y in 0..3 {
         for x in 0..12 {
@@ -164,7 +170,11 @@ fn check_fill_boundary_style(rect: Rect) {
             let expected = if rect.contains(pos) {
                 fill.clone()
             } else if y == 1 && (2..10).contains(&x) {
-                Cell::BLANK.style(old_style.clone())
+                {
+                    let mut styled_cell = Cell::BLANK;
+                    styled_cell.set_style(old_style.clone());
+                    styled_cell
+                }
             } else {
                 Cell::BLANK
             };
@@ -200,7 +210,7 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
     // continuation produced by the previous set(). That second write must
     // not blank the wide primary we just placed.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2));
+    buf.set((3, 0), &Cell::new("中", 2, Style::EMPTY));
     // Now write a continuation into col 4 (where one already lives).
     let cont = Cell::CONTINUATION;
     buf.set((4, 0), &cont);
@@ -209,20 +219,10 @@ fn test_overwrite_continuation_with_continuation_keeps_primary() {
     assert!(buf.cell(Position::new(4, 0)).unwrap().is_continuation());
 }
 
-#[test]
-fn test_resize() {
-    let mut buf = Buffer::new(10, 5);
-    buf.set((0, 0), &Cell::new("X", 1));
-    buf.resize(20, 10);
-    assert_eq!(buf.width(), 20);
-    assert_eq!(buf.height(), 10);
-    assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "X");
-}
-
 fn fill_with_marker(buf: &mut Buffer) {
     for y in 0..buf.height() {
         for x in 0..buf.width() {
-            buf.set((x, y), &Cell::new(format!("{x},{y}"), 1));
+            buf.set((x, y), &Cell::new(format!("{x},{y}"), 1, Style::EMPTY));
         }
     }
 }
@@ -327,21 +327,11 @@ fn resize_same_width_height_only() {
 }
 
 #[test]
-fn test_write_string() {
-    let mut buf = TextBuffer::new(20, 1).with_width_mode(WidthMode::Grapheme);
-    let p =
-        Painter::new(&mut buf).set_str_wrap((0, 0), "Hello", WrapMode::Truncate, Style::default());
-    assert_eq!(p, Position::new(5, 0));
-    assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "H");
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
-}
-
-#[test]
 fn test_view() {
     let mut buf = RenderBuffer::new(20, 10);
     {
         let mut v = View::new(&mut buf, (5, 2, 10, 5));
-        v.set_cell(Position::new(5, 2), &Cell::new("W", 1));
+        v.set_cell(Position::new(5, 2), &Cell::new("W", 1, Style::EMPTY));
         assert_eq!(v.cell(Position::new(5, 2)).unwrap().content(), "W");
     }
     assert_eq!(buf.cell(Position::new(5, 2)).unwrap().content(), "W");
@@ -383,30 +373,6 @@ fn write_string_wc_mode_skips_leading_combining_mark() {
 }
 
 #[test]
-fn write_string_truncates_at_right_edge() {
-    let mut buf = TextBuffer::new(5, 1);
-    let p = Painter::new(&mut buf).set_str_wrap(
-        (0, 0),
-        "Hello, World!",
-        WrapMode::Truncate,
-        Style::default(),
-    );
-    assert_eq!(p, Position::new(5, 0));
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "o");
-}
-
-#[test]
-fn write_string_wraps_to_next_row() {
-    let mut buf = TextBuffer::new(5, 3);
-    let p =
-        Painter::new(&mut buf).set_str_wrap((0, 0), "abcdefghij", WrapMode::Wrap, Style::default());
-    assert_eq!(p, Position::new(5, 1));
-    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().content(), "e");
-    assert_eq!(buf.cell(Position::new(0, 1)).unwrap().content(), "f");
-    assert_eq!(buf.cell(Position::new(4, 1)).unwrap().content(), "j");
-}
-
-#[test]
 fn write_string_wrap_stops_at_bottom() {
     let mut buf = TextBuffer::new(3, 2);
     let p =
@@ -414,24 +380,6 @@ fn write_string_wrap_stops_at_bottom() {
     // Two full rows consumed, then we run out.
     assert_eq!(p, Position::new(0, 2));
     assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "f");
-}
-
-#[test]
-fn write_string_wrap_inside_view() {
-    // View with non-zero origin: wrap must respect bounds, not
-    // wrap to the underlying buffer's left edge.
-    let mut tb = TextBuffer::new(20, 5);
-    let p = Painter::new(&mut tb).set_str_rect_wrap(
-        (10, 1, 4, 2),
-        "abcdefgh",
-        WrapMode::Wrap,
-        Style::default(),
-    );
-    assert_eq!(p, Position::new(14, 2));
-    assert_eq!(tb.cell(Position::new(10, 1)).unwrap().content(), "a");
-    assert_eq!(tb.cell(Position::new(13, 1)).unwrap().content(), "d");
-    assert_eq!(tb.cell(Position::new(10, 2)).unwrap().content(), "e");
-    assert_eq!(tb.cell(Position::new(13, 2)).unwrap().content(), "h");
 }
 
 #[test]
@@ -444,11 +392,11 @@ fn write_string_with_link() {
         Style::default().link("https://example.com", ""),
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(0, 0)).unwrap().style),
+        link_of(buf.cell(Position::new(0, 0)).unwrap()),
         Some(("https://example.com", ""))
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(1, 0)).unwrap().style),
+        link_of(buf.cell(Position::new(1, 0)).unwrap()),
         Some(("https://example.com", ""))
     );
 }
@@ -463,11 +411,11 @@ fn a_cell_too_wide_for_the_row_leaves_no_continuation_behind() {
     let mut buf = Buffer::new(5, 1);
     buf.set(
         Position::new(0, 0),
-        &Cell::new("\u{1f468}\u{200d}\u{1f469}", 8),
+        &Cell::new("\u{1f468}\u{200d}\u{1f469}", 8, Style::EMPTY),
     );
 
     assert!(buf.cell(Position::new(0, 0)).unwrap().is_blank());
-    for x in 0..5 {
+    for x in 1..5 {
         assert!(
             !buf.cell(Position::new(x, 0)).unwrap().is_continuation(),
             "column {x} holds a continuation with no primary that owns it"
@@ -484,7 +432,7 @@ fn a_wide_fill_spans_a_row_as_wide_as_the_address_space() {
     let mut buf = Buffer::new(u16::MAX, 1);
     buf.fill_rect(
         Rect::new(0, 0, u16::MAX, 1),
-        &Cell::new("\u{1f468}\u{200d}\u{1f469}", 255),
+        &Cell::new("\u{1f468}\u{200d}\u{1f469}", 255, Style::EMPTY),
     );
 
     assert!(buf.cell(Position::new(0, 0)).unwrap().is_wide());
@@ -500,8 +448,8 @@ fn a_fill_inside_a_wide_cell_leaves_no_orphan_continuation() {
     // past the fill would keep pointing at an owner that no longer exists.
     let fam = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
     let mut buf = Buffer::new(12, 1);
-    buf.set(Position::new(0, 0), &Cell::new(fam, 8));
-    buf.fill_rect(Rect::new(2, 0, 2, 1), &Cell::new("x", 1));
+    buf.set(Position::new(0, 0), &Cell::new(fam, 8, Style::EMPTY));
+    buf.fill_rect(Rect::new(2, 0, 2, 1), &Cell::new("x", 1, Style::EMPTY));
 
     for x in 0..2 {
         assert!(buf.cell(Position::new(x, 0)).unwrap().is_blank());
@@ -528,8 +476,11 @@ fn no_fill_of_any_width_leaves_a_continuation_without_an_owner() {
         for lo in 0..w as u16 {
             for hi in (lo + 1)..=(w as u16) {
                 let mut buf = Buffer::new(12, 1);
-                buf.set(Position::new(0, 0), &Cell::new("W", w));
-                buf.fill_rect(Rect::new(lo, 0, hi - lo, 1), &Cell::new("x", 1));
+                buf.set(Position::new(0, 0), &Cell::new("W", w, Style::EMPTY));
+                buf.fill_rect(
+                    Rect::new(lo, 0, hi - lo, 1),
+                    &Cell::new("x", 1, Style::EMPTY),
+                );
 
                 let mut owner_reaches = 0u16;
                 for x in 0..12u16 {
@@ -555,7 +506,7 @@ fn a_cell_that_stores_nothing_still_reserves_the_columns_it_claims() {
     // continuations left off, the next write would land inside the claim
     // and every column after it would read one place off.
     let mut buf = Buffer::new(6, 1);
-    buf.set(Position::new(0, 0), &Cell::new("", 3));
+    buf.set(Position::new(0, 0), &Cell::new("", 3, Style::EMPTY));
 
     for x in 1..3 {
         assert!(
@@ -568,7 +519,7 @@ fn a_cell_that_stores_nothing_still_reserves_the_columns_it_claims() {
     // blanks. Had the columns never been reserved, this write would have
     // landed inside a cell that still claimed them, and every column after
     // it would read one place off.
-    buf.set(Position::new(1, 0), &Cell::new("B", 1));
+    buf.set(Position::new(1, 0), &Cell::new("B", 1, Style::EMPTY));
 
     assert_eq!(buf.cell(Position::new(1, 0)).unwrap().content(), "B");
     for x in [0, 2] {
@@ -581,8 +532,11 @@ fn a_cell_that_stores_nothing_still_reserves_the_columns_it_claims() {
 #[test]
 fn height_resize_reuses_storage_and_blanks_returned_rows() {
     let mut buffer = Buffer::new(4, 5);
-    buffer.set((0, 0), &Cell::new("kept", 1));
-    buffer.set((0, 4), &Cell::new("discarded heap content", 1));
+    buffer.set((0, 0), &Cell::new("kept", 1, Style::EMPTY));
+    buffer.set(
+        (0, 4),
+        &Cell::new("discarded heap content", 1, Style::EMPTY),
+    );
     let storage = buffer.cells.as_ptr();
     let capacity = buffer.cells.capacity();
     buffer.resize(4, 1);

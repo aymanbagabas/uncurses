@@ -34,7 +34,12 @@ jobs:
         id: cliff
         uses: orhun/git-cliff-action@v4
         with:
-          args: --latest --strip header
+          # The v0.0.7 tag has a separate history. This commit has the same tree.
+          args: >-
+            --strip header
+            ${{ github.ref_name == 'v0.0.8'
+                && 'd9478372aa2a0990f5cbc577477fcfa2a1844fec..HEAD'
+                || '--latest' }}
 
       # Intro first, then the generated changelog folded away — the full list is
       # long enough to bury the description of what the thing actually is.

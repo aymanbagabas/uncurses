@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(g.len(), 3);
         assert_eq!(g[2], ("中", 2));
 
-        // Wc mode also segments by cluster; widths come from first char.
+        // Wc mode also segments by cluster; widths sum the code points.
         let w: Vec<_> = grapheme_cells("e\u{0301}A", WidthMode::Wc, false).collect();
         assert_eq!(w.len(), 2);
         assert_eq!(w[0], ("e\u{0301}", 1));

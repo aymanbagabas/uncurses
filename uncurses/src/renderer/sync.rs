@@ -3,19 +3,73 @@
 //! Screens write freely into their `front_buf`; `fill_rect` and bulk
 //! ops mark whole rows as touched even when the resulting content
 //! matches the previous frame. [`Renderer::sync_front`] copies those
-//! touched spans into [`Renderer::back_buf`] using
-//! [`RenderBuffer::set_cell`], which only flips `back_buf.touched`
-//! when the destination cell actually differs. The diff pass then
+//! touched spans into [`Renderer::back_buf`]. Complete clusters use
+//! owned slice copies; partial clusters use [`RenderBuffer::set_cell`].
+//! Both paths mark only changed spans. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
 //! Only cells inside touched spans participate in synchronization.
 
 use crate::renderer::Renderer;
-use crate::renderer::buffer::RenderBuffer;
+use crate::renderer::buffer::{RenderBuffer, TouchedSpan};
 
 use crate::buffer::Surface;
+use crate::cell::Cell;
+
+fn complete_clusters(cells: &[Cell]) -> bool {
+    let mut remaining = 0;
+    for cell in cells {
+        if cell.is_placement() {
+            return false;
+        }
+        match (remaining, cell.width()) {
+            (0, 0) => return false,
+            (0, width) => remaining = width - 1,
+            (_, 0) => remaining -= 1,
+            _ => return false,
+        }
+    }
+    remaining == 0
+}
 
 impl Renderer {
+    fn sync_owned_span(&mut self, front: &RenderBuffer, y: u16, span: TouchedSpan) -> bool {
+        let start = usize::from(span.first);
+        let end = (usize::from(span.last) + 1).min(usize::from(front.width()));
+        if start >= end {
+            return true;
+        }
+        let source = &front.line(y).unwrap()[start..end];
+        let previous = &self.back_buf.line(y).unwrap()[start..end];
+        if !complete_clusters(source) || !complete_clusters(previous) {
+            return false;
+        }
+        let Some(mut first) = source.iter().zip(previous).position(|(a, b)| a != b) else {
+            return true;
+        };
+        let mut last = source
+            .iter()
+            .zip(previous)
+            .rposition(|(a, b)| a != b)
+            .unwrap()
+            + 1;
+        // Close both ends at primary boundaries in both complete rows.
+        while source[first].is_continuation() || previous[first].is_continuation() {
+            first -= 1;
+        }
+        while last < source.len()
+            && (source[last].is_continuation() || previous[last].is_continuation())
+        {
+            last += 1;
+        }
+        // Per-cell equality checks can cost more than inline clones.
+        self.back_buf.line_mut(y).unwrap()[start + first..start + last]
+            .clone_from_slice(&source[first..last]);
+        self.back_buf
+            .touch_line(y, (start + first) as u16, (start + last - 1) as u16);
+        true
+    }
+
     /// Sync a caller-facing buffer into the renderer staging buffer.
     ///
     /// # Parameters
@@ -32,9 +86,9 @@ impl Renderer {
     ///
     /// # Behavior
     ///
-    /// Copies only cells within `front`'s touched spans, skips
-    /// continuation cells, steps by wide-cell width, and clears
-    /// `front`'s touched flags before returning.
+    /// Copies primary cells within `front`'s touched spans and restores
+    /// independent continuation styles. Repairs missing continuation cells
+    /// under retained, fully visible primaries. Clears `front`'s touched flags.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
         self.sync_front_impl::<true>(front)
             .expect("placement metadata is accepted")
@@ -61,23 +115,38 @@ impl Renderer {
             let Some(span) = front.touched(y) else {
                 continue;
             };
-            let mut x = span.first;
-            while x <= span.last {
+            if self.sync_owned_span(front, y, span) {
+                continue;
+            }
+            let mut next_primary = span.first;
+            for x in span.first..=span.last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
-                    x += 1;
                     continue;
                 };
-                // Skip continuation columns. The primary write already copies them.
                 if new_cell.is_continuation() {
-                    x += 1;
+                    // A primary write regenerates its continuations.
+                    if self
+                        .back_buf
+                        .cell(pos)
+                        .is_some_and(|old| old.is_continuation() && !old.same_style(new_cell))
+                    {
+                        self.back_buf
+                            .cell_mut(pos)
+                            .unwrap()
+                            .copy_style_from(new_cell);
+                    }
                     continue;
                 }
-                let existing = self.back_buf.cell(pos).unwrap();
-                let previous_width = existing.width();
-                let changed = existing != new_cell || u16::from(new_cell.width()) > width - x;
-                if !changed {
-                    x = x.saturating_add(u16::from(new_cell.width()));
+                // Resize can leave blanks inside a retained primary's footprint.
+                if x < next_primary {
+                    if let Some(continuation) = self
+                        .back_buf
+                        .cell(pos)
+                        .filter(|cell| cell.is_continuation())
+                    {
+                        front.line_mut(y).unwrap()[usize::from(x)].clone_from(continuation);
+                    }
                     continue;
                 }
                 if new_cell.is_placement() {
@@ -88,14 +157,11 @@ impl Renderer {
                         ));
                     }
                     self.back_buf
-                        .set_cell(pos, &crate::cell::Cell::BLANK.style(&new_cell.style));
+                        .set_cell(pos, &Cell::new(" ", 1, new_cell.style()));
                 } else {
-                    self.back_buf.replace_cell(pos, new_cell, previous_width);
+                    self.back_buf.set_cell(pos, new_cell);
                 }
-                // Step over any continuation columns owned by the cell
-                // we just wrote so we don't try to re-copy them.
-                let step = (new_cell.width() as u16).max(1);
-                x = x.saturating_add(step);
+                next_primary = x.saturating_add(u16::from(new_cell.width()));
             }
         }
         front.clear_touched();
@@ -113,9 +179,10 @@ mod tests {
     use super::*;
     use crate::cell::Cell;
     use crate::renderer::buffer::RenderBuffer;
+    use crate::style::Style;
 
     fn cell(c: &str) -> Cell {
-        Cell::new(c, 1)
+        Cell::new(c, 1, Style::EMPTY)
     }
 
     fn fill_row(buf: &mut RenderBuffer, y: u16, content: &str) {
@@ -132,12 +199,79 @@ mod tests {
             .bold()
             .bg(crate::color::Color::Blue)
             .link("https://example.com", "");
-        front.set_cell((0, 0), &Cell::placement(1).style(&style));
+        let mut placement = Cell::placement(1);
+        placement.set_style(&style);
+        front.set_cell((0, 0), &placement);
         renderer.sync_front(&mut front);
         assert_eq!(
             renderer.back_buf.cell((0, 0).into()),
-            Some(&Cell::BLANK.style(style))
+            Some(&Cell::new(" ", 1, style))
         );
+    }
+
+    #[test]
+    fn sync_validates_clusters_inside_both_spans_after_resize() {
+        for broken_front in [false, true] {
+            let mut r = Renderer::new();
+            let mut front = RenderBuffer::new(8, 1);
+            r.sync_front(&mut front);
+            let broken = if broken_front {
+                &mut front
+            } else {
+                &mut r.back_buf
+            };
+            broken.set_cell((1, 0), &Cell::new("wide", 4, Style::EMPTY));
+            let continuation_style = Style::new().bg(crate::color::Color::Blue);
+            broken
+                .cell_mut((2, 0))
+                .unwrap()
+                .set_style(&continuation_style);
+            broken.buffer.resize(3, 1);
+            broken.buffer.resize(8, 1);
+            assert_eq!(broken.cell((1, 0).into()).unwrap().width(), 4);
+            assert!(!broken.cell((3, 0).into()).unwrap().is_continuation());
+            front.set_cell((0, 0), &cell("L"));
+            front.set_cell((7, 0), &cell("R"));
+            front.touch_all();
+
+            let mut expected = [Cell::BLANK; 8];
+            expected[0] = cell("L");
+            expected[7] = cell("R");
+            if broken_front {
+                expected[1] = Cell::new("wide", 4, Style::EMPTY);
+                expected[2..5].fill(Cell::CONTINUATION);
+                expected[2].set_style(continuation_style);
+            }
+            r.sync_front(&mut front);
+            assert_eq!(
+                r.back_buf.line(0).unwrap(),
+                expected.as_slice(),
+                "front={broken_front}"
+            );
+        }
+    }
+
+    #[test]
+    fn sync_owned_span_keeps_text_and_links_after_source_changes() {
+        let text = format!("e{}", "\u{301}".repeat(40));
+        let mut r = Renderer::new();
+        {
+            let mut front = RenderBuffer::new(4, 1);
+            let source = Cell::new(
+                text.as_str(),
+                1,
+                crate::style::Style::new()
+                    .fg(crate::color::Color::Green)
+                    .link("https://example.test", "id=owned"),
+            );
+            front.set_cell((0, 0), &source);
+            r.sync_front(&mut front);
+            front.set_cell((0, 0), &Cell::BLANK);
+        }
+        let copied = r.back_buf.cell((0, 0).into()).unwrap();
+        assert_eq!(copied.content(), text);
+        assert_eq!(copied.fg, Some(crate::color::Color::Green));
+        assert_eq!(copied.link.as_deref().unwrap().params, "id=owned");
     }
 
     #[test]
@@ -154,14 +288,14 @@ mod tests {
         let mut renderer = Renderer::new();
         let mut front = RenderBuffer::new(3, 1);
         let style = crate::style::Style::new().bold();
-        front.set_cell((1, 0), &Cell::new("\u{754c}", 2).style(&style));
+        front.set_cell((1, 0), &Cell::new("\u{754c}", 2, &style));
         renderer.sync_front(&mut front);
 
         front.resize(2, 1);
         renderer.sync_front(&mut front);
         assert_eq!(
             renderer.back_buf.cell((1, 0).into()),
-            Some(&Cell::BLANK.style(style))
+            Some(&Cell::new(" ", 1, style))
         );
     }
 
@@ -228,22 +362,26 @@ mod tests {
 
     #[test]
     fn sync_only_walks_touched_spans() {
-        // Writing a single cell must not propagate other rows or
-        // columns to back_buf — verified by leaving back_buf in a
-        // distinct state outside the span and confirming it survives.
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 3);
-        // Pre-seed back_buf row 2 with content via a full sync.
+        fill_row(&mut front, 0, "preset");
         fill_row(&mut front, 2, "preset");
         r.sync_front(&mut front);
         r.back_buf.clear_touched();
 
-        // Now write one cell on row 0; row 2 of front is blank-but-
-        // untouched, so sync must not visit row 2.
+        // A fresh buffer leaves blank cells untouched. Only its explicit
+        // write may replace the content from the previous buffer.
+        let mut front = RenderBuffer::new(10, 3);
         front.set_cell((3, 0), &cell("X"));
         r.sync_front(&mut front);
         assert!(r.back_buf.touched(0).is_some());
         assert!(r.back_buf.touched(2).is_none());
+        assert_eq!(r.back_buf.cell((3, 0).into()).unwrap().content(), "X");
+        assert_eq!(
+            r.back_buf.cell((0, 0).into()).unwrap().content(),
+            "p",
+            "columns outside the touched span must keep their content"
+        );
         assert_eq!(
             r.back_buf.cell((0, 2).into()).unwrap().content(),
             "p",
@@ -254,8 +392,12 @@ mod tests {
     #[test]
     fn sync_reports_force_clear_even_with_no_changes() {
         let mut r = Renderer::new();
-        r.force_clear = true;
         let mut front = RenderBuffer::new(10, 3);
+        assert!(r.sync_front(&mut front));
+        r.render_back(&mut Vec::new()).unwrap();
+        assert!(!r.sync_front(&mut front));
+
+        r.request_clear();
         assert!(r.sync_front(&mut front));
     }
 
@@ -269,7 +411,7 @@ mod tests {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 1);
         // Wide CJK cell at col 0; col 1 is its continuation.
-        let wide = Cell::new("漢", 2);
+        let wide = Cell::new("漢", 2, Style::EMPTY);
         front.set_cell((0, 0), &wide);
         front.set_cell((3, 0), &cell("a"));
         r.sync_front(&mut front);

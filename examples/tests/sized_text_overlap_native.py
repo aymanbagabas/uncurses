@@ -30,9 +30,7 @@ for record in sys.stdin:
         require(sized_text.count("Demo") == 3, sized_text)
     elif name == "after":
         require(sized_text.count("Demo") == 1, "only the first block must remain")
-        require(lower[12] == "X", "the lower-row write must skip to column 13")
         require(top[31] == "X", "the top-row write must stay at column 32")
-        require(lower[57] == "X", "the explicit erase must allow column 58")
         require(top[30] in (" ", "\0") and top[56] in (" ", "\0"),
                 "the other blocks must be erased")
         require([x for x in range(80) if lower[x] == "X"] == [12, 57],

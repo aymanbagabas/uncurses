@@ -9,6 +9,13 @@ it. This page maps those roles and shows when to reach for each one.
 
 ```mermaid
 flowchart TB
+  accTitle: How the library layers connect
+  accDescr {
+    Program manages Screen for rendering, Terminal for the terminal connection,
+    and EventSource for input.
+    Screen and TextBuffer use the surface primitives.
+    Encode turns surfaces into output bytes.
+  }
   Program["Program<br/>session, modes, input facade"]
   Screen["Screen<br/>pure renderer + diffed drawing"]
   Surface["Surface primitives<br/>cells, buffers, TextSurface"]
@@ -50,18 +57,21 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    program.init()?;
-    program.enter_alt_screen()?;
-    program.hide_cursor()?;
+    let result = (|| {
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
 
-    program
-        .screen_mut()
-        .set_str((0, 0), "managed session, pure renderer", Style::new());
-    program.screen_mut().render()?;
+        program
+            .screen_mut()
+            .set_str((0, 0), "managed session, pure renderer", Style::new());
+        program.screen_mut().render()?;
 
-    while !matches!(program.read_event()?, Event::KeyPress(_)) {}
-
-    program.finish()
+        while !matches!(program.read_event()?, Event::KeyPress(_)) {}
+        Ok(())
+    })();
+    let finish = program.finish();
+    result.and(finish)
 }
 ```
 
@@ -156,19 +166,23 @@ terminal input into types you can match on. It is exactly what `Program` uses
 under the hood to read events.
 
 ```rust
-use uncurses::event::{Event, EventSource, SourceFlags};
+use uncurses::event::{Event, EventSource};
 use uncurses::terminal::Terminal;
 
 fn main() -> std::io::Result<()> {
     let mut term = Terminal::stdio();
-    term.make_raw()?;
-    let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
-
-    if let Event::KeyPress(key) = events.read()? {
-        let _ = key;
-    }
-
-    term.restore()
+    let result = (|| {
+        term.make_raw()?;
+        let mut events = EventSource::new(term.input())?;
+        #[cfg(windows)]
+        events.set_vt_input(true);
+        if let Event::KeyPress(key) = events.read()? {
+            let _ = key;
+        }
+        Ok(())
+    })();
+    let restore = term.restore();
+    result.and(restore)
 }
 ```
 

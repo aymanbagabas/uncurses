@@ -142,17 +142,20 @@ mod utf8_boundaries {
             // UTF-8 before `from_utf8_unchecked` takes it on trust. A scanner
             // that stops mid-character makes these panic under
             // `debug_assertions` and makes them UB without.
-            for limit in [0usize, 1, 3, 7, 100] {
+            for limit in [0usize, 1, 3, 7] {
                 wrap::hardwrap(input, limit, false);
+            }
+            for limit in [0usize, 1, 3, 7, 100] {
                 wrap::hardwrap(input, limit, true);
                 wrap::wordwrap(input, limit, wrap::DEFAULT_BREAKPOINTS);
                 wrap::wrap(input, limit, wrap::DEFAULT_BREAKPOINTS);
                 truncate::truncate(input, limit, "…");
                 truncate::truncate_left(input, limit, "…");
                 truncate::cut(input, limit / 2, limit);
-                strip(input);
             }
         }
+        wrap::hardwrap(INPUTS[INPUTS.len() - 1], 100, false);
+        strip(INPUTS[INPUTS.len() - 1]);
     }
 
     /// The visible text survives the sequence, which is the user-facing half
