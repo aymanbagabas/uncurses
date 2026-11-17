@@ -559,6 +559,119 @@ mod tests {
     use super::*;
 
     #[test]
+    fn kitty_modifier_order_applies_across_csi_key_forms_and_input_splits() {
+        use crate::event::{Key, KeyCode, KeyModifiers};
+
+        for (body, expected) in [
+            (
+                b"1;9D".as_slice(),
+                Event::KeyPress(Key::new(KeyCode::Left, KeyModifiers::SUPER)),
+            ),
+            (
+                b"3;17~",
+                Event::KeyPress(Key::new(KeyCode::Delete, KeyModifiers::HYPER)),
+            ),
+            (
+                b"1;33H",
+                Event::KeyPress(Key::new(KeyCode::Home, KeyModifiers::META)),
+            ),
+            (
+                b"27;9;97~",
+                Event::KeyPress(Key::new(KeyCode::Char('a'), KeyModifiers::SUPER)),
+            ),
+            (
+                b"27;33;97~",
+                Event::KeyPress(Key::new(KeyCode::Char('a'), KeyModifiers::META)),
+            ),
+            (
+                b"127;9u",
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::SUPER)),
+            ),
+            (
+                b"127;33u",
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::META)),
+            ),
+            (
+                b"1;257D",
+                Event::KeyPress(Key::new(KeyCode::Left, KeyModifiers::empty())),
+            ),
+            (
+                b"127;265u",
+                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::SUPER)),
+            ),
+            (
+                b"13;65:2~",
+                Event::KeyRepeat(Key::new(KeyCode::F(3), KeyModifiers::CAPS_LOCK)),
+            ),
+            (
+                b"1;129:3P",
+                Event::KeyRelease(Key::new(KeyCode::F(1), KeyModifiers::NUM_LOCK)),
+            ),
+            (
+                b"3;256~",
+                Event::KeyPress(Key::new(
+                    KeyCode::Delete,
+                    KeyModifiers::SHIFT
+                        | KeyModifiers::ALT
+                        | KeyModifiers::CTRL
+                        | KeyModifiers::SUPER
+                        | KeyModifiers::HYPER
+                        | KeyModifiers::META
+                        | KeyModifiers::CAPS_LOCK
+                        | KeyModifiers::NUM_LOCK,
+                )),
+            ),
+        ] {
+            for prefix in [b"\x1b[".as_slice(), b"\x9b"] {
+                let bytes = [prefix, body].concat();
+                for split in 0..=bytes.len() {
+                    let mut decoder = Decoder::default();
+                    let mut events = decoder.parse(&bytes[..split]);
+                    events.extend(decoder.parse(&bytes[split..]));
+                    assert_eq!(events, vec![expected.clone()], "{bytes:?}, split {split}");
+                    assert_eq!(
+                        events[0].as_key().unwrap().modifiers,
+                        expected.as_key().unwrap().modifiers,
+                        "{bytes:?}, split {split}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ambiguous_f3_uses_kitty_modifier_order_and_keeps_cursor_report() {
+        use crate::event::{KeyCode, KeyModifiers};
+
+        let mut decoder = Decoder::default();
+        let events = decoder.parse(b"\x1b[1;9R");
+        assert_eq!(events.len(), 2);
+        let key = events[0].as_key().unwrap();
+        assert_eq!(key.code, KeyCode::F(3));
+        assert_eq!(key.modifiers, KeyModifiers::SUPER);
+        assert!(matches!(
+            events[1],
+            Event::CursorPosition { position, page: 0 }
+                if position == crate::layout::Position::new(8, 0)
+        ));
+    }
+
+    #[test]
+    fn legacy_preferences_preserve_kitty_modifier_order() {
+        use crate::event::{KeyCode, KeyModifiers};
+
+        let mut decoder = Decoder::new(DecoderFlags::CTRL_I);
+        assert_eq!(decoder.flags(), DecoderFlags::CTRL_I);
+        assert_eq!(first_press(&mut decoder, b"\t").code, KeyCode::Char('i'));
+        decoder.set_flags(DecoderFlags::CTRL_M);
+        assert_eq!(
+            first_press(&mut decoder, b"\x1b[1;9D").modifiers,
+            KeyModifiers::SUPER
+        );
+        assert_eq!(first_press(&mut decoder, b"\r").code, KeyCode::Char('m'));
+    }
+
+    #[test]
     fn backspace_mode_report_does_not_change_decoder_state() {
         let mut decoder = Decoder::default();
         let input = b"\x1b[?67;1$y\x08";

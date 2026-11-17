@@ -1,0 +1,12 @@
+{{- if eq .Type "mermaid" -}}
+  {{- .Page.Store.Set "mermaid" true -}}
+  <figure class="diagram">
+    <pre class="mermaid">{{ .Inner }}</pre>
+    <figcaption class="diagram-error" role="status" hidden></figcaption>
+  </figure>
+{{- else -}}
+  <div class="code-block">
+    <div class="code-toolbar"><span>{{ .Type | default "text" }}</span><button type="button" data-copy-code hidden>Copy</button></div>
+    {{ highlight .Inner .Type .Options }}
+  </div>
+{{- end -}}

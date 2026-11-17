@@ -18,6 +18,12 @@ own: a multibyte character can be split across a chunk boundary.
 
 ```mermaid
 flowchart TB
+  accTitle: The paste event sequence
+  accDescr {
+    PasteStart begins a paste.
+    Zero or more PasteChunk events carry its bytes.
+    PasteEnd finishes the paste, including an empty paste.
+  }
   s["Event::PasteStart"]
   s --> c["Event::PasteChunk(Vec&lt;u8&gt;) ... zero or more"]
   s --> e["Event::PasteEnd"]

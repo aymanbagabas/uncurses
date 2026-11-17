@@ -48,17 +48,13 @@ use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT,
-    DEFAULT_STRING_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
+    READY_INPUT, READY_SLOTS, READY_WAKE, SourceFlags, Waker,
 };
 
 const READ_BATCH: usize = 64;
 
-/// Inner waker state. Owns a Win32 `Event` HANDLE that signals the
-/// cancellation slot of [`WaitForMultipleObjects`]. The `HANDLE` value
-/// is also copied into [`EventSource::wake_event`] so the wait array
-/// can reference it without an `Arc` indirection; ownership remains
-/// with the waker (its `Drop` calls [`CloseHandle`]).
+/// Owns the manual-reset event used by the source's readiness poller.
 pub(super) struct WindowsWakerInner {
     event: HANDLE,
 }
@@ -76,7 +72,6 @@ impl WindowsWakerInner {
         self.event
     }
 
-    #[cfg(feature = "async")]
     pub(super) fn clear(&self) -> io::Result<()> {
         if unsafe { ResetEvent(self.event) } == 0 {
             return Err(io::Error::last_os_error());
@@ -105,11 +100,6 @@ impl Drop for WindowsWakerInner {
 unsafe impl Send for WindowsWakerInner {}
 unsafe impl Sync for WindowsWakerInner {}
 
-// SAFETY: the contained HANDLE in `EventSource::wake_event` is a kernel
-// object, not a pointer into thread-local memory; the underlying read
-// handle is also thread-safe to use.
-unsafe impl<I> Send for EventSource<I> where I: Input {}
-
 impl<I> EventSource<I>
 where
     I: Input,
@@ -121,11 +111,9 @@ where
     /// Resize events arrive as `WINDOW_BUFFER_SIZE_EVENT` records on the input
     /// handle, so no separate signal or resize pipe is needed.
     ///
-    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`], [`DEFAULT_PASTE_IDLE_TIMEOUT`],
-    /// and [`DEFAULT_STRING_IDLE_TIMEOUT`]. Override them with
-    /// [`EventSource::with_esc_timeout`],
-    /// [`EventSource::with_paste_idle_timeout`], and
-    /// [`EventSource::with_string_idle_timeout`].
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and [`DEFAULT_PASTE_IDLE_TIMEOUT`].
+    /// Override them with [`EventSource::with_esc_timeout`] and
+    /// [`EventSource::with_paste_idle_timeout`].
     ///
     /// `flags` selects the input source behavior. Set [`SourceFlags::VT_INPUT`]
     /// when the console uses virtual-terminal input.
@@ -146,10 +134,9 @@ where
         // wait path relies on. `input_is_tty` is meaningless on Windows
         // and ignored by the poller there.
         use std::os::windows::io::RawHandle;
-        let fds = [
-            input_handle as *mut _ as RawHandle,
-            wake_event as *mut _ as RawHandle,
-        ];
+        let mut fds = [std::ptr::null_mut(); READY_SLOTS];
+        fds[READY_INPUT] = input_handle as RawHandle;
+        fds[READY_WAKE] = wake_event;
         let poller = super::poll::new_poller(&fds, false)?;
 
         Ok(Self {
@@ -161,8 +148,6 @@ where
             esc_deadline: None,
             paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
-            string_idle_timeout: Some(DEFAULT_STRING_IDLE_TIMEOUT),
-            string_deadline: None,
             #[cfg(feature = "async")]
             deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
@@ -170,7 +155,6 @@ where
             waker,
             handle_resize: true,
             poller,
-            wake_event,
             pending_high_surrogate: [None, None],
             last_size: None,
             last_mouse_buttons: 0,
@@ -183,24 +167,11 @@ where
         notification: &Waker,
     ) -> io::Result<Arc<dyn super::poll::Poller>> {
         use std::os::windows::io::AsRawHandle;
-        super::poll::new_poller(
-            &[
-                self.input.as_handle().as_raw_handle(),
-                self.waker.poll_fd(),
-                notification.poll_fd(),
-            ],
-            false,
-        )
-    }
-
-    /// Reset the wake event after a [`Waker`] fired.
-    ///
-    /// Platform hook for [`EventSource::fill`]. Resetting consumes the wake so a
-    /// later wait can block again.
-    pub(super) fn drain_wake(&mut self) {
-        unsafe {
-            ResetEvent(self.wake_event);
-        }
+        let mut fds = [std::ptr::null_mut(); READY_SLOTS + 1];
+        fds[READY_INPUT] = self.input.as_handle().as_raw_handle();
+        fds[READY_WAKE] = self.waker.poll_fd();
+        fds[READY_SLOTS] = notification.poll_fd();
+        super::poll::new_poller(&fds, false)
     }
 
     /// Read ready console records and serialize them through the decoder.

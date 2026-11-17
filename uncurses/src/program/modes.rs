@@ -135,7 +135,7 @@ impl<I: Input, O: Write> Program<I, O> {
     /// to `0..=100`.
     ///
     /// The state is recorded for save/restore: it is removed on a shell
-    /// handoff ([`pause`](Self::pause), [`suspend`](Self::suspend),
+    /// handoff ([`pause`](Self::pause), Unix `suspend`,
     /// [`finish`](Self::finish)) and re-reported by
     /// [`resume`](Self::resume). Take it down with
     /// [`reset_progress_state`](Self::reset_progress_state).

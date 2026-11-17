@@ -1,0 +1,32 @@
+<main id="main" class="docs-main" tabindex="-1">
+  <header class="article-header">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="{{ "docs/" | relURL }}">Documentation</a>
+      {{ if and .Parent (not .Parent.IsHome) (ne .Parent.RelPermalink ("docs/" | relURL)) }}
+        <span aria-hidden="true">/</span><a href="{{ .Parent.RelPermalink }}">{{ .Parent.Title }}</a>
+      {{ end }}
+    </nav>
+    <h1 class="page-title">{{ .Title }}</h1>
+  </header>
+  {{ if .Fragments.Headings }}
+    <aside class="page-toc" aria-label="On this page">
+      <details>
+        <summary>On this page</summary>
+        {{ .TableOfContents }}
+      </details>
+    </aside>
+  {{ end }}
+  <div class="document-body">
+    <div class="prose">{{ .Content }}</div>
+    {{ $pages := .Parent.RegularPages.ByWeight }}
+    {{ if and .IsPage (gt (len $pages) 1) }}
+      <nav class="page-pagination" aria-label="Page navigation">
+        {{ with $pages.Next . }}<a href="{{ .RelPermalink }}"><span>PREVIOUS</span>{{ .Title }}</a>{{ else }}<span></span>{{ end }}
+        {{ with $pages.Prev . }}<a href="{{ .RelPermalink }}"><span>NEXT</span>{{ .Title }}</a>{{ end }}
+      </nav>
+    {{ end }}
+    <div class="article-end">
+      {{ with .File }}<a href="https://github.com/aymanbagabas/uncurses/edit/main/website/content/{{ .Path }}">Edit this page</a>{{ end }}
+    </div>
+  </div>
+</main>

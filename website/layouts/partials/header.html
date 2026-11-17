@@ -1,0 +1,15 @@
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="{{ site.Home.RelPermalink }}" aria-label="uncurses home">
+      {{ partial "logo.html" . }}
+    </a>
+    <nav class="site-links" aria-label="Main navigation">
+      {{ range site.Menus.main }}
+        {{ $active := and (eq .Name "Manual") (hasPrefix $.RelPermalink ("docs/" | relURL)) }}
+        <a href="{{ .URL | relURL }}"{{ if $active }} aria-current="true"{{ end }}>{{ .Name }}</a>
+      {{ end }}
+      {{ partial "icon-button.html" "search" }}
+    </nav>
+    {{ partial "icon-button.html" "theme" }}
+  </div>
+</header>
