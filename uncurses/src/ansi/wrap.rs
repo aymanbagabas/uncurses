@@ -460,7 +460,7 @@ mod tests {
             "ab\u{ff1b}\ncd"
         );
         // A character absent from the set must not break.
-        assert_eq!(wordwrap("ab\u{3001}cd", 9, "\u{3002}"), "ab\u{3001}cd");
+        assert_eq!(wordwrap("ab\u{3001}cd", 3, "\u{3002}"), "ab\u{3001}cd");
     }
 
     #[test]

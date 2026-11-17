@@ -18,12 +18,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 default = ["unicode-rs"]
 unicode-rs = ["uncurses/unicode-rs"]
 icu = ["uncurses/icu"]
-# Asynchronous event streaming. Re-exports uncurses async so the screen's
-# `events()` stream is available through the backend.
+# Asynchronous event streaming through the backend's `event_stream()` method.
 async = ["uncurses/async"]
 
 [dependencies]
 # Version must track workspace.package.version for crates.io publish
-uncurses = { path = "../uncurses", version = "0.0.7", default-features = false }
+uncurses = { path = "../uncurses", version = "0.0.9", default-features = false }
 ratatui = { version = "0.30", default-features = false, features = ["underline-color", "scrolling-regions"] }
 unicode-width = "0.2"

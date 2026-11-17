@@ -4,7 +4,7 @@
 //! pasted text in [`Event::PasteStart`] / [`Event::PasteEnd`] and streams
 //! the body as [`Event::PasteChunk`] payloads. That lets you tell a paste
 //! apart from someone typing fast, and reassemble it by accumulating the
-//! chunks into a `Vec<u8>`. This app shows the last thing you pasted.
+//! chunks into a `Vec<u8>`. This app shows the last paste and its completion flag.
 //!
 //! Run with `cargo run --example paste`. Paste some text (try a few
 //! lines). Press F2 between pastes to toggle the two-second idle timeout.
@@ -34,11 +34,11 @@ fn main() -> std::io::Result<()> {
 
 fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
-    let mut last: Option<String> = None;
+    let mut last: Option<(String, bool)> = None;
     let mut timeout_enabled = true;
     // Holds chunk bytes between PasteStart and PasteEnd.
     let mut pending: Option<Vec<u8>> = None;
-    render(program.screen_mut(), last.as_deref(), timeout_enabled);
+    render(program.screen_mut(), last.as_ref(), timeout_enabled);
 
     loop {
         let ev = program.read_event()?;
@@ -51,7 +51,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
                     .lock()
                     .unwrap()
                     .set_paste_idle_timeout(timeout_enabled.then_some(Duration::from_secs(2)));
-                render(program.screen_mut(), last.as_deref(), timeout_enabled);
+                render(program.screen_mut(), last.as_ref(), timeout_enabled);
             }
             Event::PasteStart => pending = Some(Vec::new()),
             Event::PasteChunk(bytes) => {
@@ -59,15 +59,15 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
                     buf.extend_from_slice(&bytes);
                 }
             }
-            Event::PasteEnd => {
+            Event::PasteEnd { complete } => {
                 if let Some(buf) = pending.take() {
-                    last = Some(String::from_utf8_lossy(&buf).into_owned());
-                    render(program.screen_mut(), last.as_deref(), timeout_enabled);
+                    last = Some((String::from_utf8_lossy(&buf).into_owned(), complete));
+                    render(program.screen_mut(), last.as_ref(), timeout_enabled);
                 }
             }
             Event::Resize(_) => {
                 program.autoresize()?;
-                render(program.screen_mut(), last.as_deref(), timeout_enabled);
+                render(program.screen_mut(), last.as_ref(), timeout_enabled);
             }
             _ => {}
         }
@@ -75,7 +75,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdout>, last: Option<&str>, timeout_enabled: bool) {
+fn render(screen: &mut Screen<Stdout>, last: Option<&(String, bool)>, timeout_enabled: bool) {
     screen.clear();
     let dim = Style::default().fg(Color::BrightBlack);
     screen.set_str(
@@ -98,10 +98,11 @@ fn render(screen: &mut Screen<Stdout>, last: Option<&str>, timeout_enabled: bool
         None => {
             screen.set_str((0, 2), "(nothing pasted yet)", dim);
         }
-        Some(text) => {
+        Some((text, complete)) => {
             let lines = text.lines().count().max(1);
             let chars = text.chars().count();
-            let summary = format!("pasted {chars} chars across {lines} line(s):");
+            let summary =
+                format!("pasted {chars} chars across {lines} line(s); complete: {complete}");
             screen.set_str((0, 2), &summary, Style::default());
 
             let body = Style::default().fg(Color::BrightGreen);

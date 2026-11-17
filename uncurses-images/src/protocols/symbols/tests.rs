@@ -266,8 +266,8 @@ fn ambiguous_half_blocks_use_two_cells_and_keep_their_shape() {
                 eaw_wide
             );
             if profile == Profile::TrueColor {
-                assert_eq!(first.style.fg, Some(Color::Rgb(255, 255, 255)));
-                assert_eq!(first.style.bg, Some(Color::Rgb(0, 0, 0)));
+                assert_eq!(first.style().fg, Some(Color::Rgb(255, 255, 255)));
+                assert_eq!(first.style().bg, Some(Color::Rgb(0, 0, 0)));
             }
         }
     }
@@ -495,10 +495,10 @@ fn every_manual_class_selects_real_glyphs() {
                 "{name}: {cell:?}"
             );
             if profile < Profile::Ansi {
-                assert_eq!(cell.style, Style::default());
+                assert_eq!(cell.style(), Style::default());
             } else {
-                assert_eq!(profile.convert(cell.style.fg.unwrap()), cell.style.fg);
-                assert_eq!(profile.convert(cell.style.bg.unwrap()), cell.style.bg);
+                assert_eq!(profile.convert(cell.style().fg.unwrap()), cell.style().fg);
+                assert_eq!(profile.convert(cell.style().bg.unwrap()), cell.style().bg);
             }
         }
     }
@@ -714,9 +714,9 @@ fn palette_matching_and_geometry_keep_caller_options() {
     let emitted = glyph(cell.content().chars().next().unwrap());
     for i in 0..64 {
         let color = if emitted.mask[0] & (1 << i) != 0 {
-            cell.style.fg
+            cell.style().fg
         } else {
-            cell.style.bg
+            cell.style().bg
         };
         let expected = if glyph('\u{259a}').mask[0] & (1 << i) != 0 {
             Color::Rgb(255, 255, 255)
@@ -732,7 +732,7 @@ fn palette_matching_and_geometry_keep_caller_options() {
 fn invalid_selection_leaves_the_screen_unchanged() {
     let image = Image::from_rgba(1, 1, vec![255; 4]).unwrap();
     let mut screen = Screen::new(Vec::new(), (4, 2));
-    screen.set_cell((0, 0), &Cell::new("X", 1));
+    screen.set_cell((0, 0), &Cell::new("X", 1, Style::EMPTY));
     assert_eq!(
         image
             .symbols((4, 2).into(), &options(), SymbolSet::NONE, &screen,)

@@ -8,22 +8,32 @@ default width backend or pick another one, and you are ready to draw.
 
 ## Add the dependency
 
-uncurses is not on crates.io yet, so depend on it straight from git:
+Install v0.0.9 of [uncurses](https://crates.io/crates/uncurses) and
+[uncurses-ratatui](https://crates.io/crates/uncurses-ratatui) from crates.io.
+Use the matching API reference:
+[uncurses v0.0.9](https://docs.rs/uncurses/0.0.9) or
+[uncurses-ratatui v0.0.9](https://docs.rs/uncurses-ratatui/0.0.9).
+
+The dependency examples on this page target v0.0.9:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses = "0.0.9"
 ```
 
-Using the [ratatui](https://docs.rs/ratatui) backend too? Add the core crate,
-the backend crate, and ratatui:
+Using the [Ratatui](https://docs.rs/ratatui) backend too? Add the core crate,
+the backend crate, and Ratatui:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
-uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses = "0.0.9"
+uncurses-ratatui = "0.0.9"
 ratatui = "0.30"
 ```
+
+The rest of this website follows the current repository source.
+For unreleased APIs, use matching git dependencies from
+[the repository](https://github.com/aymanbagabas/uncurses).
 
 ## Feature flags
 
@@ -42,14 +52,14 @@ for correctness, switch to `icu`:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses", default-features = false, features = ["icu"] }
+uncurses = { version = "0.0.9", default-features = false, features = ["icu"] }
 ```
 
 To await events instead of blocking a thread, add `async`:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses", features = ["async"] }
+uncurses = { version = "0.0.9", features = ["async"] }
 ```
 
 ## Supported platforms
@@ -69,3 +79,6 @@ normal `cargo build` is all it takes.
 
 With the crate added, the next page writes the smallest complete interactive
 program: [Hello, terminal]({{< relref "hello-world.md" >}}).
+
+The [uncurses skill](https://github.com/aymanbagabas/uncurses/blob/main/skills/README.md)
+helps coding assistants write uncurses applications and find relevant examples.

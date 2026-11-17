@@ -119,17 +119,36 @@ pub(super) fn parse_string(
     if data.len() == prefix_len {
         return ParseResult::Incomplete;
     }
-    let mut i = prefix_len;
+    let (len, end) = scan_string(&data[prefix_len..], allow_bel);
+    match end {
+        StringEnd::Terminator(n) => ParseResult::Event(
+            finalize(&data[prefix_len..prefix_len + len]),
+            prefix_len + len + n,
+        ),
+        StringEnd::Escape => sequence_fallback(data, prefix_len + len),
+        StringEnd::Incomplete => ParseResult::IncompleteString,
+    }
+}
+
+pub(super) enum StringEnd {
+    Terminator(usize),
+    Escape,
+    Incomplete,
+}
+
+/// Return the safe payload prefix and the boundary that follows it.
+pub(super) fn scan_string(data: &[u8], allow_bel: bool) -> (usize, StringEnd) {
+    let mut i = 0;
     while i < data.len() {
         let b = data[i];
         if b == 0x9c || (allow_bel && b == 0x07) {
-            return ParseResult::Event(finalize(&data[prefix_len..i]), i + 1);
+            return (i, StringEnd::Terminator(1));
         }
         if b == 0x1b {
             return match data.get(i + 1) {
-                Some(b'\\') => ParseResult::Event(finalize(&data[prefix_len..i]), i + 2),
-                Some(_) => sequence_fallback(data, i),
-                None => ParseResult::IncompleteString,
+                Some(b'\\') => (i, StringEnd::Terminator(2)),
+                Some(_) => (i, StringEnd::Escape),
+                None => (i, StringEnd::Incomplete),
             };
         }
         let width = match b {
@@ -145,13 +164,13 @@ pub(super) fn parse_string(
                     i = end;
                     continue;
                 }
-                Err(err) if err.error_len().is_none() => return ParseResult::IncompleteString,
+                Err(err) if err.error_len().is_none() => return (i, StringEnd::Incomplete),
                 Err(_) => {}
             }
         }
         i += 1;
     }
-    ParseResult::IncompleteString
+    (i, StringEnd::Incomplete)
 }
 
 /// Parse a Kitty Graphics options string like `a=T,f=32,s=10,v=5`.
@@ -175,7 +194,7 @@ pub(super) fn parse_kitty_options(s: &[u8]) -> Vec<(String, String)> {
 
 pub(super) fn csi_modifiers(params: Params<'_>) -> KeyModifiers {
     // Modifier param defaults to 1 (= no modifiers) per the xterm protocol.
-    xterm_modifiers(params.get_or(1, 1) as u16)
+    key_modifiers(params.get_or(1, 1))
 }
 
 /// Read the Kitty keyboard-protocol event-type sub-parameter from the
@@ -294,22 +313,11 @@ pub(super) fn remap_tilde(n: u16, code: KeyCode, flags: DecoderFlags) -> KeyCode
     }
 }
 
-pub(super) fn xterm_modifiers(n: u16) -> KeyModifiers {
-    let n = n.saturating_sub(1);
-    let mut mods = KeyModifiers::empty();
-    if n & 1 != 0 {
-        mods |= KeyModifiers::SHIFT;
-    }
-    if n & 2 != 0 {
-        mods |= KeyModifiers::ALT;
-    }
-    if n & 4 != 0 {
-        mods |= KeyModifiers::CTRL;
-    }
-    if n & 8 != 0 {
-        mods |= KeyModifiers::META;
-    }
-    mods
+pub(super) fn key_modifiers(parameter: u32) -> KeyModifiers {
+    // Use Kitty's ordering for all CSI key forms. Xterm assigns bit 8 to Meta;
+    // we intentionally interpret it as Super instead of guessing the terminal.
+    // Only the protocol's low eight bits apply; Scroll Lock is a local flag.
+    KeyModifiers::from_bits_truncate((parameter.saturating_sub(1) & 0xff) as u16)
 }
 
 pub(super) fn key_with_mods(code: KeyCode, mods: KeyModifiers) -> Key {

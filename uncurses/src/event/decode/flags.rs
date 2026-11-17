@@ -10,8 +10,7 @@
 //! ## Affected paths
 //!
 //! The flags affect C0 controls, a timed-out lone `ESC`, Delete/Backspace, and
-//! VT220 Find/Select tilde codes. They do not change richer keyboard encodings
-//! that carry explicit key identity.
+//! VT220 Find/Select tilde codes.
 //!
 //! ## Gotchas
 //!

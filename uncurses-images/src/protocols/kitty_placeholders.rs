@@ -161,10 +161,7 @@ fn placeholder_cells(size: Size, id: u32) -> Buffer {
             if high != 0 {
                 text.push(DIACRITICS[usize::from(high)]);
             }
-            cells.set_cell(
-                Position::new(x, y),
-                &Cell::new(text, 1).style(style.clone()),
-            );
+            cells.set_cell(Position::new(x, y), &Cell::new(text, 1, &style));
         }
     }
     cells
@@ -195,8 +192,8 @@ mod tests {
                 DIACRITICS[255]
             ],
         );
-        assert_eq!(cell.style.fg, Some(Color::Rgb(255, 255, 255)));
-        assert_eq!(cell.style.underline_color, Some(Color::Rgb(0, 0, 1)));
+        assert_eq!(cell.style().fg, Some(Color::Rgb(255, 255, 255)));
+        assert_eq!(cell.style().underline_color, Some(Color::Rgb(0, 0, 1)));
     }
 
     #[test]
@@ -209,8 +206,8 @@ mod tests {
             low.content().chars().collect::<Vec<_>>(),
             ['\u{10eeee}', DIACRITICS[0], DIACRITICS[1]],
         );
-        assert_eq!(low.style.fg, high.style.fg);
-        assert_ne!(low.style.underline_color, high.style.underline_color);
+        assert_eq!(low.style().fg, high.style().fg);
+        assert_ne!(low.style().underline_color, high.style().underline_color);
         assert_eq!(
             high.content().chars().collect::<Vec<_>>(),
             ['\u{10eeee}', DIACRITICS[0], DIACRITICS[0], DIACRITICS[1]],
@@ -247,13 +244,13 @@ mod tests {
                 let high = chars.get(3).map_or(0, |&high| {
                     DIACRITICS.iter().position(|&c| c == high).unwrap() as u8
                 });
-                let Some(Color::Rgb(red, green, blue)) = cell.style.fg else {
+                let Some(Color::Rgb(red, green, blue)) = cell.style().fg else {
                     panic!()
                 };
                 let id = u32::from_be_bytes([high, red, green, blue]);
                 assert!(output.contains(&format!("i={id},")));
                 assert_eq!(
-                    cell.style.underline_color,
+                    cell.style().underline_color,
                     Some(Color::Rgb(0, 0, placement_id(id)))
                 );
             }

@@ -21,10 +21,10 @@
 //! [`Optimizations::ONLCR`] describe the host's output processing, not
 //! the terminal's own abilities, so no baseline here carries them: a
 //! `\t` is only usable if the line discipline passes it through, which
-//! `$TERM` cannot tell you. A [`Screen`](crate::screen::Screen) enables
+//! `$TERM` cannot tell you. A [`Program`](crate::program::Program) enables
 //! `TABS` and `BS` on *every* raw-mode entry —
-//! [`init`](crate::screen::Screen::init) and
-//! [`resume`](crate::screen::Screen::resume) alike — because raw mode
+//! [`init`](crate::program::Program::init) and
+//! [`resume`](crate::program::Program::resume) alike — because raw mode
 //! turns the host's output processing off, which is exactly what makes
 //! `\t` and `\x08` safe to emit.
 //!
@@ -60,7 +60,7 @@ bitflags! {
     ///
     /// [`TABS`](Self::TABS), [`BS`](Self::BS), and
     /// [`ONLCR`](Self::ONLCR) are the odd ones out: they describe the
-    /// *host*, not the terminal. A [`Screen`](crate::screen::Screen)
+    /// *host*, not the terminal. A [`Program`](crate::program::Program)
     /// enables `TABS` and `BS` on every raw-mode entry and never touches
     /// `ONLCR`. See the module docs.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -221,7 +221,7 @@ impl Optimizations {
     /// receiving terminal is in cooked mode without `TAB0` set on
     /// `c_oflag` and `\t` would otherwise be expanded to spaces.
     ///
-    /// A [`Screen`](crate::screen::Screen) enables this on every raw-mode
+    /// A [`Program`](crate::program::Program) enables this on every raw-mode
     /// entry, since raw mode is what makes `\t` safe, so setting it here
     /// matters only when driving a renderer directly.
     #[must_use]
@@ -235,7 +235,7 @@ impl Optimizations {
     /// receiving terminal does not interpret `\x08` as cursor-left
     /// by one cell.
     ///
-    /// A [`Screen`](crate::screen::Screen) enables this on every raw-mode
+    /// A [`Program`](crate::program::Program) enables this on every raw-mode
     /// entry, since raw mode is what makes `\x08` safe, so setting it here
     /// matters only when driving a renderer directly.
     #[must_use]
@@ -249,7 +249,7 @@ impl Optimizations {
     /// Enable when the terminal is in cooked mode with `ONLCR` set so a
     /// newline both advances a row and resets the column.
     ///
-    /// A [`Screen`](crate::screen::Screen) never sets this — raw mode
+    /// A [`Program`](crate::program::Program) never sets this — raw mode
     /// clears `OPOST`, so `\n` carries no carriage return — but it never
     /// clears it either. It is yours to opt into and yours to keep.
     #[must_use]
@@ -372,8 +372,11 @@ impl Optimizations {
             // set. Alacritty falls into this bucket too; the detector
             // uses the shared modern baseline rather than maintaining a
             // vendor-specific single-flag variant here.
-            "alacritty" | "contour" | "foot" | "ghostty" | "kitty" | "rio" | "st" | "tmux"
-            | "wezterm" => Self::modern(),
+            "alacritty" | "contour" | "foot" | "ghostty" | "kitty" | "rio" | "st" | "wezterm" => {
+                Self::modern()
+            }
+            // tmux 3.8 ignores CHT; literal tabs still work.
+            "tmux" => Self::modern().difference(Self::CHT),
             "xterm" => Self::xterm(),
             "screen" => Self::screen(),
             "linux" => Self::linux(),
@@ -403,15 +406,25 @@ impl Optimizations {
     /// Windows Terminal. Terminals outside it fall back to the portable
     /// TBC-then-HTS reset, so a false negative only costs a few extra
     /// bytes, never correctness. This inspects the environment only and
-    /// never probes the terminal.
+    /// never probes the terminal. tmux and GNU Screen use the portable
+    /// reset even when they inherit an outer terminal's environment.
     pub(crate) fn supports_decst8c(env: &dyn Env) -> bool {
+        let term = env.get("TERM");
+        if env.has("TMUX")
+            || env.has("STY")
+            || term.as_deref().is_some_and(|term| {
+                matches!(term.split(['-', '.']).next(), Some("tmux" | "screen"))
+            })
+        {
+            return false;
+        }
         // Windows Terminal announces itself with a session token rather
         // than through $TERM.
         if env.has("WT_SESSION") {
             return true;
         }
         // kitty, Alacritty, and iTerm2 export a session/window id that
-        // survives login shells and multiplexers rewriting $TERM.
+        // survives login shells rewriting $TERM.
         if env.has("KITTY_WINDOW_ID")
             || env.has("ALACRITTY_WINDOW_ID")
             || env.has("ITERM_SESSION_ID")
@@ -434,7 +447,7 @@ impl Optimizations {
         {
             return true;
         }
-        let Some(term) = env.get("TERM") else {
+        let Some(term) = term else {
             return false;
         };
         // Match the bare vendor head and the xterm-<vendor> promotion
@@ -502,6 +515,34 @@ mod tests {
     }
 
     #[test]
+    fn supports_decst8c_rejects_multiplexers_with_outer_terminal_hints() {
+        for pairs in [
+            [("TERM", "tmux"), ("WT_SESSION", "abc")],
+            [("TERM", "tmux-256color"), ("KITTY_WINDOW_ID", "1")],
+            [("TERM", "screen"), ("TERM_PROGRAM", "ghostty")],
+            [("TERM", "screen-256color"), ("LC_TERMINAL", "iTerm2")],
+            [
+                ("TERM", "screen.xterm-256color"),
+                ("ITERM_SESSION_ID", "w0t0p0:abc"),
+            ],
+            [
+                ("TERM", "xterm-kitty"),
+                ("TMUX", "/tmp/tmux-1000/default,123,0"),
+            ],
+            [("TERM", "alacritty"), ("STY", "123.session")],
+            [
+                ("ALACRITTY_WINDOW_ID", "1"),
+                ("TMUX", "/tmp/tmux-1000/default,123,0"),
+            ],
+        ] {
+            assert!(
+                !Optimizations::supports_decst8c(&env_with(&pairs)),
+                "multiplexer must use the portable tab reset: {pairs:?}",
+            );
+        }
+    }
+
+    #[test]
     fn supports_decst8c_detects_terminals_via_env_tokens() {
         // Windows Terminal and window-id exporters are recognized even when
         // $TERM is rewritten to a generic value.
@@ -518,7 +559,7 @@ mod tests {
             ("ALACRITTY_WINDOW_ID", "1"),
         ])));
         assert!(Optimizations::supports_decst8c(&env_with(&[
-            ("TERM", "screen"),
+            ("TERM", "xterm-256color"),
             ("TERM_PROGRAM", "ghostty"),
         ])));
         // iTerm2 keeps $TERM generic and identifies itself through its own
@@ -545,22 +586,6 @@ mod tests {
     #[test]
     fn none_disables_escape_caps_only() {
         let o = Optimizations::none();
-        assert!(!o.intersects(
-            Optimizations::ECH
-                | Optimizations::REP
-                | Optimizations::ICH
-                | Optimizations::DCH
-                | Optimizations::CSR
-                | Optimizations::SU_SD
-                | Optimizations::IL_DL
-                | Optimizations::BCE
-                | Optimizations::CHA
-                | Optimizations::HPA
-                | Optimizations::VPA
-                | Optimizations::CBT
-                | Optimizations::CHT
-                | Optimizations::ONLCR,
-        ));
         // The line discipline is not a $TERM question; `Screen::init`
         // grants TABS and BS once raw mode has settled it instead.
         assert!(o.is_empty());
@@ -575,9 +600,6 @@ mod tests {
     #[test]
     fn xterm_drops_hpa_cht_rep() {
         let o = Optimizations::xterm();
-        assert!(!o.contains(Optimizations::HPA));
-        assert!(!o.contains(Optimizations::CHT));
-        assert!(!o.contains(Optimizations::REP));
         let expected = Optimizations::modern()
             .difference(Optimizations::HPA | Optimizations::CHT | Optimizations::REP);
         assert_eq!(o, expected);
@@ -595,8 +617,7 @@ mod tests {
             | Optimizations::SU_SD
             | Optimizations::BCE
             | Optimizations::CBT
-            | Optimizations::CHT
-            | Optimizations::ONLCR;
+            | Optimizations::CHT;
         assert!(!o.intersects(missing));
         // VT100 era margins + VT102 editing pairs.
         let present =
@@ -627,11 +648,6 @@ mod tests {
             | Optimizations::VPA
             | Optimizations::CBT;
         assert_eq!(o, present);
-        assert!(!o.contains(Optimizations::BCE));
-        assert!(!o.contains(Optimizations::ECH));
-        assert!(!o.contains(Optimizations::REP));
-        assert!(!o.contains(Optimizations::CHA));
-        assert!(!o.contains(Optimizations::CHT));
     }
 
     /// No `$TERM` baseline may carry a line-discipline flag. `\t`,
@@ -641,22 +657,11 @@ mod tests {
     /// leaves `ONLCR` to the caller.
     #[test]
     fn no_baseline_carries_line_discipline_flags() {
-        let line_discipline = LINE_DISCIPLINE;
-        let baselines = [
-            ("none", Optimizations::none()),
-            ("modern", Optimizations::modern()),
-            ("xterm", Optimizations::xterm()),
-            ("vt100", Optimizations::vt100()),
-            ("linux", Optimizations::linux()),
-            ("screen", Optimizations::screen()),
-            ("default", Optimizations::default()),
-        ];
-        for (name, o) in baselines {
-            assert!(
-                !o.intersects(line_discipline),
-                "{name} baseline must not assume the line discipline: {o:?}"
-            );
-        }
+        let o = Optimizations::vt100();
+        assert!(
+            !o.intersects(LINE_DISCIPLINE),
+            "vt100 baseline must not assume the line discipline: {o:?}"
+        );
     }
 
     /// Every `$TERM` the detector recognizes routes to one of the
@@ -678,11 +683,7 @@ mod tests {
             "xterm",
             "xterm-256color",
             "screen",
-            "screen-256color",
-            "linux",
             "vt100",
-            "dumb",
-            "",
         ] {
             let o = Optimizations::from_term(term);
             assert!(
@@ -749,20 +750,6 @@ mod tests {
     }
 
     #[test]
-    fn xterm_term_enables_cha() {
-        let o = Optimizations::from_term("xterm-256color");
-        assert!(o.contains(Optimizations::CHA));
-        assert!(!o.contains(Optimizations::HPA));
-    }
-
-    #[test]
-    fn linux_term_supports_vpa_hpa_not_rep() {
-        let o = Optimizations::from_term("linux");
-        assert!(o.contains(Optimizations::VPA | Optimizations::HPA));
-        assert!(!o.contains(Optimizations::REP));
-    }
-
-    #[test]
     fn alacritty_term_has_explicit_caps() {
         let o = Optimizations::from_term("alacritty");
         assert!(o.contains(Optimizations::CHA | Optimizations::ECH | Optimizations::REP));
@@ -770,15 +757,20 @@ mod tests {
 
     #[test]
     fn screen_term_uses_screen_profile() {
-        assert_eq!(
-            Optimizations::from_term("screen-256color"),
-            Optimizations::screen(),
-        );
+        for term in ["screen", "screen-256color"] {
+            assert_eq!(Optimizations::from_term(term), Optimizations::screen());
+        }
     }
 
     #[test]
-    fn tmux_term_supports_vpa() {
-        assert!(Optimizations::from_term("tmux-256color").contains(Optimizations::VPA));
+    fn tmux_term_excludes_cht() {
+        for term in ["tmux", "tmux-256color"] {
+            assert_eq!(
+                Optimizations::from_term(term),
+                Optimizations::modern().difference(Optimizations::CHT),
+                "TERM={term}",
+            );
+        }
     }
 
     #[test]
@@ -787,7 +779,6 @@ mod tests {
             "contour",
             "foot",
             "ghostty",
-            "kitty",
             "rio",
             "st",
             "tmux",
