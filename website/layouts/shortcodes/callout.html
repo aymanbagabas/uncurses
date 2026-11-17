@@ -1,0 +1,4 @@
+<aside class="callout callout-{{ .Get "type" | default "info" }}" aria-label="{{ if eq (.Get "type") "warning" }}Warning{{ else }}Note{{ end }}">
+  <span class="callout-label">{{ if eq (.Get "type") "warning" }}Warning{{ else }}Note{{ end }}</span>
+  {{ .Inner | .Page.RenderString (dict "display" "block") }}
+</aside>
