@@ -85,10 +85,15 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
         let mut screen = Screen::new(writer, size);
         screen.set_color_profile(color_profile);
         screen.set_optimizations(optimizations);
+        let source = Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap()));
+        #[cfg(windows)]
+        let source_waker = source.lock().unwrap().waker();
         Self {
             terminal,
             screen,
-            source: Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap())),
+            source,
+            #[cfg(windows)]
+            source_waker,
             unread: VecDeque::new(),
             state: state::State::default(),
             caps: Capabilities::default(),

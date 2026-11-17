@@ -7,15 +7,16 @@ use std::ffi::c_void;
 use std::io::{self, Read, Write};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use uncurses::event::{Event, EventSource, KeyCode, KeyModifiers};
+use uncurses::event::{Event, EventSource, Input, KeyCode, KeyModifiers};
 use uncurses::program::{Program, ProgramOptions};
 use uncurses::terminal::{Terminal, TtyInput, TtyOutput};
-use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, ENABLE_VIRTUAL_TERMINAL_INPUT,
     FlushConsoleInputBuffer, GetConsoleCP, GetConsoleMode, HPCON, INPUT_RECORD, KEY_EVENT,
@@ -329,7 +330,7 @@ fn child_pause_serialization() {
     output.flush().unwrap();
 }
 
-fn check_up_key(program: &Program<TtyInput, TtyOutput>, input: TtyInput, vt_input: bool) {
+fn check_up_key<I: Input, O: Write>(program: &Program<I, O>, input: TtyInput, vt_input: bool) {
     let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
     record.EventType = KEY_EVENT as u16;
     record.Event.KeyEvent.bKeyDown = 1;
@@ -365,6 +366,184 @@ fn check_up_key(program: &Program<TtyInput, TtyOutput>, input: TtyInput, vt_inpu
         }
         break;
     }
+}
+
+#[test]
+fn mode_changes_interrupt_shared_readers() {
+    run_conpty("child_mode_change_readers", &[]);
+}
+
+#[test]
+#[ignore = "fixture launched inside a ConPTY by mode_changes_interrupt_shared_readers"]
+fn child_mode_change_readers() {
+    let terminal = Terminal::open().unwrap();
+    let input = terminal.input();
+    let original_mode = input_mode(input);
+    assert_ne!(
+        unsafe {
+            SetConsoleMode(
+                input.as_raw_handle(),
+                original_mode & !ENABLE_VIRTUAL_TERMINAL_INPUT,
+            )
+        },
+        0
+    );
+    for action in ["pause", "resume", "finish"] {
+        for use_poll in [false, true] {
+            let mut program = Program::open().unwrap();
+            program.init().unwrap();
+            if action == "resume" {
+                program.pause().unwrap();
+            }
+            assert_ne!(unsafe { FlushConsoleInputBuffer(input.as_raw_handle()) }, 0);
+            let source = program.event_source();
+            let reader_source = source.clone();
+            let (started, waiting) = mpsc::sync_channel(0);
+            let reader = std::thread::spawn(move || {
+                let mut source = reader_source.lock().unwrap();
+                started.send(()).unwrap();
+                if use_poll {
+                    assert!(!source.poll(None).unwrap());
+                } else {
+                    assert_eq!(
+                        source.read().unwrap_err().kind(),
+                        io::ErrorKind::Interrupted
+                    );
+                }
+            });
+            waiting.recv_timeout(TIMEOUT).unwrap();
+            match action {
+                "pause" => {
+                    program.pause().unwrap();
+                    check_up_key(&program, input, false);
+                    program.finish().unwrap();
+                }
+                "resume" => {
+                    program.resume().unwrap();
+                    check_up_key(&program, input, true);
+                    program.finish().unwrap();
+                }
+                "finish" => program.finish().unwrap(),
+                _ => unreachable!(),
+            }
+            reader.join().unwrap();
+            assert!(!source.lock().unwrap().vt_input());
+        }
+    }
+    assert_ne!(
+        unsafe { SetConsoleMode(input.as_raw_handle(), original_mode) },
+        0
+    );
+    let mut output = terminal.output();
+    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
+    output.flush().unwrap();
+}
+
+#[derive(Clone, Copy)]
+struct SwitchHandle<'a, H> {
+    console: H,
+    pipe: BorrowedHandle<'a>,
+    fail: &'a AtomicBool,
+}
+
+impl<H: AsHandle> AsHandle for SwitchHandle<'_, H> {
+    fn as_handle(&self) -> BorrowedHandle<'_> {
+        if self.fail.load(Ordering::Relaxed) {
+            self.pipe
+        } else {
+            self.console.as_handle()
+        }
+    }
+}
+
+impl<H: Read> Read for SwitchHandle<'_, H> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.console.read(buf)
+    }
+}
+
+impl<H: Write> Write for SwitchHandle<'_, H> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.console.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.console.flush()
+    }
+}
+
+#[test]
+fn partial_restore_updates_only_applied_input_modes() {
+    run_conpty("child_partial_restore", &[]);
+}
+
+#[test]
+#[ignore = "fixture launched inside a ConPTY by partial_restore_updates_only_applied_input_modes"]
+fn child_partial_restore() {
+    let terminal = Terminal::open().unwrap();
+    let input = terminal.input();
+    let original_mode = input_mode(input);
+    assert_ne!(
+        unsafe {
+            SetConsoleMode(
+                input.as_raw_handle(),
+                original_mode & !ENABLE_VIRTUAL_TERMINAL_INPUT,
+            )
+        },
+        0
+    );
+    let (pipe, _writer) = io::pipe().unwrap();
+    let fail_input = AtomicBool::new(false);
+    let fail_output = AtomicBool::new(false);
+    for input_fails in [false, true] {
+        let terminal = Terminal::new(
+            SwitchHandle {
+                console: input,
+                pipe: pipe.as_handle(),
+                fail: &fail_input,
+            },
+            SwitchHandle {
+                console: terminal.output(),
+                pipe: pipe.as_handle(),
+                fail: &fail_output,
+            },
+            uncurses::terminal::EnvList::new(),
+        );
+        let mut program = Program::new(terminal).unwrap();
+        program.init().unwrap();
+        fail_input.store(input_fails, Ordering::Relaxed);
+        fail_output.store(!input_fails, Ordering::Relaxed);
+        assert_eq!(
+            program.pause().unwrap_err().raw_os_error(),
+            Some(ERROR_INVALID_HANDLE as i32)
+        );
+        assert_eq!(
+            input_mode(input) & ENABLE_VIRTUAL_TERMINAL_INPUT != 0,
+            input_fails
+        );
+        assert_eq!(
+            program.event_source().lock().unwrap().vt_input(),
+            input_fails
+        );
+        fail_input.store(false, Ordering::Relaxed);
+        fail_output.store(false, Ordering::Relaxed);
+        check_up_key(&program, input, input_fails);
+        program.pause().unwrap();
+        check_up_key(&program, input, false);
+        fail_output.store(true, Ordering::Relaxed);
+        program.pause().unwrap();
+        fail_output.store(false, Ordering::Relaxed);
+        program.resume().unwrap();
+        check_up_key(&program, input, true);
+        program.finish().unwrap();
+    }
+    assert_ne!(
+        unsafe { SetConsoleMode(input.as_raw_handle(), original_mode) },
+        0
+    );
+    let mut output = terminal.output();
+    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
+    output.flush().unwrap();
 }
 
 #[test]

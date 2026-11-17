@@ -114,6 +114,9 @@ where
     /// Held in an `Arc<Mutex<_>>`; the lock is uncontended in the common
     /// single-reader case.
     source: Arc<Mutex<EventSource<I>>>,
+    /// Interrupts a shared reader without acquiring its source lock.
+    #[cfg(windows)]
+    source_waker: crate::event::Waker,
     /// Events handed back by [`Self::unread_event`], which the read path
     /// drains before the source. Kept here rather than in `source` because
     /// these were already observed: routing them back through the source
@@ -955,10 +958,14 @@ where
         screen.set_optimizations(optimizations);
 
         let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
+        #[cfg(windows)]
+        let source_waker = source.lock().unwrap().waker();
         Ok(Self {
             terminal,
             screen,
             source,
+            #[cfg(windows)]
+            source_waker,
             unread: VecDeque::new(),
             state: state::State::default(),
             caps: Capabilities::default(),
@@ -1225,17 +1232,20 @@ where
         // Restore even when teardown fails: the caller asked for the terminal
         // back, and a failed write to it is not a reason to keep it raw.
         let teardown = self.teardown();
+        #[cfg(not(windows))]
         let restore = self.terminal.restore();
         #[cfg(windows)]
-        let restore = restore.and_then(|()| {
+        let restore = {
             use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
-            let state = self.terminal.get_state()?;
-            self.source
-                .lock()
-                .unwrap()
-                .set_vt_input(state.input & ENABLE_VIRTUAL_TERMINAL_INPUT != 0);
-            Ok(())
-        });
+            let source = Arc::clone(&self.source);
+            let mut source = lock_source_for_mode_change(&source, &self.source_waker);
+            let restore = self.terminal.restore_with_input(|mode| {
+                if let Ok(source) = source.as_mut() {
+                    source.set_vt_input(mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0);
+                }
+            });
+            source.map(|_| ()).and(restore)
+        };
         teardown.and(restore)
     }
 
@@ -1258,9 +1268,13 @@ where
     }
 
     fn enter_raw_mode(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        let source = Arc::clone(&self.source);
+        #[cfg(windows)]
+        let mut source = lock_source_for_mode_change(&source, &self.source_waker)?;
         self.terminal.make_raw()?;
         #[cfg(windows)]
-        self.source.lock().unwrap().set_vt_input(true);
+        source.set_vt_input(true);
         Ok(())
     }
 
@@ -1273,6 +1287,20 @@ where
         // SAFETY: raise is async-signal-safe.
         unsafe { libc::raise(libc::SIGTSTP) };
         Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn lock_source_for_mode_change<'a, I: Input>(
+    source: &'a Mutex<EventSource<I>>,
+    waker: &crate::event::Waker,
+) -> io::Result<std::sync::MutexGuard<'a, EventSource<I>>> {
+    match source.try_lock() {
+        Err(std::sync::TryLockError::WouldBlock) => {
+            waker.wake()?;
+            Ok(source.lock().unwrap())
+        }
+        result => Ok(result.unwrap()),
     }
 }
 

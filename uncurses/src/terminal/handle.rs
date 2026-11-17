@@ -367,8 +367,22 @@ impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
     ///
     /// This method does not intentionally panic.
     pub fn restore(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        return self.restore_with_input(|_| {});
+
+        #[cfg(not(windows))]
         if let Some(state) = self.saved.as_ref() {
             raw::set_state(&self.input, &self.output, state)?;
+            self.saved = None;
+        }
+        #[cfg(not(windows))]
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn restore_with_input(&mut self, on_input: impl FnOnce(u32)) -> io::Result<()> {
+        if let Some(state) = self.saved.as_ref() {
+            raw::set_state_with_input(&self.input, &self.output, state, on_input)?;
             self.saved = None;
         }
         Ok(())
