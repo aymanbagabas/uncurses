@@ -54,6 +54,35 @@ For terminal sequences, verify the relevant specification before implementation.
 Use [xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
 or the extension's own specification, as appropriate.
 
+## Test quality
+
+Keep the smallest set of tests that protects distinct behavior. A passing test
+alone does not prove that it exercises its stated behavior.
+
+- Search nearby and related tests before adding a case. Extend existing
+  coverage when the entry point, configuration, and behavior match.
+- Identify the concrete regression each case detects. For a bug fix, confirm
+  that the regression test fails before the fix and passes afterward.
+- Build fixtures through supported APIs or valid internal state. Preserve
+  malformed external input cases, because terminals can supply invalid bytes.
+- Verify the setup, not just the result. Enable the required mode or
+  optimization, isolate the relevant frame, and set explicit capabilities or
+  environment values when the assertion depends on them.
+- Derive expected results from the contract or specification, independently
+  of the implementation under test. Assert the intended result precisely.
+  Avoid discarded checks, self-comparisons, and ranges that accept every result.
+- Keep each matrix case only when it protects a distinct boundary, behavior,
+  feature, or platform. Avoid duplicate cases and assertions already implied
+  by an exact equality check.
+- Test library behavior rather than Rust derives, field assignments, fixture
+  helpers, or incidental implementation details.
+- Keep fixtures small and reliable. Coordinate concurrent operations
+  explicitly, including pipe writers and readers. Surface fixture failures.
+- Before removing a test, identify its retained equivalent or prove that it
+  checks no library behavior. Preserve distinct entry points, configurations,
+  boundaries, malformed input, failure recovery, features, and platforms.
+  Repair an inaccurate fixture when it protects unique behavior.
+
 ## Verify the change
 
 Start with the affected package and test filter. Examples:

@@ -56,6 +56,15 @@ Published releases and the current source can differ.
 - Use Conventional Commit subjects and sign off commits, as explained in the
   [contributor guide](CONTRIBUTING.md#commits-and-pull-requests).
 
+## Test quality
+
+- Search existing coverage before adding tests. Extend a nearby test instead
+  of repeating the same behavior.
+- Give each case a distinct behavioral purpose and an assertion that can
+  detect its regression. Verify that the fixture reaches the claimed path.
+- Follow the [test quality rules](CONTRIBUTING.md#test-quality) when adding,
+  changing, or removing tests.
+
 ## Common checks
 
 Run commands from the workspace root:
