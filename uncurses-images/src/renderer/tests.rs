@@ -991,12 +991,12 @@ fn rejected_frames_and_commits_can_be_corrected_without_image_invalidation() {
         let error = if rejected_commit {
             renderer.commit_rows(&mut screen, 1).unwrap_err()
         } else {
-            screen.set_cell((1, 0), &Cell::new("\x07", 1));
+            screen.set_cell((1, 0), &Cell::new("\x07", 1, uncurses::style::Style::EMPTY));
             renderer.render(&mut screen).unwrap_err()
         };
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert!(screen.writer().is_empty());
-        screen.set_cell((1, 0), &Cell::new("X", 1));
+        screen.set_cell((1, 0), &Cell::new("X", 1, uncurses::style::Style::EMPTY));
         renderer.render(&mut screen).unwrap();
         assert!(String::from_utf8_lossy(screen.writer()).contains("a=t,"));
     }

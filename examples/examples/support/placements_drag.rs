@@ -469,7 +469,7 @@ fn paint<W: Write>(
                 .bold();
             screen.fill_rect(
                 Rect::new(position.x, position.y, width, height),
-                &uncurses::cell::Cell::BLANK.style(style.clone()),
+                &uncurses::cell::Cell::new(" ", 1, &style),
             );
             screen.set_str(position, &"Dialog"[..usize::from(width.min(6))], style);
         }

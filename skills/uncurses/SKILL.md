@@ -1,6 +1,6 @@
 ---
 name: uncurses
-description: Use for Rust terminal UIs with the uncurses crate or code that imports uncurses::. Covers terminal sessions, drawing, keyboard and mouse input, resize, async events, and the uncurses-ratatui backend. Includes the ownership model, examples, and API pitfalls.
+description: Use for Rust terminal applications with uncurses or uncurses-ratatui, including code that imports uncurses::. Covers basic terminal behavior, terminal standards, and optional protocol extensions supported by uncurses. Includes sessions, drawing, input, capability queries, async events, the ownership model, examples, and API pitfalls.
 version: 0.1.0
 ---
 
@@ -9,10 +9,16 @@ version: 0.1.0
 uncurses provides terminal UI components for Rust. It communicates directly
 with modern terminals and discovers capabilities through queries instead of
 terminfo. This skill covers the ownership model and common mistakes. Use
-**https://uncurses.org**, rustdoc, and the source for detailed API information.
+[the website](https://uncurses.org), rustdoc, and the source for detailed API information.
 
-Check the dependency revision before you copy an example. This skill follows
-the source in this checkout.
+Use this skill in applications that depend on uncurses. For changes to the
+uncurses repository, read its `AGENTS.md` and `CONTRIBUTING.md`.
+
+The examples below target the repository source, which can differ from a
+published release. Check the application's dependency version and Git revision
+in `Cargo.lock` before copying a sample. Use the source at that revision, or the
+version-matched [docs.rs reference](https://docs.rs/uncurses), to confirm APIs.
+An installed copy of this skill can be separate from the uncurses checkout.
 
 ## Mental model
 
@@ -123,8 +129,10 @@ Use one input consumer in steady state; shared readers compete for events.
   a position. Both `TextSurface` and `Painter` use this argument order.
 - Measure text with the destination's width policy, such as `screen.str_width`.
   Byte length and character count can differ from terminal column width.
-- `Cell::new(content, width)` takes an explicit column width. Use
-  `cell.content()` and `cell.width()` to read those values. Surface writes
+- `Cell::new(content, width, style)` takes an explicit width and style.
+  Use `Style::EMPTY` for the default style. Use `cell.style()` to read a
+  style and `cell.set_style(style)` to change it. Use `cell.content()` and
+  `cell.width()` to read the content and width. Surface writes
   create continuation cells automatically. Prefer `set_str` for ordinary text.
 - `screen.set_cursor_position((x, y))` stages a position that persists across
   frames. `render()` applies it after the cell diff.
@@ -194,13 +202,28 @@ See `examples/examples/ratatui_hello_world.rs` for setup, drawing, and teardown.
 
 Enable at least one Unicode backend. The feature name is `unicode-rs`.
 
+## Protocol-specific tasks
+
+For raw Kitty drag and drop, start with the
+[drag-and-drop guide](https://uncurses.org/docs/guides/drag-and-drop/) and
+`examples/examples/drag_drop.rs`. Applications handle registration, MIME
+selection, payload encoding, and transfer completion through the raw interface.
+Use the guide's terminal requirements before testing an exchange.
+
+For task state, progress, and child records, use the
+[program-status guide](https://uncurses.org/docs/guides/program-status/) and
+`examples/examples/program_status.rs`. Supporting terminals choose how to
+display reports. Check the guide before assuming that a terminal supports them.
+
 ## Where to look next
 
-Read the closest example under `examples/examples/` in the uncurses repository
-before you implement a feature. From that checkout, run
+Example paths in this skill refer to the
+[uncurses repository](https://github.com/aymanbagabas/uncurses/tree/main/examples/examples),
+not the application or the installed skill directory. Select the matching
+revision before reading an example. From an uncurses checkout, run
 `cargo run -p examples --example <name>`.
 
-- **Minimal / interactive:** `counter.rs`, `interactive.rs`, `tour.rs`
+- **Minimal / interactive:** `hello_world.rs`, `counter.rs`, `interactive.rs`, `tour.rs`
 - **Inline & modal:** `inline_input.rs`, `modal_inline.rs`, `marquee_hello.rs`
 - **Input:** `keylog.rs`, `legacy_keys.rs`, `input_only.rs`, `paste.rs`, `mouse.rs`,
   `cursor_pad.rs`
@@ -210,6 +233,8 @@ before you implement a feature. From that checkout, run
 - **Output / low level:** `draw_only.rs`, `low_level.rs`, `terminal.rs`, `offscreen.rs`
 - **ratatui:** `ratatui_hello_world.rs`, `ratatui_user_input.rs`, `ratatui_popup.rs`
 - **Styling:** `styles.rs`, `gradient.rs`
+- **Raw drag and drop:** `drag_drop.rs`
+- **Program status:** `program_status.rs`
 
 Use public `program`, `screen`, and `event` APIs. The `renderer`,
 `event::decode`, and `event::poll` modules are internal. Check the source or

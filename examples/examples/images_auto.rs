@@ -312,7 +312,7 @@ fn dump_shared(source: &Image) -> io::Result<()> {
                         .bg(uncurses::color::Color::Black);
                     screen.fill_rect(
                         Rect::new(4, 3, 6, 2),
-                        &uncurses::cell::Cell::BLANK.style(&style),
+                        &uncurses::cell::Cell::new(" ", 1, &style),
                     );
                     screen.set_str((4, 3), "Dialog", style);
                 }

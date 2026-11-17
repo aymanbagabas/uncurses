@@ -12,19 +12,14 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::color::Color;
 use crate::event::{ProgramStatusCapabilities, SettingReport};
 use crate::text::TextSurface;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn null_input() -> std::io::PipeReader {
     // A pipe read end is epoll/kqueue-registerable (unlike /dev/null), which
     // EventSource::new requires. The write end is dropped; tests never read.
-    let (reader, _writer) = std::io::pipe().unwrap();
-    reader
-}
-
-#[cfg(windows)]
-fn null_input() -> std::io::PipeReader {
     let (reader, _writer) = std::io::pipe().unwrap();
     reader
 }
@@ -85,12 +80,18 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
         let mut screen = Screen::new(writer, size);
         screen.set_color_profile(color_profile);
         screen.set_optimizations(optimizations);
+        let source = Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap()));
+        #[cfg(windows)]
+        let source_waker = source.lock().unwrap().waker();
         Self {
             terminal,
             screen,
-            source: Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap())),
+            source,
+            #[cfg(windows)]
+            source_waker,
             unread: VecDeque::new(),
             state: state::State::default(),
+            synchronized_output_discovered: false,
             caps: Capabilities::default(),
             options: ProgramOptions::default(),
             window_cells: None,
@@ -132,41 +133,6 @@ fn decoder_flags_delegate_without_changing_options_or_terminal_modes() {
 
 #[cfg(unix)]
 #[test]
-fn shared_source_string_timeout_can_change_during_a_reply() {
-    let buf = RefCell::new(Vec::new());
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
-    let source = program.event_source();
-    source
-        .lock()
-        .unwrap()
-        .set_string_idle_timeout(Some(Duration::ZERO));
-    writer.write_all(b"\x1b]52;c;qqqq").unwrap();
-    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-
-    source.lock().unwrap().set_string_idle_timeout(None);
-    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-    source
-        .lock()
-        .unwrap()
-        .set_string_idle_timeout(Some(Duration::ZERO));
-    assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::Unknown(b"\x1b]52;c;qqqq".to_vec()),
-    );
-    writer.write_all(b"\x1b]52;c;Zm9v\x1b\\").unwrap();
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::Clipboard {
-            selection: crate::event::ClipboardSelection::System,
-            content: "Zm9v".into(),
-        },
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn shared_source_paste_timeout_can_change_during_a_paste() {
     let buf = RefCell::new(Vec::new());
     let (reader, mut writer) = std::io::pipe().unwrap();
@@ -199,13 +165,92 @@ fn shared_source_paste_timeout_can_change_during_a_paste() {
         program.read_event().unwrap(),
         Event::PasteChunk(b"\x1b[20".to_vec()),
     );
-    assert_eq!(program.read_event().unwrap(), Event::PasteEnd);
+    assert_eq!(
+        program.read_event().unwrap(),
+        Event::PasteEnd { complete: false }
+    );
 
     writer.write_all(b"x").unwrap();
     assert!(matches!(
         program.read_event().unwrap(),
         Event::KeyPress(key) if key.code == crate::event::KeyCode::Char('x')
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_source_preserves_a_partial_paste_marker_when_a_program_finishes() {
+    let Some((mut keyboard, tty)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let terminal = || crate::terminal::Terminal::new(&tty, &tty, crate::terminal::EnvList::new());
+    let mut main = Program::new(terminal()).unwrap();
+    main.init().unwrap();
+    main.pause().unwrap();
+
+    let mut dialog = Program::with_event_source(terminal(), main.event_source()).unwrap();
+    dialog.init().unwrap();
+    keyboard.write_all(b"/\x1b[20").unwrap();
+    assert!(matches!(
+        dialog.read_event().unwrap(),
+        Event::KeyPress(key) if key.code == crate::event::KeyCode::Char('/')
+    ));
+    dialog.finish().unwrap();
+    main.resume().unwrap();
+    keyboard.write_all(b"0~one\ntwo\x1b[201~").unwrap();
+
+    let mut next = || {
+        assert!(main.poll_event(Some(Duration::from_secs(1))).unwrap());
+        main.try_read_event().unwrap().unwrap()
+    };
+    assert_eq!(next(), Event::PasteStart);
+    assert_eq!(next(), Event::PasteChunk(b"one\ntwo".to_vec()));
+    assert_eq!(next(), Event::PasteEnd { complete: true });
+    main.finish().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_source_restores_signal_resizes_for_a_new_program() {
+    let Some((_keyboard, tty)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let terminal = || crate::terminal::Terminal::new(&tty, &tty, crate::terminal::EnvList::new());
+    let mut main = Program::new(terminal()).unwrap();
+    main.init().unwrap();
+    main.enable_in_band_resize().unwrap();
+    assert!(!main.event_source().lock().unwrap().handle_resize());
+    main.pause().unwrap();
+
+    let mut dialog = Program::with_event_source(terminal(), main.event_source()).unwrap();
+    dialog.init().unwrap();
+    assert!(dialog.event_source().lock().unwrap().handle_resize());
+    dialog.finish().unwrap();
+    main.resume().unwrap();
+    assert!(!main.event_source().lock().unwrap().handle_resize());
+    main.finish().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_source_restores_signal_resizes_when_the_original_program_resumes() {
+    let Some((_keyboard, tty)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let terminal = || crate::terminal::Terminal::new(&tty, &tty, crate::terminal::EnvList::new());
+    let mut main = Program::new(terminal()).unwrap();
+    main.init().unwrap();
+    assert!(main.event_source().lock().unwrap().handle_resize());
+    main.pause().unwrap();
+
+    let mut dialog = Program::with_event_source(terminal(), main.event_source()).unwrap();
+    dialog.init().unwrap();
+    dialog.enable_in_band_resize().unwrap();
+    assert!(!dialog.event_source().lock().unwrap().handle_resize());
+    dialog.finish().unwrap();
+    main.resume().unwrap();
+    assert!(main.event_source().lock().unwrap().handle_resize());
+    main.finish().unwrap();
 }
 
 #[cfg(unix)]
@@ -406,6 +451,64 @@ fn color_queries_are_optional_and_preserve_options() {
             }
         }
     }
+}
+
+#[test]
+fn palette_cleanup_resets_only_owned_entries() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.set_palette_color(255, Color::Rgb(1, 2, 3)).unwrap();
+    buf.borrow_mut().clear();
+    program.reset().unwrap();
+    program.screen.flush().unwrap();
+    let output = written(&buf);
+    assert!(output.contains("\x1b]104;255\x07"), "{output:?}");
+    assert!(!output.contains("\x1b]104\x07"), "{output:?}");
+
+    buf.borrow_mut().clear();
+    program.restore().unwrap();
+    program.screen.flush().unwrap();
+    assert!(written(&buf).contains("\x1b]4;255;rgb:0101/0202/0303\x07"));
+
+    buf.borrow_mut().clear();
+    program.reset_palette_colors().unwrap();
+    assert_eq!(written(&buf), "\x1b]104\x07");
+    buf.borrow_mut().clear();
+    program.reset().unwrap();
+    program.restore().unwrap();
+    program.screen.flush().unwrap();
+    assert!(!written(&buf).contains("\x1b]104"));
+    assert!(!written(&buf).contains("\x1b]4;"));
+}
+
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn palette_pause_resume_and_finish_preserve_unowned_entries() {
+    use crate::terminal::{EnvList, Terminal};
+    use crate::testutil::{drain, open_pty_pair};
+
+    let Some((master, slave)) = open_pty_pair() else {
+        return;
+    };
+    let terminal = Terminal::new(&slave, &slave, EnvList::new());
+    let mut program = Program::new(terminal).unwrap();
+    program.init_with(ProgramOptions::default()).unwrap();
+    program.set_palette_color(0, Color::Rgb(1, 2, 3)).unwrap();
+    drain(&master);
+    program.pause().unwrap();
+    let output = String::from_utf8(drain(&master)).unwrap();
+    assert!(output.contains("\x1b]104;0\x07"), "{output:?}");
+    assert!(!output.contains("\x1b]104\x07"), "{output:?}");
+    program.resume().unwrap();
+    let output = String::from_utf8(drain(&master)).unwrap();
+    assert!(
+        output.contains("\x1b]4;0;rgb:0101/0202/0303\x07"),
+        "{output:?}"
+    );
+    program.finish().unwrap();
+    let output = String::from_utf8(drain(&master)).unwrap();
+    assert!(output.contains("\x1b]104;0\x07"), "{output:?}");
+    assert!(!output.contains("\x1b]104\x07"), "{output:?}");
 }
 
 #[cfg(unix)]
@@ -692,37 +795,6 @@ fn autoresize_refits_after_the_report_was_already_observed() {
         "autoresize must still refit the managed area"
     );
 }
-
-// --- end-to-end renderer tests ---
-//
-// Drive the renderer through the Screen render surface. The writer
-// is `&mut Vec<u8>` (or scoped so the test owns the `Vec<u8>` that
-// outlives the program), and per-test configuration is established
-// up front with the `with_color_profile` / `with_optimizations`
-// builders — there is no runtime mutation of these knobs.
-//
-// Each optimization-toggle pair asserts on the **discriminating
-// byte sequence** the optimization controls (ECH, REP, tab,
-// backspace, map-newline, scroll), so the ON and OFF variants
-// would diverge if the optimization regressed.
-//
-// Some renderer behaviours are intentionally not covered here:
-// * Touched-span tracking: depends on directly poking `RenderBuffer`
-//   and reading per-line touched spans, neither of which is part of
-//   the public API. Touch tracking is exercised indirectly by every
-//   render test that asserts on emitted bytes.
-// * Renderer logger hooks: not provided.
-// * Style-change runtime mutation: exercised by
-//   `renderer_redraws_when_style_changes` below.
-// * Runtime mutation of the relative-cursor flag: inline /
-//   fullscreen flavors of the relative-cursor model are covered by
-//   `inline_hello_world_emits_exact_byte_stream` and
-//   `fullscreen_diagonal_emits_exact_byte_stream`.
-//
-// Output-frame cases drive the same source text through Screen
-// (with `set_str_wrap(..., WrapMode::Wrap)`), render both frames in a
-// single Screen lifetime, and assert that the relevant content and
-// clearing sequences appear in the cumulative byte stream.
 
 #[test]
 fn set_title_emits_osc_0() {
@@ -1232,37 +1304,29 @@ fn reset_lnm_emits_ansi_mode_20_reset() {
 }
 
 #[test]
-fn reset_tab_stops_emits_even_when_tabs_disabled() {
-    let buf = RefCell::new(Vec::new());
-    {
-        let opts = Optimizations::default().difference(Optimizations::TABS);
-        let mut program = Program::for_test(&buf, (20, 1));
-        program.screen_mut().set_optimizations(opts);
-        program.reset_tab_stops().unwrap();
+fn reset_tab_stops_uses_terminal_env_with_tabs_enabled_or_disabled() {
+    let portable = "\r\x1b[3g\x1b[8C\x1bH\x1b[8C\x1bH\r";
+    for (term, expected) in [
+        ("xterm-kitty", "\x1b[?5W"),
+        ("tmux-256color", portable),
+        ("screen-256color", portable),
+    ] {
+        for tabs in [false, true] {
+            let buf = RefCell::new(Vec::new());
+            let input = null_input();
+            let terminal = Terminal::from_parts(
+                &input,
+                TestOut(&buf),
+                crate::terminal::EnvList::from_pairs([("TERM", term), ("KITTY_WINDOW_ID", "1")]),
+            );
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            program
+                .screen_mut()
+                .set_optimizations(Optimizations::from_term(term).with_tabs(tabs));
+            program.reset_tab_stops().unwrap();
+            assert_eq!(written(&buf), expected, "TERM={term}, tabs={tabs}");
+        }
     }
-    assert!(
-        !buf.borrow().is_empty(),
-        "tab stops belong to the terminal, not to our willingness to use them: \
-         turning TABS on later must not find them unknown"
-    );
-}
-
-#[test]
-fn reset_tab_stops_emits_reset_when_tabs_enabled() {
-    let buf = RefCell::new(Vec::new());
-    {
-        let opts = Optimizations::default().union(Optimizations::TABS);
-        let mut program = Program::for_test(&buf, (20, 1));
-        program.screen_mut().set_optimizations(opts);
-        program.reset_tab_stops().unwrap();
-    }
-    let out = written(&buf);
-    // Either the DECST8C one-shot or the portable TBC clear-all, depending
-    // on the terminal detected from the environment.
-    assert!(
-        out.contains("\x1b[?5W") || out.contains("\x1b[3g"),
-        "expected a tab-stop reset: {out:?}"
-    );
 }
 
 #[test]
@@ -1274,11 +1338,16 @@ fn reset_moves_cursor_to_last_row_inline() {
             .screen_mut()
             .set_str((0, 0), "hi", crate::style::Style::default());
         program.screen_mut().render().unwrap();
+        program
+            .screen_mut()
+            .move_cursor_to(Position::ORIGIN)
+            .unwrap();
+        buf.borrow_mut().clear();
         program.reset().unwrap();
         program.screen_mut().flush().unwrap();
     }
     let out = written(&buf);
-    // After "hi" lands at row 0, cur.pos.y == 0. reset must walk down
+    // The explicit move leaves the cursor at row 0. reset must walk down
     // to row 4 (last of 5-row inline surface). In inline / relative
     // mode the planner emits CUD 4 (or 4× LF when cheaper).
     assert!(
@@ -1374,93 +1443,176 @@ fn set_kitty_keyboard_flags_always_emits_set() {
 #[test]
 fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
     use crate::ansi::kitty::KittyKeyboardFlags;
-    let buf = RefCell::new(Vec::new());
-    {
+    for flags in [
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+        KittyKeyboardFlags::empty(),
+    ] {
+        let buf = RefCell::new(Vec::new());
         let mut program = Program::for_test(&buf, (20, 1));
+        program.options.prefer_kitty_keyboard = Some(flags);
         program
-            .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
+            .observe_event(&Event::KittyKeyboardEnhancements(
+                KittyKeyboardFlags::empty(),
+            ))
             .unwrap();
         program.set_alt_screen(true).unwrap();
         program.set_alt_screen(false).unwrap();
         program.screen_mut().flush().unwrap();
+        let out = written(&buf);
+        let bits = flags.bits();
+        // The departing alternate buffer also receives an empty selection.
+        let expected = if flags.is_empty() { 4 } else { 3 };
+        assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), expected);
     }
+}
+
+#[test]
+fn leaving_alt_screen_clears_its_keyboard_flags_before_main_selection_changes() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program
+        .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
+        .unwrap();
+    program.enter_alt_screen().unwrap();
+    buf.borrow_mut().clear();
+    program.exit_alt_screen().unwrap();
+    program.set_kitty_keyboard(None).unwrap();
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
     let out = written(&buf);
-    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-    // Initial set + alt-enter re-apply + alt-leave re-apply = 3 emissions.
-    assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 3);
+    let leave = out.find("\x1b[?1049l").unwrap();
+    assert!(
+        out[..leave].contains("\x1b[=0;1u"),
+        "the departing buffer retains its flags: {out:?}"
+    );
+    assert_eq!(
+        program.state().kitty_keyboard(),
+        Some(KittyKeyboardFlags::empty())
+    );
+}
+
+#[test]
+fn restore_selects_explicit_main_buffer_before_its_keyboard_flags() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.exit_alt_screen().unwrap();
+    program.set_kitty_keyboard(None).unwrap();
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
+    buf.borrow_mut().clear();
+    program.restore().unwrap();
+    program.screen_mut().flush().unwrap();
+    assert_eq!(written(&buf), "\x1b[?1049l\x1b[=0;1u");
+    assert_eq!(
+        program.state().mode(mode::Mode::ALT_SCREEN_SAVE_CURSOR),
+        Some(false)
+    );
 }
 
 #[test]
 fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
     use crate::ansi::kitty::KittyKeyboardFlags;
-    let buf = RefCell::new(Vec::new());
-    {
+    for selected in [
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+        KittyKeyboardFlags::empty(),
+    ] {
+        let buf = RefCell::new(Vec::new());
         let mut program = Program::for_test(&buf, (20, 1));
         program
             .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
             .unwrap();
         program.set_alt_screen(true).unwrap();
+        program.set_kitty_keyboard(Some(selected)).unwrap();
+        buf.borrow_mut().clear();
         program.reset().unwrap();
         // State preserved across reset for restore to use.
-        assert_eq!(
-            program.state.kitty_keyboard,
-            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
-        );
+        assert_eq!(program.state.kitty_keyboard, selected);
         program.screen_mut().flush().unwrap();
+        let out = written(&buf);
+        let leave = out.find("\x1b[?1049l").expect("alt-program leave");
+        let head = &out[..leave];
+        let tail = &out[leave..];
+        assert!(
+            head.contains("\x1b[=0;1u"),
+            "alt clear missing: head={head:?}"
+        );
+        assert!(
+            tail.contains("\x1b[=0;1u"),
+            "main clear missing: tail={tail:?}"
+        );
     }
+}
+
+#[test]
+fn explicitly_disabled_modes_are_reasserted_on_restore() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.disable_mouse().unwrap();
+    program.disable_bracketed_paste().unwrap();
+    program.disable_focus_events().unwrap();
+    program.disable_color_scheme_updates().unwrap();
+    program.disable_visibility_reports().unwrap();
+    program.disable_in_band_resize().unwrap();
+    program.disable_grapheme_clusters().unwrap();
+    program.show_cursor().unwrap();
+    program
+        .set_modify_other_keys(crate::event::ModifyOtherKeysMode::Disabled)
+        .unwrap();
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
+    buf.borrow_mut().clear();
+
+    program.restore().unwrap();
+    program.screen_mut().flush().unwrap();
     let out = written(&buf);
-    let leave = out.find("\x1b[?1049l").expect("alt-program leave");
-    let head = &out[..leave];
-    let tail = &out[leave..];
-    // A clear targets the alt buffer before leaving, and another
-    // clear targets the main buffer afterwards.
-    assert!(
-        head.contains("\x1b[=0;1u"),
-        "alt clear missing: head={head:?}"
-    );
-    assert!(
-        tail.contains("\x1b[=0;1u"),
-        "main clear missing: tail={tail:?}"
-    );
+    for expected in [
+        "\x1b[?2004l",
+        "\x1b[?1004l",
+        "\x1b[?2031l",
+        "\x1b[?2033l",
+        "\x1b[?2048l",
+        "\x1b[?2027l",
+        "\x1b[?25h",
+        "\x1b[>4m",
+        "\x1b[?9;1000;1002;1003;1006;1016l",
+    ] {
+        assert!(out.contains(expected), "missing {expected:?}: {out:?}");
+    }
 }
 
 #[test]
 fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
-    let buf = RefCell::new(Vec::new());
     use crate::ansi::kitty::KittyKeyboardFlags;
-    {
+    for flags in [
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+        KittyKeyboardFlags::empty(),
+    ] {
+        let buf = RefCell::new(Vec::new());
         let mut program = Program::for_test(&buf, (20, 1));
-        program
-            .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
-            .unwrap();
+        program.set_kitty_keyboard(Some(flags)).unwrap();
         program.set_alt_screen(true).unwrap();
         program.reset().unwrap();
         // Swap writers so only restore-side bytes land in restore_buf.
         buf.borrow_mut().clear();
         program.restore().unwrap();
         program.screen_mut().flush().unwrap();
+        let out = written(&buf);
+        let bits = flags.bits();
+        let enter = out.find("\x1b[?1049h").expect("alt-program enter");
+        let head = &out[..enter];
+        let tail = &out[enter..];
+        // Set on main first (before the alt-program enter), then on alt
+        // (after entering).
+        assert!(
+            head.contains(&format!("\x1b[={bits};1u")),
+            "main set missing: head={head:?}"
+        );
+        assert!(
+            tail.contains(&format!("\x1b[={bits};1u")),
+            "alt set missing: tail={tail:?}"
+        );
     }
-    let out = written(&buf);
-    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-    let enter = out.find("\x1b[?1049h").expect("alt-program enter");
-    let head = &out[..enter];
-    let tail = &out[enter..];
-    // Set on main first (before the alt-program enter), then on alt
-    // (after entering).
-    assert!(
-        head.contains(&format!("\x1b[={bits};1u")),
-        "main set missing: head={head:?}"
-    );
-    assert!(
-        tail.contains(&format!("\x1b[={bits};1u")),
-        "alt set missing: tail={tail:?}"
-    );
 }
-
-// --- teardown drain of pending capability-query replies ---
-
-// Uses a pipe the event source must poll; on Windows the source polls a
-// console handle, not a pipe, so this drain path is exercised on Unix only.
 
 #[test]
 fn origin_defaults_to_zero_and_maps_mouse() {
@@ -1602,6 +1754,98 @@ fn an_unread_event_is_not_observed_a_second_time() {
     assert_eq!(program.origin_queries_pending, 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn unread_events_preserve_wakes_in_poll_and_read() {
+    for use_poll in [false, true] {
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test_with_input(&buf, (10, 3), reader);
+        program.unread_event(Event::PasteStart);
+        program.source.lock().unwrap().waker().wake().unwrap();
+        let event = if use_poll {
+            assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
+            program.try_read_event().unwrap().unwrap()
+        } else {
+            program.read_event().unwrap()
+        };
+        assert_eq!(event, Event::PasteStart);
+        assert_eq!(
+            program.read_event().unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
+        assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mode_changes_keep_interrupting_retrying_and_competing_readers() {
+    use std::sync::mpsc;
+
+    for use_poll in [false, true] {
+        for competing in [false, true] {
+            let (input, mut output) = std::io::pipe().unwrap();
+            let source = Arc::new(Mutex::new(EventSource::new(input).unwrap()));
+            let waker = source.lock().unwrap().waker();
+            let (started, waiting) = mpsc::sync_channel(0);
+            let (acquired, finished) = mpsc::sync_channel(0);
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| {
+                    let mut source = source.lock().unwrap();
+                    started.send(()).unwrap();
+                    let mut results = Vec::new();
+                    for _ in 0..2 {
+                        let result = if use_poll {
+                            source.poll(None).map(|ready| !ready)
+                        } else {
+                            source.read().map(|_| false).or_else(|error| {
+                                if error.kind() == io::ErrorKind::Interrupted {
+                                    Ok(true)
+                                } else {
+                                    Err(error)
+                                }
+                            })
+                        };
+                        results.push(result.unwrap());
+                    }
+                    results
+                });
+                waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+                let competitor = competing.then(|| {
+                    scope.spawn(|| {
+                        for _ in 0..2 {
+                            if let Err(error) = source.lock().unwrap().read() {
+                                assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+                            }
+                        }
+                    })
+                });
+                let transition = scope.spawn(|| {
+                    let _source = lock_source_for_mode_change(&source, &waker).unwrap();
+                    acquired.send(()).unwrap();
+                });
+                let result = finished.recv_timeout(Duration::from_secs(2));
+                // Release all readers even when the transition loses its only wake.
+                output.write_all(b"xxxx").unwrap();
+                let interrupted = reader.join().unwrap();
+                if let Some(competitor) = competitor {
+                    competitor.join().unwrap();
+                }
+                if result.is_err() {
+                    finished.recv_timeout(Duration::from_secs(2)).unwrap();
+                }
+                transition.join().unwrap();
+                assert!(
+                    result.is_ok(),
+                    "mode change blocked after a reader consumed its wake"
+                );
+                assert_eq!(interrupted, [true, true]);
+            });
+        }
+    }
+}
+
 /// Pixel-to-cell mapping has to scale across the whole grid. Dividing by a
 /// truncated cell width reports columns past the last one whenever the pixel
 /// width is not an exact multiple of the column count.
@@ -1665,21 +1909,6 @@ fn a_synchronous_read_observes_without_a_second_call() {
         );
         assert_eq!(program.origin(), Position::new(2, 4));
     }
-}
-
-#[test]
-fn mouse_to_origin_is_an_identity_in_fullscreen() {
-    use crate::event::{KeyModifiers, Mouse, MouseButton};
-
-    let buf = RefCell::new(Vec::new());
-    let mut program = Program::for_test(&buf, (10, 3));
-    program.origin = Position::new(0, 5);
-    // Entering the alternate screen re-anchors the area at the top-left, so
-    // the inline origin recorded earlier must not be subtracted any more.
-    program.screen_mut().set_fullscreen(true);
-    let m = Mouse::new(3, 7, MouseButton::Left, KeyModifiers::empty());
-    let mapped = program.mouse_to_origin(m);
-    assert_eq!((mapped.x, mapped.y), (3, 7));
 }
 
 #[test]
@@ -1869,6 +2098,23 @@ fn init_grants_tabs_and_bs_after_entering_raw_mode() {
     program.screen_mut().set_optimizations(primed);
     program.resume().expect("resume");
     assert_tabs_and_bs_granted(program.screen().optimizations(), primed, "resume");
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_raw_mode_entry_does_not_enable_vt_input() {
+    let (reader, writer) = std::io::pipe().unwrap();
+    for resume in [false, true] {
+        let terminal = Terminal::new(&reader, &writer, crate::terminal::EnvList::new());
+        let mut program = Program::with_render(terminal, (80, 24)).unwrap();
+        let result = if resume {
+            program.resume()
+        } else {
+            program.init()
+        };
+        assert!(result.is_err());
+        assert!(!program.source.lock().unwrap().vt_input());
+    }
 }
 
 /// Exactly what a raw-mode entry must leave behind: `TABS` and `BS` on, and
@@ -2555,6 +2801,203 @@ fn an_empty_kitty_reply_still_proves_support() {
         program.capabilities().kitty_keyboard(),
         Some(KittyKeyboardFlags::empty())
     );
+    assert_eq!(written(&buf), "\x1b[=1;1u");
+}
+
+#[test]
+fn kitty_preferences_wait_for_support_and_apply_once_without_changing_options() {
+    let flags =
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES | KittyKeyboardFlags::REPORT_EVENT_TYPES;
+    for (preference, expected) in [
+        (None, ""),
+        (Some(KittyKeyboardFlags::empty()), "\x1b[=0;1u"),
+        (Some(flags), "\x1b[=3;1u"),
+    ] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.options.prefer_kitty_keyboard = preference;
+        program.request_kitty_keyboard().unwrap();
+        assert!(!written(&buf).contains("\x1b[="));
+        buf.borrow_mut().clear();
+
+        for reported in [
+            KittyKeyboardFlags::empty(),
+            KittyKeyboardFlags::REPORT_ALTERNATE_KEYS,
+        ] {
+            program
+                .observe_event(&Event::KittyKeyboardEnhancements(reported))
+                .unwrap();
+            assert_eq!(written(&buf), expected);
+            assert_eq!(program.capabilities().kitty_keyboard(), Some(reported));
+            assert_eq!(program.options.prefer_kitty_keyboard, preference);
+        }
+    }
+}
+
+#[test]
+fn explicit_kitty_keyboard_choices_take_precedence_over_discovery() {
+    for choice in [None, Some(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.set_kitty_keyboard(choice).unwrap();
+        buf.borrow_mut().clear();
+        program
+            .observe_event(&Event::KittyKeyboardEnhancements(
+                KittyKeyboardFlags::empty(),
+            ))
+            .unwrap();
+        assert_eq!(written(&buf), "");
+    }
+}
+
+#[test]
+fn tracked_snapshots_separate_owned_choices_reports_and_screen_properties() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    let untouched = program.state().clone();
+    assert_eq!(untouched.mouse(), None);
+    assert_eq!(untouched.kitty_keyboard(), None);
+    assert_eq!(untouched.modify_other_keys(), None);
+    assert_eq!(untouched.mode(Mode::IN_BAND_RESIZE), None);
+    assert!(untouched.cursor_visible());
+    assert!(!untouched.alt_screen());
+    assert!(buf.borrow().is_empty());
+
+    program.disable_mouse().unwrap();
+    program.set_kitty_keyboard(None).unwrap();
+    program
+        .set_modify_other_keys(crate::event::ModifyOtherKeysMode::Disabled)
+        .unwrap();
+    program.disable_in_band_resize().unwrap();
+    program.set_backspace_mode(false).unwrap();
+    program.enable_bracketed_paste().unwrap();
+    program.enable_focus_events().unwrap();
+    program.enable_color_scheme_updates().unwrap();
+    program.enable_visibility_reports().unwrap();
+    program.hide_cursor().unwrap();
+    program.enter_alt_screen().unwrap();
+    program
+        .set_cursor_style(crate::ansi::cursor::CursorShape::Bar, false)
+        .unwrap();
+    program.set_cursor_color(Color::rgb(10, 20, 30)).unwrap();
+    program.set_window_title("first title").unwrap();
+    let selected = program.state().clone();
+    assert_eq!(selected.mouse(), Some(None));
+    assert_eq!(selected.kitty_keyboard(), Some(KittyKeyboardFlags::empty()));
+    assert_eq!(
+        selected.modify_other_keys(),
+        Some(crate::event::ModifyOtherKeysMode::Disabled)
+    );
+    for (mode, expected) in [
+        (Mode::IN_BAND_RESIZE, false),
+        (Mode::BACKARROW_KEY, false),
+        (Mode::BRACKETED_PASTE, true),
+        (Mode::FOCUS, true),
+        (Mode::LIGHT_DARK, true),
+        (Mode::VISIBILITY_REPORTS, true),
+        (Mode::CURSOR_VISIBLE, false),
+        (Mode::ALT_SCREEN_SAVE_CURSOR, true),
+    ] {
+        assert_eq!(selected.mode(mode), Some(expected));
+    }
+    assert_eq!(
+        selected.cursor_style(),
+        crate::ansi::cursor::CursorStyle::new(crate::ansi::cursor::CursorShape::Bar, false)
+    );
+    assert_eq!(selected.cursor_color(), Some(Color::rgb(10, 20, 30)));
+    assert!(!selected.cursor_visible());
+    assert!(selected.alt_screen());
+    assert_eq!(selected.window_title(), Some("first title"));
+
+    // Late and duplicate replies remain observations, not new choices.
+    for _ in 0..2 {
+        program
+            .observe_event(&Event::KittyKeyboardEnhancements(
+                KittyKeyboardFlags::REPORT_ALTERNATE_KEYS,
+            ))
+            .unwrap();
+        program
+            .observe_event(&Event::ModeReport {
+                mode: Mode::IN_BAND_RESIZE,
+                setting: ModeSetting::Reset,
+            })
+            .unwrap();
+    }
+    let reports = program.capabilities().clone();
+    assert_eq!(program.state(), &selected);
+    assert_eq!(reports.mode(Mode::IN_BAND_RESIZE), Some(ModeSetting::Reset));
+    assert_eq!(
+        reports.kitty_keyboard(),
+        Some(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
+    );
+    assert!(program.options.prefer_in_band_resize);
+    assert_eq!(
+        program.options.prefer_kitty_keyboard,
+        Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
+
+    program.reset().unwrap();
+    assert_eq!(program.state(), &selected);
+    program.restore().unwrap();
+    assert_eq!(program.state(), &selected);
+    program.enable_mouse(MouseTracking::empty()).unwrap();
+    program.set_window_title("second title").unwrap();
+    program.screen_mut().set_cursor_visible(true);
+    assert!(!program.state().cursor_visible());
+    assert_eq!(selected.mouse(), Some(None));
+    assert_eq!(selected.window_title(), Some("first title"));
+    assert_eq!(untouched.window_title(), None);
+    assert_eq!(program.state().mouse(), Some(Some(MouseTracking::empty())));
+    assert_eq!(reports, *program.capabilities());
+    buf.borrow_mut().clear();
+    let _state: &super::State = program.state();
+    assert!(buf.borrow().is_empty(), "inspection must not emit queries");
+}
+
+#[test]
+fn synchronized_output_discovery_preserves_selected_state() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    for preferred in [false, true] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.options.prefer_synchronized_output = preferred;
+        program.screen_mut().set_synchronized_output(false);
+        let selected = program.state().clone();
+
+        program
+            .observe_event(&Event::ModeReport {
+                mode: Mode::SYNCHRONIZED_OUTPUT,
+                setting: ModeSetting::Set,
+            })
+            .unwrap();
+        assert_eq!(program.state(), &selected);
+        assert_eq!(program.screen().synchronized_output(), preferred);
+        assert_eq!(
+            program.capabilities().mode(Mode::SYNCHRONIZED_OUTPUT),
+            Some(ModeSetting::Set)
+        );
+
+        program.screen_mut().set_synchronized_output(false);
+        for setting in [
+            ModeSetting::Set,
+            ModeSetting::NotRecognized,
+            ModeSetting::Set,
+        ] {
+            program
+                .observe_event(&Event::ModeReport {
+                    mode: Mode::SYNCHRONIZED_OUTPUT,
+                    setting,
+                })
+                .unwrap();
+        }
+        assert_eq!(program.state(), &selected);
+        assert!(!program.screen().synchronized_output());
+        assert_eq!(program.options.prefer_synchronized_output, preferred);
+        assert!(buf.borrow().is_empty());
+    }
 }
 
 #[test]
@@ -2967,7 +3410,7 @@ fn reset_and_restore_round_trip_visibility_reports() {
 }
 
 #[test]
-fn disabled_visibility_reports_are_not_reset_or_restored() {
+fn disabled_visibility_reports_are_only_reasserted_on_restore() {
     let buf = RefCell::new(Vec::new());
     {
         let mut program = Program::for_test(&buf, (20, 1));
@@ -2975,13 +3418,15 @@ fn disabled_visibility_reports_are_not_reset_or_restored() {
         program.disable_visibility_reports().unwrap();
         buf.borrow_mut().clear();
         program.reset().unwrap();
+        program.screen_mut().flush().unwrap();
+        assert!(!written(&buf).contains("\x1b[?2033"));
         program.restore().unwrap();
         program.screen_mut().flush().unwrap();
     }
     let out = written(&buf);
     assert!(
-        !out.contains("\x1b[?2033"),
-        "unexpected 2033 traffic: {out:?}"
+        out.matches("\x1b[?2033l").count() == 1 && !out.contains("\x1b[?2033h"),
+        "expected the selected reset on restore: {out:?}"
     );
 }
 
@@ -2996,7 +3441,6 @@ fn request_visibility_is_a_one_shot_query() {
     }
     let out = written(&buf);
     assert_eq!(out, "\x1b[?998n");
-    assert!(!out.contains("\x1b[?2033h"));
 }
 
 /// Visibility support needs no capability field of its own: the mode is
@@ -3042,31 +3486,6 @@ fn request_cursor_style_asks_decrqss_for_decscusr() {
     // DECRQSS names the control function by its intermediate and final
     // bytes, so DECSCUSR (`CSI Ps SP q`) is selected by `SP q`.
     assert_eq!(buf.borrow().as_slice(), b"\x1bP$q q\x1b\\");
-}
-
-#[test]
-fn a_cursor_style_reply_reads_back_in_the_terms_it_was_set_with() {
-    use crate::ansi::cursor::CursorShape;
-    use crate::ansi::cursor::CursorStyle;
-    use crate::event::SettingReport;
-
-    let buf = RefCell::new(Vec::new());
-    let mut program = Program::for_test(&buf, (10, 3));
-    program.set_cursor_style(CursorShape::Bar, false).unwrap();
-    buf.borrow_mut().clear();
-
-    // What a terminal answering DECRQSS would send back for that style.
-    let reply = Event::SettingReport(SettingReport::CursorStyle(CursorStyle::SteadyBar));
-    program.observe_event(&reply).unwrap();
-
-    let Event::SettingReport(SettingReport::CursorStyle(style)) = reply else {
-        unreachable!()
-    };
-    assert_eq!(
-        (style.shape(), style.blinking()),
-        (Some(CursorShape::Bar), Some(false)),
-        "the reply decomposes into the arguments set_cursor_style took"
-    );
 }
 
 #[test]

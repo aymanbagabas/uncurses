@@ -48,7 +48,7 @@ fn main() -> io::Result<()> {
             screen
                 .cell((0, 0).into())
                 .unwrap()
-                .style
+                .style()
                 .attrs
                 .contains(AttrFlags::BOLD)
         );

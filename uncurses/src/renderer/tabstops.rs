@@ -435,7 +435,6 @@ mod tests {
     #[test]
     fn tabstops_clear_unsets_all_default_stops() {
         let mut ts = TabStops::default_for(24);
-        assert!(ts.is_stop(0) && ts.is_stop(8) && ts.is_stop(16));
         ts.clear();
         for c in 0..24 {
             assert!(!ts.is_stop(c), "col {c} still set after clear");

@@ -411,6 +411,20 @@ fn paint_literal<S: SurfaceMut + ?Sized>(
     eaw_wide: bool,
     style: &Style,
 ) -> Position {
+    let width = if matches!(s.as_bytes(), [b' '..=b'~']) {
+        1
+    } else {
+        let mut chars = s.chars();
+        match (chars.next(), chars.next()) {
+            (Some(ch), None) if !ch.is_control() => mode.grapheme_width(s, eaw_wide),
+            _ => 0,
+        }
+    };
+    if width > 0 && clip.contains(start) && !overruns(start.x, u16::from(width), clip.right()) {
+        let cell = Cell::new(s, width, style);
+        target.set_cell(start, &cell);
+        return Position::new(start.x + u16::from(width), start.y);
+    }
     paint_literal_inner(target, start, clip, s, wrap, mode, eaw_wide, style, None)
 }
 
@@ -529,8 +543,8 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
             }
         }
         if clip.contains(Position::new(x, y)) {
-            let cell = Cell::new(cluster, cw);
-            target.set_cell(Position::new(x, y), &cell.style(style.clone()));
+            let cell = Cell::new(cluster, cw, style);
+            target.set_cell(Position::new(x, y), &cell);
         }
         x += w;
     }
@@ -565,8 +579,169 @@ fn stamp_literal_tail<S: SurfaceMut + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::TextBuffer;
+    use crate::buffer::{Buffer, Surface, TextBuffer};
+    use crate::color::Color;
     use crate::style::Style;
+
+    #[test]
+    fn matching_text_creates_a_local_override_on_read_through_surfaces() {
+        use crate::buffer::Bounded;
+
+        struct ReadThrough {
+            inherited: Cell,
+            local: Option<Cell>,
+        }
+
+        impl Bounded for ReadThrough {
+            fn bounds(&self) -> Rect {
+                Rect::new(0, 0, 1, 1)
+            }
+        }
+
+        impl Surface for ReadThrough {
+            fn cell(&self, pos: Position) -> Option<&Cell> {
+                self.contains(pos)
+                    .then(|| self.local.as_ref().unwrap_or(&self.inherited))
+            }
+        }
+
+        impl SurfaceMut for ReadThrough {
+            fn set_cell(&mut self, pos: Position, cell: &Cell) {
+                if self.contains(pos) {
+                    self.local = Some(cell.clone());
+                }
+            }
+
+            fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
+                if self.contains(pos) {
+                    self.local.as_mut()
+                } else {
+                    None
+                }
+            }
+        }
+
+        impl TextSurface for ReadThrough {
+            fn width_mode(&self) -> WidthMode {
+                WidthMode::Wc
+            }
+
+            fn eaw_wide(&self) -> bool {
+                false
+            }
+        }
+
+        for text in ["A", "A\u{301}"] {
+            let expected = Cell::new(
+                text,
+                1,
+                Style::new()
+                    .fg(Color::Green)
+                    .link("https://example.test/override", ""),
+            );
+            let mut surface = ReadThrough {
+                inherited: expected.clone(),
+                local: None,
+            };
+            assert_eq!(
+                surface.set_str((0, 0), text, expected.style()),
+                Position::new(1, 0)
+            );
+            surface.inherited = Cell::new("Z", 1, Style::EMPTY);
+            assert_eq!(surface.cell((0, 0).into()), Some(&expected), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn literal_shortcuts_preserve_general_positions_and_cells() {
+        let style = Style::new()
+            .fg(Color::Green)
+            .link("https://example.test", "");
+        let mut initial = Buffer::new(8, 3);
+        initial.set((2, 1), &Cell::new("界", 2, Style::EMPTY));
+        for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+            for eaw in [false, true] {
+                for wrap in [WrapMode::Truncate, WrapMode::Wrap] {
+                    for clip in [Rect::new(1, 1, 6, 2), Rect::new(1, 1, 0, 0)] {
+                        for start in [(0, 0), (1, 1), (2, 1), (3, 1), (6, 1), (7, 1), (1, 3)] {
+                            for text in [
+                                "",
+                                "A",
+                                " ",
+                                "é",
+                                "¡",
+                                "界",
+                                "👩",
+                                "\u{301}",
+                                "\u{200d}",
+                                "\n",
+                                "\r",
+                                "\r\n",
+                                "\t",
+                                "\u{7f}",
+                                "A\u{301}",
+                                "👩\u{200d}💻",
+                                "AB",
+                            ] {
+                                let mut fast = initial.clone();
+                                let mut general = initial.clone();
+                                let fast_end = paint_literal(
+                                    &mut fast,
+                                    start.into(),
+                                    clip,
+                                    text,
+                                    wrap,
+                                    mode,
+                                    eaw,
+                                    &style,
+                                );
+                                let general_end = paint_literal_inner(
+                                    &mut general,
+                                    start.into(),
+                                    clip,
+                                    text,
+                                    wrap,
+                                    mode,
+                                    eaw,
+                                    &style,
+                                    None,
+                                );
+                                assert_eq!(fast_end, general_end, "{text:?}, {start:?}, {mode:?}");
+                                for y in 0..3 {
+                                    assert_eq!(
+                                        fast.line(y),
+                                        general.line(y),
+                                        "{text:?}, {start:?}, {mode:?}, row {y}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_updates_own_borrowed_clusters_and_replace_links() {
+        let expected = format!("e{}", "\u{301}".repeat(40));
+        let mut buffer = TextBuffer::new(4, 1);
+        {
+            let borrowed = expected.clone();
+            let style = Style::new()
+                .fg(Color::Green)
+                .link("https://example.test", "id=owned");
+            assert_eq!(buffer.set_str((0, 0), &borrowed, &style), (1, 0).into());
+        }
+        let cell = buffer.cell((0, 0).into()).unwrap();
+        assert_eq!(cell.content(), expected);
+        assert_eq!(cell.link.as_deref().unwrap().url, "https://example.test");
+
+        buffer.set_str((0, 0), "x", Style::EMPTY);
+        let cell = buffer.cell((0, 0).into()).unwrap();
+        assert_eq!(cell.content(), "x");
+        assert_eq!(cell.style(), Style::EMPTY);
+    }
 
     /// `right()` is exclusive and saturates at `u16::MAX`, so a row that ends
     /// at the top of the address space can leave `x` equal to it. Adding the

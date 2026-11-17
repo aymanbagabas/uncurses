@@ -58,6 +58,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::Style;
     use crate::{buffer::Surface, layout::Position};
 
     #[test]
@@ -68,7 +69,7 @@ mod tests {
             .into_iter()
             .enumerate()
         {
-            front.buffer.set((0, row as u16), &Cell::new(value, width));
+            front.set_cell((0, row as u16), &Cell::new(value, width, Style::EMPTY));
         }
         renderer.cur_buf = Some(front.clone());
         renderer.back_buf = front.clone();
@@ -103,11 +104,25 @@ mod tests {
     fn preserves_mismatched_caches() {
         let mut renderer = Renderer::new();
         let mut front = RenderBuffer::new(8, 3);
-        renderer.cur_buf = Some(RenderBuffer::new(8, 2));
+        let mut current = RenderBuffer::new(8, 2);
+        current.buffer.set((0, 0), &Cell::new("a", 1, Style::EMPTY));
+        current.buffer.set((0, 1), &Cell::new("b", 1, Style::EMPTY));
+        renderer.cur_buf = Some(current.clone());
         renderer.back_buf = RenderBuffer::new(7, 3);
         renderer.saved.set_pos(Position::new(2, 2));
         renderer.commit_rows(&mut front, 1);
         assert_eq!(renderer.cur_buf.as_ref().unwrap().height(), 2);
+        for row in 0..2 {
+            assert_eq!(
+                renderer
+                    .cur_buf
+                    .as_ref()
+                    .unwrap()
+                    .buffer
+                    .cell((0, row).into()),
+                current.buffer.cell((0, row).into())
+            );
+        }
         assert_eq!(renderer.back_buf.height(), 3);
         assert_eq!(renderer.back_buf.width(), 7);
         assert_eq!(renderer.saved.pos(), Position::new(2, 1));

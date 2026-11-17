@@ -190,7 +190,7 @@ impl<W: Write> Screen<W> {
         let position = position.into();
         let area = Rect::new(position.x, position.y, size.width, size.height);
         let style = style.into();
-        let mut draw = crate::style::diff::convert_style(&style, self.color_profile())
+        let mut draw = crate::style::diff::convert_style(style.clone(), self.color_profile())
             .to_string()
             .into_bytes();
         write_sized_text(&mut draw, text, sizing)?;
@@ -205,7 +205,7 @@ impl<W: Write> Screen<W> {
         )?;
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
-                self.front_buf.cell_mut((x, y)).unwrap().style = style.clone();
+                self.front_buf.cell_mut((x, y)).unwrap().set_style(&style);
             }
         }
         Ok(())
@@ -654,7 +654,7 @@ mod tests {
             for x in 2..10 {
                 let cell = screen.cell((x, y).into()).unwrap();
                 assert!(cell.is_placement());
-                assert_eq!(cell.style, style);
+                assert_eq!(cell.style(), style);
             }
         }
         screen.flush().unwrap();
@@ -680,10 +680,10 @@ mod tests {
                 let cell = screen.cell((x, y).into()).unwrap();
                 if (x, y) == (3, 2) {
                     assert_eq!(cell.content(), "X");
-                    assert_eq!(cell.style, overlay);
+                    assert_eq!(cell.style(), overlay);
                 } else {
                     assert!(cell.is_blank());
-                    assert_eq!(cell.style, style);
+                    assert_eq!(cell.style(), style);
                 }
             }
         }
@@ -766,9 +766,9 @@ mod tests {
             screen
                 .set_sized_text(1, (1, 0), "", TextSizing::default(), &style)
                 .unwrap();
-            assert_eq!(screen.cell((1, 0).into()).unwrap().style, style);
+            assert_eq!(screen.cell((1, 0).into()).unwrap().style(), style);
             screen.render().unwrap();
-            let converted = crate::style::diff::convert_style(&style, profile);
+            let converted = crate::style::diff::convert_style(style.clone(), profile);
             let expected = format!("{converted}\x1b]66;s=1:w=1:n=0:d=0:v=0:h=0; \x1b\\");
             assert!(String::from_utf8_lossy(screen.writer()).contains(&expected));
         }
@@ -787,7 +787,7 @@ mod tests {
             .set_sized_text(1, (5, 1), "B", sizing, &style)
             .unwrap();
         assert!(screen.cell((1, 1).into()).unwrap().is_blank());
-        assert_eq!(screen.cell((1, 1).into()).unwrap().style, style);
+        assert_eq!(screen.cell((1, 1).into()).unwrap().style(), style);
         screen.writer_mut().clear();
         screen.render().unwrap();
         let output = String::from_utf8_lossy(screen.writer());
@@ -798,7 +798,7 @@ mod tests {
         screen.render().unwrap();
         let blank = screen.cell((5, 1).into()).unwrap();
         assert!(blank.is_blank());
-        assert_eq!(blank.style, style);
+        assert_eq!(blank.style(), style);
         assert!(!String::from_utf8_lossy(screen.writer()).contains("\x1b]66;"));
     }
 
@@ -937,9 +937,9 @@ mod tests {
                 erase_on_overwrite: true,
                 ..Default::default()
             };
-            screen.fill_rect(area, &Cell::BLANK.style(&style));
+            screen.fill_rect(area, &Cell::new(" ", 1, &style));
             screen.set_placement(1, area, &options).unwrap();
-            assert_eq!(screen.cell((1, 1).into()).unwrap().style, style);
+            assert_eq!(screen.cell((1, 1).into()).unwrap().style(), style);
             screen.render().unwrap();
             match operation {
                 "overwrite" => {
@@ -957,10 +957,10 @@ mod tests {
                 for x in area.x..area.right().min(screen.size().width) {
                     let cell = screen.cell((x, y).into()).unwrap();
                     if operation == "overwrite" && (x, y) == (2, 2) {
-                        assert_eq!(cell.style, overlay);
+                        assert_eq!(cell.style(), overlay);
                         assert_eq!(cell.content(), "X");
                     } else {
-                        assert_eq!(cell.style, style, "{operation}: {x},{y}");
+                        assert_eq!(cell.style(), style, "{operation}: {x},{y}");
                         assert!(cell.is_blank());
                     }
                 }
@@ -1031,7 +1031,7 @@ mod tests {
         assert!(second.render().is_err());
         assert!(second.writer().is_empty());
         let mut empty = Screen::new(Vec::new(), (20, 5));
-        empty.set_cell((1, 1), &Cell::new("\0p2:unknown", 1));
+        empty.set_cell((1, 1), &Cell::new("\0p2:unknown", 1, Style::EMPTY));
         assert!(empty.render().is_err());
         assert!(empty.writer().is_empty());
     }
@@ -1044,7 +1044,7 @@ mod tests {
             .unwrap();
         screen.render().unwrap();
         screen.writer_mut().clear();
-        screen.set_cell((2, 1), &Cell::new("\n", 1));
+        screen.set_cell((2, 1), &Cell::new("\n", 1, Style::EMPTY));
         for _ in 0..2 {
             assert!(screen.render().is_err());
             assert!(screen.writer().is_empty());
@@ -1225,10 +1225,7 @@ mod tests {
         screen
             .set_placement(1, Rect::new(1, 1, 8, 2), &options)
             .unwrap();
-        screen.set_cell(
-            (14, 1),
-            &Cell::new("", 3).style(Style::default().fg(Color::Red)),
-        );
+        screen.set_cell((14, 1), &Cell::new("", 3, Style::default().fg(Color::Red)));
         screen.render().unwrap();
         assert_eq!(options, original);
         assert!(String::from_utf8_lossy(screen.writer()).contains("\x1b[31m   "));

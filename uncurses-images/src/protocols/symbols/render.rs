@@ -173,8 +173,11 @@ impl Image {
                 if let Some(choice) = &choices[x] {
                     cells.set_cell(
                         Position::new(x as u16, y),
-                        &Cell::new(choice.glyph.character.to_string(), choice.glyph.width)
-                            .style(choice.style.clone()),
+                        &Cell::new(
+                            choice.glyph.character.to_string(),
+                            choice.glyph.width,
+                            &choice.style,
+                        ),
                     );
                     x += usize::from(choice.glyph.width);
                 } else {
@@ -314,7 +317,9 @@ impl Image {
                 let top = pixels.get_pixel(u32::from(x), u32::from(y) * 2).0;
                 let bottom = pixels.get_pixel(u32::from(x), u32::from(y) * 2 + 1).0;
                 let cell = if profile >= Profile::Ansi {
-                    Cell::new("\u{2580}", 1).style(
+                    Cell::new(
+                        "\u{2580}",
+                        1,
                         Style::default()
                             .fg(profile.convert(Color::Rgb(top[0], top[1], top[2])))
                             .bg(profile.convert(Color::Rgb(bottom[0], bottom[1], bottom[2]))),
@@ -330,7 +335,7 @@ impl Image {
                         (false, true) => "\u{2584}",
                         (true, true) => "\u{2588}",
                     };
-                    Cell::new(glyph, 1)
+                    Cell::new(glyph, 1, Style::EMPTY)
                 };
                 cells.set_cell(Position::new(x, y), &cell);
             }

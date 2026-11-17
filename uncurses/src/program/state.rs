@@ -30,34 +30,45 @@ use crate::event::{ColorScheme, ModifyOtherKeysMode, ProgramStatusCapabilities};
 use super::MouseTracking;
 use super::ProgressState;
 
-/// Tracked non-render mode state for save/restore.
-#[derive(Debug, Clone)]
-pub(super) struct State {
+/// Session choices tracked by [`Program`](super::Program) for save and restore.
+///
+/// The values record requests staged through `Program`, including preferences
+/// adopted after discovery. They describe the state restored after a shell
+/// handoff, even while the program is paused. They do not confirm terminal
+/// acceptance or successful output after an I/O error. Direct writes and
+/// changes through `screen_mut` are outside this record.
+///
+/// [`Capabilities`] holds terminal replies separately. Startup configuration
+/// stays in [`ProgramOptions`](super::ProgramOptions). Read the current choices
+/// through [`Program::state`](super::Program::state), or clone them for an owned
+/// snapshot. Neither operation sends queries or waits for replies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct State {
     /// Cursor style.
-    pub cursor_style: CursorStyle,
+    pub(super) cursor_style: CursorStyle,
     /// Requested mouse tracking, or `None` when mouse tracking is disabled.
-    pub mouse: Option<MouseTracking>,
+    pub(super) mouse: Option<MouseTracking>,
     /// Bracketed paste mode.
-    pub bracketed_paste: bool,
+    pub(super) bracketed_paste: bool,
     /// Focus in/out reporting (DECSET 1004).
-    pub focus_events: bool,
+    pub(super) focus_events: bool,
     /// Color-scheme update notifications (DEC 2031). When `true`, the
     /// terminal sends unsolicited reports as the user/OS toggles the
     /// dark/light scheme. Reports the dark/light preference only, not the
     /// actual colors.
-    pub color_scheme_updates: bool,
+    pub(super) color_scheme_updates: bool,
     /// Terminal visibility reports (DEC 2033). When `true`, the terminal
     /// sends an unsolicited report whenever the view becomes observable or
     /// stops being observable, surfaced as [`Event::Visibility`].
     ///
     /// [`Event::Visibility`]: crate::event::Event::Visibility
-    pub visibility_reports: bool,
+    pub(super) visibility_reports: bool,
     /// In-band resize notifications (DEC 2048). When `true`, the
     /// terminal sends a `CSI 48 ; … t` report whenever the surface
     /// changes size, surfaced as [`Event::Resize`].
     ///
     /// [`Event::Resize`]: crate::event::Event::Resize
-    pub in_band_resize: bool,
+    pub(super) in_band_resize: bool,
     /// Window title set via [`OSC 2`] (or [`OSC 0`], which sets both this and
     /// [`icon_name`](Self::icon_name)). `None` when no
     /// [`set_window_title`](super::Program::set_window_title) or
@@ -65,7 +76,7 @@ pub(super) struct State {
     ///
     /// [`OSC 2`]: crate::ansi::title::write_window_title
     /// [`OSC 0`]: crate::ansi::title::write_window_title_and_icon
-    pub window_title: Option<String>,
+    pub(super) window_title: Option<String>,
     /// Icon name set via [`OSC 1`] (or [`OSC 0`], which sets both this and
     /// [`window_title`](Self::window_title)). `None` when no
     /// [`set_icon_title`](super::Program::set_icon_title) or
@@ -73,50 +84,55 @@ pub(super) struct State {
     ///
     /// [`OSC 1`]: crate::ansi::title::write_icon_name
     /// [`OSC 0`]: crate::ansi::title::write_window_title_and_icon
-    pub icon_name: Option<String>,
+    pub(super) icon_name: Option<String>,
     /// Default foreground color override. `Some(c)` when the facade has
     /// emitted `OSC 10` to install `c`; `None` when the terminal is
     /// using its built-in default. Drives `OSC 110` on reset and
     /// re-emission on restore.
-    pub foreground_color: Option<Color>,
+    pub(super) foreground_color: Option<Color>,
     /// Default background color override. See [`State::foreground_color`].
-    pub background_color: Option<Color>,
+    pub(super) background_color: Option<Color>,
     /// Cursor color override. See [`State::foreground_color`].
-    pub cursor_color: Option<Color>,
+    pub(super) cursor_color: Option<Color>,
     /// Indexed palette overrides set via `OSC 4`, keyed by palette index.
     /// Drives `OSC 104 ; index` on reset and re-emission on restore.
-    pub palette: BTreeMap<u8, Color>,
+    pub(super) palette: BTreeMap<u8, Color>,
     /// Active xterm modifyOtherKeys mode (`CSI > 4 ; n m`). Drives
     /// `CSI > 4 m` on reset and re-emission on restore.
-    pub modify_other_keys: ModifyOtherKeysMode,
+    pub(super) modify_other_keys: ModifyOtherKeysMode,
+    /// Whether the application selected modifyOtherKeys, including disabled.
+    pub(super) modify_other_keys_chosen: bool,
     /// Pointer (mouse cursor) shape override set via `OSC 22`. `None` when
     /// using the terminal default. Drives the `OSC 22` reset on reset and
     /// re-emission on restore.
-    pub pointer_shape: Option<String>,
+    pub(super) pointer_shape: Option<String>,
     /// Progress reported via `OSC 9;4`. `None` when no progress is being
     /// reported. Drives the `OSC 9;4;0` removal on reset and re-emission on
     /// restore.
-    pub progress: Option<ProgressState>,
+    pub(super) progress: Option<ProgressState>,
     /// Active Kitty keyboard enhancement flag set. The stack is
     /// per-screen-buffer, so the program re-emits this onto whichever buffer
-    /// becomes active. `NONE` means no frame is set.
-    pub kitty_keyboard: KittyKeyboardFlags,
+    /// becomes active. An empty set explicitly disables enhancements when
+    /// `kitty_keyboard_chosen` is true.
+    pub(super) kitty_keyboard: KittyKeyboardFlags,
+    /// An explicit choice or discovery has settled the keyboard flags.
+    pub(super) kitty_keyboard_chosen: bool,
     /// Whether the facade has put the terminal on the alternate screen buffer
     /// (DECSET 1049). Mirrors [`Screen::fullscreen`](crate::screen::Screen::fullscreen)
     /// while the app drives the buffer through
     /// [`enter_alt_screen`](super::Program::enter_alt_screen) /
     /// [`exit_alt_screen`](super::Program::exit_alt_screen).
-    pub alt_screen: bool,
+    pub(super) alt_screen: bool,
     /// Whether the terminal cursor is visible (DECTCEM). Mirrors
     /// [`Screen::cursor_visible`](crate::screen::Screen::cursor_visible).
     /// Starts `true`: a terminal shows its cursor until told otherwise.
-    pub cursor_visible: bool,
+    pub(super) cursor_visible: bool,
     /// Whether grapheme-cluster mode is on (DEC 2027). Mirrors
     /// [`Screen::grapheme_clusters`](crate::screen::Screen::grapheme_clusters).
-    pub grapheme_clusters: bool,
+    pub(super) grapheme_clusters: bool,
     /// Application-selected Backarrow mode, restored after a pause.
     /// The decoder separately tracks the current mode from incoming reports.
-    pub backspace_mode: bool,
+    pub(super) backspace_mode: bool,
     /// Modes selected through the program's mode methods or adopted on the
     /// application's behalf.
     ///
@@ -125,7 +141,7 @@ pub(super) struct State {
     /// preferred mode only for a mode absent from this set, so an explicit
     /// `disable_*` issued before the terminal ever reports is not quietly
     /// undone by the report when it arrives.
-    pub chosen: BTreeSet<Mode>,
+    pub(super) chosen: BTreeSet<Mode>,
 }
 
 impl Default for State {
@@ -145,15 +161,123 @@ impl Default for State {
             cursor_color: None,
             palette: BTreeMap::new(),
             modify_other_keys: ModifyOtherKeysMode::Disabled,
+            modify_other_keys_chosen: false,
             pointer_shape: None,
             progress: None,
             kitty_keyboard: KittyKeyboardFlags::empty(),
+            kitty_keyboard_chosen: false,
             alt_screen: false,
             cursor_visible: true,
             grapheme_clusters: false,
             backspace_mode: false,
             chosen: BTreeSet::new(),
         }
+    }
+}
+
+impl State {
+    /// Cursor appearance selected through `Program`, or the terminal default.
+    pub fn cursor_style(&self) -> CursorStyle {
+        self.cursor_style
+    }
+
+    /// Requested cursor color override, or the terminal default.
+    pub fn cursor_color(&self) -> Option<Color> {
+        self.cursor_color
+    }
+
+    /// Requested hardware cursor visibility. Initially `true`.
+    pub fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    /// Whether the alternate screen buffer is selected.
+    pub fn alt_screen(&self) -> bool {
+        self.alt_screen
+    }
+
+    /// Selected mouse policy. `None` means no choice; `Some(None)` disables
+    /// tracking. `Some(Some(empty()))` requests basic button tracking.
+    pub fn mouse(&self) -> Option<Option<MouseTracking>> {
+        self.chosen
+            .contains(&Mode::MOUSE_NORMAL)
+            .then_some(self.mouse)
+    }
+
+    /// Selected Kitty flags. `None` means no choice; `Some(empty())` explicitly
+    /// disables all enhancements. The selection follows buffer transitions.
+    pub fn kitty_keyboard(&self) -> Option<KittyKeyboardFlags> {
+        self.kitty_keyboard_chosen.then_some(self.kitty_keyboard)
+    }
+
+    /// Selected modifyOtherKeys mode, including an explicit disabled choice.
+    /// `None` means the application has made no choice.
+    pub fn modify_other_keys(&self) -> Option<ModifyOtherKeysMode> {
+        self.modify_other_keys_chosen
+            .then_some(self.modify_other_keys)
+    }
+
+    /// Selected value of a tracked boolean mode.
+    ///
+    /// `None` means no choice was made through `Program`, or the mode is
+    /// outside this record. `Some(false)` is an explicit reset. Supported modes
+    /// are alternate screen (1049), cursor visibility (25), bracketed paste
+    /// (2004), focus (1004), color scheme (2031), visibility reports (2033),
+    /// in-band resize (2048), Unicode core (2027), and Backarrow (67).
+    ///
+    /// This records application choices and adopted preferences, independently
+    /// of the last report in [`Capabilities::mode`].
+    pub fn mode(&self, mode: Mode) -> Option<bool> {
+        if !self.chosen.contains(&mode) {
+            return None;
+        }
+        Some(match mode {
+            Mode::ALT_SCREEN_SAVE_CURSOR => self.alt_screen,
+            Mode::CURSOR_VISIBLE => self.cursor_visible,
+            Mode::BRACKETED_PASTE => self.bracketed_paste,
+            Mode::FOCUS => self.focus_events,
+            Mode::LIGHT_DARK => self.color_scheme_updates,
+            Mode::VISIBILITY_REPORTS => self.visibility_reports,
+            Mode::IN_BAND_RESIZE => self.in_band_resize,
+            Mode::UNICODE_CORE => self.grapheme_clusters,
+            Mode::BACKARROW_KEY => self.backspace_mode,
+            _ => return None,
+        })
+    }
+
+    /// Requested default foreground override.
+    pub fn foreground_color(&self) -> Option<Color> {
+        self.foreground_color
+    }
+
+    /// Requested default background override.
+    pub fn background_color(&self) -> Option<Color> {
+        self.background_color
+    }
+
+    /// Requested indexed palette overrides.
+    pub fn palette(&self) -> &BTreeMap<u8, Color> {
+        &self.palette
+    }
+
+    /// Requested window title override.
+    pub fn window_title(&self) -> Option<&str> {
+        self.window_title.as_deref()
+    }
+
+    /// Requested icon name override.
+    pub fn icon_name(&self) -> Option<&str> {
+        self.icon_name.as_deref()
+    }
+
+    /// Requested pointer shape override.
+    pub fn pointer_shape(&self) -> Option<&str> {
+        self.pointer_shape.as_deref()
+    }
+
+    /// Requested progress indicator.
+    pub fn progress(&self) -> Option<ProgressState> {
+        self.progress
     }
 }
 

@@ -14,7 +14,7 @@ impl Cell {
     }
 
     pub(crate) fn placement(id: u64) -> Self {
-        Self::new(format!("{PREFIX}{id:016x}"), 1)
+        Self::new(format!("{PREFIX}{id:016x}"), 1, crate::style::Style::EMPTY)
     }
 
     pub(crate) fn placement_ref(&self) -> io::Result<Option<u64>> {
@@ -50,10 +50,19 @@ mod tests {
             }
         }
         for value in ["\0p2:0000000000000001", "\0p1:0000000000000000", "\0p1:x"] {
-            assert!(Cell::new(value, 1).placement_ref().is_err());
+            assert!(
+                Cell::new(value, 1, crate::style::Style::EMPTY)
+                    .placement_ref()
+                    .is_err()
+            );
         }
-        assert!(Cell::new("", 0).is_continuation());
-        assert!(Cell::new("\0p1:literal", 0).is_continuation());
-        assert_eq!(Cell::new("\0p1:literal", 2).placement_ref().unwrap(), None);
+        assert!(Cell::new("", 0, crate::style::Style::EMPTY).is_continuation());
+        assert!(Cell::new("\0p1:literal", 0, crate::style::Style::EMPTY).is_continuation());
+        assert_eq!(
+            Cell::new("\0p1:literal", 2, crate::style::Style::EMPTY)
+                .placement_ref()
+                .unwrap(),
+            None
+        );
     }
 }

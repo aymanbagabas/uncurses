@@ -248,7 +248,7 @@ fn draw(
     }
 
     let shift = frame_count as usize;
-    let glyph_cell = Cell::new(GLYPH, 1);
+    let glyph_cell = Cell::new(GLYPH, 1, Style::EMPTY);
 
     for y in body_top..height {
         let py = (y - body_top) as usize * 2;
@@ -256,7 +256,8 @@ fn draw(
             let sx = ((x as usize) + shift) % width as usize;
             let fg = field.at(sx as u16, py as u16);
             let bg = field.at(sx as u16, (py + 1) as u16);
-            let cell = glyph_cell.clone().style(Style::default().fg(fg).bg(bg));
+            let mut cell = glyph_cell.clone();
+            cell.set_style(Style::default().fg(fg).bg(bg));
             screen.set_cell((x, y), &cell);
         }
     }
