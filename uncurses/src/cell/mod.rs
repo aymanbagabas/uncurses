@@ -104,14 +104,7 @@ pub struct Cell {
 impl PartialEq for Cell {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width
-            && self.content == other.content
-            && self.fg == other.fg
-            && self.bg == other.bg
-            && self.underline_color == other.underline_color
-            && self.attrs == other.attrs
-            && self.underline == other.underline
-            && self.link == other.link
+        self.width == other.width && self.content == other.content && self.same_style(other)
     }
 }
 
@@ -424,6 +417,26 @@ impl Cell {
         self.underline = style.underline;
         self.link = style.link;
     }
+
+    #[inline]
+    pub(crate) fn same_style(&self, other: &Self) -> bool {
+        self.fg == other.fg
+            && self.bg == other.bg
+            && self.underline_color == other.underline_color
+            && self.attrs == other.attrs
+            && self.underline == other.underline
+            && self.link == other.link
+    }
+
+    #[inline]
+    pub(crate) fn matches_style(&self, style: &Style) -> bool {
+        self.fg == style.fg
+            && self.bg == style.bg
+            && self.underline_color == style.underline_color
+            && self.attrs == style.attrs
+            && self.underline == style.underline
+            && self.link == style.link
+    }
 }
 
 #[cfg(test)]
@@ -652,6 +665,8 @@ mod tests {
             b.link.as_deref().unwrap()
         ));
         assert_eq!(a.style(), b.style());
+        assert!(a.same_style(&b));
+        assert!(a.matches_style(&b.style()));
         let mut same = b.clone();
         same.content.clone_from(&a.content);
         same.width = a.width;
@@ -670,5 +685,20 @@ mod tests {
         assert_ne!(cell, Cell::BLANK);
         assert_eq!(cell.style(), empty_link);
         assert!(cell.style().link.is_some());
+        assert!(!cell.same_style(&Cell::BLANK));
+        assert!(!cell.matches_style(&Style::EMPTY));
+
+        for style in [
+            Style::new().fg(Color::Green),
+            Style::new().bg(Color::Blue),
+            Style::new().underline_color(Color::Red),
+            Style::new().bold(),
+            Style::new().attrs(AttrFlags::from_bits_retain(1 << 15)),
+            Style::new().underline_style(UnderlineStyle::Curly),
+        ] {
+            let changed = Cell::new(" ", 1, &style);
+            assert!(!Cell::BLANK.same_style(&changed), "{style:?}");
+            assert!(!Cell::BLANK.matches_style(&style), "{style:?}");
+        }
     }
 }

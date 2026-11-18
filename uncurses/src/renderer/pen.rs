@@ -20,15 +20,7 @@ impl Renderer {
         // function.
         if cell.map_or_else(
             || self.cur.style().is_empty(),
-            |cell| {
-                let style = self.cur.style();
-                cell.fg == style.fg
-                    && cell.bg == style.bg
-                    && cell.underline_color == style.underline_color
-                    && cell.attrs == style.attrs
-                    && cell.underline == style.underline
-                    && cell.link == style.link
-            },
+            |cell| cell.matches_style(self.cur.style()),
         ) {
             return Ok(());
         }

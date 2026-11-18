@@ -439,14 +439,7 @@ fn paint_cluster<S: SurfaceMut + ?Sized>(
         && let Some(old) = target.cell(pos)
         && old.width() == 1
     {
-        if old.content == text
-            && old.fg == style.fg
-            && old.bg == style.bg
-            && old.underline_color == style.underline_color
-            && old.attrs == style.attrs
-            && old.underline == style.underline
-            && old.link == style.link
-        {
+        if old.content == text && old.matches_style(style) {
             return;
         }
         if let Some(cell) = target.cell_mut(pos) {
