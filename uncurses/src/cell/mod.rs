@@ -93,21 +93,78 @@ pub struct CellRef<'a> {
 #[derive(Clone, Copy)]
 enum RefSource<'a> {
     Packed(&'a PackedCell, &'a Resources),
-    Owned(&'a Cell),
+    Text(TextRef<'a>),
 }
 
-impl<'a> CellRef<'a> {
-    fn owned_import_source(&self) -> Option<&'a Cell> {
-        match self.source {
-            RefSource::Owned(cell) => Some(cell),
-            RefSource::Packed(_, _) => None,
+#[derive(Clone, Copy)]
+enum TextRef<'a> {
+    Owned(&'a Cell),
+    Borrowed(&'a BorrowedCell<'a>),
+}
+
+impl<'a> TextRef<'a> {
+    #[inline]
+    fn content(self) -> &'a str {
+        match self {
+            Self::Owned(cell) => cell.content(),
+            Self::Borrowed(cell) => cell.content,
         }
     }
 
-    fn packed_import_source(&self) -> Option<PackedCell> {
+    #[inline]
+    fn width(self) -> u8 {
+        match self {
+            Self::Owned(cell) => cell.width(),
+            Self::Borrowed(cell) => cell.width,
+        }
+    }
+
+    #[inline]
+    fn style(self) -> &'a Style {
+        match self {
+            Self::Owned(cell) => &cell.style,
+            Self::Borrowed(cell) => cell.style,
+        }
+    }
+}
+
+/// A transient text cell. Storage imports its borrowed content and style.
+pub(crate) struct BorrowedCell<'a> {
+    content: &'a str,
+    width: u8,
+    style: &'a Style,
+}
+
+impl<'a> BorrowedCell<'a> {
+    pub(crate) fn new(content: &'a str, width: u8, style: &'a Style) -> Self {
+        Self {
+            content,
+            width,
+            style,
+        }
+    }
+
+    pub(crate) fn as_ref(&self) -> CellRef<'_> {
+        CellRef {
+            source: RefSource::Text(TextRef::Borrowed(self)),
+            scalar: [0; 4],
+            scalar_len: 0,
+        }
+    }
+}
+
+impl<'a> CellRef<'a> {
+    fn text_import_source(&self) -> Option<(&'a str, u8, &'a Style)> {
         match self.source {
-            RefSource::Packed(cell, _) => Some(*cell),
-            RefSource::Owned(_) => None,
+            RefSource::Text(cell) => Some((cell.content(), cell.width(), cell.style())),
+            _ => None,
+        }
+    }
+
+    fn packed_import_source(&self) -> Option<(PackedCell, &'a Resources)> {
+        match self.source {
+            RefSource::Packed(cell, resources) => Some((*cell, resources)),
+            _ => None,
         }
     }
 
@@ -129,8 +186,8 @@ impl<'a> CellRef<'a> {
     pub fn scalar(&self) -> Option<char> {
         match self.source {
             RefSource::Packed(cell, _) => cell.scalar(),
-            RefSource::Owned(cell) => {
-                let mut chars = cell.content().chars();
+            _ => {
+                let mut chars = self.content().chars();
                 let first = chars.next()?;
                 chars.next().is_none().then_some(first)
             }
@@ -144,8 +201,8 @@ impl<'a> CellRef<'a> {
                 Glyph::Str(s) => Some(s),
                 _ => None,
             },
-            RefSource::Owned(cell) => {
-                let s = cell.content();
+            _ => {
+                let s = self.content();
                 s.chars().nth(1).is_some().then_some(s)
             }
         }
@@ -162,7 +219,7 @@ impl<'a> CellRef<'a> {
                 Glyph::Str(s) => s,
                 Glyph::Scalar(_) => unreachable!("scalar content is inline"),
             },
-            RefSource::Owned(cell) => cell.content(),
+            RefSource::Text(cell) => cell.content(),
         }
     }
     #[inline]
@@ -178,7 +235,7 @@ impl<'a> CellRef<'a> {
     pub fn width(&self) -> u8 {
         match self.source {
             RefSource::Packed(cell, _) => cell.width(),
-            RefSource::Owned(cell) => cell.width(),
+            RefSource::Text(cell) => cell.width(),
         }
     }
     /// Test for a one-column space.
@@ -186,7 +243,9 @@ impl<'a> CellRef<'a> {
     pub fn is_blank(&self) -> bool {
         match self.source {
             RefSource::Packed(cell, _) => cell.is_blank(),
-            RefSource::Owned(cell) => cell.is_blank(),
+            RefSource::Text(cell) => {
+                cell.width() == 1 && (cell.content().is_empty() || cell.content() == " ")
+            }
         }
     }
     #[inline]
@@ -218,7 +277,7 @@ impl<'a> CellRef<'a> {
     pub fn fg_color(&self) -> Option<Color> {
         match self.source {
             RefSource::Packed(cell, _) => storage::color_value(cell.sgr_word()),
-            RefSource::Owned(cell) => cell.style.fg_color(),
+            RefSource::Text(cell) => cell.style().fg_color(),
         }
     }
     /// Return the background color.
@@ -226,7 +285,7 @@ impl<'a> CellRef<'a> {
     pub fn bg_color(&self) -> Option<Color> {
         match self.source {
             RefSource::Packed(cell, _) => storage::color_value(cell.sgr_word() >> 25),
-            RefSource::Owned(cell) => cell.style.bg_color(),
+            RefSource::Text(cell) => cell.style().bg_color(),
         }
     }
     /// Return the explicit underline color.
@@ -234,7 +293,7 @@ impl<'a> CellRef<'a> {
     pub fn ul_color(&self) -> Option<Color> {
         match self.source {
             RefSource::Packed(cell, resources) => resources.underline_color(*cell),
-            RefSource::Owned(cell) => cell.style.ul_color(),
+            RefSource::Text(cell) => cell.style().ul_color(),
         }
     }
     /// Return the attributes.
@@ -244,7 +303,7 @@ impl<'a> CellRef<'a> {
             RefSource::Packed(cell, _) => {
                 AttrFlags::from_bits_truncate(((cell.sgr_word() >> 50) & 0xff) as u16)
             }
-            RefSource::Owned(cell) => cell.style.attributes(),
+            RefSource::Text(cell) => cell.style().attributes(),
         }
     }
     /// Return the underline shape.
@@ -252,7 +311,7 @@ impl<'a> CellRef<'a> {
     pub fn underline_shape(&self) -> UnderlineStyle {
         match self.source {
             RefSource::Packed(cell, _) => storage::underline_shape(cell.sgr_word()),
-            RefSource::Owned(cell) => cell.style.underline_shape(),
+            RefSource::Text(cell) => cell.style().underline_shape(),
         }
     }
     /// Borrow the hyperlink target.
@@ -262,7 +321,7 @@ impl<'a> CellRef<'a> {
             RefSource::Packed(cell, resources) => resources
                 .extras(*cell)
                 .and_then(|extras| extras.link.as_deref()),
-            RefSource::Owned(cell) => cell.style.link_target(),
+            RefSource::Text(cell) => cell.style().link_target(),
         }
     }
     /// Make an owned style with the same components.
@@ -291,7 +350,7 @@ impl<'a> CellRef<'a> {
     pub(crate) fn style_eq(&self, style: &Style) -> bool {
         match self.source {
             RefSource::Packed(cell, resources) => resources.style_eq(*cell, style),
-            RefSource::Owned(cell) => cell.style == *style,
+            RefSource::Text(cell) => cell.style() == style,
         }
     }
     #[inline]
@@ -300,22 +359,22 @@ impl<'a> CellRef<'a> {
             (RefSource::Packed(cell, resources), RefSource::Packed(other, owner)) => {
                 resources.styles_eq(*cell, owner, *other)
             }
-            (_, RefSource::Owned(cell)) => self.style_eq(&cell.style),
-            (RefSource::Owned(cell), _) => other.style_eq(&cell.style),
+            (_, RefSource::Text(cell)) => self.style_eq(cell.style()),
+            (RefSource::Text(cell), _) => other.style_eq(cell.style()),
         }
     }
     #[inline]
     pub(crate) fn parts(&self) -> StyleParts<'a> {
         match self.source {
             RefSource::Packed(cell, resources) => resources.style(*cell),
-            RefSource::Owned(cell) => StyleParts::from_style(&cell.style),
+            RefSource::Text(cell) => StyleParts::from_style(cell.style()),
         }
     }
     #[inline]
     pub(crate) fn glyph(&self) -> Glyph<'_> {
         match self.source {
             RefSource::Packed(cell, resources) => resources.glyph(*cell),
-            RefSource::Owned(cell) => Glyph::Str(cell.content()),
+            RefSource::Text(cell) => Glyph::Str(cell.content()),
         }
     }
 }
@@ -324,7 +383,7 @@ impl<'a> From<&'a Cell> for CellRef<'a> {
     #[inline]
     fn from(cell: &'a Cell) -> Self {
         Self {
-            source: RefSource::Owned(cell),
+            source: RefSource::Text(TextRef::Owned(cell)),
             scalar: [0; 4],
             scalar_len: 0,
         }
@@ -333,21 +392,34 @@ impl<'a> From<&'a Cell> for CellRef<'a> {
 impl PartialEq for CellRef<'_> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
+        if let (RefSource::Packed(a, owner), RefSource::Packed(b, other_owner)) =
+            (self.source, other.source)
+        {
+            return owner.value_eq(*a, other_owner, *b);
+        }
+        self.text_eq(other)
+    }
+}
+
+impl CellRef<'_> {
+    // Keep text decoding out of the packed comparison path.
+    #[inline(never)]
+    fn text_eq(&self, other: &Self) -> bool {
         match (self.source, other.source) {
-            (RefSource::Packed(a, owner), RefSource::Packed(b, other_owner)) => {
-                owner.value_eq(*a, other_owner, *b)
+            (RefSource::Text(a), RefSource::Text(b)) => {
+                a.width() == b.width() && a.style() == b.style() && a.content() == b.content()
             }
-            (RefSource::Owned(a), RefSource::Owned(b)) => a == b,
-            (RefSource::Owned(cell), _) => {
-                cell.width() == other.width()
-                    && other.style_eq(&cell.style)
-                    && cell.content().as_bytes() == other.content_bytes()
-            }
-            (_, RefSource::Owned(cell)) => {
+            (_, RefSource::Text(cell)) => {
                 cell.width() == self.width()
-                    && self.style_eq(&cell.style)
                     && cell.content().as_bytes() == self.content_bytes()
+                    && self.style_eq(cell.style())
             }
+            (RefSource::Text(cell), _) => {
+                cell.width() == other.width()
+                    && cell.content().as_bytes() == other.content_bytes()
+                    && other.style_eq(cell.style())
+            }
+            _ => unreachable!("packed cells use packed equality"),
         }
     }
 }

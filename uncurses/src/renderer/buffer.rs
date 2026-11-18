@@ -246,6 +246,11 @@ impl RenderBuffer {
             existing.is_none_or(|e| e != cell) || u16::from(cell.width()) > self.width() - pos.x;
 
         if changed {
+            if cell.width() == 1 && existing.is_some_and(|e| e.width() == 1) {
+                self.buffer.set(pos, cell);
+                self.touch_line(pos.y, pos.x, pos.x);
+                return;
+            }
             let new_width = cell.width().max(1) as u16;
             let prev_width = existing.map(|e| e.width()).unwrap_or(0).max(1) as u16;
             let width = new_width.max(prev_width);

@@ -37,6 +37,23 @@ pub(crate) struct PackedCell {
 }
 
 impl PackedCell {
+    #[inline]
+    pub(crate) fn is_resource_free(self) -> bool {
+        self.token() < COMPLEX && self.extras_id == 0
+    }
+
+    /// Encode a scalar or empty cell only when it needs no owner-local resources.
+    pub(crate) fn from_scalar(scalar: Option<char>, width: u8, style: &Style) -> Option<Self> {
+        if style.ul_color().is_some() || style.link_arc().is_some() {
+            return None;
+        }
+        Some(Self {
+            glyph_width: (u32::from(width) << 24) | scalar.map_or(EMPTY, |scalar| scalar as u32),
+            extras_id: 0,
+            sgr: style.sgr_word(),
+        })
+    }
+
     pub(crate) const BLANK: Self = Self {
         glyph_width: (1 << 24) | b' ' as u32,
         extras_id: 0,
@@ -279,18 +296,24 @@ impl<T> Pool<T> {
         entry.refs = entry.refs.checked_add(1).expect("resource count exceeded");
     }
 
+    #[inline]
     fn release(&mut self, id: u32) {
         let entry = self.entries[id as usize].as_mut().unwrap();
         assert!(entry.refs > 0);
         entry.refs -= 1;
         if entry.refs == 0 {
-            self.index
-                .find_entry(entry.hash, |&old| old == id)
-                .unwrap()
-                .remove();
-            self.entries[id as usize] = None;
-            self.free.push(id);
+            self.reclaim(id);
         }
+    }
+
+    fn reclaim(&mut self, id: u32) {
+        let hash = self.entries[id as usize].as_ref().unwrap().hash;
+        self.index
+            .find_entry(hash, |&old| old == id)
+            .unwrap()
+            .remove();
+        self.entries[id as usize] = None;
+        self.free.push(id);
     }
 }
 
@@ -322,13 +345,23 @@ impl std::ops::DerefMut for Resources {
 }
 
 /// Each translation owns a hold until the operation ends.
+/// Operation-local translations from one immutable source.
+///
+/// Each entry holds a destination reference until `Resources::release_imports`.
+/// Release the cache before the source can recycle its IDs.
 #[derive(Default)]
 pub(crate) struct ImportCache {
-    glyphs: std::collections::HashMap<u32, u32>,
-    extras: std::collections::HashMap<u32, u32>,
+    glyphs: rustc_hash::FxHashMap<u32, u32>,
+    extras: rustc_hash::FxHashMap<u32, u32>,
 }
 
 impl Resources {
+    #[inline]
+    pub(crate) fn empty_ref() -> &'static Self {
+        static EMPTY: Resources = Resources { pools: None };
+        &EMPTY
+    }
+
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.pools
@@ -348,12 +381,7 @@ impl Resources {
                 .entry(cell.token() - COMPLEX)
                 .or_insert_with(|| {
                     let content = source.glyphs.get(cell.token() - COMPLEX).as_ref();
-                    self.glyphs.acquire(
-                        content,
-                        |value| value.as_ref() == content,
-                        || content.into(),
-                        GLYPH_MASK - COMPLEX,
-                    )
+                    self.acquire_glyph(content)
                 });
             self.glyphs.retain(id);
             COMPLEX + id
@@ -389,28 +417,43 @@ impl Resources {
         }
     }
 
+    #[inline]
     pub(crate) fn import(&mut self, cell: super::CellRef<'_>) -> PackedCell {
-        if let Some(owned) = cell.owned_import_source()
-            && owned.style.ul_color().is_none()
-            && owned.style.link_arc().is_none()
+        if let Some((packed, _)) = cell.packed_import_source()
+            && packed.is_resource_free()
         {
-            let mut chars = owned.content().chars();
-            let first = chars.next();
-            if chars.next().is_none() {
-                return PackedCell {
-                    glyph_width: (u32::from(owned.width()) << 24)
-                        | first.map_or(EMPTY, |scalar| scalar as u32),
-                    extras_id: 0,
-                    sgr: owned.style.sgr_word(),
-                };
-            }
-        }
-        if let Some(packed) = cell.packed_import_source()
-            && packed.token() < COMPLEX
-            && packed.extras_id == 0
-        {
-            // Scalar and empty cells carry values, not owner-local handles.
             return packed;
+        }
+        self.import_value(cell)
+    }
+
+    fn import_value(&mut self, cell: super::CellRef<'_>) -> PackedCell {
+        if let Some((packed, source)) = cell.packed_import_source() {
+            let token = if packed.token() >= COMPLEX {
+                COMPLEX + self.acquire_glyph(source.glyphs.get(packed.token() - COMPLEX))
+            } else {
+                packed.token()
+            };
+            let extras_id = source.extras(packed).map_or(0, |extras| {
+                self.acquire_extras(ExtrasRef {
+                    link: extras.link.as_ref(),
+                    underline_color: extras.underline_color,
+                })
+            });
+            return PackedCell {
+                glyph_width: (u32::from(packed.width()) << 24) | token,
+                extras_id,
+                sgr: packed.sgr,
+            };
+        }
+        if let Some((content, width, style)) = cell.text_import_source() {
+            let mut chars = content.chars();
+            let first = chars.next();
+            if chars.next().is_none()
+                && let Some(packed) = PackedCell::from_scalar(first, width, style)
+            {
+                return packed;
+            }
         }
         self.intern_parts(cell.glyph(), cell.width(), cell.parts())
     }
@@ -439,15 +482,7 @@ impl Resources {
                 match (chars.next(), chars.next()) {
                     (None, _) => EMPTY,
                     (Some(scalar), None) => scalar as u32,
-                    _ => {
-                        COMPLEX
-                            + self.glyphs.acquire(
-                                content,
-                                |value| value.as_ref() == content,
-                                || content.into(),
-                                GLYPH_MASK - COMPLEX,
-                            )
-                    }
+                    _ => COMPLEX + self.acquire_glyph(content),
                 }
             }
         };
@@ -458,6 +493,15 @@ impl Resources {
             extras_id,
             sgr,
         }
+    }
+
+    fn acquire_glyph(&mut self, content: &str) -> u32 {
+        self.glyphs.acquire(
+            content,
+            |value| value.as_ref() == content,
+            || content.into(),
+            GLYPH_MASK - COMPLEX,
+        )
     }
 
     fn acquire_extras(&mut self, extras: ExtrasRef<'_>) -> u32 {
@@ -602,12 +646,16 @@ impl Resources {
 
     #[inline]
     pub(crate) fn value_eq(&self, cell: PackedCell, other: &Self, other_cell: PackedCell) -> bool {
-        if std::ptr::eq(self, other) {
-            return cell == other_cell;
-        }
         if cell.sgr != other_cell.sgr || cell.width() != other_cell.width() {
             return false;
         }
+        if std::ptr::eq(self, other) || (cell.is_resource_free() && other_cell.is_resource_free()) {
+            return cell == other_cell;
+        }
+        self.resource_value_eq(cell, other, other_cell)
+    }
+
+    fn resource_value_eq(&self, cell: PackedCell, other: &Self, other_cell: PackedCell) -> bool {
         let glyph_equal = if cell.token() < COMPLEX || other_cell.token() < COMPLEX {
             cell.token() == other_cell.token()
         } else {
@@ -759,6 +807,21 @@ mod tests {
                     let owned = Cell::new(content, width).style(style.clone());
                     let imported_owned = destination.import(CellRef::from(&owned));
                     assert_eq!(destination.materialize(imported_owned), owned);
+                    let text = crate::cell::BorrowedCell::new(content, width, style);
+                    let borrowed = text.as_ref();
+                    assert_eq!(borrowed, owned.as_ref());
+                    assert_eq!(borrowed.scalar(), owned.as_ref().scalar());
+                    assert_eq!(borrowed.grapheme(), owned.as_ref().grapheme());
+                    assert_eq!(borrowed.is_blank(), owned.is_blank());
+                    assert_eq!(borrowed.to_style(), *style);
+                    assert_eq!(borrowed.fg_color(), style.fg_color());
+                    assert_eq!(borrowed.bg_color(), style.bg_color());
+                    assert_eq!(borrowed.ul_color(), style.ul_color());
+                    assert_eq!(borrowed.link(), style.link_target());
+                    assert_eq!(borrowed.attributes(), style.attributes());
+                    assert_eq!(borrowed.underline_shape(), style.underline_shape());
+                    let imported_borrowed = destination.import(borrowed);
+                    assert_eq!(destination.materialize(imported_borrowed), owned);
                     let packed = source.intern(&owned);
                     let imported_packed = destination.import(CellRef::packed(&packed, &source));
                     assert_eq!(destination.materialize(imported_packed), owned);
@@ -766,10 +829,16 @@ mod tests {
                     audit(&source, &[source_hold, packed]);
                     audit(
                         &destination,
-                        &[destination_hold, imported_owned, imported_packed],
+                        &[
+                            destination_hold,
+                            imported_owned,
+                            imported_borrowed,
+                            imported_packed,
+                        ],
                     );
                     source.release(packed);
                     destination.release(imported_owned);
+                    destination.release(imported_borrowed);
                     destination.release(imported_packed);
                 }
             }

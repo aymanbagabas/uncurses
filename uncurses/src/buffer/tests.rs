@@ -8,6 +8,49 @@ fn link_of(s: &Style) -> Option<(&str, &str)> {
 }
 
 #[test]
+fn narrow_literal_replacements_release_resources_and_preserve_wide_styles() {
+    use crate::color::Color;
+    use std::sync::Arc;
+
+    let rich = Style::new()
+        .bg(Color::Blue)
+        .underline_color(Color::Green)
+        .link("https://example.test/replace", "id=replace");
+    let link = rich.link_arc().unwrap();
+    let baseline = Arc::strong_count(link);
+    let plain = Style::new().fg(Color::Red).bold();
+    let mut buffer = Buffer::new(6, 1);
+    buffer.set((1, 0), &Cell::new("e\u{301}", 1).style(&rich));
+    buffer.set_str((1, 0), "A", &plain);
+    assert_eq!(
+        buffer.cell((1, 0).into()).unwrap(),
+        Cell::new("A", 1).style(&plain).as_ref()
+    );
+    buffer.resources.audit(&buffer.cells);
+    assert!(buffer.resources.is_empty());
+    assert_eq!(Arc::strong_count(link), baseline);
+
+    for column in [2, 3] {
+        buffer.set((2, 0), &Cell::new("界", 2).style(&rich));
+        buffer.set_style((3, 0).into(), Style::new().italic());
+        buffer.set_str((column, 0), " ", &plain);
+        assert!(buffer.cell((2, 0).into()).unwrap().is_blank());
+        assert!(buffer.cell((3, 0).into()).unwrap().is_blank());
+        assert!(buffer.cell((column, 0).into()).unwrap().style_eq(&plain));
+        let other = if column == 2 { 3 } else { 2 };
+        assert!(buffer.cell((other, 0).into()).unwrap().style_eq(&rich));
+        buffer.resources.audit(&buffer.cells);
+    }
+    buffer.set_str((2, 0), " ", &rich);
+    buffer.resources.audit(&buffer.cells);
+    buffer.set_str((2, 0), " ", Style::EMPTY);
+    buffer.set_str((3, 0), " ", Style::EMPTY);
+    buffer.resources.audit(&buffer.cells);
+    assert!(buffer.resources.is_empty());
+    assert_eq!(Arc::strong_count(link), baseline);
+}
+
+#[test]
 fn borrowed_cells_match_portable_values_without_link_count_changes() {
     use crate::color::Color;
     use crate::style::UnderlineStyle;
@@ -46,6 +89,52 @@ fn borrowed_cells_match_portable_values_without_link_count_changes() {
         assert_eq!(Arc::strong_count(link), count);
     }
     buffer.resources.audit(&buffer.cells);
+}
+
+#[test]
+fn literal_import_owns_borrowed_graphemes_and_releases_replaced_glyphs() {
+    use crate::color::Color;
+    use std::sync::Arc;
+
+    let mut buffer = Buffer::new(8, 1).with_width_mode(WidthMode::Grapheme);
+    let link;
+    {
+        let mut text = String::from("e\u{301}");
+        let style = Style::new()
+            .fg(Color::Rgb(3, 5, 7))
+            .underline_color(Color::Indexed(9))
+            .link("https://example.test/borrowed", "id=borrowed");
+        link = Arc::downgrade(style.link_arc().unwrap());
+        buffer.set_str((0, 0), &text, &style);
+        buffer.set_str((1, 0), &text, &style);
+        text.clear();
+        text.push_str("👩‍💻");
+        assert_eq!(buffer.set_str((2, 0), &text, &style), Position::new(4, 0));
+    }
+    buffer.resources.audit(&buffer.cells);
+    assert_eq!(buffer.cell((0, 0).into()).unwrap().content(), "e\u{301}");
+    assert_eq!(buffer.cell((1, 0).into()).unwrap().content(), "e\u{301}");
+    assert_eq!(buffer.cell((2, 0).into()).unwrap().content(), "👩‍💻");
+    assert_eq!(
+        buffer.cell((2, 0).into()).unwrap().ul_color(),
+        Some(Color::Indexed(9))
+    );
+    assert_eq!(
+        buffer.cell((3, 0).into()).unwrap().link().unwrap().params,
+        "id=borrowed"
+    );
+    assert_eq!(buffer.resources.slots().1, 2);
+
+    buffer.set_str((0, 0), "é", Style::new());
+    buffer.resources.audit(&buffer.cells);
+    assert_eq!(buffer.resources.slots().1, 2);
+    buffer.set_str((1, 0), "界", Style::new());
+    buffer.resources.audit(&buffer.cells);
+    assert_eq!(buffer.resources.slots().1, 0);
+    buffer.set_str((3, 0), "x", Style::new());
+    buffer.resources.audit(&buffer.cells);
+    assert!(buffer.resources.is_empty());
+    assert!(link.upgrade().is_none());
 }
 
 #[test]
