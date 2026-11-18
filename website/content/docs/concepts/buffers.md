@@ -53,11 +53,12 @@ Create one, paint cells into it by position, and ask about its shape:
 use uncurses::buffer::{Buffer, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::layout::Position;
+use uncurses::style::Style;
 
 fn main() {
     let mut frame = Buffer::new(20, 5);   // 20 columns, 5 rows of blank cells
-    frame.set_cell(Position::new(0, 0), &Cell::new("H", 1));
-    frame.set_cell(Position::new(1, 0), &Cell::new("i", 1));
+    frame.set_cell(Position::new(0, 0), &Cell::new("H", 1, Style::EMPTY));
+    frame.set_cell(Position::new(1, 0), &Cell::new("i", 1, Style::EMPTY));
     assert_eq!(frame.width(), 20);
     assert_eq!(frame.height(), 5);
 }

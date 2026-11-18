@@ -375,7 +375,8 @@ pub trait SurfaceMut: Surface {
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         let step = (cell.width() as u16).max(1);
-        let blank = Cell::BLANK.style(cell.style.clone());
+        let mut blank = Cell::BLANK;
+        blank.set_style(cell.style());
         for y in clipped.top()..clipped.bottom() {
             let mut x = clipped.left();
             while !overruns(x, step, clipped.right()) {
@@ -728,6 +729,7 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::buffer::View;
+    use crate::style::Style;
 
     #[test]
     fn the_default_row_edits_fill_a_row_as_wide_as_the_address_space() {
@@ -737,7 +739,7 @@ mod tests {
         // that width no longer fits a `u16`.
         let mut buf = Buffer::new(u16::MAX, 1);
         let mut view = View::new(&mut buf, Rect::new(0, 0, u16::MAX, 1));
-        let wide = Cell::new("\u{1f468}\u{200d}\u{1f469}", 255);
+        let wide = Cell::new("\u{1f468}\u{200d}\u{1f469}", 255, Style::EMPTY);
 
         view.insert_cells(Position::new(u16::MAX - 1, 0), 1, u16::MAX, &wide);
         view.delete_cells(Position::new(0, 0), 1, u16::MAX, &wide);
@@ -754,21 +756,21 @@ mod tests {
         let mut view = View::new(&mut buf, Rect::new(0, 0, u16::MAX, 1));
         view.fill_rect(
             Rect::new(0, 0, u16::MAX, 1),
-            &Cell::new("\u{1f468}\u{200d}\u{1f469}", 255),
+            &Cell::new("\u{1f468}\u{200d}\u{1f469}", 255, Style::EMPTY),
         );
 
         assert!(buf.cell(Position::new(0, 0)).unwrap().is_wide());
     }
 
     fn wide(s: &str) -> Cell {
-        Cell::new(s, 2)
+        Cell::new(s, 2, Style::EMPTY)
     }
 
     #[test]
     fn draw_copies_normal_cells() {
         let mut src = Buffer::new(2, 1);
-        src.set((0, 0), &Cell::new("A", 1));
-        src.set((1, 0), &Cell::new("B", 1));
+        src.set((0, 0), &Cell::new("A", 1, Style::EMPTY));
+        src.set((1, 0), &Cell::new("B", 1, Style::EMPTY));
         let mut dst = Buffer::new(4, 1);
         src.draw(&mut dst, Position::new(1, 0));
         assert_eq!(dst.cell(Position::new(0, 0)).unwrap().content(), " ");
@@ -797,13 +799,13 @@ mod tests {
         // slice. The default must not propagate the orphan.
         let mut src = Buffer::new(3, 1);
         src.set((0, 0), &wide("世"));
-        src.set((2, 0), &Cell::new("X", 1));
+        src.set((2, 0), &Cell::new("X", 1, Style::EMPTY));
         let src = View::new(&mut src, Rect::new(1, 0, 2, 1));
 
         let mut dst = Buffer::new(2, 1);
         // Seed the target with nonblank cells so a skipped write is visible.
-        dst.set((0, 0), &Cell::new("Y", 1));
-        dst.set((1, 0), &Cell::new("Z", 1));
+        dst.set((0, 0), &Cell::new("Y", 1, Style::EMPTY));
+        dst.set((1, 0), &Cell::new("Z", 1, Style::EMPTY));
 
         src.draw(&mut dst, Position::new(0, 0));
 
@@ -835,18 +837,21 @@ mod tests {
         use crate::buffer::View;
 
         for (text, width) in [("中", 2), ("👩‍👩", 4), ("👩‍👩‍👧‍👦", 8)] {
-            let cell = Cell::new(text, width);
+            let cell = Cell::new(text, width, Style::EMPTY);
             let width = u16::from(width);
             for origin in [Position::ORIGIN, Position::new(2, 1)] {
                 let mut source = Buffer::new(origin.x + width + 1, origin.y + 1);
                 source.set(origin, &cell);
-                source.set((origin.x + width, origin.y), &Cell::new("M", 1));
+                source.set(
+                    (origin.x + width, origin.y),
+                    &Cell::new("M", 1, Style::EMPTY),
+                );
                 let source = View::new(&mut source, Rect::new(origin.x, origin.y, width + 1, 1));
 
                 for at in [Position::ORIGIN, Position::new(3, 2)] {
                     for clipped in 0..=width {
                         let mut target = Buffer::new(at.x + width + 2, at.y + 2);
-                        target.fill(&Cell::new("Z", 1));
+                        target.fill(&Cell::new("Z", 1, Style::EMPTY));
                         let mut expected = target.clone();
                         for x in at.x + clipped..at.x + width {
                             expected.set((x, at.y), &Cell::BLANK);
@@ -854,7 +859,7 @@ mod tests {
                         if clipped == 0 {
                             expected.set(at, &cell);
                         }
-                        expected.set((at.x + width, at.y), &Cell::new("M", 1));
+                        expected.set((at.x + width, at.y), &Cell::new("M", 1, Style::EMPTY));
 
                         let mut view = View::new(
                             &mut target,
@@ -888,7 +893,7 @@ mod tests {
             for (x, ch) in row.chars().enumerate() {
                 win.set_cell(
                     Position::new(x as u16, y as u16),
-                    &Cell::new(ch.to_string(), 1),
+                    &Cell::new(ch.to_string(), 1, Style::EMPTY),
                 );
             }
         }
@@ -945,9 +950,9 @@ mod tests {
         // 世's new primary would be at col 2, continuation at col 3.
         // That still fits (col 3 < right=4). So 世 is preserved.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
+        win.set_cell(Position::new(0, 0), &Cell::new("A", 1, Style::EMPTY));
         win.set_cell(Position::new(1, 0), &wide("世"));
-        win.set_cell(Position::new(3, 0), &Cell::new("B", 1));
+        win.set_cell(Position::new(3, 0), &Cell::new("B", 1, Style::EMPTY));
         SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
 
         assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
@@ -962,8 +967,8 @@ mod tests {
         // 世 would move from col 2 to col 3, continuation to col 4 (out).
         // So 世 must be dropped, leaving a blank at col 3.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
-        win.set_cell(Position::new(1, 0), &Cell::new("B", 1));
+        win.set_cell(Position::new(0, 0), &Cell::new("A", 1, Style::EMPTY));
+        win.set_cell(Position::new(1, 0), &Cell::new("B", 1, Style::EMPTY));
         win.set_cell(Position::new(2, 0), &wide("世"));
         SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
 
@@ -978,9 +983,9 @@ mod tests {
         // Row: A 世(prim) 世(cont) B, delete 2 at col 1 with right=4.
         // 世's primary falls inside [1, 3) → dropped entirely.
         let mut win = Window::new(4, 1);
-        win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
+        win.set_cell(Position::new(0, 0), &Cell::new("A", 1, Style::EMPTY));
         win.set_cell(Position::new(1, 0), &wide("世"));
-        win.set_cell(Position::new(3, 0), &Cell::new("B", 1));
+        win.set_cell(Position::new(3, 0), &Cell::new("B", 1, Style::EMPTY));
         SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 4, &Cell::BLANK);
 
         assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");

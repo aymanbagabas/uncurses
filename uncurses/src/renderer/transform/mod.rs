@@ -38,7 +38,7 @@ mod tests {
                 ("👨‍👩‍👧‍👦", true),
             ] {
                 assert_eq!(
-                    renderer.width_is_uncertain(&Cell::new(text, 1)),
+                    renderer.width_is_uncertain(&Cell::new(text, 1, Style::EMPTY)),
                     mode == crate::text::WidthMode::Wc && uncertain,
                     "{text:?} under {mode:?}"
                 );
@@ -57,7 +57,7 @@ mod tests {
         ] {
             let mut old = RenderBuffer::new(40, 1);
             let mut new = RenderBuffer::new(40, 1);
-            let family = Cell::new("👨‍👩‍👧‍👦", 8);
+            let family = Cell::new("👨‍👩‍👧‍👦", 8, Style::EMPTY);
             if let Some(x) = old_at {
                 old.set_cell((x, 0), &family);
             }
@@ -92,14 +92,14 @@ mod tests {
                         }
                         let mut old = RenderBuffer::new(24, 1);
                         let mut new = old.clone();
-                        let family = Cell::new("👨‍👩‍👧‍👦", 8);
+                        let family = Cell::new("👨‍👩‍👧‍👦", 8, Style::EMPTY);
                         if let Some(x) = old_at {
                             old.set_cell((x, 0), &family);
                         }
                         if let Some(x) = new_at {
                             new.set_cell((x, 0), &family);
                         }
-                        new.set_cell((changed_at, 0), &Cell::new("X", 1));
+                        new.set_cell((changed_at, 0), &Cell::new("X", 1, Style::EMPTY));
                         let old = old.line(0).unwrap();
                         let new = new.line(0).unwrap();
                         let first_diff = new.iter().zip(old).position(|(n, o)| n != o).unwrap();
@@ -127,7 +127,8 @@ mod tests {
             attrs: AttrFlags::BOLD | AttrFlags::ITALIC | AttrFlags::SLOW_BLINK,
             ..Style::default()
         };
-        let cell = Cell::BLANK.style(style);
+        let mut cell = Cell::BLANK;
+        cell.set_style(style);
         assert!(can_clear_with(&cell, true));
         assert!(can_clear_with(&cell, false));
     }
@@ -142,7 +143,8 @@ mod tests {
             bg: Some(Color::Red),
             ..Style::default()
         };
-        let cell = Cell::BLANK.style(style);
+        let mut cell = Cell::BLANK;
+        cell.set_style(style);
         assert!(can_clear_with(&cell, true));
         assert!(!can_clear_with(&cell, false));
     }
@@ -153,7 +155,8 @@ mod tests {
             underline: UnderlineStyle::Single,
             ..Style::default()
         };
-        let cell = Cell::BLANK.style(style);
+        let mut cell = Cell::BLANK;
+        cell.set_style(style);
         assert!(!can_clear_with(&cell, true));
         assert!(!can_clear_with(&cell, false));
     }
@@ -169,7 +172,8 @@ mod tests {
                 attrs: attr,
                 ..Style::default()
             };
-            let cell = Cell::BLANK.style(style);
+            let mut cell = Cell::BLANK;
+            cell.set_style(style);
             assert!(
                 !can_clear_with(&cell, true),
                 "attr {attr:?} should not be clearable with BCE"
@@ -187,7 +191,7 @@ mod tests {
         r.cur_buf = Some(RenderBuffer::new(10, 1));
 
         let mut new_buf = RenderBuffer::new(10, 1);
-        new_buf.set_cell((3, 0), &Cell::new("X", 1));
+        new_buf.set_cell((3, 0), &Cell::new("X", 1, Style::EMPTY));
 
         let mut sink = Vec::new();
         r.transform_line(&mut sink, &new_buf, 0, 0, 9).unwrap();
@@ -202,16 +206,32 @@ mod tests {
         for old_width in [8, 40] {
             for x in [0, 4, 20, 38, 39] {
                 for (old_cell, new_cell, offset) in [
-                    (Cell::new("世", 2), Cell::new("Y", 1), 0),
-                    (Cell::new("世", 2), Cell::new("Y", 1), 1),
-                    (Cell::new("X", 1), Cell::new("世", 2), 0),
-                    (Cell::new("X", 1), Cell::new(&combining, 1), 0),
+                    (
+                        Cell::new("世", 2, Style::EMPTY),
+                        Cell::new("Y", 1, Style::EMPTY),
+                        0,
+                    ),
+                    (
+                        Cell::new("世", 2, Style::EMPTY),
+                        Cell::new("Y", 1, Style::EMPTY),
+                        1,
+                    ),
+                    (
+                        Cell::new("X", 1, Style::EMPTY),
+                        Cell::new("世", 2, Style::EMPTY),
+                        0,
+                    ),
+                    (
+                        Cell::new("X", 1, Style::EMPTY),
+                        Cell::new(&combining, 1, Style::EMPTY),
+                        0,
+                    ),
                 ] {
                     let mut old = RenderBuffer::new(old_width, 1);
                     let mut new = RenderBuffer::new(40, 1);
                     for column in 0..40 {
-                        old.set_cell((column, 0), &Cell::new("a", 1));
-                        new.set_cell((column, 0), &Cell::new("a", 1));
+                        old.set_cell((column, 0), &Cell::new("a", 1, Style::EMPTY));
+                        new.set_cell((column, 0), &Cell::new("a", 1, Style::EMPTY));
                     }
                     old.set_cell((x, 0), &old_cell);
                     new.set_cell((x, 0), &old_cell);
@@ -254,16 +274,16 @@ mod tests {
         // Old buffer has content across the full line
         let mut old_buf = RenderBuffer::new(10, 1);
         for i in 0..10 {
-            old_buf.set_cell((i, 0), &Cell::new("X", 1));
+            old_buf.set_cell((i, 0), &Cell::new("X", 1, Style::EMPTY));
         }
         old_buf.clear_touched();
         r.cur_buf = Some(old_buf);
 
         // New buffer only has content in first 3 cols, rest is blank
         let mut new_buf = RenderBuffer::new(10, 1);
-        new_buf.set_cell((0, 0), &Cell::new("A", 1));
-        new_buf.set_cell((1, 0), &Cell::new("B", 1));
-        new_buf.set_cell((2, 0), &Cell::new("C", 1));
+        new_buf.set_cell((0, 0), &Cell::new("A", 1, Style::EMPTY));
+        new_buf.set_cell((1, 0), &Cell::new("B", 1, Style::EMPTY));
+        new_buf.set_cell((2, 0), &Cell::new("C", 1, Style::EMPTY));
 
         let mut sink = Vec::new();
         r.transform_line(&mut sink, &new_buf, 0, 0, 9).unwrap();
@@ -293,7 +313,8 @@ mod tests {
         // scroll blanked or shifted cur_buf).
         let mut cur = RenderBuffer::new(width, height);
         for (x, ch) in "ABCDEFGHIJ".chars().enumerate() {
-            cur.buffer.set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+            cur.buffer
+                .set((x as u16, 0), &Cell::new(ch.to_string(), 1, Style::EMPTY));
         }
         r.cur_buf = Some(cur);
         r.last_width = width;
@@ -306,7 +327,7 @@ mod tests {
         for (x, ch) in "012XYZWVUT".chars().enumerate() {
             new_buf
                 .buffer
-                .set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+                .set((x as u16, 0), &Cell::new(ch.to_string(), 1, Style::EMPTY));
         }
         new_buf.touch_line(0, 3, 9);
 
@@ -329,7 +350,8 @@ mod tests {
         let mut r = Renderer::new();
         let mut cur = RenderBuffer::new(width, 1);
         for (x, ch) in "Hello world!".chars().enumerate() {
-            cur.buffer.set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+            cur.buffer
+                .set((x as u16, 0), &Cell::new(ch.to_string(), 1, Style::EMPTY));
         }
         r.cur_buf = Some(cur);
         r.last_width = width;
@@ -339,7 +361,7 @@ mod tests {
         for (x, ch) in "      world!".chars().enumerate() {
             new_buf
                 .buffer
-                .set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+                .set((x as u16, 0), &Cell::new(ch.to_string(), 1, Style::EMPTY));
         }
         new_buf.touch_line(0, 0, width - 1);
 
@@ -361,7 +383,8 @@ mod tests {
         let mut r = Renderer::new();
         let mut cur = RenderBuffer::new(width, 1);
         for (x, ch) in "Hello there".chars().enumerate() {
-            cur.buffer.set((x as u16, 0), &Cell::new(ch.to_string(), 1));
+            cur.buffer
+                .set((x as u16, 0), &Cell::new(ch.to_string(), 1, Style::EMPTY));
         }
         r.cur_buf = Some(cur);
         r.last_width = width;
@@ -386,7 +409,7 @@ mod tests {
 
         let mut new_buf = RenderBuffer::new(10, 1);
         let style = Style::default().fg(Color::Red);
-        new_buf.set_cell((0, 0), &Cell::new("R", 1).style(style));
+        new_buf.set_cell((0, 0), &Cell::new("R", 1, style));
 
         let mut sink = Vec::new();
         r.transform_line(&mut sink, &new_buf, 0, 0, 9).unwrap();
@@ -403,15 +426,15 @@ mod tests {
         // Old buffer has content on all 5 lines
         let mut old_buf = RenderBuffer::new(10, 5);
         for y in 0..5 {
-            old_buf.set_cell((0, y), &Cell::new("X", 1));
+            old_buf.set_cell((0, y), &Cell::new("X", 1, Style::EMPTY));
         }
 
         r.cur_buf = Some(old_buf);
 
         // New buffer only has content on first 2 lines
         let mut new_buf = RenderBuffer::new(10, 5);
-        new_buf.set_cell((0, 0), &Cell::new("A", 1));
-        new_buf.set_cell((0, 1), &Cell::new("B", 1));
+        new_buf.set_cell((0, 0), &Cell::new("A", 1, Style::EMPTY));
+        new_buf.set_cell((0, 1), &Cell::new("B", 1, Style::EMPTY));
 
         let mut sink = Vec::new();
         r.clear_bottom(&mut sink, &new_buf).unwrap();
@@ -430,15 +453,15 @@ mod tests {
         let mut r = Renderer::new();
 
         let mut old_buf = RenderBuffer::new(10, 4);
-        old_buf.set_cell((0, 3), &Cell::new("X", 1));
+        old_buf.set_cell((0, 3), &Cell::new("X", 1, Style::EMPTY));
         r.cur_buf = Some(old_buf);
 
         // new_buf has the bottom row filled with bg-red spaces. The
         // pen on entry is default, so ED would paint with default bg
         // and erase the red background — wrong.
-        let bg_red = Cell::new(" ", 1).style(Style::default().bg(crate::color::Color::Indexed(1)));
+        let bg_red = Cell::new(" ", 1, Style::default().bg(crate::color::Color::Indexed(1)));
         let mut new_buf = RenderBuffer::new(10, 4);
-        new_buf.set_cell((0, 0), &Cell::new("A", 1));
+        new_buf.set_cell((0, 0), &Cell::new("A", 1, Style::EMPTY));
         for x in 0..10u16 {
             new_buf.set_cell((x, 3), &bg_red.clone());
         }
@@ -462,13 +485,13 @@ mod tests {
         let mut old_buf = RenderBuffer::new(10, 1);
         let mut new_buf = RenderBuffer::new(10, 1);
         for x in 0..10u16 {
-            old_buf.set_cell((x, 0), &Cell::new("a", 1));
-            new_buf.set_cell((x, 0), &Cell::new("a", 1));
+            old_buf.set_cell((x, 0), &Cell::new("a", 1, Style::EMPTY));
+            new_buf.set_cell((x, 0), &Cell::new("a", 1, Style::EMPTY));
         }
-        old_buf.set_cell((3, 0), &Cell::new("X", 1));
-        old_buf.set_cell((9, 0), &Cell::new("X", 1));
-        new_buf.set_cell((3, 0), &Cell::new("A", 1));
-        new_buf.set_cell((9, 0), &Cell::new("B", 1));
+        old_buf.set_cell((3, 0), &Cell::new("X", 1, Style::EMPTY));
+        old_buf.set_cell((9, 0), &Cell::new("X", 1, Style::EMPTY));
+        new_buf.set_cell((3, 0), &Cell::new("A", 1, Style::EMPTY));
+        new_buf.set_cell((9, 0), &Cell::new("B", 1, Style::EMPTY));
         r.cur_buf = Some(old_buf);
         r.last_width = 10;
         r.last_height = 1;
