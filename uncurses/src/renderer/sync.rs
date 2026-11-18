@@ -114,13 +114,10 @@ impl Renderer {
                         .cell(pos)
                         .is_some_and(|old| !old.same_style(new_cell))
                     {
-                        let old = self.back_buf.cell_mut(pos).unwrap();
-                        old.fg = new_cell.fg;
-                        old.bg = new_cell.bg;
-                        old.underline_color = new_cell.underline_color;
-                        old.attrs = new_cell.attrs;
-                        old.underline = new_cell.underline;
-                        old.link.clone_from(&new_cell.link);
+                        self.back_buf
+                            .cell_mut(pos)
+                            .unwrap()
+                            .copy_style_from(new_cell);
                     }
                     continue;
                 }
