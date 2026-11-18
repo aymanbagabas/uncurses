@@ -126,12 +126,7 @@ impl Clone for Cell {
     #[inline]
     fn clone_from(&mut self, source: &Self) {
         self.content.clone_from(&source.content);
-        self.fg = source.fg;
-        self.bg = source.bg;
-        self.underline_color = source.underline_color;
-        self.attrs = source.attrs;
-        self.underline = source.underline;
-        self.link.clone_from(&source.link);
+        self.copy_style_from(source);
         self.width = source.width;
     }
 }
@@ -419,6 +414,16 @@ impl Cell {
     }
 
     #[inline]
+    pub(crate) fn copy_style_from(&mut self, source: &Self) {
+        self.fg = source.fg;
+        self.bg = source.bg;
+        self.underline_color = source.underline_color;
+        self.attrs = source.attrs;
+        self.underline = source.underline;
+        self.link.clone_from(&source.link);
+    }
+
+    #[inline]
     pub(crate) fn same_style(&self, other: &Self) -> bool {
         self.fg == other.fg
             && self.bg == other.bg
@@ -616,13 +621,16 @@ mod tests {
 
         let text = format!("中{}", "\u{301}".repeat(40));
         let style = Style::new()
+            .fg(Color::Green)
             .bg(Color::Blue)
+            .underline_color(Color::Red)
+            .attrs(AttrFlags::from_bits_retain(u16::MAX))
             .underline_style(UnderlineStyle::Curly)
             .link("https://example.test/shared", "id=long");
         let shared = style.link.as_ref().unwrap();
         let mut source = Cell::new(text.as_str(), 2, &style);
         let mut continuation = Cell::CONTINUATION;
-        continuation.set_style(source.style());
+        continuation.copy_style_from(&source);
         assert_eq!(continuation.style(), source.style());
         assert!(continuation.is_continuation());
         assert_eq!(continuation.content(), "");
@@ -630,6 +638,9 @@ mod tests {
             continuation.link.as_deref().unwrap(),
             shared.as_ref()
         ));
+        continuation.copy_style_from(&Cell::BLANK);
+        assert_eq!(continuation.style(), Style::EMPTY);
+        assert_eq!((continuation.content(), continuation.width()), ("", 0));
 
         let mut copy = Cell::new("old", 1, Style::new().bold());
         copy.clone_from(&source);
