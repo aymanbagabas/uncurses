@@ -69,16 +69,12 @@
 //! and draws a space, regardless of style. A continuation claims zero
 //! columns, so it returns `false`.
 
-#[cfg(test)]
 use std::sync::Arc;
 
 use compact_str::CompactString;
 
-#[cfg(test)]
 use crate::color::Color;
-use crate::style::Style;
-#[cfg(test)]
-use crate::style::{AttrFlags, Link, UnderlineStyle};
+use crate::style::{AttrFlags, Link, Style, UnderlineStyle};
 
 /// A single terminal-grid cell.
 ///
@@ -89,12 +85,17 @@ use crate::style::{AttrFlags, Link, UnderlineStyle};
 /// Use [`Cell::new`] for construction and [`Cell::BLANK`] for an empty
 /// styled-as-default space. Continuations are normally produced by the
 /// surface write path rather than by application code.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Cell {
     /// The grapheme cluster content. Empty string for a continuation
     /// placeholder.
     pub(crate) content: CompactString,
-    pub(crate) style: Style,
+    pub(crate) fg: Option<Color>,
+    pub(crate) bg: Option<Color>,
+    pub(crate) underline_color: Option<Color>,
+    pub(crate) attrs: AttrFlags,
+    pub(crate) underline: UnderlineStyle,
+    pub(crate) link: Option<Arc<Link>>,
     /// Column footprint. `0` marks a continuation placeholder; `1` or more
     /// marks a primary owning that many columns.
     pub(crate) width: u8,
@@ -103,7 +104,35 @@ pub struct Cell {
 impl PartialEq for Cell {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width && self.same_style(other) && self.content == other.content
+        self.width == other.width && self.content == other.content && self.same_style(other)
+    }
+}
+
+impl Clone for Cell {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            content: self.content.clone(),
+            fg: self.fg,
+            bg: self.bg,
+            underline_color: self.underline_color,
+            attrs: self.attrs,
+            underline: self.underline,
+            link: self.link.clone(),
+            width: self.width,
+        }
+    }
+
+    #[inline]
+    fn clone_from(&mut self, source: &Self) {
+        self.content.clone_from(&source.content);
+        self.fg = source.fg;
+        self.bg = source.bg;
+        self.underline_color = source.underline_color;
+        self.attrs = source.attrs;
+        self.underline = source.underline;
+        self.link.clone_from(&source.link);
+        self.width = source.width;
     }
 }
 
@@ -136,7 +165,12 @@ impl Cell {
     /// owned value is required.
     pub const BLANK: Cell = Cell {
         content: CompactString::const_new(" "),
-        style: Style::EMPTY,
+        fg: None,
+        bg: None,
+        underline_color: None,
+        attrs: AttrFlags::empty(),
+        underline: UnderlineStyle::None,
+        link: None,
         width: 1,
     };
 
@@ -166,7 +200,12 @@ impl Cell {
     /// rather than leaving it default.
     pub const CONTINUATION: Cell = Cell {
         content: CompactString::const_new(""),
-        style: Style::EMPTY,
+        fg: None,
+        bg: None,
+        underline_color: None,
+        attrs: AttrFlags::empty(),
+        underline: UnderlineStyle::None,
+        link: None,
         width: 0,
     };
 
@@ -355,7 +394,14 @@ impl Cell {
     /// Changes to the returned style take effect after [`Self::set_style`].
     #[inline]
     pub fn style(&self) -> Style {
-        self.style.clone()
+        Style {
+            fg: self.fg,
+            bg: self.bg,
+            underline_color: self.underline_color,
+            attrs: self.attrs,
+            underline: self.underline,
+            link: self.link.clone(),
+        }
     }
 
     /// Replace the visual style without changing content or width.
@@ -363,17 +409,33 @@ impl Cell {
     /// An owned style transfers its hyperlink. A borrowed style shares it.
     #[inline]
     pub fn set_style(&mut self, style: impl Into<Style>) {
-        self.style = style.into();
+        let style = style.into();
+        self.fg = style.fg;
+        self.bg = style.bg;
+        self.underline_color = style.underline_color;
+        self.attrs = style.attrs;
+        self.underline = style.underline;
+        self.link = style.link;
     }
 
     #[inline]
     pub(crate) fn same_style(&self, other: &Self) -> bool {
-        self.style == other.style
+        self.fg == other.fg
+            && self.bg == other.bg
+            && self.underline_color == other.underline_color
+            && self.attrs == other.attrs
+            && self.underline == other.underline
+            && self.link == other.link
     }
 
     #[inline]
     pub(crate) fn matches_style(&self, style: &Style) -> bool {
-        &self.style == style
+        self.fg == style.fg
+            && self.bg == style.bg
+            && self.underline_color == style.underline_color
+            && self.attrs == style.attrs
+            && self.underline == style.underline
+            && self.link == style.link
     }
 }
 
@@ -504,7 +566,7 @@ mod tests {
     #[test]
     fn test_cell_with_style() {
         let c = Cell::new("x", 1, Style::default().bold());
-        assert!(c.style().attrs.contains(crate::style::AttrFlags::BOLD));
+        assert!(c.attrs.contains(crate::style::AttrFlags::BOLD));
     }
 
     #[test]
@@ -526,6 +588,11 @@ mod tests {
                 .link("https://example.test/flat", "id=roundtrip");
             let cell = Cell::new("中", 2, &style);
             assert_eq!(cell.style(), style);
+            assert_eq!(cell.fg, style.fg);
+            assert_eq!(cell.bg, style.bg);
+            assert_eq!(cell.underline_color, style.underline_color);
+            assert_eq!(cell.underline, underline);
+            assert_eq!(cell.attrs.bits(), u16::MAX);
 
             let mut changed = cell.style();
             changed.bg = None;
@@ -535,9 +602,12 @@ mod tests {
             assert_eq!(cell.style(), style);
             copy.set_style(Style::EMPTY);
             assert_eq!(copy.style(), Style::EMPTY);
-            assert!(copy.style().link.as_deref().is_none());
+            assert!(copy.link.as_deref().is_none());
             assert_eq!((copy.content(), copy.width()), ("中", 2));
         }
+
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(std::mem::size_of::<Cell>(), 48);
     }
 
     #[test]
@@ -557,7 +627,7 @@ mod tests {
         assert!(continuation.is_continuation());
         assert_eq!(continuation.content(), "");
         assert!(std::ptr::eq(
-            continuation.style.link.as_deref().unwrap(),
+            continuation.link.as_deref().unwrap(),
             shared.as_ref()
         ));
 
@@ -572,17 +642,11 @@ mod tests {
         let extracted = copy.style();
         assert_eq!(extracted, style);
         assert!(Arc::ptr_eq(extracted.link.as_ref().unwrap(), shared));
-        assert!(std::ptr::eq(
-            copy.style.link.as_deref().unwrap(),
-            shared.as_ref()
-        ));
+        assert!(std::ptr::eq(copy.link.as_deref().unwrap(), shared.as_ref()));
         for x in 0..2 {
             let cell = buffer.cell((x, 0).into()).unwrap();
             assert_eq!(cell.style(), copy.style());
-            assert!(std::ptr::eq(
-                cell.style.link.as_deref().unwrap(),
-                shared.as_ref()
-            ));
+            assert!(std::ptr::eq(cell.link.as_deref().unwrap(), shared.as_ref()));
             assert_eq!(cell.is_continuation(), x == 1);
         }
         assert_eq!(buffer.cell((0, 0).into()).unwrap().content(), text);
@@ -597,8 +661,8 @@ mod tests {
             Style::new().link("https://example.test", "id=same"),
         );
         assert!(!std::ptr::eq(
-            a.style.link.as_deref().unwrap(),
-            b.style.link.as_deref().unwrap()
+            a.link.as_deref().unwrap(),
+            b.link.as_deref().unwrap()
         ));
         assert_eq!(a.style(), b.style());
         assert!(a.same_style(&b));

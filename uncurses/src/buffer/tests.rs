@@ -4,8 +4,7 @@ use crate::style::Style;
 use crate::text::{Painter, TextSurface, WrapMode};
 
 fn link_of(cell: &Cell) -> Option<(&str, &str)> {
-    cell.style
-        .link
+    cell.link
         .as_deref()
         .map(|l| (l.url.as_str(), l.params.as_str()))
 }
@@ -59,17 +58,14 @@ fn test_broken_wide_cell_keeps_bg() {
     buf.set((4, 0), &Cell::new("A", 1, Style::EMPTY));
     let primary = buf.cell(Position::new(3, 0)).unwrap();
     assert!(primary.is_blank());
-    assert_eq!(primary.style().bg, Some(Color::Red));
+    assert_eq!(primary.bg, Some(Color::Red));
 
     // Overwriting the primary blanks the trailing continuation; that blank
     // keeps the wide cell's background too.
     let mut buf = Buffer::new(10, 1);
     buf.set((3, 0), &Cell::new("中", 2, styled.clone()));
     buf.set((3, 0), &Cell::new("A", 1, Style::EMPTY));
-    assert_eq!(
-        buf.cell(Position::new(4, 0)).unwrap().style().bg,
-        Some(Color::Red)
-    );
+    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().bg, Some(Color::Red));
 
     // A wide cell that doesn't fit at the right edge is stored as a blank
     // that still carries its background.
@@ -77,7 +73,7 @@ fn test_broken_wide_cell_keeps_bg() {
     buf.set((3, 0), &Cell::new("中", 2, styled.clone()));
     let edge = buf.cell(Position::new(3, 0)).unwrap();
     assert!(edge.is_blank());
-    assert_eq!(edge.style().bg, Some(Color::Red));
+    assert_eq!(edge.bg, Some(Color::Red));
 }
 
 fn check_partial_fill_style(use_view: bool) {

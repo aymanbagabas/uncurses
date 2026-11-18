@@ -338,6 +338,11 @@ impl Buffer {
             return;
         }
 
+        if line[x].width() == 1 && cell.width() == 1 {
+            line[x].clone_from(cell);
+            return;
+        }
+
         // If we're overwriting a wide cell's continuation, blank the primary
         // cell that owns it, so the wide grapheme does not survive with one
         // half replaced. The branch above already returned for an incoming
@@ -409,7 +414,7 @@ impl Buffer {
             }
         }
 
-        line[x] = cell.clone();
+        line[x].clone_from(cell);
     }
 
     /// Resize the buffer, preserving the top-left intersection.
