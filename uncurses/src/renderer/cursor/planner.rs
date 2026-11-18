@@ -14,10 +14,10 @@
 //! per-shape "predicted cost equals emitted bytes" invariant is kept on
 //! the shapes themselves.
 
+use crate::buffer::CellRow;
 use std::io::{self, Write};
 
 use crate::ansi::{cost, cursor};
-use crate::cell::Cell;
 use crate::layout::Position;
 use crate::renderer::Renderer;
 use crate::renderer::caps::Optimizations;
@@ -97,7 +97,7 @@ impl Renderer {
         out: &mut Vec<u8>,
         from: Position,
         to: Position,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
     ) -> io::Result<()> {
         self.write_optimal_move_with_pen(
             out,
@@ -114,7 +114,7 @@ impl Renderer {
         out: &mut Vec<u8>,
         from: Position,
         to: Position,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
         pen: PenPolicy,
     ) -> io::Result<()> {
         if from.y == to.y && from.x == to.x && self.cur.known() {
@@ -198,14 +198,19 @@ impl Renderer {
         !self.fullscreen
             && matches!(plan.vertical.shape, VerticalShape::Lf { .. })
             && self.opts.contains(Optimizations::BCE)
-            && self.cur.style().bg.is_some()
+            && self.cur.style().bg_color().is_some()
     }
 
     /// Enumerate the move candidates and return the cheapest.
     ///
     /// Pure: no bytes are materialised, so the caller can plan, change
     /// the pen, and plan again to keep the two in agreement.
-    fn plan_move(&self, from: Position, to: Position, overwrite_line: Option<&[Cell]>) -> Winner {
+    fn plan_move(
+        &self,
+        from: Position,
+        to: Position,
+        overwrite_line: Option<CellRow<'_>>,
+    ) -> Winner {
         // Seed the candidate list with CUP in absolute mode so it
         // wins ties against any relative shape.
         let mut best: Option<Winner> = None;

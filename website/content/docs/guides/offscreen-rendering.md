@@ -101,12 +101,11 @@ The `offscreen` example shows green text with a red truncation indicator.
 
 ## Reading cells back
 
-The grid is also queryable. Walk it cell by cell to extract text directly, which
-is handy for transcripts or diffing two frames yourself.
+`Surface::cell` returns a borrowed `CellRef`. Use its getters directly.
+Copy text into your output while the borrowed value is in scope.
 
 ```rust
 use uncurses::buffer::{Bounded, Surface};
-use uncurses::cell::Cell;
 use uncurses::layout::Position;
 use uncurses::screen::Screen;
 use uncurses::style::Style;
@@ -120,7 +119,9 @@ fn main() {
     for y in 0..screen.height() {
         let mut line = String::new();
         for x in 0..screen.width() {
-            line.push_str(screen.cell(Position::new(x, y)).map_or(" ", Cell::content));
+            if let Some(cell) = screen.cell(Position::new(x, y)) {
+                line.push_str(cell.content());
+            }
         }
         lines.push(line.trim_end().to_string());
     }
@@ -136,3 +137,76 @@ also query.
 
 See the `offscreen` example, which composes a bordered, colored card entirely in
 memory and then replays the exact bytes on your terminal.
+
+## Prepare cells and copy a frame
+
+Use `Buffer` to prepare a frame with its own width policy.
+`new_cell` accepts exactly one grapheme with a nonzero measured width.
+It returns an owned `Cell`, which you can borrow with `as_ref`.
+
+`blit` copies from the source into the target. `blit_rect` copies a source rectangle.
+The destination imports the content and styles into its own storage.
+Both methods preserve stored widths, even when the target uses another width policy.
+
+```rust
+use uncurses::buffer::{Buffer, Surface};
+use uncurses::layout::Rect;
+use uncurses::style::Style;
+use uncurses::text::{Encode, WidthMode};
+
+fn main() -> Result<(), uncurses::cell::CellError> {
+    let mut target = Buffer::new(8, 1);
+    {
+        let mut source = Buffer::new(4, 1).with_width_mode(WidthMode::Grapheme);
+        let cell = source.new_cell("世", Style::new())?;
+        source.set_cell((0, 0).into(), cell.as_ref());
+        source.blit(&mut target, (1, 0).into());
+        source.blit_rect(&mut target, Rect::new(0, 0, 2, 1), (4, 0).into());
+    }
+    assert_eq!(target.cell((1, 0).into()).unwrap().width(), 2);
+    assert_eq!(target.display().to_string(), " 世 世");
+    Ok(())
+}
+```
+
+The target remains valid after the source goes out of scope.
+Structural operations, such as copies and resize, retain the stored widths.
+Policy setters affect subsequent text output and factory calls.
+
+For imports from another grid library, use `Cell::new(content, width)`.
+This constructor retains the supplied symbol and width, including arbitrary
+symbols that span several graphemes. Choose the width from the source grid.
+
+## Keep an owned snapshot
+
+Use `to_owned` when a cell must outlive the borrowed source.
+The snapshot retains the text, width, complete style, and hyperlink.
+
+```rust
+use uncurses::buffer::{Buffer, Surface};
+use uncurses::style::Style;
+
+let snapshot = {
+    let mut source = Buffer::new(4, 1);
+    let cell = source.new_cell("e\u{301}", Style::new().bold()).unwrap();
+    source.set_cell((0, 0).into(), &cell);
+    source.cell((0, 0).into()).unwrap().to_owned()
+};
+let mut target = Buffer::new(4, 1);
+target.set_cell((0, 0).into(), snapshot.as_ref());
+assert_eq!(target.cell((0, 0).into()).unwrap(), snapshot);
+```
+
+`Buffer::line` returns an iterator of borrowed cells, one per column.
+It includes continuation columns. Use `cell.to_owned()` to collect portable
+snapshots when you need an owned row.
+
+`TextBuffer` remains a thin wrapper around `Buffer`. Its policy setters update
+that buffer. Its grid operations use the `SurfaceMut` defaults.
+`Buffer` also has inherent rotation operations with their own boundary rules.
+See the [buffer reference](/api/uncurses/buffer/struct.Buffer.html) before you
+select an operation for a span that cuts through a wide cell.
+
+Run the [offscreen example](https://github.com/aymanbagabas/uncurses/blob/main/examples/examples/offscreen.rs)
+with `cargo run -p examples --example offscreen`.
+It demonstrates factories, copies, snapshots, and per-column style changes.

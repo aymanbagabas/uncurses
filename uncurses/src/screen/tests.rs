@@ -6,6 +6,7 @@
 //! exercised and the emitted bytes inspected without a terminal.
 use super::*;
 
+use crate::cell::Cell;
 use crate::color::{Color, Profile};
 use crate::text::{TextSurface, WidthMode, WrapMode};
 
@@ -16,6 +17,94 @@ fn screen_is_send_sync() {
     // an internal field regresses (e.g. the renderer color cache going back to
     // RefCell would drop Sync).
     assert_send_sync::<Screen<crate::terminal::Stdout>>();
+}
+
+#[test]
+fn owned_cells_keep_their_width_after_a_screen_is_dropped() {
+    let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}";
+    let style = Style::new().fg(Color::Red).link("https://example.test", "");
+    let owned = {
+        let mut source = Screen::new(Vec::new(), (12, 1));
+        let cell = source.new_cell(family, style.clone()).unwrap();
+        source.set_cell((0, 0), cell.as_ref());
+        source.cell((0, 0).into()).unwrap().to_owned()
+    };
+    let mut target = Screen::new(Vec::new(), (12, 1));
+    target.set_grapheme_clusters(true);
+    assert!(owned.width() > target.grapheme_width(family));
+    target.set_cell((0, 0), owned.as_ref());
+    let borrowed = target.cell((0, 0).into()).unwrap();
+    assert_eq!(borrowed.width(), owned.width());
+    assert_eq!(borrowed.content(), family);
+    assert_eq!(borrowed.to_style(), style);
+}
+
+#[test]
+fn replacing_a_style_marks_the_frame_without_changing_content() {
+    let mut screen = Screen::new(Vec::new(), (4, 1));
+    screen.set_color_profile(Profile::Ansi);
+    screen.set_cell((0, 0), Cell::new("x", 1).as_ref());
+    screen.render().unwrap();
+    screen.writer_mut().clear();
+
+    screen.set_style((0, 0), Style::new().fg(Color::Green));
+    let cell = screen.cell((0, 0).into()).unwrap();
+    assert_eq!(cell.content(), "x");
+    assert_eq!(cell.width(), 1);
+    assert_eq!(cell.fg_color(), Some(Color::Green));
+    screen.render().unwrap();
+    assert!(screen.writer().windows(5).any(|bytes| bytes == b"\x1b[32m"));
+    assert!(screen.writer().contains(&b'x'));
+    screen.writer_mut().clear();
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn continuation_style_changes_reach_the_renderer() {
+    let mut screen = Screen::new(Vec::new(), (4, 1));
+    screen.set_cell((0, 0), &Cell::new("界", 2));
+    screen.render().unwrap();
+
+    let style = Style::new()
+        .bg(Color::Blue)
+        .link("https://example.test/continuation", "id=continuation");
+    screen.set_style((1, 0), style.clone());
+    screen.render().unwrap();
+    assert_eq!(screen.diverge(), None);
+    let continuation = screen.cell((1, 0).into()).unwrap();
+    assert!(continuation.is_continuation());
+    assert_eq!(continuation.to_style(), style);
+
+    screen.writer_mut().clear();
+    screen.set_style((1, 0), style);
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn primary_style_changes_preserve_continuation_styles() {
+    for (content, width) in [("界", 2), ("abcd", 4)] {
+        let mut screen = Screen::new(Vec::new(), (6, 1));
+        screen.set_cell((0, 0), &Cell::new(content, width));
+        screen.render().unwrap();
+
+        screen.set_style((0, 0), Style::new().fg(Color::Green));
+        for x in 1..u16::from(width) {
+            screen.set_style(
+                (x, 0),
+                Style::new()
+                    .bg(Color::Indexed(x as u8))
+                    .link(format!("https://example.test/{x}"), ""),
+            );
+        }
+        screen.render().unwrap();
+        assert_eq!(screen.diverge(), None, "stored width {width}");
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
 }
 
 /// Test-only construction and a few shims mirroring the historical renderer
@@ -683,7 +772,10 @@ fn equal_wide_cell_after_screen_shrink_is_normalized() {
         screen.resize((u16::from(width) - 1, 1));
         screen.set_cell((0, 0), &cell);
         for x in 0..screen.width() {
-            assert_eq!(screen.cell(Position::new(x, 0)), Some(&Cell::BLANK));
+            assert_eq!(
+                screen.cell(Position::new(x, 0)).map(|cell| cell.to_owned()),
+                Some(Cell::BLANK)
+            );
         }
         screen.render().unwrap();
     }
@@ -3475,7 +3567,7 @@ fn a_cluster_wider_than_the_row_is_not_written() {
 /// emitted nothing at all.
 #[test]
 fn a_cell_claiming_no_column_renders_the_same_as_it_encodes() {
-    use crate::buffer::{Buffer, SurfaceMut};
+    use crate::buffer::Buffer;
     use crate::text::Encode;
 
     // A mark that is zero-width in its own right, and a letter that is not.

@@ -3,93 +3,60 @@ title: "Surfaces"
 weight: 6
 ---
 
-A [buffer]({{< relref "buffers.md" >}}) is one kind of cell grid, but it is not
-the only one. There are clipped views, off-screen windows, text buffers, render
-buffers, and the live screen itself.
-Drawing code should not care which one it is writing into. The *surface* traits
-are the shared contract that makes that possible: write a widget once, and draw
-it into any grid.
+A surface is a rectangular cell grid. The surface traits let one function
+work with a buffer, a clipped view, a window, or a screen.
+Choose the trait that describes the work your function needs.
 
-## A ladder of traits
+## A shared contract
 
-Surfaces are described in layers, each one adding a capability to the last.
+`Bounded` describes the rectangle. `Surface` adds borrowed cell reads and
+copies into another surface. It also supplies the text width policy and a
+cell factory.
 
 ```mermaid
 flowchart TB
   accTitle: The surface layers
   accDescr {
     Each surface layer builds on the previous one.
-    Bounded defines the area. Surface adds reads and drawing.
-    SurfaceMut adds cell changes. TextSurface adds text layout and width rules.
+    Bounded defines the area. Surface adds reads, copies, and width rules.
+    SurfaceMut adds cell changes. TextSurface adds text layout.
   }
-  bounded["Bounded: how big is it?"] --> surface["Surface: read a cell, blit onto another"]
+  bounded["Bounded: how big is it?"] --> surface["Surface: read and copy cells, measure text"]
   surface --> surfacemut["SurfaceMut: write and edit cells"]
-  surfacemut --> textsurface["TextSurface: paint strings with width policy"]
+  surfacemut --> textsurface["TextSurface: lay out text"]
 ```
 
-- **`Bounded`** answers the base question: what rectangle does this grid cover?
-  It also provides `width` and `height`.
-- **`Surface`** adds reading a cell and `draw`, which blits one surface onto
-  another, keeping wide cells and their continuations intact.
-- **`SurfaceMut`** adds writing: `set_cell`, mutable cell access, filling and
-  clearing regions, line insertion and deletion, and cell insertion and
-  deletion within a row.
-- **`TextSurface`** adds the `set_str` family. It is the only layer that knows
-  about [width]({{< relref "width.md" >}}), so it segments graphemes and lays
-  down wide primaries and continuations for you.
-
-## Write once, draw anywhere
-
-Because the traits are the contract, drawing code targets a trait instead of a
-concrete type. A function that takes `&mut impl SurfaceMut` works on a plain
-buffer, a clipped view, or the live screen without changing a line. That is the
-whole point: your rendering logic is decoupled from where the pixels eventually
-land.
-
-{{< callout type="info" >}}
-By default, the `set_str` family paints text *literally*: an escape sequence in
-your string is drawn as visible characters, not interpreted. To treat inline
-SGR and hyperlinks as styling, wrap the surface in a `Painter`. The [Styling
-text guide]({{< relref "../guides/styling-text.md" >}}) covers the difference.
-{{< /callout >}}
-
-## TextBuffer: paint and serialize, no terminal
-
-`TextBuffer` is the session-free surface you reach for when there is no terminal
-to manage. It wraps a buffer with a width policy and implements `TextSurface`,
-so you can paint strings into it. It also implements `Encode`, so you can turn
-the finished grid into escape bytes or a `String`. No renderer, no terminal, no
-raw mode.
+`SurfaceMut` adds cell writes, style changes, and grid operations.
+`TextSurface` adds text output and measurement with the surface's width policy.
+These traits preserve wide characters and their continuation columns.
 
 ```rust
-use uncurses::buffer::TextBuffer;
 use uncurses::style::Style;
-use uncurses::text::{Encode, TextSurface};
+use uncurses::text::TextSurface;
 
-fn main() {
-    let mut frame = TextBuffer::new(8, 1);
-    frame.set_str((0, 0), "hi 世", Style::default());
-    assert_eq!(frame.display().to_string(), "hi 世");
+fn label(target: &mut impl TextSurface) {
+    target.set_str((0, 0), "Ready", Style::new().bold());
 }
 ```
 
-That makes it the right tool for one-shot frames, snapshot tests, transcripts,
-and append-style output.
+The same function can write into a `Buffer`, `TextBuffer`, or
+[`Screen`]({{< relref "screen.md" >}}).
 
-## Other grids
+## Choose a surface
 
-The same traits back a small family of grids. `Buffer` is the plain owned grid.
-`Window` is an owned off-screen grid with a target position. `View` is a
-clipped borrow over another surface, so you can hand a widget a sub-rectangle
-and let it draw within those bounds. The widget still uses the wrapped surface's
-coordinates; the view clips reads and writes, but does not translate them.
-`RenderBuffer` adds dirty tracking for the renderer.
+`Buffer` owns a grid and its width policy. `TextBuffer` wraps a buffer for
+offscreen text output. Both can serialize a frame through `Encode`.
 
-`TextBuffer` and [`Screen`]({{< relref "screen.md" >}}) implement `TextSurface`,
-and `Painter` wraps a text surface when inline SGR or OSC 8 should become style
-instead of literal text. Those are the destinations where the `set_str` family
-works.
+`Window` owns a grid with a destination position.
+`View` borrows part of another surface and clips access to that rectangle.
+A view uses the source coordinates.
+`Screen` combines a grid with a renderer and writer.
 
-In an interactive app, [`Program`]({{< relref "program.md" >}}) owns the live
-`Screen` and you borrow it with `program.screen_mut()`. In output-only code,
-construct `Screen<W>` yourself over any writer.
+Text methods draw literal text. Use `Painter` when strings contain style
+escapes that you want to interpret.
+
+See the [offscreen guide]({{< relref "../guides/offscreen-rendering.md" >}})
+for copies, cell reads, and snapshots.
+See the [styling guide]({{< relref "../guides/styling-text.md" >}})
+for style changes and `Painter`.
+The [surface reference](/api/uncurses/buffer/trait.SurfaceMut.html) defines grid operation behavior.

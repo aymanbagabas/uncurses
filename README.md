@@ -111,6 +111,11 @@ screen.render().unwrap();
 assert!(!screen.writer().is_empty());
 ```
 
+For an in-memory grid, use `Buffer` or its thin `TextBuffer` wrapper.
+Both support text output and serialization. Grid reads return borrowed `CellRef` values.
+Use `to_owned()` for portable snapshots and `source.blit(&mut target, at)` to copy a frame.
+The [offscreen example](examples/examples/offscreen.rs) shows factories, copies, snapshots, and style changes.
+
 Per-crate guides and more examples:
 
 - [`uncurses`](uncurses/): program, screen, rendering, input, and the event loop.

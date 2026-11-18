@@ -7,9 +7,15 @@
 //! [`SurfaceMut::set_cell`] are in the *inner* surface's coordinate
 //! space — a view does **not** translate addresses, it just clips
 //! them.
+//!
+//! Reads return [`CellRef`] values borrowed from the inner surface.
+//! The view forwards its width policy to cell factories and text helpers.
+//! Style writes replace individual columns, including wide-cell continuations.
 
-use crate::cell::Cell;
+use crate::cell::CellRef;
 use crate::layout::{Position, Rect};
+use crate::style::Style;
+use crate::text::{TextSurface, WidthMode};
 
 use super::{Bounded, Surface, SurfaceMut};
 
@@ -43,30 +49,41 @@ impl<T: Bounded + ?Sized> Bounded for View<'_, T> {
 }
 
 impl<T: Surface + ?Sized> Surface for View<'_, T> {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<CellRef<'_>> {
         if self.bounds.contains(pos) {
             self.inner.cell(pos)
         } else {
             None
         }
     }
+    fn width_mode(&self) -> WidthMode {
+        self.inner.width_mode()
+    }
+    fn eaw_wide(&self) -> bool {
+        self.inner.eaw_wide()
+    }
 }
 
 impl<T: SurfaceMut + ?Sized> SurfaceMut for View<'_, T> {
-    fn set_cell(&mut self, pos: Position, cell: &Cell) {
+    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>) {
         if self.bounds.contains(pos) {
             self.inner.set_cell(pos, cell);
         }
     }
 
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
+    fn set_style(&mut self, pos: Position, style: Style) {
         if self.bounds.contains(pos) {
-            self.inner.cell_mut(pos)
-        } else {
-            None
+            self.inner.set_style(pos, style);
         }
     }
 }
+impl<T: SurfaceMut + ?Sized> View<'_, T> {
+    /// Write a cell inside the view.
+    pub fn set_cell<'a>(&mut self, pos: Position, cell: impl Into<CellRef<'a>>) {
+        SurfaceMut::set_cell(self, pos, cell.into());
+    }
+}
+impl<T: SurfaceMut + ?Sized> TextSurface for View<'_, T> {}
 
 #[cfg(test)]
 mod tests {

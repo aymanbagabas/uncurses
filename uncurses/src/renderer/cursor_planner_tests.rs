@@ -1,5 +1,6 @@
 use super::tabstops::TabStops;
 use super::*;
+use crate::buffer::CellRow;
 use crate::cell::Cell;
 use crate::layout::Position;
 use crate::style::Style;
@@ -38,7 +39,7 @@ fn relative_move(
     r: &mut Renderer,
     from: Position,
     to: Position,
-    line: Option<&[Cell]>,
+    line: Option<CellRow<'_>>,
     use_tabs: bool,
     use_backspace: bool,
 ) -> Vec<u8> {
@@ -207,7 +208,7 @@ fn styled_overwrite_beats_cuf() {
         &mut r,
         Position { x: 0, y: 0 },
         Position { x: 2, y: 0 },
-        Some(&line),
+        Some(CellRow::from_cells(&line)),
         false,
         false,
     );

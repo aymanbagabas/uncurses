@@ -31,11 +31,13 @@ pub(crate) fn read_style(params: Params<'_>, style: &mut Style) {
         return;
     }
 
+    let target = style;
+    let mut style = crate::cell::storage::StyleParts::from_style(target);
     let mut groups = params.iter();
     while let Some(g) = groups.next() {
         let main = sgr_main(g);
         match main {
-            0 => *style = Style::default(),
+            0 => style = crate::cell::storage::StyleParts::from_style(&Style::EMPTY),
             1 => style.attrs |= AttrFlags::BOLD,
             2 => style.attrs |= AttrFlags::FAINT,
             3 => style.attrs |= AttrFlags::ITALIC,
@@ -83,6 +85,7 @@ pub(crate) fn read_style(params: Params<'_>, style: &mut Style) {
             _ => {} // unknown — ignore
         }
     }
+    *target = style.to_owned();
 }
 
 /// Main parameter value of an SGR group. Omitted slot → `0` per
@@ -187,32 +190,32 @@ mod tests {
     #[test]
     fn bold_italic() {
         let s = rs(b"1;3");
-        assert!(s.attrs.contains(AttrFlags::BOLD));
-        assert!(s.attrs.contains(AttrFlags::ITALIC));
+        assert!(s.attributes().contains(AttrFlags::BOLD));
+        assert!(s.attributes().contains(AttrFlags::ITALIC));
     }
 
     #[test]
     fn underline_styles() {
-        assert_eq!(rs(b"4:3").underline, UnderlineStyle::Curly);
-        assert_eq!(rs(b"4").underline, UnderlineStyle::Single);
+        assert_eq!(rs(b"4:3").underline_shape(), UnderlineStyle::Curly);
+        assert_eq!(rs(b"4").underline_shape(), UnderlineStyle::Single);
 
         let mut s = Style::default().underline();
         read_style(Params::from_raw(b"24"), &mut s);
-        assert_eq!(s.underline, UnderlineStyle::None);
+        assert_eq!(s.underline_shape(), UnderlineStyle::None);
     }
 
     #[test]
     fn named_fg_bg() {
         let s = rs(b"31;42");
-        assert_eq!(s.fg, Some(Color::Red));
-        assert_eq!(s.bg, Some(Color::Green));
+        assert_eq!(s.fg_color(), Some(Color::Red));
+        assert_eq!(s.bg_color(), Some(Color::Green));
     }
 
     #[test]
     fn bright_fg_bg() {
         let s = rs(b"91;107");
-        assert_eq!(s.fg, Some(Color::BrightRed));
-        assert_eq!(s.bg, Some(Color::BrightWhite));
+        assert_eq!(s.fg_color(), Some(Color::BrightRed));
+        assert_eq!(s.bg_color(), Some(Color::BrightWhite));
     }
 
     #[test]
@@ -222,47 +225,56 @@ mod tests {
             .bg(Color::Blue)
             .underline_color(Color::Green);
         read_style(Params::from_raw(b"39;49;59"), &mut s);
-        assert_eq!(s.fg, None);
-        assert_eq!(s.bg, None);
-        assert_eq!(s.underline_color, None);
+        assert_eq!(s.fg_color(), None);
+        assert_eq!(s.bg_color(), None);
+        assert_eq!(s.ul_color(), None);
     }
 
     #[test]
     fn fg_256_semicolon() {
-        assert_eq!(rs(b"38;5;200").fg, Some(Color::Indexed(200)));
+        assert_eq!(rs(b"38;5;200").fg_color(), Some(Color::Indexed(200)));
     }
 
     #[test]
     fn fg_truecolor_semicolon() {
-        assert_eq!(rs(b"38;2;255;100;50").fg, Some(Color::Rgb(255, 100, 50)));
+        assert_eq!(
+            rs(b"38;2;255;100;50").fg_color(),
+            Some(Color::Rgb(255, 100, 50))
+        );
     }
 
     #[test]
     fn fg_truecolor_colon() {
-        assert_eq!(rs(b"38:2:255:100:50").fg, Some(Color::Rgb(255, 100, 50)));
+        assert_eq!(
+            rs(b"38:2:255:100:50").fg_color(),
+            Some(Color::Rgb(255, 100, 50))
+        );
     }
 
     #[test]
     fn fg_truecolor_colon_with_empty_colorspace() {
         // `38:2::r:g:b` — six values, omitted colorspace slot.
-        assert_eq!(rs(b"38:2::255:100:50").fg, Some(Color::Rgb(255, 100, 50)));
+        assert_eq!(
+            rs(b"38:2::255:100:50").fg_color(),
+            Some(Color::Rgb(255, 100, 50))
+        );
     }
 
     #[test]
     fn fg_256_colon() {
-        assert_eq!(rs(b"38:5:200").fg, Some(Color::Indexed(200)));
+        assert_eq!(rs(b"38:5:200").fg_color(), Some(Color::Indexed(200)));
     }
 
     #[test]
     fn bg_256_semicolon() {
         // 0..=15 promotes to a named Color.
-        assert_eq!(rs(b"48;5;7").bg, Some(Color::White));
+        assert_eq!(rs(b"48;5;7").bg_color(), Some(Color::White));
     }
 
     #[test]
     fn underline_color_truecolor() {
         assert_eq!(
-            rs(b"58:2:10:20:30").underline_color,
+            rs(b"58:2:10:20:30").ul_color(),
             Some(Color::Rgb(10, 20, 30))
         );
     }
@@ -272,8 +284,8 @@ mod tests {
         // `22` should clear both bold and faint.
         let mut s = Style::default().bold().faint();
         read_style(Params::from_raw(b"22"), &mut s);
-        assert!(!s.attrs.contains(AttrFlags::BOLD));
-        assert!(!s.attrs.contains(AttrFlags::FAINT));
+        assert!(!s.attributes().contains(AttrFlags::BOLD));
+        assert!(!s.attributes().contains(AttrFlags::FAINT));
     }
 
     #[test]

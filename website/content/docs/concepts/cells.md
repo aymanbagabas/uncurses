@@ -3,14 +3,9 @@ title: "Cells"
 weight: 2
 ---
 
-A terminal screen is not a canvas of free pixels. It is a grid of fixed slots,
-each one character tall and (usually) one character wide. uncurses calls one
-slot a *cell*, and the cell is the atomic unit of everything you draw.
-
-## What a cell holds
-
-Every cell carries three things: the grapheme to show (if any), how it should
-look, and how many columns it occupies.
+A terminal displays a grid of cells. Each cell has text, a style, and a width
+in terminal columns. The text usually represents one visible character, called
+a *grapheme*. A grapheme can contain several Unicode code points.
 
 ```mermaid
 flowchart TB
@@ -24,72 +19,38 @@ flowchart TB
   cell --> cols["width: columns occupied"]
 ```
 
-For visible cells, the content is a single *grapheme*. That means "one
-character" the way a human counts it, even when it is several Unicode code
-points stitched together (think `e` plus a combining accent, or a flag emoji).
-The style is color and attributes like bold or underline. The width is the
-interesting part.
+## Wide characters
 
-## Narrow, wide, and continuation
+Some graphemes occupy several columns. The first column holds the text.
+Each additional column holds a *continuation*. The grid creates these
+continuations when you write a wide character.
 
-Most cells are *narrow*: one grapheme, one column. Some graphemes are wider. A
-CJK character like `世` wants two columns, not one. uncurses models that as a
-*primary* cell holding the grapheme, followed by a *continuation* placeholder
-for each further column. A continuation has no content of its own and reports
-width zero, because its column belongs to the primary on its left.
+A blank cell represents a space. A new [buffer]({{< relref "buffers.md" >}})
+starts with blank cells.
 
-A primary owns as many columns as its grapheme measures, and holds one
-continuation for each column after the first.
+## Borrow a cell or keep a snapshot
 
-| row / col | 1 | 2 | 3 |
-| --- | --- | --- | --- |
-| row 1 | 世 | cont | A |
+A grid read returns a `CellRef`. This borrowed value lets you inspect the text,
+width, colors, attributes, and hyperlink. It stays valid while its source
+remains borrowed.
 
-One terminal row. The wide glyph `世` is a primary cell in column 1 with a
-zero-width continuation cell in column 2, and the narrow `A` sits in column 3.
-
-You almost never create a continuation by hand: writing a wide grapheme into a
-grid lays down the primary and its continuations together. When you do build a
-row yourself, `Cell::CONTINUATION` is the placeholder to put in each column
-after the first. The
-[Width]({{< relref "width.md" >}}) page digs into how uncurses decides what is
-narrow and what is wide, and why getting it wrong smears a whole row.
-
-## The blank cell
-
-What is an empty terminal slot, a place showing nothing at all? A *blank* cell:
-a single space painted in the default style. uncurses calls that `Cell::BLANK`.
-It is what a freshly allocated grid is full of, and what clearing a cell puts
-back.
-
-## Building a cell
-
-Construct every cell with `Cell::new`, passing the content and the number of
-columns it occupies. Attach a style fluently (colors, attributes, even an OSC 8
-hyperlink), and ask how many columns the grid will reserve:
+A `Cell` is an owned, portable value. Use it for reusable content or a snapshot
+that must outlive the source.
 
 ```rust
-use uncurses::cell::Cell;
-use uncurses::color::Color;
+use uncurses::buffer::{Buffer, Surface};
 use uncurses::style::Style;
 
-fn main() {
-    let cell = Cell::new("a", 1).style(
-        Style::default()
-            .bold()
-            .fg(Color::Green)
-            .link("https://example.com", ""),
-    );
-    assert_eq!(cell.width(), 1);
-
-    let wide = Cell::new("世", 2);
-    assert_eq!(wide.width(), 2);
-}
+let mut frame = Buffer::new(4, 1);
+let cell = frame.new_cell("世", Style::new()).unwrap();
+frame.set_cell((0, 0).into(), cell.as_ref());
+let snapshot = frame.cell((0, 0).into()).unwrap().to_owned();
+assert_eq!(snapshot.content(), "世");
 ```
 
-Measure the width rather than guessing it: `WidthMode::grapheme_width` gives
-the number the terminal will advance, and passing that keeps the grid and the
-screen in agreement.
+The buffer measures the grapheme with its [width policy]({{< relref "width.md" >}}).
+Copies preserve that measured width.
 
-A single cell is not very useful on its own. The next step is a whole grid of
-them: see [Buffers]({{< relref "buffers.md" >}}).
+See the [offscreen guide]({{< relref "../guides/offscreen-rendering.md" >}})
+for cell factories, snapshots, and copies between grids.
+The [cell reference](/api/uncurses/cell/index.html) covers explicit imports and cell accessors.

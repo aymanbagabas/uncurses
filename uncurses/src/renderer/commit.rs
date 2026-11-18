@@ -18,7 +18,7 @@ impl Renderer {
             if buffer.width() == width && buffer.height() == old_height {
                 buffer
                     .buffer
-                    .delete_lines(0, count, old_height, &Cell::BLANK);
+                    .delete_lines(0, count, old_height, Cell::BLANK.as_ref());
                 buffer.resize_height(height);
                 buffer.clear_touched();
             }

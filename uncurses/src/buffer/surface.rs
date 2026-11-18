@@ -3,7 +3,7 @@
 //! Buffer-like types ([`Buffer`](super::Buffer), [`Window`](super::Window),
 //! [`View`](super::View), [`TextBuffer`](super::TextBuffer), and
 //! [`Screen`](crate::screen::Screen)) all expose a rectangular region of
-//! [`Cell`]s. This module defines the traits that let drawing code use
+//! borrowed [`CellRef`] values. This module defines the traits that let drawing code use
 //! those regions without depending on a concrete storage type.
 //!
 //! ## Trait layers
@@ -12,14 +12,16 @@
 //! |----------------|---------------------------------|------------------------------------------|
 //! | [`Bounded`]    | rectangular extent              | [`bounds`](Bounded::bounds)              |
 //! | [`Surface`]    | read-only cell access           | [`cell`](Surface::cell)                  |
-//! | [`SurfaceMut`] | writes and terminal operations  | [`set_cell`](SurfaceMut::set_cell), [`cell_mut`](SurfaceMut::cell_mut) |
+//! | [`SurfaceMut`] | writes and terminal operations  | [`set_cell`](SurfaceMut::set_cell), [`set_style`](SurfaceMut::set_style) |
 //!
 //! [`Surface`] extends [`Bounded`], and [`SurfaceMut`] extends
 //! [`Surface`]. Default methods supply common behavior such as
-//! [`Surface::draw`], [`SurfaceMut::fill_rect`],
+//! [`Surface::blit`], [`SurfaceMut::fill_rect`],
 //! [`SurfaceMut::insert_lines`], and [`SurfaceMut::delete_cells`].
-//! Implementations may override defaults for storage-specific fast paths
-//! as long as they preserve the same visible semantics.
+//! Implementations may override defaults for storage-specific behavior.
+//! [`Buffer`](super::Buffer) rotates stored columns for insert/delete operations;
+//! the defaults snapshot primaries and replay writes. See [`super::TextBuffer`]
+//! for the distinction at wide-cell boundaries.
 //!
 //! ## Coordinates and bounds
 //!
@@ -43,12 +45,15 @@
 //! ## Wide-cell invariants
 //!
 //! A wide grapheme occupies a primary cell plus a continuation placeholder
-//! in the following column. Methods that copy or fill cells step by the
+//! in each following column that it owns. Methods that copy or fill cells step by the
 //! primary cell's display width and substitute blanks when a wide grapheme
 //! would be split by a source slice, a destination edge, or a fill region.
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellError, CellRef};
 use crate::layout::{Position, Rect, overruns};
+use crate::style::Style;
+use crate::text::WidthMode;
+use crate::unicode::graphemes;
 
 /// A value with a rectangular extent in terminal-cell coordinates.
 ///
@@ -144,7 +149,7 @@ pub trait Bounded {
 /// use for render sources, snapshots, and helpers that only need to inspect
 /// cells or copy them into another surface.
 ///
-/// The provided [`Surface::draw`] method is intentionally conservative
+/// The provided [`Surface::blit`] method is intentionally conservative
 /// about wide cells: it avoids producing orphan continuation columns and
 /// blanks wide primaries that would be split by source or destination
 /// bounds.
@@ -157,7 +162,7 @@ pub trait Surface: Bounded {
     ///
     /// # Returns
     ///
-    /// `Some(&Cell)` when `pos` is readable, or `None` when it is outside
+    /// `Some(CellRef)` when `pos` is readable, or `None` when it is outside
     /// [`Bounded::bounds`] or otherwise unavailable.
     ///
     /// # Panics
@@ -167,9 +172,40 @@ pub trait Surface: Bounded {
     /// # Usage notes
     ///
     /// A returned cell may be a wide primary or a continuation placeholder.
+    /// The view borrows the source. Its direct style accessors borrow link
+    /// data; [`CellRef::to_owned`] creates an independent portable snapshot.
     /// Callers that walk rows should advance by `cell.width().max(1)` for
     /// primary cells and handle continuations explicitly.
-    fn cell(&self, pos: Position) -> Option<&Cell>;
+    fn cell(&self, pos: Position) -> Option<CellRef<'_>>;
+
+    /// Return the text width policy.
+    fn width_mode(&self) -> WidthMode {
+        WidthMode::Wc
+    }
+    /// Return the ambiguous-width policy.
+    fn eaw_wide(&self) -> bool {
+        false
+    }
+    /// Validate one grapheme and measure it once with this surface's policy.
+    ///
+    /// Returns an owned [`Cell`] with the supplied style.
+    /// Returns [`CellError::Empty`] for empty input,
+    /// [`CellError::MultipleGraphemes`] for several clusters, or
+    /// [`CellError::ZeroWidth`] for a cluster whose measured width is zero.
+    /// Later structural copies preserve this width.
+    /// Use [`Cell::new`] to import symbols with an explicit width instead.
+    fn new_cell(&self, grapheme: &str, style: Style) -> Result<Cell, CellError> {
+        let mut clusters = graphemes(grapheme);
+        let first = clusters.next().ok_or(CellError::Empty)?;
+        if clusters.next().is_some() {
+            return Err(CellError::MultipleGraphemes);
+        }
+        let width = self.width_mode().grapheme_width(first, self.eaw_wide());
+        if width == 0 {
+            return Err(CellError::ZeroWidth);
+        }
+        Ok(Cell::new(first, width).style(style))
+    }
 
     /// Copy `self`'s cells into `target`, mapping the top-left of
     /// `self.bounds()` to `at` in target coordinates.
@@ -183,12 +219,11 @@ pub trait Surface: Bounded {
     /// # Behavior
     ///
     /// The default walks the source row by row and emits one
-    /// [`SurfaceMut::set_cell`] call per source cell. Wide-cell
+    /// [`SurfaceMut::set_cell`] call per primary or replacement blank. Wide-cell
     /// semantics are preserved:
     ///
     /// * Wide-primary cells advance the column cursor by their full
-    ///   `width` so the source's continuation cells are not written
-    ///   over independently.
+    ///   `width`. Their continuation columns retain each source column's style.
     /// * If the source has been sliced through the middle of a wide
     ///   grapheme (a leading continuation with no primary in view, or
     ///   a trailing primary with no room for its continuation), the
@@ -198,6 +233,8 @@ pub trait Surface: Bounded {
     ///
     /// Implementations may override for a faster path (e.g. bulk line
     /// copies), but must preserve the wide-cell invariants above.
+    /// The target imports resources during the call. It remains valid after
+    /// the source is dropped. Stored widths and shared hyperlinks are preserved.
     ///
     /// # Panics
     ///
@@ -209,8 +246,19 @@ pub trait Surface: Bounded {
     /// Destination clipping is delegated to `target`. Cells whose
     /// destination coordinate lies outside the target bounds are passed to
     /// `set_cell`, which is expected to ignore them.
-    fn draw<T: SurfaceMut + ?Sized>(&self, target: &mut T, at: Position) {
-        let b = self.bounds();
+    fn blit<T: SurfaceMut + ?Sized>(&self, target: &mut T, at: Position) {
+        self.blit_rect(target, self.bounds(), at);
+    }
+
+    /// Copy the clipped source rectangle to `at` without remeasurement.
+    ///
+    /// Intersects `source_rect` with the source bounds, then maps that
+    /// intersection's top-left to `at` in the target.
+    /// The target clips writes to its bounds.
+    /// Split wide cells become styled blanks, as in [`Self::blit`].
+    /// Imported values remain valid after the source is dropped.
+    fn blit_rect<T: SurfaceMut + ?Sized>(&self, target: &mut T, source_rect: Rect, at: Position) {
+        let b = self.bounds().intersection(source_rect);
         let tb = target.bounds();
         let t_right = tb.x.saturating_add(tb.width);
         for dy in 0..b.height {
@@ -229,7 +277,7 @@ pub trait Surface: Bounded {
                 // Substitute a blank to avoid writing an orphan
                 // continuation into target.
                 if cell.is_continuation() {
-                    target.set_cell(dst, &Cell::BLANK);
+                    target.set_cell(dst, Cell::BLANK.as_ref());
                     dx += 1;
                     continue;
                 }
@@ -240,14 +288,22 @@ pub trait Surface: Bounded {
                 // edge sliced through its continuation, or either edge
                 // of the target cuts it off. Emit a blank instead.
                 let fits_in_src = dx + w <= b.width;
-                let fits_in_dst = dst.x >= tb.x && dst.x.saturating_add(w) <= t_right;
+                let fits_in_dst = dst.x >= tb.x && !overruns(dst.x, w, t_right);
                 if w > 1 && (!fits_in_src || !fits_in_dst) {
-                    target.set_cell(dst, &Cell::BLANK);
+                    target.set_cell(dst, Cell::BLANK.as_ref());
                     dx += 1;
                     continue;
                 }
 
                 target.set_cell(dst, cell);
+                for column in 1..w {
+                    if let Some(continuation) = self.cell(Position::new(src.x + column, src.y)) {
+                        target.set_style(
+                            Position::new(dst.x + column, dst.y),
+                            continuation.to_style(),
+                        );
+                    }
+                }
                 dx += w;
             }
         }
@@ -269,9 +325,8 @@ pub trait Surface: Bounded {
 pub trait SurfaceMut: Surface {
     /// Place `cell` at `pos`. Implementations are responsible for
     /// wide-cell semantics (continuation markers, blanking covered
-    /// cells) and any dirty tracking they care to do. Taking `&Cell`
-    /// lets implementations skip the clone when the destination
-    /// already matches.
+    /// cells) and any dirty tracking they need.
+    /// The input borrows its owner until this call returns.
     ///
     /// # Parameters
     ///
@@ -288,39 +343,33 @@ pub trait SurfaceMut: Surface {
     ///
     /// # Usage notes
     ///
-    /// Out-of-bounds writes should be ignored. Use this method instead of
-    /// [`Self::cell_mut`] whenever changing content could affect display
-    /// width or neighboring continuation slots.
+    /// Out-of-bounds writes should be ignored. Content writes account for
+    /// the width and neighboring continuation columns.
     // A continuation belongs to the wide cell on its left and is placed by
     // that cell's own write, so an implementor ignores one passed on its
     // own rather than storing it.
-    fn set_cell(&mut self, pos: Position, cell: &Cell);
+    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>);
 
-    /// Mutable handle to the cell at `pos`. Returns `None` for
-    /// out-of-bounds positions.
+    /// Replace the complete style at `pos` without changing content or width.
     ///
-    /// # Parameters
+    /// A continuation keeps its structural role and gets the replacement
+    /// style independently of its primary. Ignore positions outside bounds.
+    /// Read the current style with [`CellRef::to_style`] and use [`Style`]
+    /// builders when only selected components should change.
+    fn set_style(&mut self, pos: Position, style: Style);
+
+    /// Replace the style of each column in the clipped rectangle.
     ///
-    /// - `pos`: coordinate in this surface's coordinate space.
-    ///
-    /// # Returns
-    ///
-    /// `Some(&mut Cell)` for an in-bounds cell, or `None` when `pos` is not
-    /// writable.
-    ///
-    /// # Panics
-    ///
-    /// Implementations should not panic for out-of-bounds positions.
-    ///
-    /// # Usage notes
-    ///
-    /// Implementations that track dirty state must mark the cell as
-    /// touched eagerly — the caller may mutate any field through this
-    /// handle and the surface has no way to observe a write. Callers
-    /// must not change the cell's display width through this handle; use
-    /// [`Self::set_cell`] for wide-cell writes that need
-    /// continuation-column accounting.
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell>;
+    /// Preserves all content and stored widths. This includes each wide-cell
+    /// continuation, whose style can differ from its primary's style.
+    fn set_style_rect(&mut self, rect: Rect, style: Style) {
+        let rect = self.bounds().intersection(rect);
+        for y in rect.top()..rect.bottom() {
+            for x in rect.left()..rect.right() {
+                self.set_style(Position::new(x, y), style.clone());
+            }
+        }
+    }
 
     /// Fill the entire surface bounds with `cell`.
     ///
@@ -340,7 +389,7 @@ pub trait SurfaceMut: Surface {
     ///
     /// This delegates to [`Self::fill_rect`] with [`Bounded::bounds`].
     /// Wide fills are handled by `fill_rect`.
-    fn fill(&mut self, cell: &Cell) {
+    fn fill(&mut self, cell: CellRef<'_>) {
         let b = self.bounds();
         self.fill_rect(b, cell);
     }
@@ -372,10 +421,10 @@ pub trait SurfaceMut: Surface {
     /// multiple of `cell.width()` ends in blanks, because the cell cannot be
     /// drawn in fewer columns than it takes: a width-8 fill into ten columns
     /// leaves the last two blank.
-    fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
+    fn fill_rect(&mut self, rect: Rect, cell: CellRef<'_>) {
         let clipped = self.bounds().intersection(rect);
         let step = (cell.width() as u16).max(1);
-        let blank = Cell::BLANK.style(cell.style.clone());
+        let blank = Cell::BLANK.style(cell.to_style());
         for y in clipped.top()..clipped.bottom() {
             let mut x = clipped.left();
             while !overruns(x, step, clipped.right()) {
@@ -383,7 +432,7 @@ pub trait SurfaceMut: Surface {
                 x += step;
             }
             while x < clipped.right() {
-                self.set_cell(Position::new(x, y), &blank);
+                self.set_cell(Position::new(x, y), blank.as_ref());
                 x += 1;
             }
         }
@@ -401,9 +450,9 @@ pub trait SurfaceMut: Surface {
     ///
     /// # Usage notes
     ///
-    /// This is equivalent to `self.fill(&Cell::BLANK)`.
+    /// This is equivalent to `self.fill(Cell::BLANK.as_ref())`.
     fn clear(&mut self) {
-        self.fill(&Cell::BLANK);
+        self.fill(Cell::BLANK.as_ref());
     }
 
     /// Clear a rectangle to [`Cell::BLANK`].
@@ -425,7 +474,7 @@ pub trait SurfaceMut: Surface {
     ///
     /// Only the intersection of `rect` and [`Bounded::bounds`] is modified.
     fn clear_rect(&mut self, rect: Rect) {
-        self.fill_rect(rect, &Cell::BLANK);
+        self.fill_rect(rect, Cell::BLANK.as_ref());
     }
 
     /// Insert `n` blank rows at `y`, pushing existing rows down within
@@ -458,7 +507,7 @@ pub trait SurfaceMut: Surface {
     ///
     /// `bounds_bottom` is clamped to the surface height. Calls with
     /// `n == 0` or `y >= bounds_bottom` are no-ops.
-    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: CellRef<'_>) {
         let h = self.bounds().height;
         let bottom = bounds_bottom.min(h);
         if y >= bottom || n == 0 {
@@ -507,7 +556,7 @@ pub trait SurfaceMut: Surface {
     ///
     /// `bounds_bottom` is clamped to the surface height. Calls with
     /// `n == 0` or `y >= bounds_bottom` are no-ops.
-    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
+    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: CellRef<'_>) {
         let h = self.bounds().height;
         let bottom = bounds_bottom.min(h);
         if y >= bottom || n == 0 {
@@ -555,7 +604,7 @@ pub trait SurfaceMut: Surface {
     ///
     /// `bounds_right` is clamped to the surface width. Calls with `n == 0`,
     /// an out-of-bounds row, or `pos.x >= bounds_right` are no-ops.
-    fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+    fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: CellRef<'_>) {
         let bounds = self.bounds();
         if pos.y >= bounds.height || pos.x >= bounds.width || n == 0 {
             return;
@@ -575,7 +624,7 @@ pub trait SurfaceMut: Surface {
             if overruns(dst_x, cw, right) {
                 continue;
             }
-            self.set_cell(Position::new(dst_x, pos.y), cell);
+            self.set_cell(Position::new(dst_x, pos.y), cell.as_ref());
         }
 
         fill_span(self, pos.y, pos.x, pos.x + n, fill);
@@ -611,7 +660,7 @@ pub trait SurfaceMut: Surface {
     ///
     /// `bounds_right` is clamped to the surface width. Calls with `n == 0`,
     /// an out-of-bounds row, or `pos.x >= bounds_right` are no-ops.
-    fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
+    fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: CellRef<'_>) {
         let bounds = self.bounds();
         if pos.y >= bounds.height || pos.x >= bounds.width || n == 0 {
             return;
@@ -635,7 +684,7 @@ pub trait SurfaceMut: Surface {
             if overruns(dst_x, cw, right) {
                 continue;
             }
-            self.set_cell(Position::new(dst_x, pos.y), cell);
+            self.set_cell(Position::new(dst_x, pos.y), cell.as_ref());
         }
 
         fill_span(self, pos.y, right - n, right, fill);
@@ -655,7 +704,7 @@ fn collect_primaries<S: SurfaceMut + ?Sized>(
             && !cell.is_continuation()
         {
             let cw = (cell.width() as u16).max(1);
-            out.push((x, cell.clone()));
+            out.push((x, cell.to_owned()));
             x = x.saturating_add(cw);
             continue;
         }
@@ -666,11 +715,11 @@ fn collect_primaries<S: SurfaceMut + ?Sized>(
 
 fn blank_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16) {
     for x in left..right {
-        s.set_cell(Position::new(x, y), &Cell::BLANK);
+        s.set_cell(Position::new(x, y), Cell::BLANK.as_ref());
     }
 }
 
-fn fill_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16, fill: &Cell) {
+fn fill_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16, fill: CellRef<'_>) {
     if left >= right {
         return;
     }
@@ -681,7 +730,7 @@ fn fill_span<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, left: u16, right: u16, f
         col += fill_w;
     }
     while col < right {
-        s.set_cell(Position::new(col, y), &Cell::BLANK);
+        s.set_cell(Position::new(col, y), Cell::BLANK.as_ref());
         col += 1;
     }
 }
@@ -691,27 +740,27 @@ fn copy_row<S: SurfaceMut + ?Sized>(s: &mut S, src_y: u16, dst_y: u16, width: u1
     while x < width {
         let src = Position::new(x, src_y);
         let dst = Position::new(x, dst_y);
-        let Some(cell) = s.cell(src).cloned() else {
+        let Some(cell) = s.cell(src).map(|cell| cell.to_owned()) else {
             x += 1;
             continue;
         };
         if cell.is_continuation() {
-            s.set_cell(dst, &Cell::BLANK);
+            s.set_cell(dst, Cell::BLANK.as_ref());
             x += 1;
             continue;
         }
         let cw = (cell.width() as u16).max(1);
         if cw > 1 && x + cw > width {
-            s.set_cell(dst, &Cell::BLANK);
+            s.set_cell(dst, Cell::BLANK.as_ref());
             x += 1;
         } else {
-            s.set_cell(dst, &cell);
+            s.set_cell(dst, cell.as_ref());
             x += cw;
         }
     }
 }
 
-fn blank_row<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, width: u16, fill: &Cell) {
+fn blank_row<S: SurfaceMut + ?Sized>(s: &mut S, y: u16, width: u16, fill: CellRef<'_>) {
     for x in 0..width {
         s.set_cell(Position::new(x, y), fill);
     }
@@ -730,6 +779,29 @@ mod tests {
     use crate::buffer::View;
 
     #[test]
+    fn blit_near_the_coordinate_limit_preserves_the_first_column() {
+        use crate::color::Color;
+        for (width, x) in [(2, u16::MAX), (3, u16::MAX - 1)] {
+            let mut source = Buffer::new(width, 1);
+            source.set((0, 0), &Cell::new("中", width as u8));
+            source.set_style_rect(Rect::new(1, 0, width - 1, 1), Style::new().fg(Color::Red));
+            let mut target = Buffer::new(u16::MAX, 1);
+            target.set((0, 0), &Cell::new("x", 1).style(Style::new().italic()));
+            let first = target.cell(Position::ORIGIN).unwrap().to_owned();
+
+            source.blit(&mut target, Position::new(x, 0));
+
+            assert_eq!(target.cell(Position::ORIGIN).unwrap(), first);
+            assert!(
+                target
+                    .cell(Position::new(u16::MAX - 1, 0))
+                    .unwrap()
+                    .is_blank()
+            );
+        }
+    }
+
+    #[test]
     fn the_default_row_edits_fill_a_row_as_wide_as_the_address_space() {
         // `Buffer` overrides both of these, so the default walks need their
         // own cover. Both fill a freed span with a cell that can claim 255
@@ -739,8 +811,8 @@ mod tests {
         let mut view = View::new(&mut buf, Rect::new(0, 0, u16::MAX, 1));
         let wide = Cell::new("\u{1f468}\u{200d}\u{1f469}", 255);
 
-        view.insert_cells(Position::new(u16::MAX - 1, 0), 1, u16::MAX, &wide);
-        view.delete_cells(Position::new(0, 0), 1, u16::MAX, &wide);
+        view.insert_cells(Position::new(u16::MAX - 1, 0), 1, u16::MAX, wide.as_ref());
+        view.delete_cells(Position::new(0, 0), 1, u16::MAX, wide.as_ref());
 
         assert!(!buf.cell(Position::new(u16::MAX - 1, 0)).unwrap().is_wide());
     }
@@ -754,7 +826,7 @@ mod tests {
         let mut view = View::new(&mut buf, Rect::new(0, 0, u16::MAX, 1));
         view.fill_rect(
             Rect::new(0, 0, u16::MAX, 1),
-            &Cell::new("\u{1f468}\u{200d}\u{1f469}", 255),
+            Cell::new("\u{1f468}\u{200d}\u{1f469}", 255).as_ref(),
         );
 
         assert!(buf.cell(Position::new(0, 0)).unwrap().is_wide());
@@ -770,7 +842,7 @@ mod tests {
         src.set((0, 0), &Cell::new("A", 1));
         src.set((1, 0), &Cell::new("B", 1));
         let mut dst = Buffer::new(4, 1);
-        src.draw(&mut dst, Position::new(1, 0));
+        src.blit(&mut dst, Position::new(1, 0));
         assert_eq!(dst.cell(Position::new(0, 0)).unwrap().content(), " ");
         assert_eq!(dst.cell(Position::new(1, 0)).unwrap().content(), "A");
         assert_eq!(dst.cell(Position::new(2, 0)).unwrap().content(), "B");
@@ -782,7 +854,7 @@ mod tests {
         src.set((0, 0), &wide("世"));
         // Buffer::set already wrote the continuation at (1,0).
         let mut dst = Buffer::new(2, 1);
-        src.draw(&mut dst, Position::new(0, 0));
+        src.blit(&mut dst, Position::new(0, 0));
         let primary = dst.cell(Position::new(0, 0)).unwrap();
         let cont_cell = dst.cell(Position::new(1, 0)).unwrap();
         assert_eq!(primary.content(), "世");
@@ -805,7 +877,7 @@ mod tests {
         dst.set((0, 0), &Cell::new("Y", 1));
         dst.set((1, 0), &Cell::new("Z", 1));
 
-        src.draw(&mut dst, Position::new(0, 0));
+        src.blit(&mut dst, Position::new(0, 0));
 
         // The orphan continuation became a blank — no spurious
         // continuation marker carried over.
@@ -823,7 +895,7 @@ mod tests {
         src.set((0, 0), &wide("世"));
 
         let mut dst = Buffer::new(2, 1);
-        src.draw(&mut dst, Position::new(1, 0));
+        src.blit(&mut dst, Position::new(1, 0));
 
         let landed = dst.cell(Position::new(1, 0)).unwrap();
         assert_eq!(landed.content(), " ");
@@ -860,12 +932,12 @@ mod tests {
                             &mut target,
                             Rect::new(at.x + clipped, at.y, width + 1 - clipped, 1),
                         );
-                        source.draw(&mut view, at);
+                        source.blit(&mut view, at);
 
                         for y in 0..target.height() {
                             assert_eq!(
-                                target.line(y),
-                                expected.line(y),
+                                target.row(y),
+                                expected.row(y),
                                 "width {width}, clipped {clipped}, origin {origin:?}, at {at:?}, row {y}",
                             );
                         }
@@ -908,7 +980,7 @@ mod tests {
     #[test]
     fn default_insert_lines_shifts_down_and_blanks_top() {
         let mut win = window_with(&["AAA", "BBB", "CCC", "DDD"]);
-        SurfaceMut::insert_lines(&mut win, 1, 1, 4, &Cell::BLANK);
+        SurfaceMut::insert_lines(&mut win, 1, 1, 4, Cell::BLANK.as_ref());
         assert_eq!(row_content(&win, 0), "AAA");
         assert_eq!(row_content(&win, 1), "   ");
         assert_eq!(row_content(&win, 2), "BBB");
@@ -918,7 +990,7 @@ mod tests {
     #[test]
     fn default_delete_lines_pulls_up_and_blanks_bottom() {
         let mut win = window_with(&["AAA", "BBB", "CCC", "DDD"]);
-        SurfaceMut::delete_lines(&mut win, 1, 1, 4, &Cell::BLANK);
+        SurfaceMut::delete_lines(&mut win, 1, 1, 4, Cell::BLANK.as_ref());
         assert_eq!(row_content(&win, 0), "AAA");
         assert_eq!(row_content(&win, 1), "CCC");
         assert_eq!(row_content(&win, 2), "DDD");
@@ -928,14 +1000,14 @@ mod tests {
     #[test]
     fn default_insert_cells_shifts_right_and_blanks_left() {
         let mut win = window_with(&["ABCDE"]);
-        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 2, 5, &Cell::BLANK);
+        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 2, 5, Cell::BLANK.as_ref());
         assert_eq!(row_content(&win, 0), "A  BC");
     }
 
     #[test]
     fn default_delete_cells_pulls_left_and_blanks_right() {
         let mut win = window_with(&["ABCDE"]);
-        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 5, &Cell::BLANK);
+        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 5, Cell::BLANK.as_ref());
         assert_eq!(row_content(&win, 0), "ADE  ");
     }
 
@@ -948,7 +1020,7 @@ mod tests {
         win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
         win.set_cell(Position::new(1, 0), &wide("世"));
         win.set_cell(Position::new(3, 0), &Cell::new("B", 1));
-        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
+        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, Cell::BLANK.as_ref());
 
         assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
         assert_eq!(win.cell(Position::new(1, 0)).unwrap().content(), " ");
@@ -965,7 +1037,7 @@ mod tests {
         win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
         win.set_cell(Position::new(1, 0), &Cell::new("B", 1));
         win.set_cell(Position::new(2, 0), &wide("世"));
-        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, &Cell::BLANK);
+        SurfaceMut::insert_cells(&mut win, Position::new(1, 0), 1, 4, Cell::BLANK.as_ref());
 
         assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
         assert_eq!(win.cell(Position::new(1, 0)).unwrap().content(), " ");
@@ -981,7 +1053,7 @@ mod tests {
         win.set_cell(Position::new(0, 0), &Cell::new("A", 1));
         win.set_cell(Position::new(1, 0), &wide("世"));
         win.set_cell(Position::new(3, 0), &Cell::new("B", 1));
-        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 4, &Cell::BLANK);
+        SurfaceMut::delete_cells(&mut win, Position::new(1, 0), 2, 4, Cell::BLANK.as_ref());
 
         assert_eq!(win.cell(Position::new(0, 0)).unwrap().content(), "A");
         assert_eq!(win.cell(Position::new(1, 0)).unwrap().content(), "B");

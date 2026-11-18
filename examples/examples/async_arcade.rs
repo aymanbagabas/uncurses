@@ -32,7 +32,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio_stream::StreamExt;
 
-use uncurses::buffer::SurfaceMut;
+use uncurses::buffer::{Surface, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key, KeyCode};
@@ -740,8 +740,8 @@ impl World {
 /// the cell it lands on so sparks/orbs don't clobber the menu bar's fill.
 fn put(screen: &mut Screen<Stdout>, x: u16, y: u16, glyph: &str, style: Style) {
     let pos = Position { x, y };
-    let style = if style.bg.is_none() {
-        match screen.cell_mut(pos).and_then(|c| c.style.bg) {
+    let style = if style.bg_color().is_none() {
+        match screen.cell(pos).and_then(|c| c.bg_color()) {
             Some(bg) => style.bg(bg),
             None => style,
         }

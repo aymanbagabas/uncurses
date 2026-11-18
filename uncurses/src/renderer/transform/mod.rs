@@ -38,7 +38,7 @@ mod tests {
                 ("👨‍👩‍👧‍👦", true),
             ] {
                 assert_eq!(
-                    renderer.width_is_uncertain(&Cell::new(text, 1)),
+                    renderer.width_is_uncertain(Cell::new(text, 1).as_ref()),
                     mode == crate::text::WidthMode::Wc && uncertain,
                     "{text:?} under {mode:?}"
                 );
@@ -68,7 +68,7 @@ mod tests {
                 .line(0)
                 .unwrap()
                 .iter()
-                .zip(old.line(0).unwrap())
+                .zip(old.line(0).unwrap().iter())
                 .position(|(new, old)| new != old)
                 .unwrap();
             assert_eq!(
@@ -102,13 +102,17 @@ mod tests {
                         new.set_cell((changed_at, 0), &Cell::new("X", 1));
                         let old = old.line(0).unwrap();
                         let new = new.line(0).unwrap();
-                        let first_diff = new.iter().zip(old).position(|(n, o)| n != o).unwrap();
+                        let first_diff = new
+                            .iter()
+                            .zip(old.iter())
+                            .position(|(n, o)| n != o)
+                            .unwrap();
                         let expected = renderer
                             .uncertain_from(new)
                             .into_iter()
                             .chain(renderer.uncertain_from(old))
                             .min()
-                            .filter(|&at| new[at..] != old[at..])
+                            .filter(|&at| new.slice(at..) != old.slice(at..))
                             .map(|at| super::emit::cluster_start(new, at));
                         assert_eq!(
                             renderer.uncertain_bail(new, Some(old), first_diff),
@@ -123,13 +127,11 @@ mod tests {
 
     #[test]
     fn can_clear_with_accepts_bold_italic_blink() {
-        let style = Style {
-            attrs: AttrFlags::BOLD | AttrFlags::ITALIC | AttrFlags::SLOW_BLINK,
-            ..Style::default()
-        };
+        let style =
+            Style::default().attrs(AttrFlags::BOLD | AttrFlags::ITALIC | AttrFlags::SLOW_BLINK);
         let cell = Cell::BLANK.style(style);
-        assert!(can_clear_with(&cell, true));
-        assert!(can_clear_with(&cell, false));
+        assert!(can_clear_with(cell.as_ref(), true));
+        assert!(can_clear_with(cell.as_ref(), false));
     }
 
     #[test]
@@ -138,24 +140,18 @@ mod tests {
         // bg-colored blank is reproducible. Without BCE, the erase
         // would paint with the terminal's default background — the
         // styled bg would be lost.
-        let style = Style {
-            bg: Some(Color::Red),
-            ..Style::default()
-        };
+        let style = Style::default().bg(Some(Color::Red));
         let cell = Cell::BLANK.style(style);
-        assert!(can_clear_with(&cell, true));
-        assert!(!can_clear_with(&cell, false));
+        assert!(can_clear_with(cell.as_ref(), true));
+        assert!(!can_clear_with(cell.as_ref(), false));
     }
 
     #[test]
     fn can_clear_with_rejects_underline() {
-        let style = Style {
-            underline: UnderlineStyle::Single,
-            ..Style::default()
-        };
+        let style = Style::default().underline_style(UnderlineStyle::Single);
         let cell = Cell::BLANK.style(style);
-        assert!(!can_clear_with(&cell, true));
-        assert!(!can_clear_with(&cell, false));
+        assert!(!can_clear_with(cell.as_ref(), true));
+        assert!(!can_clear_with(cell.as_ref(), false));
     }
 
     #[test]
@@ -165,17 +161,14 @@ mod tests {
             AttrFlags::STRIKETHROUGH,
             AttrFlags::CONCEAL,
         ] {
-            let style = Style {
-                attrs: attr,
-                ..Style::default()
-            };
+            let style = Style::default().attrs(attr);
             let cell = Cell::BLANK.style(style);
             assert!(
-                !can_clear_with(&cell, true),
+                !can_clear_with(cell.as_ref(), true),
                 "attr {attr:?} should not be clearable with BCE"
             );
             assert!(
-                !can_clear_with(&cell, false),
+                !can_clear_with(cell.as_ref(), false),
                 "attr {attr:?} should not be clearable without BCE"
             );
         }
@@ -222,7 +215,7 @@ mod tests {
                     renderer.transform_line(&mut out, &new, 0, 0, 39).unwrap();
                     assert_eq!(
                         renderer.cur_buf.as_ref().unwrap().line(0).unwrap(),
-                        &new.line(0).unwrap()[..usize::from(old_width)],
+                        new.line(0).unwrap().slice(..usize::from(old_width)),
                         "old_width={old_width}, x={x}, offset={offset}, cell={new_cell:?}"
                     );
                     if old_width == 40 {

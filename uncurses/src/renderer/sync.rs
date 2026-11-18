@@ -3,20 +3,65 @@
 //! Screens write freely into their `front_buf`; `fill_rect` and bulk
 //! ops mark whole rows as touched even when the resulting content
 //! matches the previous frame. [`Renderer::sync_front`] copies those
-//! touched spans into [`Renderer::back_buf`] using
-//! [`RenderBuffer::set_cell`], which only flips `back_buf.touched`
-//! when the destination cell actually differs. The diff pass then
+//! touched spans into [`Renderer::back_buf`]. Resource-free narrow spans
+//! use packed copies; other spans use [`RenderBuffer::set_cell`].
+//! Both paths preserve change filtering. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
 //! Only the cells inside `front_buf.touched(y)` spans are read — no
 //! full-buffer scan.
 
 use crate::renderer::Renderer;
-use crate::renderer::buffer::RenderBuffer;
+use crate::renderer::buffer::{RenderBuffer, TouchedSpan};
 
-use crate::buffer::Surface;
+use crate::buffer::{CellRow, Surface};
 
 impl Renderer {
+    fn sync_narrow_span(&mut self, front: &RenderBuffer, y: u16, span: TouchedSpan) -> bool {
+        let Some(source) = front.buffer.row(y) else {
+            return false;
+        };
+        let Some(destination) = self.back_buf.buffer.row(y) else {
+            return false;
+        };
+        let start = span.first as usize;
+        let end = (span.last as usize + 1).min(source.len());
+        if start >= end {
+            return true;
+        }
+        let source = source.slice(start..end);
+        let destination = destination.slice(start..end);
+        let (CellRow::Packed(cells, resources), CellRow::Packed(previous, previous_resources)) =
+            (source, destination)
+        else {
+            return false;
+        };
+        if !resources.is_empty()
+            || !previous_resources.is_empty()
+            || !cells.iter().chain(previous).all(|cell| cell.width() == 1)
+        {
+            return false;
+        }
+        let Some(first) = cells.iter().zip(previous).position(|(a, b)| a != b) else {
+            return true;
+        };
+        let last = cells
+            .iter()
+            .zip(previous)
+            .rposition(|(a, b)| a != b)
+            .unwrap()
+            + 1;
+        self.back_buf
+            .buffer
+            .row_mut(y)
+            .unwrap()
+            .slice(start + first..start + last)
+            .copy_from(source.slice(first..last));
+        self.back_buf
+            .touch_line(y, (start + first) as u16, (start + last - 1) as u16);
+        true
+    }
+
     /// Sync a caller-facing buffer into the renderer staging buffer.
     ///
     /// # Parameters
@@ -33,9 +78,9 @@ impl Renderer {
     ///
     /// # Behavior
     ///
-    /// Copies only cells within `front`'s touched spans, skips
-    /// continuation cells, steps by wide-cell width, and clears
-    /// `front`'s touched flags before returning.
+    /// Copies primary cells within `front`'s touched spans and synchronizes
+    /// continuation styles separately. Clears `front`'s touched flags before
+    /// returning.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
         let width = front.width();
         let height = front.height();
@@ -50,32 +95,30 @@ impl Renderer {
             let Some(span) = front.touched(y) else {
                 continue;
             };
-            let mut x = span.first;
-            while x <= span.last {
+            if self.sync_narrow_span(front, y, span) {
+                continue;
+            }
+            for x in span.first..=span.last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
-                    x += 1;
                     continue;
                 };
-                // Skip continuation columns. Copying the primary places
-                // the continuation on the far side as part of the same
-                // write, so the column is already carrying the value this
-                // loop would ask for. `Buffer::set` ignores a continuation
-                // offered on its own, so passing one on would be a wasted
-                // call rather than a wrong one, and stepping over it keeps
-                // the walk in step with the widths it advances by.
                 if new_cell.is_continuation() {
-                    x += 1;
+                    // A primary write regenerates its continuations, so restore
+                    // each column's independent style afterward.
+                    if self
+                        .back_buf
+                        .cell(pos)
+                        .is_some_and(|old| !old.style_eq_ref(new_cell))
+                    {
+                        self.back_buf.set_style(pos, new_cell.to_style());
+                    }
                     continue;
                 }
                 // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
                 self.back_buf.set_cell(pos, new_cell);
-                // Step over any continuation columns owned by the cell
-                // we just wrote so we don't try to re-copy them.
-                let step = (new_cell.width() as u16).max(1);
-                x = x.saturating_add(step);
             }
         }
         front.clear_touched();
@@ -215,13 +258,8 @@ mod tests {
         assert!(r.sync_front(&mut front));
     }
 
-    /// Regression: sync_front used to step by 1 column even on wide
-    /// cells, which re-visited the continuation column and overwrote
-    /// the wide primary in back_buf with a blank. With the width-
-    /// aware step the primary survives and the continuation is
-    /// skipped.
     #[test]
-    fn sync_advances_by_wide_cell_width_and_skips_continuation() {
+    fn sync_preserves_wide_primaries_and_their_continuations() {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 1);
         // Wide CJK cell at col 0; col 1 is its continuation.
@@ -237,5 +275,91 @@ mod tests {
             "col 1 must remain the wide cell's continuation, not be blanked"
         );
         assert_eq!(r.back_buf.cell((3, 0).into()).unwrap().content(), "a");
+    }
+
+    #[test]
+    fn narrow_sync_matches_cell_writes_and_exact_damage() {
+        use crate::color::Color;
+        use crate::style::Style;
+
+        for content in ["", "x", "▀", "\u{1f600}"] {
+            for changed in [&[0][..], &[7][..], &[2, 5][..]] {
+                let mut front = RenderBuffer::new(8, 1);
+                let mut r = Renderer::new();
+                r.back_buf.resize(8, 1);
+                r.back_buf.clear_touched();
+                let value = Cell::new(content, 1)
+                    .style(Style::new().fg(Color::Rgb(3, 5, 7)).bg(Color::Indexed(0)));
+                for &x in changed {
+                    front.set_cell((x, 0), &value);
+                }
+                let mut reference = r.back_buf.clone();
+                for x in 0..8 {
+                    reference.set_cell((x, 0), front.cell((x, 0).into()).unwrap());
+                }
+                let span = TouchedSpan { first: 0, last: 7 };
+                assert!(r.sync_narrow_span(&front, 0, span));
+                for x in 0..8 {
+                    assert_eq!(
+                        r.back_buf.cell((x, 0).into()),
+                        reference.cell((x, 0).into()),
+                    );
+                }
+                assert_eq!(
+                    r.back_buf.touched(0).map(|s| (s.first, s.last)),
+                    reference.touched(0).map(|s| (s.first, s.last)),
+                );
+                r.back_buf.clear_touched();
+                assert!(r.sync_narrow_span(&front, 0, span));
+                assert!(r.back_buf.touched(0).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_sync_defers_wide_cells_and_arena_resources() {
+        use crate::style::Style;
+
+        for value in [
+            Cell::new("中", 2),
+            Cell::new("e\u{301}", 1),
+            Cell::new("l", 1).style(Style::new().link("target", "id=sync")),
+        ] {
+            let mut front = RenderBuffer::new(4, 1);
+            front.set_cell((1, 0), &value);
+            let mut r = Renderer::new();
+            r.back_buf.resize(4, 1);
+            r.back_buf.clear_touched();
+            assert!(!r.sync_narrow_span(&front, 0, TouchedSpan { first: 0, last: 3 }));
+            assert!(r.back_buf.touched(0).is_none());
+            r.sync_front(&mut front);
+            for x in 0..4 {
+                assert_eq!(r.back_buf.cell((x, 0).into()), front.cell((x, 0).into()));
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_sync_preserves_destination_wide_cell_cleanup() {
+        let mut front = RenderBuffer::new(4, 1);
+        front.set_cell((2, 0), &cell("x"));
+        let mut r = Renderer::new();
+        r.back_buf.resize(4, 1);
+        r.back_buf.set_cell((1, 0), &Cell::new("中", 2));
+        r.back_buf.clear_touched();
+        let mut reference = r.back_buf.clone();
+        reference.set_cell((2, 0), &cell("x"));
+        assert!(!r.sync_narrow_span(&front, 0, TouchedSpan { first: 2, last: 2 }));
+        r.sync_front(&mut front);
+        for x in 0..4 {
+            assert_eq!(
+                r.back_buf.cell((x, 0).into()),
+                reference.cell((x, 0).into())
+            );
+        }
+        assert_eq!(
+            r.back_buf.touched(0).map(|s| (s.first, s.last)),
+            reference.touched(0).map(|s| (s.first, s.last)),
+        );
     }
 }

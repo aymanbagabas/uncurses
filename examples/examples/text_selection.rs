@@ -18,7 +18,7 @@
 //! Run with `cargo run --example text_selection`. Drag with the left button
 //! to select; press `q`, `esc`, or `Ctrl-C` to quit.
 
-use uncurses::buffer::{Bounded, SurfaceMut};
+use uncurses::buffer::{Bounded, Surface, SurfaceMut};
 use uncurses::cell::Cell;
 use uncurses::color::Color;
 use uncurses::event::{Event, Key};
@@ -26,7 +26,7 @@ use uncurses::program::{MouseTracking, Program, ProgramOptions};
 use uncurses::screen::Screen;
 use uncurses::style::Style;
 use uncurses::terminal::{Stdin, Stdout};
-use uncurses::text::{TextSurface, grapheme_cells};
+use uncurses::text::grapheme_cells;
 
 const LINES: &[&str] = &[
     "Text and selection",

@@ -64,7 +64,7 @@ use crate::ansi::hyperlink::parse_hyperlink;
 use crate::ansi::params::Params;
 use crate::ansi::text::{TokenKind, string_width, tokenize};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
-use crate::cell::Cell;
+use crate::cell::{Cell, CellRef};
 use crate::layout::{Position, Rect, overruns};
 use crate::style::{Style, read_style};
 
@@ -206,8 +206,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 && clip.contains(Position::new(px, py))
             {
                 let cell = Cell::new(&content, w);
-                self.target
-                    .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+                self.target.set_cell(
+                    Position::new(px, py),
+                    cell.style(pen.inherit(&base)).as_ref(),
+                );
             }
 
             match tok.kind {
@@ -290,8 +292,10 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
             && clip.contains(Position::new(px, py))
         {
             let cell = Cell::new(&content, w);
-            self.target
-                .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+            self.target.set_cell(
+                Position::new(px, py),
+                cell.style(pen.inherit(&base)).as_ref(),
+            );
         }
         Position::new(x, y)
     }
@@ -304,33 +308,39 @@ impl<'s, S: TextSurface + ?Sized> Bounded for Painter<'s, S> {
 }
 
 impl<'s, S: TextSurface + ?Sized> Surface for Painter<'s, S> {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<CellRef<'_>> {
         self.target.cell(pos)
+    }
+    fn width_mode(&self) -> WidthMode {
+        self.mode
+    }
+    fn eaw_wide(&self) -> bool {
+        self.eaw_wide
     }
 }
 
 impl<'s, S: TextSurface + ?Sized> SurfaceMut for Painter<'s, S> {
-    fn set_cell(&mut self, pos: Position, cell: &Cell) {
+    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>) {
         self.target.set_cell(pos, cell);
     }
 
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.target.cell_mut(pos)
+    fn set_style(&mut self, pos: Position, style: Style) {
+        self.target.set_style(pos, style);
     }
 
-    fn insert_lines(&mut self, y: u16, count: u16, bounds_bottom: u16, fill: &Cell) {
+    fn insert_lines(&mut self, y: u16, count: u16, bounds_bottom: u16, fill: CellRef<'_>) {
         self.target.insert_lines(y, count, bounds_bottom, fill);
     }
 
-    fn delete_lines(&mut self, y: u16, count: u16, bounds_bottom: u16, fill: &Cell) {
+    fn delete_lines(&mut self, y: u16, count: u16, bounds_bottom: u16, fill: CellRef<'_>) {
         self.target.delete_lines(y, count, bounds_bottom, fill);
     }
 
-    fn insert_cells(&mut self, pos: Position, count: u16, bounds_right: u16, fill: &Cell) {
+    fn insert_cells(&mut self, pos: Position, count: u16, bounds_right: u16, fill: CellRef<'_>) {
         self.target.insert_cells(pos, count, bounds_right, fill);
     }
 
-    fn delete_cells(&mut self, pos: Position, count: u16, bounds_right: u16, fill: &Cell) {
+    fn delete_cells(&mut self, pos: Position, count: u16, bounds_right: u16, fill: CellRef<'_>) {
         self.target.delete_cells(pos, count, bounds_right, fill);
     }
 }
@@ -340,14 +350,6 @@ impl<'s, S: TextSurface + ?Sized> SurfaceMut for Painter<'s, S> {
 /// the running style as the input is parsed. This is the escape-aware
 /// counterpart to the literal painting of the default [`TextSurface`] methods.
 impl<'s, S: TextSurface + ?Sized> TextSurface for Painter<'s, S> {
-    fn width_mode(&self) -> WidthMode {
-        self.mode
-    }
-
-    fn eaw_wide(&self) -> bool {
-        self.eaw_wide
-    }
-
     /// Measure `s`, skipping recognized inline SGR and OSC 8 escape
     /// sequences so they contribute no width. This is the escape-aware
     /// counterpart to the literal default
@@ -640,13 +642,11 @@ mod tests {
     }
 
     fn cell_at(b: &TextBuffer, x: u16, y: u16) -> Cell {
-        b.cell(Position::new(x, y)).cloned().unwrap()
+        b.cell(Position::new(x, y)).unwrap().to_owned()
     }
 
     fn link_of(s: &crate::style::Style) -> Option<(&str, &str)> {
-        s.link
-            .as_deref()
-            .map(|l| (l.url.as_str(), l.params.as_str()))
+        s.link_target().map(|l| (l.url.as_str(), l.params.as_str()))
     }
 
     #[test]
@@ -676,9 +676,24 @@ mod tests {
                 Style::default(),
             );
             assert_eq!(end, Position::new(3, 0));
-            assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-            assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-            assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
+            assert!(
+                !cell_at(&b, 0, 0)
+                    .style
+                    .attributes()
+                    .contains(AttrFlags::BOLD)
+            );
+            assert!(
+                cell_at(&b, 1, 0)
+                    .style
+                    .attributes()
+                    .contains(AttrFlags::BOLD)
+            );
+            assert!(
+                !cell_at(&b, 2, 0)
+                    .style
+                    .attributes()
+                    .contains(AttrFlags::BOLD)
+            );
         }
     }
 
@@ -691,7 +706,7 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 0, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 0, 0).style.fg_color(), Some(Color::Red));
     }
 
     /// The painter's `from_utf8_unchecked` on a text token, driven by the
@@ -749,7 +764,7 @@ mod tests {
                         Some(("https://x/\u{2705}", ""))
                     );
                     assert_eq!(cell_at(&b, 0, 0).content(), "a");
-                    assert!(cell_at(&b, 1, 0).style.link.is_none());
+                    assert!(cell_at(&b, 1, 0).style.link_target().is_none());
                     assert_eq!(cell_at(&b, 1, 0).content(), "b");
                 }
             }
@@ -933,10 +948,15 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            !cell_at(&b, 0, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
         let z = cell_at(&b, 0, 1);
         assert_eq!(z.content(), "z");
-        assert!(z.style.attrs.contains(AttrFlags::BOLD));
+        assert!(z.style.attributes().contains(AttrFlags::BOLD));
         assert_eq!(link_of(&z.style), Some(("https://x", "")));
     }
 
@@ -1046,12 +1066,22 @@ mod tests {
             WrapMode::Truncate,
             Style::default().bold().link("https://x", ""),
         );
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 0, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
         assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
         // Second call with `_with` and an empty style must reset.
         Painter::new(&mut b).set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(cell_at(&b, 1, 0).style.link.is_none());
+        assert!(
+            !cell_at(&b, 1, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
+        assert!(cell_at(&b, 1, 0).style.link_target().is_none());
     }
 
     #[test]
@@ -1062,8 +1092,18 @@ mod tests {
         p.set_str_wrap((0, 0), "\x1b[1ma", WrapMode::Truncate, Style::default());
         // The next call starts fresh from its base: no bold carries over.
         p.set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 0, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
+        assert!(
+            !cell_at(&b, 1, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
@@ -1075,12 +1115,27 @@ mod tests {
         // rather than to a fully default style.
         Painter::new(&mut b).set_str_wrap((0, 0), "a\x1b[1mb\x1b[0mc", WrapMode::Truncate, base);
         let red = Some(Color::Red);
-        assert_eq!(cell_at(&b, 0, 0).style.fg, red);
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 1, 0).style.fg, red);
-        assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 2, 0).style.fg, red);
-        assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 0, 0).style.fg_color(), red);
+        assert!(
+            !cell_at(&b, 0, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
+        assert_eq!(cell_at(&b, 1, 0).style.fg_color(), red);
+        assert!(
+            cell_at(&b, 1, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
+        assert_eq!(cell_at(&b, 2, 0).style.fg_color(), red);
+        assert!(
+            !cell_at(&b, 2, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
@@ -1160,7 +1215,7 @@ mod tests {
             Style::default().fg(Color::Red),
         );
         // The tail cell gets the supplied base style.
-        assert_eq!(cell_at(&b, 4, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 4, 0).style.fg_color(), Some(Color::Red));
     }
 
     #[test]
@@ -1274,7 +1329,12 @@ mod tests {
             Style::default(),
         );
         // The tail's inline SGR bolds it even though the base style is empty.
-        assert!(cell_at(&b, 4, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(
+            cell_at(&b, 4, 0)
+                .style
+                .attributes()
+                .contains(AttrFlags::BOLD)
+        );
     }
 
     #[test]
