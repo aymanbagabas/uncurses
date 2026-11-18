@@ -235,6 +235,13 @@ impl RenderBuffer {
         }
 
         let existing = self.buffer.cell(pos);
+        if cell.width() == 1 && existing.is_some_and(|old| old.width() == 1) {
+            if existing != Some(cell) {
+                self.buffer.cell_mut(pos).unwrap().clone_from(cell);
+                self.touch_line(pos.y, pos.x, pos.x);
+            }
+            return;
+        }
         // Resize can preserve an equal primary whose columns no longer fit.
         let changed =
             existing.is_none_or(|e| e != cell) || u16::from(cell.width()) > self.width() - pos.x;

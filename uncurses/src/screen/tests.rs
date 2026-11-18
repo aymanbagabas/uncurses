@@ -18,6 +18,55 @@ fn screen_is_send_sync() {
     assert_send_sync::<Screen<crate::terminal::Stdout>>();
 }
 
+#[test]
+fn continuation_style_changes_reach_the_renderer() {
+    let mut screen = Screen::new(Vec::new(), (4, 1));
+    screen.set_cell((0, 0), &Cell::new("界", 2, Style::EMPTY));
+    screen.render().unwrap();
+
+    let style = Style::new()
+        .bg(Color::Blue)
+        .link("https://example.test/continuation", "id=continuation");
+    screen.cell_mut((1, 0)).unwrap().set_style(&style);
+    screen.render().unwrap();
+    assert_eq!(screen.diverge(), None);
+    let continuation = screen.cell((1, 0).into()).unwrap();
+    assert!(continuation.is_continuation());
+    assert_eq!(continuation.style(), style);
+
+    screen.writer_mut().clear();
+    screen.cell_mut((1, 0)).unwrap().set_style(style);
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn primary_style_changes_preserve_continuation_styles() {
+    for (content, width) in [("界", 2), ("abcd", 4)] {
+        let mut screen = Screen::new(Vec::new(), (6, 1));
+        screen.set_cell((0, 0), &Cell::new(content, width, Style::EMPTY));
+        screen.render().unwrap();
+
+        screen
+            .cell_mut((0, 0))
+            .unwrap()
+            .set_style(Style::new().fg(Color::Green));
+        for x in 1..u16::from(width) {
+            screen.cell_mut((x, 0)).unwrap().set_style(
+                Style::new()
+                    .bg(Color::Indexed(x as u8))
+                    .link(format!("https://example.test/{x}"), ""),
+            );
+        }
+        screen.render().unwrap();
+        assert_eq!(screen.diverge(), None, "stored width {width}");
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+}
+
 /// Test-only construction and a few shims mirroring the historical renderer
 /// API the render tests were written against, so they read the same way while
 /// driving the split [`Screen`].
