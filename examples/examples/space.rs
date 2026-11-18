@@ -241,7 +241,7 @@ fn draw(
     }
 
     let shift = frame_count as usize;
-    let glyph_cell = Cell::new(GLYPH, 1);
+    let glyph_cell = Cell::new(GLYPH, 1, Style::EMPTY);
 
     for y in body_top..height {
         let py = (y - body_top) as usize * 2;

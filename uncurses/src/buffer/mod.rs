@@ -25,10 +25,11 @@
 //! ```rust,ignore
 //! use uncurses::buffer::{Buffer, Surface, SurfaceMut};
 //! use uncurses::cell::Cell;
+//! use uncurses::style::Style;
 //! use uncurses::layout::Position;
 //!
 //! let mut buf = Buffer::new(4, 2);
-//! buf.set_cell(Position::new(0, 0), &Cell::new("x", 1));
+//! buf.set_cell(Position::new(0, 0), &Cell::new("x", 1, Style::EMPTY));
 //! assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "x");
 //! ```
 //!

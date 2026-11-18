@@ -23,7 +23,7 @@ fn renderer(width: u16, height: u16, opts: Optimizations) -> Renderer {
 fn buffer_with_text(width: u16, height: u16, y: u16, text: &str) -> RenderBuffer {
     let mut buf = RenderBuffer::new(width, height);
     for (x, ch) in text.chars().enumerate() {
-        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1));
+        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1, Style::EMPTY));
     }
     buf.clear_touched();
     buf
@@ -31,7 +31,7 @@ fn buffer_with_text(width: u16, height: u16, y: u16, text: &str) -> RenderBuffer
 
 fn set_text(buf: &mut RenderBuffer, y: u16, text: &str) {
     for (x, ch) in text.chars().enumerate() {
-        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1));
+        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1, Style::EMPTY));
     }
 }
 
@@ -117,7 +117,7 @@ fn emit_range_rep_skipped_for_non_ascii() {
 
     let mut new_buf = RenderBuffer::new(width, 1);
     for x in 0..8u16 {
-        new_buf.set_cell((x, 0), &Cell::new("é", 1));
+        new_buf.set_cell((x, 0), &Cell::new("é", 1, Style::EMPTY));
     }
 
     let out = transform_output(&mut renderer, &new_buf);
@@ -180,11 +180,11 @@ fn transform_el_0_partial_clear_from_column() {
     let mut cur = RenderBuffer::new(width, 1);
     let mut new_buf = RenderBuffer::new(width, 1);
     for x in 0..30u16 {
-        cur.set_cell((x, 0), &Cell::new("A", 1));
-        new_buf.set_cell((x, 0), &Cell::new("A", 1));
+        cur.set_cell((x, 0), &Cell::new("A", 1, Style::EMPTY));
+        new_buf.set_cell((x, 0), &Cell::new("A", 1, Style::EMPTY));
     }
     for x in 30..width {
-        cur.set_cell((x, 0), &Cell::new("X", 1));
+        cur.set_cell((x, 0), &Cell::new("X", 1, Style::EMPTY));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
@@ -230,11 +230,7 @@ fn transform_pen_change_emits_sgr() {
 
     let mut new_buf = RenderBuffer::new(width, 1);
     let red = Style::default().fg(Color::Red);
-    new_buf.set_cell((0, 0), &{
-        let mut styled_cell = Cell::new("R", 1);
-        styled_cell.set_style(red);
-        styled_cell
-    });
+    new_buf.set_cell((0, 0), &Cell::new("R", 1, red));
 
     let out = transform_output(&mut renderer, &new_buf);
     assert_eq!(out, b"\x1b[31mR");
@@ -248,11 +244,7 @@ fn transform_osc8_link_open_and_close() {
 
     let linked_style = Style::default().link("https://example.test", "");
     let mut linked_buf = RenderBuffer::new(width, 1);
-    linked_buf.set_cell((0, 0), &{
-        let mut styled_cell = Cell::new("L", 1);
-        styled_cell.set_style(linked_style);
-        styled_cell
-    });
+    linked_buf.set_cell((0, 0), &Cell::new("L", 1, linked_style));
     let open = transform_output(&mut renderer, &linked_buf);
     assert!(
         open.windows(b"\x1b]8;;https://example.test\x1b\\L".len())
@@ -261,7 +253,7 @@ fn transform_osc8_link_open_and_close() {
     );
 
     let mut plain_buf = RenderBuffer::new(width, 1);
-    plain_buf.set_cell((0, 0), &Cell::new("P", 1));
+    plain_buf.set_cell((0, 0), &Cell::new("P", 1, Style::EMPTY));
     let close = transform_output(&mut renderer, &plain_buf);
     assert!(
         close
@@ -299,13 +291,13 @@ fn clear_bottom_uses_ed_when_bce() {
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
     let mut cur = RenderBuffer::new(width, height);
     for y in 1..height {
-        cur.set_cell((0, y), &Cell::new("X", 1));
+        cur.set_cell((0, y), &Cell::new("X", 1, Style::EMPTY));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
 
     let mut new_buf = RenderBuffer::new(width, height);
-    new_buf.set_cell((0, 0), &Cell::new("A", 1));
+    new_buf.set_cell((0, 0), &Cell::new("A", 1, Style::EMPTY));
     let mut out = Vec::new();
     let top = renderer.clear_bottom(&mut out, &new_buf).unwrap();
 
@@ -320,13 +312,13 @@ fn clear_bottom_without_bce_still_uses_ed_for_default_blank() {
     let mut renderer = renderer(width, height, Optimizations::none());
     let mut cur = RenderBuffer::new(width, height);
     for y in 1..height {
-        cur.set_cell((0, y), &Cell::new("X", 1));
+        cur.set_cell((0, y), &Cell::new("X", 1, Style::EMPTY));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
 
     let mut new_buf = RenderBuffer::new(width, height);
-    new_buf.set_cell((0, 0), &Cell::new("A", 1));
+    new_buf.set_cell((0, 0), &Cell::new("A", 1, Style::EMPTY));
     let mut out = Vec::new();
     let top = renderer.clear_bottom(&mut out, &new_buf).unwrap();
 
@@ -346,7 +338,7 @@ fn clear_bottom_with_styled_blank() {
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
-        cur.set_cell((0, y), &Cell::new("X", 1));
+        cur.set_cell((0, y), &Cell::new("X", 1, Style::EMPTY));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
@@ -381,7 +373,7 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
-        cur.set_cell((0, y), &Cell::new("X", 1));
+        cur.set_cell((0, y), &Cell::new("X", 1, Style::EMPTY));
     }
     cur.clear_touched();
     renderer.cur_buf = Some(cur);
@@ -417,7 +409,7 @@ fn a_difference_on_a_continuation_re_emits_its_cluster() {
     renderer.set_optimizations(Optimizations::none());
     let mut buf = RenderBuffer::new(24, 1);
     for x in (0..24).step_by(2) {
-        buf.set_cell((x, 0), &Cell::new("\u{4e16}", 2));
+        buf.set_cell((x, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
     }
     let mut out = Vec::new();
     renderer.render(&mut out, &mut buf).unwrap();
@@ -453,15 +445,15 @@ fn an_insert_starts_past_the_cluster_that_owns_its_column() {
     let mut renderer = Renderer::new();
     renderer.set_optimizations(Optimizations::none());
     let mut buf = RenderBuffer::new(8, 1);
-    buf.set_cell((0, 0), &Cell::new("\u{4e16}", 2));
-    buf.set_cell((2, 0), &Cell::new("a", 1));
+    buf.set_cell((0, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
+    buf.set_cell((2, 0), &Cell::new("a", 1, Style::EMPTY));
     let mut out = Vec::new();
     renderer.render(&mut out, &mut buf).unwrap();
 
     // A second cluster appears, pushing the narrow cell right. The walk back
     // from the divergence at column 2 runs to column 0, which is a lead.
-    buf.set_cell((2, 0), &Cell::new("\u{4e16}", 2));
-    buf.set_cell((4, 0), &Cell::new("a", 1));
+    buf.set_cell((2, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
+    buf.set_cell((4, 0), &Cell::new("a", 1, Style::EMPTY));
     let mut out = Vec::new();
     renderer.render(&mut out, &mut buf).unwrap();
 
@@ -487,7 +479,7 @@ fn a_row_opening_on_an_unowned_continuation_renders() {
     renderer.set_optimizations(Optimizations::none());
     let mut buf = RenderBuffer::new(10, 1);
     for x in (0..10).step_by(2) {
-        buf.set_cell((x, 0), &Cell::new("\u{4e16}", 2));
+        buf.set_cell((x, 0), &Cell::new("\u{4e16}", 2, Style::EMPTY));
     }
     let mut out = Vec::new();
     renderer.render(&mut out, &mut buf).unwrap();

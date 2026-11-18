@@ -456,8 +456,7 @@ fn paint_cluster<S: SurfaceMut + ?Sized>(
             return;
         }
     }
-    let mut cell = Cell::new(text, width);
-    cell.set_style(style);
+    let cell = Cell::new(text, width, style);
     target.set_cell(pos, &cell);
 }
 
@@ -621,7 +620,7 @@ mod tests {
             .fg(Color::Green)
             .link("https://example.test", "");
         let mut initial = Buffer::new(8, 3);
-        initial.set((2, 1), &Cell::new("界", 2));
+        initial.set((2, 1), &Cell::new("界", 2, Style::EMPTY));
         for mode in [WidthMode::Wc, WidthMode::Grapheme] {
             for eaw in [false, true] {
                 for wrap in [WrapMode::Truncate, WrapMode::Wrap] {

@@ -39,7 +39,7 @@ fn assert_golden(actual: Vec<u8>, expected: &[u8]) {
 
 fn set_text(buf: &mut RenderBuffer, y: u16, text: &str) {
     for (x, ch) in text.chars().enumerate() {
-        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1));
+        buf.set_cell((x as u16, y), &Cell::new(ch.to_string(), 1, Style::EMPTY));
     }
 }
 
@@ -66,7 +66,7 @@ fn golden_single_cell_change_at_origin() {
     let mut renderer = renderer();
     let mut buf = RenderBuffer::new(80, 24);
     let _ = render_to_vec(&mut renderer, &mut buf);
-    buf.set_cell((0, 0), &Cell::new("X", 1));
+    buf.set_cell((0, 0), &Cell::new("X", 1, Style::EMPTY));
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
@@ -78,7 +78,7 @@ fn golden_single_cell_change_at_middle() {
     let mut renderer = renderer();
     let mut buf = RenderBuffer::new(80, 24);
     let _ = render_to_vec(&mut renderer, &mut buf);
-    buf.set_cell((40, 12), &Cell::new("X", 1));
+    buf.set_cell((40, 12), &Cell::new("X", 1, Style::EMPTY));
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
@@ -148,7 +148,7 @@ fn golden_relative_cursor_mode() {
     renderer.set_relative_cursor(true);
     let mut buf = RenderBuffer::new(80, 24);
     let _ = render_to_vec(&mut renderer, &mut buf);
-    buf.set_cell((0, 5), &Cell::new("X", 1));
+    buf.set_cell((0, 5), &Cell::new("X", 1, Style::EMPTY));
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
@@ -163,9 +163,9 @@ fn golden_a_cell_that_stores_nothing_is_blanked_across_its_whole_width() {
     // paint the rest of the row there.
     let mut renderer = renderer();
     let mut buf = RenderBuffer::new(8, 1);
-    buf.set_cell((0, 0), &Cell::new("", 3));
-    buf.set_cell((3, 0), &Cell::new("X", 1));
-    buf.set_cell((4, 0), &Cell::new("Y", 1));
+    buf.set_cell((0, 0), &Cell::new("", 3, Style::EMPTY));
+    buf.set_cell((3, 0), &Cell::new("X", 1, Style::EMPTY));
+    buf.set_cell((4, 0), &Cell::new("Y", 1, Style::EMPTY));
 
     let out = render_to_vec(&mut renderer, &mut buf);
     assert_golden(out, b"\r   XY\r");
@@ -178,12 +178,15 @@ const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F46
 
 /// Write `FAMILY` at `x` on row 0, followed by `tail`.
 fn set_family_row(buf: &mut RenderBuffer, x: u16, tail: &str) {
-    buf.set_cell((x, 0), &Cell::new(FAMILY, 8));
+    buf.set_cell((x, 0), &Cell::new(FAMILY, 8, Style::EMPTY));
     for c in x + 1..x + 8 {
-        buf.set_cell((c, 0), &Cell::new("", 0));
+        buf.set_cell((c, 0), &Cell::new("", 0, Style::EMPTY));
     }
     for (i, ch) in tail.chars().enumerate() {
-        buf.set_cell((x + 8 + i as u16, 0), &Cell::new(ch.to_string(), 1));
+        buf.set_cell(
+            (x + 8 + i as u16, 0),
+            &Cell::new(ch.to_string(), 1, Style::EMPTY),
+        );
     }
 }
 
@@ -212,7 +215,7 @@ fn golden_a_change_after_a_ligatable_cluster_repaints_from_the_cluster() {
     // The cluster itself does not change. A terminal that ligated it put
     // this `Y` at column four, so the diff's column ten is wrong and the
     // row has to be laid out again from the cluster.
-    buf.set_cell((10, 0), &Cell::new("Y", 1));
+    buf.set_cell((10, 0), &Cell::new("Y", 1, Style::EMPTY));
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
@@ -231,7 +234,7 @@ fn golden_a_change_before_a_ligatable_cluster_keeps_the_diff() {
 
     // Every column left of the cluster sits where the diff believes it
     // does, so the ordinary diff still holds there.
-    buf.set_cell((0, 0), &Cell::new("A", 1));
+    buf.set_cell((0, 0), &Cell::new("A", 1, Style::EMPTY));
 
     assert_golden(render_to_vec(&mut renderer, &mut buf), b"A ");
 }
@@ -283,8 +286,7 @@ fn golden_an_unclearable_right_edge_is_written_out() {
 
     // An underlined blank is not what an erase leaves behind, so the tail
     // has to be written out to the right edge instead of erased.
-    let mut underlined = Cell::new(" ", 1);
-    underlined.set_style(Style::default().underline());
+    let underlined = Cell::new(" ", 1, Style::default().underline());
     for x in 0..12u16 {
         buf.set_cell((x, 0), &underlined.clone());
     }
@@ -304,23 +306,11 @@ fn golden_a_colored_tail_is_erased_with_bce() {
 
     let red = Style::default().bg(Color::Red);
     for x in 0..14u16 {
-        buf.set_cell((x, 0), &{
-            let mut styled_cell = Cell::new(" ", 1);
-            styled_cell.set_style(red.clone());
-            styled_cell
-        });
+        buf.set_cell((x, 0), &Cell::new(" ", 1, red.clone()));
     }
-    buf.set_cell((2, 0), &{
-        let mut styled_cell = Cell::new(FAMILY, 8);
-        styled_cell.set_style(red.clone());
-        styled_cell
-    });
+    buf.set_cell((2, 0), &Cell::new(FAMILY, 8, red.clone()));
     for c in 3..10u16 {
-        buf.set_cell((c, 0), &{
-            let mut styled_cell = Cell::new("", 0);
-            styled_cell.set_style(red.clone());
-            styled_cell
-        });
+        buf.set_cell((c, 0), &Cell::new("", 0, red.clone()));
     }
 
     assert_golden(
@@ -337,9 +327,9 @@ fn golden_a_single_code_point_wide_cell_needs_no_repaint() {
 
     // One code point is measured the way the terminal draws it, whatever
     // the terminal's shaping does with its neighbors.
-    buf.set_cell((2, 0), &Cell::new("\u{4E16}", 2));
-    buf.set_cell((3, 0), &Cell::new("", 0));
-    buf.set_cell((4, 0), &Cell::new("Z", 1));
+    buf.set_cell((2, 0), &Cell::new("\u{4E16}", 2, Style::EMPTY));
+    buf.set_cell((3, 0), &Cell::new("", 0, Style::EMPTY));
+    buf.set_cell((4, 0), &Cell::new("Z", 1, Style::EMPTY));
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
@@ -356,9 +346,9 @@ fn golden_grapheme_widths_need_no_repaint() {
 
     // Measured whole, the cluster claims the two columns the terminal
     // draws, so the diff's columns hold and it runs as usual.
-    buf.set_cell((2, 0), &Cell::new(FAMILY, 2));
-    buf.set_cell((3, 0), &Cell::new("", 0));
-    buf.set_cell((4, 0), &Cell::new("Z", 1));
+    buf.set_cell((2, 0), &Cell::new(FAMILY, 2, Style::EMPTY));
+    buf.set_cell((3, 0), &Cell::new("", 0, Style::EMPTY));
+    buf.set_cell((4, 0), &Cell::new("Z", 1, Style::EMPTY));
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
@@ -388,7 +378,7 @@ fn golden_a_blank_run_after_a_ligatable_cluster_is_skipped_by_a_relative_move() 
 
     let mut buf = RenderBuffer::new(70, 2);
     set_family_row(&mut buf, 0, "");
-    buf.set_cell((40, 0), &Cell::new("Z", 1));
+    buf.set_cell((40, 0), &Cell::new("Z", 1, Style::EMPTY));
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
@@ -408,15 +398,15 @@ fn golden_a_variation_selector_makes_its_row_uncertain() {
     let mut buf = RenderBuffer::new(20, 2);
     let _ = render_to_vec(&mut renderer, &mut buf);
 
-    buf.set_cell((0, 0), &Cell::new("a", 1));
-    buf.set_cell((1, 0), &Cell::new("\u{2764}\u{FE0F}", 1));
-    buf.set_cell((2, 0), &Cell::new("Z", 1));
+    buf.set_cell((0, 0), &Cell::new("a", 1, Style::EMPTY));
+    buf.set_cell((1, 0), &Cell::new("\u{2764}\u{FE0F}", 1, Style::EMPTY));
+    buf.set_cell((2, 0), &Cell::new("Z", 1, Style::EMPTY));
     let _ = render_to_vec(&mut renderer, &mut buf);
 
     // Column two is where the diff believes `Z` is; a terminal giving the
     // heart two columns put it at three. The row is laid out again from
     // the heart rather than addressed by column.
-    buf.set_cell((2, 0), &Cell::new("Y", 1));
+    buf.set_cell((2, 0), &Cell::new("Y", 1, Style::EMPTY));
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
@@ -435,15 +425,15 @@ fn golden_a_keycap_without_a_selector_makes_its_row_uncertain() {
     let mut buf = RenderBuffer::new(20, 2);
     let _ = render_to_vec(&mut renderer, &mut buf);
 
-    buf.set_cell((0, 0), &Cell::new("a", 1));
-    buf.set_cell((1, 0), &Cell::new("1\u{20E3}", 1));
-    buf.set_cell((2, 0), &Cell::new("Z", 1));
+    buf.set_cell((0, 0), &Cell::new("a", 1, Style::EMPTY));
+    buf.set_cell((1, 0), &Cell::new("1\u{20E3}", 1, Style::EMPTY));
+    buf.set_cell((2, 0), &Cell::new("Z", 1, Style::EMPTY));
     let _ = render_to_vec(&mut renderer, &mut buf);
 
     // Column two is where the diff believes `Z` is; a terminal drawing
     // the keycap put it at three. The row is laid out again from the
     // keycap rather than addressed by column.
-    buf.set_cell((2, 0), &Cell::new("Y", 1));
+    buf.set_cell((2, 0), &Cell::new("Y", 1, Style::EMPTY));
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
@@ -462,11 +452,11 @@ fn golden_a_combining_mark_keeps_the_diff() {
     let mut buf = RenderBuffer::new(20, 2);
     let _ = render_to_vec(&mut renderer, &mut buf);
 
-    buf.set_cell((0, 0), &Cell::new("e\u{0301}", 1));
-    buf.set_cell((1, 0), &Cell::new("Z", 1));
+    buf.set_cell((0, 0), &Cell::new("e\u{0301}", 1, Style::EMPTY));
+    buf.set_cell((1, 0), &Cell::new("Z", 1, Style::EMPTY));
     let _ = render_to_vec(&mut renderer, &mut buf);
 
-    buf.set_cell((1, 0), &Cell::new("Y", 1));
+    buf.set_cell((1, 0), &Cell::new("Y", 1, Style::EMPTY));
 
     assert_golden(render_to_vec(&mut renderer, &mut buf), b"\x1b[DY");
 }

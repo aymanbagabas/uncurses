@@ -205,8 +205,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 && let Some((px, py, content, w)) = pending.take()
                 && clip.contains(Position::new(px, py))
             {
-                let mut cell = Cell::new(&content, w);
-                cell.set_style(pen.inherit(&base));
+                let cell = Cell::new(&content, w, pen.inherit(&base));
                 self.target.set_cell(Position::new(px, py), &cell);
             }
 
@@ -289,8 +288,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         if let Some((px, py, content, w)) = pending.take()
             && clip.contains(Position::new(px, py))
         {
-            let mut cell = Cell::new(&content, w);
-            cell.set_style(pen.inherit(&base));
+            let cell = Cell::new(&content, w, pen.inherit(&base));
             self.target.set_cell(Position::new(px, py), &cell);
         }
         Position::new(x, y)
@@ -1218,16 +1216,8 @@ mod tests {
                                 let ch = expected.as_bytes()[usize::from(x - offset)] as char;
                                 match ch {
                                     ' ' => Cell::BLANK,
-                                    '.' => {
-                                        let mut styled_cell = Cell::new(".", 1);
-                                        styled_cell.set_style(&tail_style);
-                                        styled_cell
-                                    }
-                                    _ => {
-                                        let mut styled_cell = Cell::new(ch.to_string(), 1);
-                                        styled_cell.set_style(&style);
-                                        styled_cell
-                                    }
+                                    '.' => Cell::new(".", 1, &tail_style),
+                                    _ => Cell::new(ch.to_string(), 1, &style),
                                 }
                             } else {
                                 Cell::BLANK

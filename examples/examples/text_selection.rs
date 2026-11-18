@@ -75,22 +75,22 @@ impl Row {
                         let mut joined = last.content().to_string();
                         joined.push_str(cluster);
                         let w = last.width();
-                        *last = Cell::new(joined, w);
+                        *last = Cell::new(joined, w, Style::EMPTY);
                     }
                     // Opening the row, it has nothing to share a column
                     // with, so it takes one of its own. A terminal draws a
                     // mark with no base on its own too, and dropping it
                     // would lose text the row is meant to hold.
-                    None => cells.push(Cell::new(cluster, 1)),
+                    None => cells.push(Cell::new(cluster, 1, Style::EMPTY)),
                 },
-                1 => cells.push(Cell::new(cluster, 1)),
+                1 => cells.push(Cell::new(cluster, 1, Style::EMPTY)),
                 // The primary is credited with every column the cluster
                 // measures, and the rest of the run holds its continuations.
                 // Crediting it with two while pushing `w - 1` continuations
                 // would leave the row claiming more columns than the cell
                 // accounts for.
                 w => {
-                    cells.push(Cell::new(cluster, w));
+                    cells.push(Cell::new(cluster, w, Style::EMPTY));
                     for _ in 1..w {
                         cells.push(Cell::CONTINUATION);
                     }

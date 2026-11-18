@@ -73,15 +73,16 @@ mod tests {
     use super::*;
     use crate::buffer::Buffer;
     use crate::cell::Cell;
+    use crate::style::Style;
 
     #[test]
     fn view_clips_writes_outside_bounds() {
         let mut buf = Buffer::new(10, 5);
         {
             let mut v = View::new(&mut buf, Rect::new(2, 1, 3, 2));
-            v.set_cell(Position::new(2, 1), &Cell::new("A", 1)); // inside
-            v.set_cell(Position::new(0, 0), &Cell::new("B", 1)); // outside view
-            v.set_cell(Position::new(5, 1), &Cell::new("C", 1)); // right of view
+            v.set_cell(Position::new(2, 1), &Cell::new("A", 1, Style::EMPTY)); // inside
+            v.set_cell(Position::new(0, 0), &Cell::new("B", 1, Style::EMPTY)); // outside view
+            v.set_cell(Position::new(5, 1), &Cell::new("C", 1, Style::EMPTY)); // right of view
         }
         assert_eq!(buf.cell(Position::new(2, 1)).unwrap().content(), "A");
         assert!(buf.cell(Position::new(0, 0)).unwrap().is_blank());
@@ -91,8 +92,8 @@ mod tests {
     #[test]
     fn view_clips_reads_outside_bounds() {
         let mut buf = Buffer::new(10, 5);
-        buf.set_cell(Position::new(2, 1), &Cell::new("A", 1));
-        buf.set_cell(Position::new(0, 0), &Cell::new("B", 1));
+        buf.set_cell(Position::new(2, 1), &Cell::new("A", 1, Style::EMPTY));
+        buf.set_cell(Position::new(0, 0), &Cell::new("B", 1, Style::EMPTY));
         let v = View::new(&mut buf, Rect::new(2, 1, 3, 2));
         assert_eq!(v.cell(Position::new(2, 1)).unwrap().content(), "A");
         assert!(v.cell(Position::new(0, 0)).is_none());

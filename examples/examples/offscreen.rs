@@ -85,8 +85,7 @@ fn main() -> io::Result<()> {
     // spacer carrying its own background.
     let mut spacer = TextBuffer::new(16, 1);
     spacer.set_str((0, 0), "A", Style::default());
-    let mut blank = Cell::new("", 3);
-    blank.set_style(Style::default().bg(Color::Blue));
+    let blank = Cell::new("", 3, Style::default().bg(Color::Blue));
     spacer.set_cell(Position::new(1, 0), &blank);
     spacer.set_str((4, 0), "B", Style::default());
     let mut gap = Vec::new();
@@ -116,10 +115,8 @@ fn main() -> io::Result<()> {
     updates.encode(&mut out)?;
     writeln!(out)?;
 
-    let mut source = Cell::new("A", 1);
-    source.set_style(Style::new().fg(Color::Green).bold());
-    let mut copied = Cell::new("B", 1);
-    copied.set_style(source.style());
+    let source = Cell::new("A", 1, Style::new().fg(Color::Green).bold());
+    let mut copied = Cell::new("B", 1, source.style());
     let mut style = copied.style();
     style.bg = Some(Color::Blue);
     copied.set_style(style);
@@ -139,11 +136,7 @@ fn draw_card(buf: &mut TextBuffer) {
 
     // Rounded border.
     let border = Style::default().fg(Color::BrightBlack);
-    let edge = |s: &str| {
-        let mut cell = Cell::new(s, 1);
-        cell.set_style(&border);
-        cell
-    };
+    let edge = |s: &str| Cell::new(s, 1, &border);
     buf.fill_rect(Rect::new(1, 0, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(1, h - 1, w - 2, 1), &edge("─"));
     buf.fill_rect(Rect::new(0, 1, 1, h - 2), &edge("│"));
@@ -180,8 +173,7 @@ fn draw_card(buf: &mut TextBuffer) {
     for i in 0..bar.width {
         let left = gradient_color(u32::from(i) * 2, cols);
         let right = gradient_color(u32::from(i) * 2 + 1, cols);
-        let mut cell = Cell::new("▌", 1);
-        cell.set_style(Style::default().fg(left).bg(right));
+        let cell = Cell::new("▌", 1, Style::default().fg(left).bg(right));
         buf.set_cell((bar.x + i, bar.y).into(), &cell);
     }
     buf.set_str(

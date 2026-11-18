@@ -209,9 +209,7 @@ pub(crate) fn cell_from_ratatui(rc: &ratatui::buffer::Cell) -> CzCell {
     // starts. The floor of one keeps a zero-width symbol occupying the
     // column ratatui gave it.
     let width = str_cell_width(symbol).clamp(1, u8::MAX as usize) as u8;
-    let mut cell = CzCell::new(symbol, width);
-    cell.set_style(style);
-    cell
+    CzCell::new(symbol, width, style)
 }
 
 #[cfg(test)]

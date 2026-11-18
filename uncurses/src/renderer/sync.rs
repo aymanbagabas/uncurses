@@ -148,9 +148,10 @@ mod tests {
     use super::*;
     use crate::cell::Cell;
     use crate::renderer::buffer::RenderBuffer;
+    use crate::style::Style;
 
     fn cell(c: &str) -> Cell {
-        Cell::new(c, 1)
+        Cell::new(c, 1, Style::EMPTY)
     }
 
     fn fill_row(buf: &mut RenderBuffer, y: u16, content: &str) {
@@ -170,7 +171,7 @@ mod tests {
             } else {
                 &mut r.back_buf
             };
-            broken.set_cell((1, 0), &Cell::new("wide", 4));
+            broken.set_cell((1, 0), &Cell::new("wide", 4, Style::EMPTY));
             broken.resize(3, 1);
             broken.resize(8, 1);
             assert_eq!(broken.cell((1, 0).into()).unwrap().width(), 4);
@@ -202,15 +203,13 @@ mod tests {
         let mut r = Renderer::new();
         {
             let mut front = RenderBuffer::new(4, 1);
-            let source = {
-                let mut styled_cell = Cell::new(text.as_str(), 1);
-                styled_cell.set_style(
-                    crate::style::Style::new()
-                        .fg(crate::color::Color::Green)
-                        .link("https://example.test", "id=owned"),
-                );
-                styled_cell
-            };
+            let source = Cell::new(
+                text.as_str(),
+                1,
+                crate::style::Style::new()
+                    .fg(crate::color::Color::Green)
+                    .link("https://example.test", "id=owned"),
+            );
             front.set_cell((0, 0), &source);
             r.sync_front(&mut front);
             front.set_cell((0, 0), &Cell::BLANK);
@@ -342,7 +341,7 @@ mod tests {
         let mut r = Renderer::new();
         let mut front = RenderBuffer::new(10, 1);
         // Wide CJK cell at col 0; col 1 is its continuation.
-        let wide = Cell::new("漢", 2);
+        let wide = Cell::new("漢", 2, Style::EMPTY);
         front.set_cell((0, 0), &wide);
         front.set_cell((3, 0), &cell("a"));
         r.sync_front(&mut front);
