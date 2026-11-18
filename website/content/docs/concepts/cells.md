@@ -64,9 +64,9 @@ back.
 
 ## Building a cell
 
-Construct every cell with `Cell::new`, passing the content and the number of
-columns it occupies. Attach a style fluently (colors, attributes, even an OSC 8
-hyperlink), and ask how many columns the grid will reserve:
+Construct a cell with `Cell::new` and specify its content and width.
+Use `set_style` to apply colors, attributes, and a hyperlink.
+Use `style()` to read or copy its style:
 
 ```rust
 use uncurses::cell::Cell;
@@ -74,13 +74,15 @@ use uncurses::color::Color;
 use uncurses::style::Style;
 
 fn main() {
-    let cell = Cell::new("a", 1).style(
+    let mut cell = Cell::new("a", 1);
+    cell.set_style(
         Style::default()
             .bold()
             .fg(Color::Green)
             .link("https://example.com", ""),
     );
     assert_eq!(cell.width(), 1);
+    assert_eq!(cell.style().fg, Some(Color::Green));
 
     let wide = Cell::new("世", 2);
     assert_eq!(wide.width(), 2);

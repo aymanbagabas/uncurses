@@ -411,7 +411,54 @@ fn paint_literal<S: SurfaceMut + ?Sized>(
     eaw_wide: bool,
     style: &Style,
 ) -> Position {
+    let width = if matches!(s.as_bytes(), [b' '..=b'~']) {
+        1
+    } else {
+        let mut chars = s.chars();
+        match (chars.next(), chars.next()) {
+            (Some(ch), None) if !ch.is_control() => mode.grapheme_width(s, eaw_wide),
+            _ => 0,
+        }
+    };
+    if width > 0 && clip.contains(start) && !overruns(start.x, u16::from(width), clip.right()) {
+        paint_cluster(target, start, s, width, style);
+        return Position::new(start.x + u16::from(width), start.y);
+    }
     paint_literal_inner(target, start, clip, s, wrap, mode, eaw_wide, style, None)
+}
+
+#[inline]
+fn paint_cluster<S: SurfaceMut + ?Sized>(
+    target: &mut S,
+    pos: Position,
+    text: &str,
+    width: u8,
+    style: &Style,
+) {
+    if width == 1
+        && let Some(old) = target.cell(pos)
+        && old.width() == 1
+    {
+        if old.content == text
+            && old.fg == style.fg
+            && old.bg == style.bg
+            && old.underline_color == style.underline_color
+            && old.attrs == style.attrs
+            && old.underline == style.underline
+            && old.link == style.link
+        {
+            return;
+        }
+        if let Some(cell) = target.cell_mut(pos) {
+            cell.content.clear();
+            cell.content.push_str(text);
+            cell.set_style(style);
+            return;
+        }
+    }
+    let mut cell = Cell::new(text, width);
+    cell.set_style(style);
+    target.set_cell(pos, &cell);
 }
 
 /// Paint `s` literally with [`WrapMode::Truncate`], stamping `tail` on overflow.
@@ -529,8 +576,7 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
             }
         }
         if clip.contains(Position::new(x, y)) {
-            let cell = Cell::new(cluster, cw);
-            target.set_cell(Position::new(x, y), &cell.style(style.clone()));
+            paint_cluster(target, Position::new(x, y), cluster, cw, style);
         }
         x += w;
     }
@@ -565,8 +611,100 @@ fn stamp_literal_tail<S: SurfaceMut + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::TextBuffer;
+    use crate::buffer::{Buffer, Surface, TextBuffer};
+    use crate::color::Color;
     use crate::style::Style;
+
+    #[test]
+    fn literal_shortcuts_preserve_general_positions_and_cells() {
+        let style = Style::new()
+            .fg(Color::Green)
+            .link("https://example.test", "");
+        let mut initial = Buffer::new(8, 3);
+        initial.set((2, 1), &Cell::new("界", 2));
+        for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+            for eaw in [false, true] {
+                for wrap in [WrapMode::Truncate, WrapMode::Wrap] {
+                    for clip in [Rect::new(1, 1, 6, 2), Rect::new(1, 1, 0, 0)] {
+                        for start in [(0, 0), (1, 1), (2, 1), (3, 1), (6, 1), (7, 1), (1, 3)] {
+                            for text in [
+                                "",
+                                "A",
+                                " ",
+                                "é",
+                                "¡",
+                                "界",
+                                "👩",
+                                "\u{301}",
+                                "\u{200d}",
+                                "\n",
+                                "\r",
+                                "\r\n",
+                                "\t",
+                                "\u{7f}",
+                                "A\u{301}",
+                                "👩\u{200d}💻",
+                                "AB",
+                            ] {
+                                let mut fast = initial.clone();
+                                let mut general = initial.clone();
+                                let fast_end = paint_literal(
+                                    &mut fast,
+                                    start.into(),
+                                    clip,
+                                    text,
+                                    wrap,
+                                    mode,
+                                    eaw,
+                                    &style,
+                                );
+                                let general_end = paint_literal_inner(
+                                    &mut general,
+                                    start.into(),
+                                    clip,
+                                    text,
+                                    wrap,
+                                    mode,
+                                    eaw,
+                                    &style,
+                                    None,
+                                );
+                                assert_eq!(fast_end, general_end, "{text:?}, {start:?}, {mode:?}");
+                                for y in 0..3 {
+                                    assert_eq!(
+                                        fast.line(y),
+                                        general.line(y),
+                                        "{text:?}, {start:?}, {mode:?}, row {y}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_updates_own_borrowed_clusters_and_replace_links() {
+        let expected = format!("e{}", "\u{301}".repeat(40));
+        let mut buffer = TextBuffer::new(4, 1);
+        {
+            let borrowed = expected.clone();
+            let style = Style::new()
+                .fg(Color::Green)
+                .link("https://example.test", "id=owned");
+            assert_eq!(buffer.set_str((0, 0), &borrowed, &style), (1, 0).into());
+        }
+        let cell = buffer.cell((0, 0).into()).unwrap();
+        assert_eq!(cell.content(), expected);
+        assert_eq!(cell.link.as_deref().unwrap().url, "https://example.test");
+
+        buffer.set_str((0, 0), "x", Style::EMPTY);
+        let cell = buffer.cell((0, 0).into()).unwrap();
+        assert_eq!(cell.content(), "x");
+        assert_eq!(cell.style(), Style::EMPTY);
+    }
 
     /// `right()` is exclusive and saturates at `u16::MAX`, so a row that ends
     /// at the top of the address space can leave `x` equal to it. Adding the

@@ -50,7 +50,13 @@ pub(in crate::renderer) fn collect_overwrite_bytes(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            if &cell.style != style {
+            if cell.fg != style.fg
+                || cell.bg != style.bg
+                || cell.underline_color != style.underline_color
+                || cell.attrs != style.attrs
+                || cell.underline != style.underline
+                || cell.link != style.link
+            {
                 return false;
             }
             // Matches the cost pass, which prices this move in bytes and so

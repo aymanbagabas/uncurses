@@ -235,6 +235,13 @@ impl RenderBuffer {
         }
 
         let existing = self.buffer.cell(pos);
+        if cell.width() == 1 && existing.is_some_and(|old| old.width() == 1) {
+            if existing != Some(cell) {
+                self.buffer.cell_mut(pos).unwrap().clone_from(cell);
+                self.touch_line(pos.y, pos.x, pos.x);
+            }
+            return;
+        }
         // Resize can preserve an equal primary whose columns no longer fit.
         let changed =
             existing.is_none_or(|e| e != cell) || u16::from(cell.width()) > self.width() - pos.x;
@@ -726,7 +733,8 @@ mod tests {
             for x in [0, 3] {
                 for remaining in 1..u16::from(width) {
                     for style in [Style::default(), Style::EMPTY.bg(Color::Red).bold()] {
-                        let cell = Cell::new(text, width).style(style);
+                        let mut cell = Cell::new(text, width);
+                        cell.set_style(style);
                         let mut rb = RenderBuffer::new(x + u16::from(width) + 1, 1);
                         rb.set_cell((x, 0), &cell);
                         rb.resize(x + remaining, 1);
@@ -740,7 +748,8 @@ mod tests {
                         rb.set_cell((x, 0), &cell);
 
                         assert_eq!(rb.line(0), expected.line(0));
-                        let blank = Cell::BLANK.style(cell.style.clone());
+                        let mut blank = Cell::BLANK;
+                        blank.set_style(cell.style());
                         for col in x..rb.width() {
                             assert_eq!(rb.buffer.cell(Position::new(col, 0)), Some(&blank));
                         }

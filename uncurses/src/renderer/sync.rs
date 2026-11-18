@@ -3,20 +3,70 @@
 //! Screens write freely into their `front_buf`; `fill_rect` and bulk
 //! ops mark whole rows as touched even when the resulting content
 //! matches the previous frame. [`Renderer::sync_front`] copies those
-//! touched spans into [`Renderer::back_buf`] using
-//! [`RenderBuffer::set_cell`], which only flips `back_buf.touched`
-//! when the destination cell actually differs. The diff pass then
+//! touched spans into [`Renderer::back_buf`]. Complete clusters use
+//! owned slice copies; partial clusters use [`RenderBuffer::set_cell`].
+//! Both paths mark only changed spans. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
 //! Only the cells inside `front_buf.touched(y)` spans are read — no
 //! full-buffer scan.
 
 use crate::renderer::Renderer;
-use crate::renderer::buffer::RenderBuffer;
+use crate::renderer::buffer::{RenderBuffer, TouchedSpan};
 
 use crate::buffer::Surface;
+use crate::cell::Cell;
+
+fn complete_clusters(cells: &[Cell]) -> bool {
+    let mut remaining = 0;
+    for cell in cells {
+        match (remaining, cell.width()) {
+            (0, 0) => return false,
+            (0, width) => remaining = width - 1,
+            (_, 0) => remaining -= 1,
+            _ => return false,
+        }
+    }
+    remaining == 0
+}
 
 impl Renderer {
+    fn sync_owned_span(&mut self, front: &RenderBuffer, y: u16, span: TouchedSpan) -> bool {
+        let start = usize::from(span.first);
+        let end = (usize::from(span.last) + 1).min(usize::from(front.width()));
+        if start >= end {
+            return true;
+        }
+        let source = &front.line(y).unwrap()[start..end];
+        let previous = &self.back_buf.line(y).unwrap()[start..end];
+        if !complete_clusters(source) || !complete_clusters(previous) {
+            return false;
+        }
+        let Some(mut first) = source.iter().zip(previous).position(|(a, b)| a != b) else {
+            return true;
+        };
+        let mut last = source
+            .iter()
+            .zip(previous)
+            .rposition(|(a, b)| a != b)
+            .unwrap()
+            + 1;
+        // Close both ends at primary boundaries in both complete rows.
+        while source[first].is_continuation() || previous[first].is_continuation() {
+            first -= 1;
+        }
+        while last < source.len()
+            && (source[last].is_continuation() || previous[last].is_continuation())
+        {
+            last += 1;
+        }
+        self.back_buf.line_mut(y).unwrap()[start + first..start + last]
+            .clone_from_slice(&source[first..last]);
+        self.back_buf
+            .touch_line(y, (start + first) as u16, (start + last - 1) as u16);
+        true
+    }
+
     /// Sync a caller-facing buffer into the renderer staging buffer.
     ///
     /// # Parameters
@@ -33,9 +83,8 @@ impl Renderer {
     ///
     /// # Behavior
     ///
-    /// Copies only cells within `front`'s touched spans, skips
-    /// continuation cells, steps by wide-cell width, and clears
-    /// `front`'s touched flags before returning.
+    /// Copies primary cells within `front`'s touched spans and restores
+    /// independent continuation styles. Clears `front`'s touched flags.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
         let width = front.width();
         let height = front.height();
@@ -50,32 +99,38 @@ impl Renderer {
             let Some(span) = front.touched(y) else {
                 continue;
             };
-            let mut x = span.first;
-            while x <= span.last {
+            if self.sync_owned_span(front, y, span) {
+                continue;
+            }
+            for x in span.first..=span.last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
-                    x += 1;
                     continue;
                 };
-                // Skip continuation columns. Copying the primary places
-                // the continuation on the far side as part of the same
-                // write, so the column is already carrying the value this
-                // loop would ask for. `Buffer::set` ignores a continuation
-                // offered on its own, so passing one on would be a wasted
-                // call rather than a wrong one, and stepping over it keeps
-                // the walk in step with the widths it advances by.
                 if new_cell.is_continuation() {
-                    x += 1;
+                    // A primary write regenerates its continuations.
+                    if self.back_buf.cell(pos).is_some_and(|old| {
+                        old.fg != new_cell.fg
+                            || old.bg != new_cell.bg
+                            || old.underline_color != new_cell.underline_color
+                            || old.attrs != new_cell.attrs
+                            || old.underline != new_cell.underline
+                            || old.link != new_cell.link
+                    }) {
+                        let old = self.back_buf.cell_mut(pos).unwrap();
+                        old.fg = new_cell.fg;
+                        old.bg = new_cell.bg;
+                        old.underline_color = new_cell.underline_color;
+                        old.attrs = new_cell.attrs;
+                        old.underline = new_cell.underline;
+                        old.link.clone_from(&new_cell.link);
+                    }
                     continue;
                 }
                 // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
                 self.back_buf.set_cell(pos, new_cell);
-                // Step over any continuation columns owned by the cell
-                // we just wrote so we don't try to re-copy them.
-                let step = (new_cell.width() as u16).max(1);
-                x = x.saturating_add(step);
             }
         }
         front.clear_touched();
@@ -102,6 +157,68 @@ mod tests {
         for (x, ch) in content.chars().enumerate() {
             buf.set_cell((x as u16, y), &cell(&ch.to_string()));
         }
+    }
+
+    #[test]
+    fn sync_validates_clusters_inside_both_spans_after_resize() {
+        for broken_front in [false, true] {
+            let mut r = Renderer::new();
+            let mut front = RenderBuffer::new(8, 1);
+            r.sync_front(&mut front);
+            let broken = if broken_front {
+                &mut front
+            } else {
+                &mut r.back_buf
+            };
+            broken.set_cell((1, 0), &Cell::new("wide", 4));
+            broken.resize(3, 1);
+            broken.resize(8, 1);
+            assert_eq!(broken.cell((1, 0).into()).unwrap().width(), 4);
+            assert!(!broken.cell((3, 0).into()).unwrap().is_continuation());
+            front.set_cell((0, 0), &cell("L"));
+            front.set_cell((7, 0), &cell("R"));
+            front.touch_all();
+
+            let mut expected = r.back_buf.buffer.clone();
+            for (x, cell) in front.line(0).unwrap().iter().enumerate() {
+                let pos = (x as u16, 0);
+                if cell.is_continuation() {
+                    expected
+                        .cell_mut(pos.into())
+                        .unwrap()
+                        .set_style(cell.style());
+                } else {
+                    expected.set(pos, cell);
+                }
+            }
+            r.sync_front(&mut front);
+            assert_eq!(r.back_buf.line(0), expected.line(0), "front={broken_front}");
+        }
+    }
+
+    #[test]
+    fn sync_owned_span_keeps_text_and_links_after_source_changes() {
+        let text = format!("e{}", "\u{301}".repeat(40));
+        let mut r = Renderer::new();
+        {
+            let mut front = RenderBuffer::new(4, 1);
+            let source = {
+                let mut styled_cell = Cell::new(text.as_str(), 1);
+                styled_cell.set_style(
+                    crate::style::Style::new()
+                        .fg(crate::color::Color::Green)
+                        .link("https://example.test", "id=owned"),
+                );
+                styled_cell
+            };
+            front.set_cell((0, 0), &source);
+            r.sync_front(&mut front);
+            front.set_cell((0, 0), &Cell::BLANK);
+        }
+        let copied = r.back_buf.cell((0, 0).into()).unwrap();
+        assert_eq!(copied.content(), text);
+        assert_eq!(copied.fg, Some(crate::color::Color::Green));
+        assert_eq!(copied.link.as_deref().unwrap().params, "id=owned");
     }
 
     #[test]

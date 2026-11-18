@@ -18,6 +18,55 @@ fn screen_is_send_sync() {
     assert_send_sync::<Screen<crate::terminal::Stdout>>();
 }
 
+#[test]
+fn continuation_style_changes_reach_the_renderer() {
+    let mut screen = Screen::new(Vec::new(), (4, 1));
+    screen.set_cell((0, 0), &Cell::new("界", 2));
+    screen.render().unwrap();
+
+    let style = Style::new()
+        .bg(Color::Blue)
+        .link("https://example.test/continuation", "id=continuation");
+    screen.cell_mut((1, 0)).unwrap().set_style(&style);
+    screen.render().unwrap();
+    assert_eq!(screen.diverge(), None);
+    let continuation = screen.cell((1, 0).into()).unwrap();
+    assert!(continuation.is_continuation());
+    assert_eq!(continuation.style(), style);
+
+    screen.writer_mut().clear();
+    screen.cell_mut((1, 0)).unwrap().set_style(style);
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn primary_style_changes_preserve_continuation_styles() {
+    for (content, width) in [("界", 2), ("abcd", 4)] {
+        let mut screen = Screen::new(Vec::new(), (6, 1));
+        screen.set_cell((0, 0), &Cell::new(content, width));
+        screen.render().unwrap();
+
+        screen
+            .cell_mut((0, 0))
+            .unwrap()
+            .set_style(Style::new().fg(Color::Green));
+        for x in 1..u16::from(width) {
+            screen.cell_mut((x, 0)).unwrap().set_style(
+                Style::new()
+                    .bg(Color::Indexed(x as u8))
+                    .link(format!("https://example.test/{x}"), ""),
+            );
+        }
+        screen.render().unwrap();
+        assert_eq!(screen.diverge(), None, "stored width {width}");
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+}
+
 /// Test-only construction and a few shims mirroring the historical renderer
 /// API the render tests were written against, so they read the same way while
 /// driving the split [`Screen`].
@@ -399,10 +448,11 @@ fn truecolor_profile_emits_38_2_rgb() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::TrueColor);
-        screen.set_cell(
-            (0u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
-        );
+        screen.set_cell((0u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().fg(Color::rgb(255, 0, 0)));
+            styled_cell
+        });
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -419,10 +469,11 @@ fn ansi256_profile_emits_38_5_index() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ansi256);
-        screen.set_cell(
-            (0u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
-        );
+        screen.set_cell((0u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().fg(Color::rgb(255, 0, 0)));
+            styled_cell
+        });
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -436,10 +487,11 @@ fn ansi_profile_emits_basic_sgr_3x_or_9x() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ansi);
-        screen.set_cell(
-            (0u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
-        );
+        screen.set_cell((0u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().fg(Color::rgb(255, 0, 0)));
+            styled_cell
+        });
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -458,10 +510,11 @@ fn ascii_profile_emits_no_color_sgr() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ascii);
-        screen.set_cell(
-            (0u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
-        );
+        screen.set_cell((0u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().fg(Color::rgb(255, 0, 0)));
+            styled_cell
+        });
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -1908,22 +1961,26 @@ fn styled_text_emits_specific_sgr_payloads() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (4, 1)).with_color_profile(Profile::TrueColor);
-        screen.set_cell(
-            (0u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().bold()),
-        );
-        screen.set_cell(
-            (1u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
-        );
-        screen.set_cell(
-            (2u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().bg(Color::rgb(0, 255, 0))),
-        );
-        screen.set_cell(
-            (3u16, 0u16),
-            &Cell::new("X", 1).style(Style::default().bold().fg(Color::rgb(0, 0, 255))),
-        );
+        screen.set_cell((0u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().bold());
+            styled_cell
+        });
+        screen.set_cell((1u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().fg(Color::rgb(255, 0, 0)));
+            styled_cell
+        });
+        screen.set_cell((2u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().bg(Color::rgb(0, 255, 0)));
+            styled_cell
+        });
+        screen.set_cell((3u16, 0u16), &{
+            let mut styled_cell = Cell::new("X", 1);
+            styled_cell.set_style(Style::default().bold().fg(Color::rgb(0, 0, 255)));
+            styled_cell
+        });
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -1941,10 +1998,11 @@ fn hyperlinks_emit_osc8_with_url() {
         let mut screen = Screen::for_test(&mut buf, (10, 1));
         let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
-            screen.set_cell(
-                (i as u16, 0u16),
-                &Cell::new(ch.to_string(), 1).style(style.clone()),
-            );
+            screen.set_cell((i as u16, 0u16), &{
+                let mut styled_cell = Cell::new(ch.to_string(), 1);
+                styled_cell.set_style(style.clone());
+                styled_cell
+            });
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -1965,10 +2023,11 @@ fn hyperlinks_suppressed_under_disabled_profile() {
         let mut screen = Screen::for_test(&mut buf, (10, 1)).with_color_profile(Profile::Disabled);
         let style = Style::default().link("https://example.com", "");
         for (i, ch) in "link".chars().enumerate() {
-            screen.set_cell(
-                (i as u16, 0u16),
-                &Cell::new(ch.to_string(), 1).style(style.clone()),
-            );
+            screen.set_cell((i as u16, 0u16), &{
+                let mut styled_cell = Cell::new(ch.to_string(), 1);
+                styled_cell.set_style(style.clone());
+                styled_cell
+            });
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -2070,7 +2129,11 @@ fn underline_styles_emit_extended_sgr_params() {
         ];
         for (i, u) in styles.iter().enumerate() {
             let st = Style::default().underline_style(*u);
-            screen.set_cell((i as u16, 0u16), &Cell::new("U", 1).style(st));
+            screen.set_cell((i as u16, 0u16), &{
+                let mut styled_cell = Cell::new("U", 1);
+                styled_cell.set_style(st);
+                styled_cell
+            });
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -2096,7 +2159,11 @@ fn text_attribute_variants_emit_matching_sgr_params() {
             Style::default().bold(),
         ];
         for (i, st) in styles.iter().enumerate() {
-            screen.set_cell((i as u16, 0u16), &Cell::new("A", 1).style(st.clone()));
+            screen.set_cell((i as u16, 0u16), &{
+                let mut styled_cell = Cell::new("A", 1);
+                styled_cell.set_style(st.clone());
+                styled_cell
+            });
         }
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -2134,7 +2201,8 @@ fn color_downsampling_emits_profile_specific_sgr() {
         let mut buf: Vec<u8> = Vec::new();
         {
             let mut screen = Screen::for_test(&mut buf, (3, 1)).with_color_profile(profile);
-            let cell = Cell::new("C", 1).style(Style::default().fg(Color::rgb(123, 234, 45)));
+            let mut cell = Cell::new("C", 1);
+            cell.set_style(Style::default().fg(Color::rgb(123, 234, 45)));
             screen.set_cell((0u16, 0u16), &cell);
             screen.render().unwrap();
             screen.flush().unwrap();
@@ -2317,10 +2385,11 @@ fn renderer_redraws_when_style_changes() {
         screen.render().unwrap();
         screen.flush().unwrap();
 
-        screen.set_cell(
-            (0u16, 0u16),
-            &Cell::new("A", 1).style(Style::default().bold()),
-        );
+        screen.set_cell((0u16, 0u16), &{
+            let mut styled_cell = Cell::new("A", 1);
+            styled_cell.set_style(Style::default().bold());
+            styled_cell
+        });
         screen.render().unwrap();
         screen.flush().unwrap();
     }
@@ -2334,7 +2403,8 @@ fn basic_color_fg_emits_sgr_31() {
     let mut buf: Vec<u8> = Vec::new();
     {
         let mut screen = Screen::for_test(&mut buf, (1, 1)).with_color_profile(Profile::Ansi);
-        let cell = Cell::new("X", 1).style(Style::default().fg(Color::Red));
+        let mut cell = Cell::new("X", 1);
+        cell.set_style(Style::default().fg(Color::Red));
         screen.set_cell((0u16, 0u16), &cell);
         screen.render().unwrap();
         screen.flush().unwrap();
@@ -2538,10 +2608,11 @@ fn test_screen_clears_stale_chars_after_navigating() {
 #[test]
 fn truecolor_termcap_upgrade_repaints_unchanged_cells() {
     let mut screen = Screen::for_test(Vec::new(), (1, 1)).with_color_profile(Profile::Ansi256);
-    screen.set_cell(
-        (0u16, 0u16),
-        &Cell::new("X", 1).style(Style::default().fg(Color::rgb(255, 0, 0))),
-    );
+    screen.set_cell((0u16, 0u16), &{
+        let mut styled_cell = Cell::new("X", 1);
+        styled_cell.set_style(Style::default().fg(Color::rgb(255, 0, 0)));
+        styled_cell
+    });
     screen.render().unwrap();
 
     let first_len = screen.writer().len();
@@ -2870,7 +2941,11 @@ fn thumb_second_frame(sync_output: bool) -> String {
     fn paint(screen: &mut Screen<Vec<u8>>, offset: usize) {
         for y in 0..H {
             let track = if y == THUMB_ROW {
-                Cell::new("\u{2588}", 1).style(Style::default().bg(Color::Red))
+                {
+                    let mut styled_cell = Cell::new("\u{2588}", 1);
+                    styled_cell.set_style(Style::default().bg(Color::Red));
+                    styled_cell
+                }
             } else {
                 Cell::new(" ", 1)
             };

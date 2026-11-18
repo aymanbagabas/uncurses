@@ -18,8 +18,12 @@
 //! use uncurses::text::Encode;
 //!
 //! let mut buf = Buffer::new(2, 1);
-//! buf.set_cell((0, 0).into(), &Cell::new("h", 1).style(Style::new().bold()));
-//! buf.set_cell((1, 0).into(), &Cell::new("i", 1).style(Style::new().bold()));
+//! let mut h = Cell::new("h", 1);
+//! h.set_style(Style::new().bold());
+//! let mut i = Cell::new("i", 1);
+//! i.set_style(h.style());
+//! buf.set_cell((0, 0).into(), &h);
+//! buf.set_cell((1, 0).into(), &i);
 //!
 //! // Render into a String via the Display adapter.
 //! let s = buf.display().to_string();
@@ -164,7 +168,7 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
         // row resets to default, so everything past `last_visible` is dropped.
         let last_visible = (bounds.x..x_end).rev().find(|&x| {
             surface.cell(Position::new(x, y)).is_some_and(|cell| {
-                !cell.is_blank() || !convert_style(&cell.style, profile).is_empty()
+                !cell.is_blank() || !convert_style(cell.style(), profile).is_empty()
             })
         });
         let Some(last_visible) = last_visible else {
@@ -186,7 +190,7 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
 
             // Downsample to the target profile, then emit the SGR and OSC 8
             // hyperlink delta from the current pen.
-            let to = convert_style(&cell.style, profile);
+            let to = convert_style(cell.style(), profile);
             write_style_diff(w, &pen, &to)?;
             pen = to;
             w.write_all(cell.draw_bytes())?;
@@ -215,8 +219,16 @@ mod tests {
     fn styled_run_emits_one_opener_and_a_trailing_reset() {
         let mut buf = Buffer::new(2, 1);
         let bold = Style::new().bold();
-        buf.set_cell((0, 0).into(), &Cell::new("h", 1).style(&bold));
-        buf.set_cell((1, 0).into(), &Cell::new("i", 1).style(&bold));
+        buf.set_cell((0, 0).into(), &{
+            let mut styled_cell = Cell::new("h", 1);
+            styled_cell.set_style(&bold);
+            styled_cell
+        });
+        buf.set_cell((1, 0).into(), &{
+            let mut styled_cell = Cell::new("i", 1);
+            styled_cell.set_style(&bold);
+            styled_cell
+        });
 
         let out = buf.display().to_string();
         // The run shares a style, so the opener appears once before the text
@@ -235,7 +247,11 @@ mod tests {
     fn a_cell_that_stores_nothing_is_blanked_across_its_whole_width() {
         let mut buf = Buffer::new(5, 1);
         buf.set_cell((0, 0).into(), &Cell::new("A", 1));
-        buf.set_cell((1, 0).into(), &Cell::new("", 3).style(Style::new().bold()));
+        buf.set_cell((1, 0).into(), &{
+            let mut styled_cell = Cell::new("", 3);
+            styled_cell.set_style(Style::new().bold());
+            styled_cell
+        });
         buf.set_cell((4, 0).into(), &Cell::new("B", 1));
 
         // The empty cell owns three columns, so it draws three blanks. Were
@@ -260,7 +276,11 @@ mod tests {
     #[test]
     fn encode_matches_display() {
         let mut buf = Buffer::new(2, 1);
-        buf.set_cell((0, 0).into(), &Cell::new("A", 1).style(Style::new().bold()));
+        buf.set_cell((0, 0).into(), &{
+            let mut styled_cell = Cell::new("A", 1);
+            styled_cell.set_style(Style::new().bold());
+            styled_cell
+        });
         let mut bytes = Vec::new();
         buf.encode(&mut bytes).unwrap();
         assert_eq!(String::from_utf8(bytes).unwrap(), buf.display().to_string());
@@ -311,7 +331,11 @@ mod tests {
         buf.set_cell((0, 0).into(), &Cell::new("a", 1));
         // A trailing space with a background is visible, so it survives.
         let bg = Style::new().bg(Color::Red);
-        buf.set_cell((2, 0).into(), &Cell::new(" ", 1).style(&bg));
+        buf.set_cell((2, 0).into(), &{
+            let mut styled_cell = Cell::new(" ", 1);
+            styled_cell.set_style(&bg);
+            styled_cell
+        });
         // "a", a positional blank, then the bg-styled space, then reset.
         assert_eq!(buf.display().to_string(), "a \x1b[41m \x1b[m");
     }
@@ -322,7 +346,11 @@ mod tests {
         let mut buf = Buffer::new(3, 1);
         buf.set_cell((0, 0).into(), &Cell::new("a", 1));
         let bg = Style::new().bg(Color::Red);
-        buf.set_cell((2, 0).into(), &Cell::new(" ", 1).style(&bg));
+        buf.set_cell((2, 0).into(), &{
+            let mut styled_cell = Cell::new(" ", 1);
+            styled_cell.set_style(&bg);
+            styled_cell
+        });
         // Under Disabled the background is dropped, so the trailing space is
         // unstyled and gets trimmed along with the interior blank.
         assert_eq!(buf.display_with(Profile::Disabled).to_string(), "a");
@@ -333,8 +361,16 @@ mod tests {
         use crate::color::{Color, Profile};
         let mut buf = Buffer::new(2, 1);
         let styled = Style::new().bold().fg(Color::Red);
-        buf.set_cell((0, 0).into(), &Cell::new("h", 1).style(&styled));
-        buf.set_cell((1, 0).into(), &Cell::new("i", 1).style(&styled));
+        buf.set_cell((0, 0).into(), &{
+            let mut styled_cell = Cell::new("h", 1);
+            styled_cell.set_style(&styled);
+            styled_cell
+        });
+        buf.set_cell((1, 0).into(), &{
+            let mut styled_cell = Cell::new("i", 1);
+            styled_cell.set_style(&styled);
+            styled_cell
+        });
         // Disabled strips every escape: only the text remains.
         assert_eq!(buf.display_with(Profile::Disabled).to_string(), "hi");
     }
@@ -346,7 +382,11 @@ mod tests {
         // A pure-red 24-bit color quantizes to the nearest palette entry,
         // xterm bright red (SGR 91), under Ansi.
         let red = Style::new().fg(Color::Rgb(255, 0, 0));
-        buf.set_cell((0, 0).into(), &Cell::new("x", 1).style(&red));
+        buf.set_cell((0, 0).into(), &{
+            let mut styled_cell = Cell::new("x", 1);
+            styled_cell.set_style(&red);
+            styled_cell
+        });
         let out = buf.display_with(Profile::Ansi).to_string();
         assert_eq!(out, "\x1b[91mx\x1b[m");
     }
@@ -356,7 +396,11 @@ mod tests {
         use crate::color::{Color, Profile};
         let mut buf = Buffer::new(1, 1);
         let styled = Style::new().bold().fg(Color::Rgb(10, 20, 30));
-        buf.set_cell((0, 0).into(), &Cell::new("x", 1).style(&styled));
+        buf.set_cell((0, 0).into(), &{
+            let mut styled_cell = Cell::new("x", 1);
+            styled_cell.set_style(&styled);
+            styled_cell
+        });
         // Bold (SGR 1) survives; the foreground color is dropped.
         assert_eq!(
             buf.display_with(Profile::Ascii).to_string(),
@@ -369,8 +413,16 @@ mod tests {
         use crate::color::{Color, Profile};
         let mut buf = Buffer::new(2, 1);
         let styled = Style::new().fg(Color::Rgb(1, 2, 3)).link("https://e.x", "");
-        buf.set_cell((0, 0).into(), &Cell::new("h", 1).style(&styled));
-        buf.set_cell((1, 0).into(), &Cell::new("i", 1).style(&styled));
+        buf.set_cell((0, 0).into(), &{
+            let mut styled_cell = Cell::new("h", 1);
+            styled_cell.set_style(&styled);
+            styled_cell
+        });
+        buf.set_cell((1, 0).into(), &{
+            let mut styled_cell = Cell::new("i", 1);
+            styled_cell.set_style(&styled);
+            styled_cell
+        });
         assert_eq!(
             buf.display_with(Profile::TrueColor).to_string(),
             buf.display().to_string(),

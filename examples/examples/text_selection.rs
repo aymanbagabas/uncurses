@@ -226,7 +226,9 @@ fn render(screen: &mut Screen<Stdout>, rows: &[Row], selection: &Selection) -> s
             }
             let position = (x as u16, y as u16);
             if selected.is_some_and(|(a, b)| x >= a && x < b) {
-                screen.set_cell(position, &cell.clone().style(highlight.clone()));
+                let mut selected_cell = cell.clone();
+                selected_cell.set_style(&highlight);
+                screen.set_cell(position, &selected_cell);
             } else {
                 screen.set_cell(position, cell);
             }

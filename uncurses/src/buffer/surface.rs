@@ -375,7 +375,8 @@ pub trait SurfaceMut: Surface {
     fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
         let clipped = self.bounds().intersection(rect);
         let step = (cell.width() as u16).max(1);
-        let blank = Cell::BLANK.style(cell.style.clone());
+        let mut blank = Cell::BLANK;
+        blank.set_style(cell.style());
         for y in clipped.top()..clipped.bottom() {
             let mut x = clipped.left();
             while !overruns(x, step, clipped.right()) {

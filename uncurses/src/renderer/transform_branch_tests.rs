@@ -230,7 +230,11 @@ fn transform_pen_change_emits_sgr() {
 
     let mut new_buf = RenderBuffer::new(width, 1);
     let red = Style::default().fg(Color::Red);
-    new_buf.set_cell((0, 0), &Cell::new("R", 1).style(red));
+    new_buf.set_cell((0, 0), &{
+        let mut styled_cell = Cell::new("R", 1);
+        styled_cell.set_style(red);
+        styled_cell
+    });
 
     let out = transform_output(&mut renderer, &new_buf);
     assert_eq!(out, b"\x1b[31mR");
@@ -244,7 +248,11 @@ fn transform_osc8_link_open_and_close() {
 
     let linked_style = Style::default().link("https://example.test", "");
     let mut linked_buf = RenderBuffer::new(width, 1);
-    linked_buf.set_cell((0, 0), &Cell::new("L", 1).style(linked_style));
+    linked_buf.set_cell((0, 0), &{
+        let mut styled_cell = Cell::new("L", 1);
+        styled_cell.set_style(linked_style);
+        styled_cell
+    });
     let open = transform_output(&mut renderer, &linked_buf);
     assert!(
         open.windows(b"\x1b]8;;https://example.test\x1b\\L".len())
@@ -331,9 +339,10 @@ fn clear_bottom_with_styled_blank() {
     let width = 8;
     let height = 4;
     let bg = Style::default().bg(Color::Blue);
-    let blank = Cell::BLANK.style(bg);
+    let mut blank = Cell::BLANK;
+    blank.set_style(bg);
     let mut renderer = renderer(width, height, opts_with(|o| o.insert(Optimizations::BCE)));
-    renderer.cur.set_style(blank.style.clone());
+    renderer.cur.set_style(blank.style());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
@@ -365,9 +374,10 @@ fn clear_bottom_skips_ed_without_bce_for_styled_blank() {
     let width = 8;
     let height = 4;
     let bg = Style::default().bg(Color::Blue);
-    let blank = Cell::BLANK.style(bg);
+    let mut blank = Cell::BLANK;
+    blank.set_style(bg);
     let mut renderer = renderer(width, height, Optimizations::none());
-    renderer.cur.set_style(blank.style.clone());
+    renderer.cur.set_style(blank.style());
 
     let mut cur = RenderBuffer::new(width, height);
     for y in 2..height {
@@ -416,7 +426,11 @@ fn a_difference_on_a_continuation_re_emits_its_cluster() {
     // directly is the only way there, because `set` leaves a continuation to
     // the cluster that owns it.
     if let Some(line) = buf.line_mut(0) {
-        line[13] = Cell::CONTINUATION.style(Style::default().bg(Color::Red));
+        line[13] = {
+            let mut styled_cell = Cell::CONTINUATION;
+            styled_cell.set_style(Style::default().bg(Color::Red));
+            styled_cell
+        };
     }
     buf.touch_line(0, 13, 13);
 

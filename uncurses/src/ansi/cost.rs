@@ -319,7 +319,13 @@ pub fn overwrite_cost(
     while i < to {
         let cell = &line[i];
         if !cell.is_continuation() {
-            if &cell.style != style {
+            if cell.fg != style.fg
+                || cell.bg != style.bg
+                || cell.underline_color != style.underline_color
+                || cell.attrs != style.attrs
+                || cell.underline != style.underline
+                || cell.link != style.link
+            {
                 return None;
             }
             let content = cell.content();

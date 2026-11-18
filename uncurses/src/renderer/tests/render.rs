@@ -25,7 +25,8 @@ fn test_post_scroll_splitter_chain_emits_correct_horizontal_back() {
     let mut rb = RenderBuffer::new(120, 50);
 
     let splitter_col: u16 = 55;
-    let dim_splitter = Cell::new("│", 1).style(Style::default().faint());
+    let mut dim_splitter = Cell::new("│", 1);
+    dim_splitter.set_style(Style::default().faint());
 
     // Frame 1: priming render so cur_buf is initialised. Just put a
     // splitter on row 0 so render() has at least one change.
@@ -668,7 +669,8 @@ fn test_clear_bottom_syncs_cur_buf_so_next_frame_repaints() {
     let mut r = Renderer::new();
     r.set_fullscreen(false);
 
-    let scrim = Cell::new(" ", 1).style(Style::default().bg(Color::Blue));
+    let mut scrim = Cell::new(" ", 1);
+    scrim.set_style(Style::default().bg(Color::Blue));
 
     // Frame 1: scrim across all 8 rows.
     let mut rb1 = RenderBuffer::new(10, 8);

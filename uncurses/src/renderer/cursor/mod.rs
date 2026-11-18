@@ -484,7 +484,11 @@ mod tests {
         r.cur.set_style(styled.clone());
         let line: Vec<Cell> = "abcde"
             .chars()
-            .map(|c| Cell::new(c.to_string(), 1).style(styled.clone()))
+            .map(|c| {
+                let mut styled_cell = Cell::new(c.to_string(), 1);
+                styled_cell.set_style(styled.clone());
+                styled_cell
+            })
             .collect();
 
         let mut buf = Vec::new();
@@ -513,7 +517,11 @@ mod tests {
         r.cur.set_style(styled.clone());
         let line: Vec<Cell> = "abcde"
             .chars()
-            .map(|c| Cell::new(c.to_string(), 1).style(styled.clone()))
+            .map(|c| {
+                let mut styled_cell = Cell::new(c.to_string(), 1);
+                styled_cell.set_style(styled.clone());
+                styled_cell
+            })
             .collect();
 
         let mut buf = Vec::new();

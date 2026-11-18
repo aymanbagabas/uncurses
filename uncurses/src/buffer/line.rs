@@ -22,7 +22,8 @@ pub(crate) fn fill_line_into(slot: &mut [Cell], fill: &Cell) {
     // A continuation is the rest of the cell that owns it, so it answers
     // for that cell's colours too. Leaving it default paints a hole in the
     // second column of every pair when the fill carries a background.
-    let cont = Cell::CONTINUATION.style(fill.style.clone());
+    let mut cont = Cell::CONTINUATION;
+    cont.set_style(fill.style());
     let mut x = 0;
     while x + step <= width {
         slot[x] = fill.clone();

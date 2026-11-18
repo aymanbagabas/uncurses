@@ -283,7 +283,8 @@ fn golden_an_unclearable_right_edge_is_written_out() {
 
     // An underlined blank is not what an erase leaves behind, so the tail
     // has to be written out to the right edge instead of erased.
-    let underlined = Cell::new(" ", 1).style(Style::default().underline());
+    let mut underlined = Cell::new(" ", 1);
+    underlined.set_style(Style::default().underline());
     for x in 0..12u16 {
         buf.set_cell((x, 0), &underlined.clone());
     }
@@ -303,11 +304,23 @@ fn golden_a_colored_tail_is_erased_with_bce() {
 
     let red = Style::default().bg(Color::Red);
     for x in 0..14u16 {
-        buf.set_cell((x, 0), &Cell::new(" ", 1).style(red.clone()));
+        buf.set_cell((x, 0), &{
+            let mut styled_cell = Cell::new(" ", 1);
+            styled_cell.set_style(red.clone());
+            styled_cell
+        });
     }
-    buf.set_cell((2, 0), &Cell::new(FAMILY, 8).style(red.clone()));
+    buf.set_cell((2, 0), &{
+        let mut styled_cell = Cell::new(FAMILY, 8);
+        styled_cell.set_style(red.clone());
+        styled_cell
+    });
     for c in 3..10u16 {
-        buf.set_cell((c, 0), &Cell::new("", 0).style(red.clone()));
+        buf.set_cell((c, 0), &{
+            let mut styled_cell = Cell::new("", 0);
+            styled_cell.set_style(red.clone());
+            styled_cell
+        });
     }
 
     assert_golden(

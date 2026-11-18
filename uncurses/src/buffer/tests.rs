@@ -3,8 +3,8 @@ use crate::renderer::RenderBuffer;
 use crate::style::Style;
 use crate::text::{Painter, TextSurface, WrapMode};
 
-fn link_of(s: &Style) -> Option<(&str, &str)> {
-    s.link
+fn link_of(cell: &Cell) -> Option<(&str, &str)> {
+    cell.link
         .as_deref()
         .map(|l| (l.url.as_str(), l.params.as_str()))
 }
@@ -54,29 +54,38 @@ fn test_broken_wide_cell_keeps_bg() {
     // Overwriting a wide cell's continuation blanks the primary; the blank
     // must keep the wide cell's background instead of resetting to default.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
+    buf.set((3, 0), &{
+        let mut styled_cell = Cell::new("中", 2);
+        styled_cell.set_style(styled.clone());
+        styled_cell
+    });
     buf.set((4, 0), &Cell::new("A", 1));
     let primary = buf.cell(Position::new(3, 0)).unwrap();
     assert!(primary.is_blank());
-    assert_eq!(primary.style.bg, Some(Color::Red));
+    assert_eq!(primary.bg, Some(Color::Red));
 
     // Overwriting the primary blanks the trailing continuation; that blank
     // keeps the wide cell's background too.
     let mut buf = Buffer::new(10, 1);
-    buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
+    buf.set((3, 0), &{
+        let mut styled_cell = Cell::new("中", 2);
+        styled_cell.set_style(styled.clone());
+        styled_cell
+    });
     buf.set((3, 0), &Cell::new("A", 1));
-    assert_eq!(
-        buf.cell(Position::new(4, 0)).unwrap().style.bg,
-        Some(Color::Red)
-    );
+    assert_eq!(buf.cell(Position::new(4, 0)).unwrap().bg, Some(Color::Red));
 
     // A wide cell that doesn't fit at the right edge is stored as a blank
     // that still carries its background.
     let mut buf = Buffer::new(4, 1);
-    buf.set((3, 0), &Cell::new("中", 2).style(styled.clone()));
+    buf.set((3, 0), &{
+        let mut styled_cell = Cell::new("中", 2);
+        styled_cell.set_style(styled.clone());
+        styled_cell
+    });
     let edge = buf.cell(Position::new(3, 0)).unwrap();
     assert!(edge.is_blank());
-    assert_eq!(edge.style.bg, Some(Color::Red));
+    assert_eq!(edge.bg, Some(Color::Red));
 }
 
 fn check_partial_fill_style(use_view: bool) {
@@ -94,7 +103,8 @@ fn check_partial_fill_style(use_view: bool) {
         for columns in [1, 5, 10] {
             let mut buf = Buffer::new(16, 3);
             let rect = Rect::new(2, 1, columns, 1);
-            let fill = Cell::new("W", width).style(style.clone());
+            let mut fill = Cell::new("W", width);
+            fill.set_style(style.clone());
             if use_view {
                 View::new(&mut buf, rect).fill_rect(Rect::new(0, 0, 16, 3), &fill);
             } else {
@@ -107,11 +117,19 @@ fn check_partial_fill_style(use_view: bool) {
                     let expected = if rect.contains(pos) {
                         let offset = x - rect.left();
                         if offset >= full_columns {
-                            Cell::BLANK.style(style.clone())
+                            {
+                                let mut styled_cell = Cell::BLANK;
+                                styled_cell.set_style(style.clone());
+                                styled_cell
+                            }
                         } else if offset.is_multiple_of(u16::from(width)) {
                             fill.clone()
                         } else {
-                            Cell::CONTINUATION.style(style.clone())
+                            {
+                                let mut styled_cell = Cell::CONTINUATION;
+                                styled_cell.set_style(style.clone());
+                                styled_cell
+                            }
                         }
                     } else {
                         Cell::BLANK
@@ -148,14 +166,22 @@ fn check_fill_boundary_style(rect: Rect) {
             .bg(Color::Blue)
             .link("https://example.com/old", "")
     };
-    let fill = Cell::new("x", 1).style(
-        Style::EMPTY
-            .fg(Color::White)
-            .bg(Color::Red)
-            .link("https://example.com/fill", ""),
-    );
+    let fill = {
+        let mut styled_cell = Cell::new("x", 1);
+        styled_cell.set_style(
+            Style::EMPTY
+                .fg(Color::White)
+                .bg(Color::Red)
+                .link("https://example.com/fill", ""),
+        );
+        styled_cell
+    };
     let mut buf = Buffer::new(12, 3);
-    buf.set((2, 1), &Cell::new("W", 8).style(old_style.clone()));
+    buf.set((2, 1), &{
+        let mut styled_cell = Cell::new("W", 8);
+        styled_cell.set_style(old_style.clone());
+        styled_cell
+    });
     buf.fill_rect(rect, &fill);
     for y in 0..3 {
         for x in 0..12 {
@@ -163,7 +189,11 @@ fn check_fill_boundary_style(rect: Rect) {
             let expected = if rect.contains(pos) {
                 fill.clone()
             } else if y == 1 && (2..10).contains(&x) {
-                Cell::BLANK.style(old_style.clone())
+                {
+                    let mut styled_cell = Cell::BLANK;
+                    styled_cell.set_style(old_style.clone());
+                    styled_cell
+                }
             } else {
                 Cell::BLANK
             };
@@ -381,11 +411,11 @@ fn write_string_with_link() {
         Style::default().link("https://example.com", ""),
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(0, 0)).unwrap().style),
+        link_of(buf.cell(Position::new(0, 0)).unwrap()),
         Some(("https://example.com", ""))
     );
     assert_eq!(
-        link_of(&buf.cell(Position::new(1, 0)).unwrap().style),
+        link_of(buf.cell(Position::new(1, 0)).unwrap()),
         Some(("https://example.com", ""))
     );
 }
