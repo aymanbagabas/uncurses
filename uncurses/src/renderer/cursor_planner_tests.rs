@@ -200,8 +200,8 @@ fn styled_overwrite_beats_cuf() {
     let style = Style::default().bold();
     r.cur.set_style(style.clone());
     let mut line = vec![Cell::BLANK; 80];
-    line[0] = Cell::new("A", 1).style(style.clone());
-    line[1] = Cell::new("B", 1).style(style);
+    line[0] = Cell::new("A", 1, style.clone());
+    line[1] = Cell::new("B", 1, style);
 
     let actual = relative_move(
         &mut r,

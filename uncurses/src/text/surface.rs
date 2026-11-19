@@ -529,8 +529,8 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
             }
         }
         if clip.contains(Position::new(x, y)) {
-            let cell = Cell::new(cluster, cw);
-            target.set_cell(Position::new(x, y), &cell.style(style.clone()));
+            let cell = Cell::new(cluster, cw, style);
+            target.set_cell(Position::new(x, y), &cell);
         }
         x += w;
     }

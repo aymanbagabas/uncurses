@@ -252,7 +252,7 @@ test("diagrams render locally and code blocks copy their source", async ({ page,
   await expect(page.locator(".mermaid svg")).toBeVisible();
   await page.getByRole("button", { name: "Copy", exact: true }).first().click();
   await expect(page.getByRole("button", { name: "Copied!" })).toBeVisible();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('Cell::new("a", 1)');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("cell.set_style(style);");
   expect(errors).toEqual([]);
 });
 

@@ -88,13 +88,14 @@ impl SurfaceMut for Window {
 mod tests {
     use super::*;
     use crate::cell::Cell;
+    use crate::style::Style;
 
     #[test]
     fn write_then_present_offsets_by_position() {
         let mut src = Window::new(3, 2);
         src.set_position((5, 1));
-        src.set_cell(Position::new(0, 0), &Cell::new("A", 1));
-        src.set_cell(Position::new(2, 1), &Cell::new("B", 1));
+        src.set_cell(Position::new(0, 0), &Cell::new("A", 1, Style::EMPTY));
+        src.set_cell(Position::new(2, 1), &Cell::new("B", 1, Style::EMPTY));
 
         let mut dst = Buffer::new(10, 4);
         src.present(&mut dst);
@@ -109,7 +110,7 @@ mod tests {
     fn present_clips_to_target_bounds() {
         let mut src = Window::new(4, 4);
         src.set_position((8, 2));
-        src.fill(&Cell::new("X", 1));
+        src.fill(&Cell::new("X", 1, Style::EMPTY));
         // Target is 10x3 — only the top-left 2x1 of src lands.
         let mut dst = Buffer::new(10, 3);
         src.present(&mut dst);

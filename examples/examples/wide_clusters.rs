@@ -22,6 +22,7 @@ use std::io::{self, Write};
 
 use uncurses::cell::Cell;
 use uncurses::screen::{Optimizations, Screen};
+use uncurses::style::Style;
 use uncurses::text::{TextSurface, WidthMode};
 
 /// A four-person family: seven code points, four faces joined by three
@@ -93,7 +94,7 @@ fn main() -> io::Result<()> {
     let width = WidthMode::Wc.grapheme_width(FAMILY, false);
     let _ = place(&mut screen, FAMILY, width)?;
     screen.writer_mut().clear();
-    screen.set_cell((2 + u16::from(width), 0), &Cell::new("Y", 1));
+    screen.set_cell((2 + u16::from(width), 0), &Cell::new("Y", 1, Style::EMPTY));
     screen.render()?;
     let bytes = screen.into_writer();
     writeln!(out, "\nchanging only the cell after the family emoji")?;
@@ -115,7 +116,7 @@ fn main() -> io::Result<()> {
 
     let mut screen = row_screen(false)?;
     let _ = place(&mut screen, FAMILY, width)?;
-    screen.set_cell((2 + u16::from(width), 0), &Cell::new("Y", 1));
+    screen.set_cell((2 + u16::from(width), 0), &Cell::new("Y", 1, Style::EMPTY));
     screen.move_cursor_to((2 + u16::from(width) + 1, 0))?;
     writeln!(
         out,
@@ -165,13 +166,13 @@ fn row_screen(whole_clusters: bool) -> io::Result<Screen<Vec<u8>>> {
 
 /// Put `text` at column 2 followed by a `Z`, and return that frame's bytes.
 fn place(screen: &mut Screen<Vec<u8>>, text: &str, width: u8) -> io::Result<Vec<u8>> {
-    screen.set_cell((2, 0), &Cell::new(text, width));
+    screen.set_cell((2, 0), &Cell::new(text, width, Style::EMPTY));
     // A wide cell owns the columns after it. They hold continuations, which
     // are never drawn: the primary cell covers them.
     for x in 3..2 + u16::from(width) {
-        screen.set_cell((x, 0), &Cell::new("", 0));
+        screen.set_cell((x, 0), &Cell::new("", 0, Style::EMPTY));
     }
-    screen.set_cell((2 + u16::from(width), 0), &Cell::new("Z", 1));
+    screen.set_cell((2 + u16::from(width), 0), &Cell::new("Z", 1, Style::EMPTY));
     screen.render()?;
     Ok(std::mem::take(screen.writer_mut()))
 }

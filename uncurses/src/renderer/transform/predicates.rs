@@ -49,7 +49,7 @@ pub(super) fn cells_equal_blank(cell: &Cell, blank: &Cell) -> bool {
         && (cell.content() == blank.content()
             || (cell.content().is_empty() && blank.content() == " ")
             || (cell.content() == " " && blank.content().is_empty()))
-        && cell.style == blank.style
+        && cell.same_style(blank)
 }
 
 /// Whether `bytes` is safe to repeat with the REP escape.

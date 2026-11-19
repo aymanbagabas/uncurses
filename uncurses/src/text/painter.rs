@@ -205,9 +205,8 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                 && let Some((px, py, content, w)) = pending.take()
                 && clip.contains(Position::new(px, py))
             {
-                let cell = Cell::new(&content, w);
-                self.target
-                    .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+                let cell = Cell::new(&content, w, pen.inherit(&base));
+                self.target.set_cell(Position::new(px, py), &cell);
             }
 
             match tok.kind {
@@ -289,9 +288,8 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
         if let Some((px, py, content, w)) = pending.take()
             && clip.contains(Position::new(px, py))
         {
-            let cell = Cell::new(&content, w);
-            self.target
-                .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
+            let cell = Cell::new(&content, w, pen.inherit(&base));
+            self.target.set_cell(Position::new(px, py), &cell);
         }
         Position::new(x, y)
     }
@@ -643,8 +641,9 @@ mod tests {
         b.cell(Position::new(x, y)).cloned().unwrap()
     }
 
-    fn link_of(s: &crate::style::Style) -> Option<(&str, &str)> {
-        s.link
+    fn link_of(cell: &Cell) -> Option<(&str, &str)> {
+        cell.style
+            .link
             .as_deref()
             .map(|l| (l.url.as_str(), l.params.as_str()))
     }
@@ -676,9 +675,9 @@ mod tests {
                 Style::default(),
             );
             assert_eq!(end, Position::new(3, 0));
-            assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-            assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-            assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
+            assert!(!cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
+            assert!(cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
+            assert!(!cell_at(&b, 2, 0).style().attrs.contains(AttrFlags::BOLD));
         }
     }
 
@@ -691,7 +690,7 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(cell_at(&b, 0, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 0, 0).style().fg, Some(Color::Red));
     }
 
     /// The painter's `from_utf8_unchecked` on a text token, driven by the
@@ -745,11 +744,11 @@ mod tests {
                     );
                     assert_eq!(position, Position::new(2, 0), "{input:?}");
                     assert_eq!(
-                        link_of(&cell_at(&b, 0, 0).style),
+                        link_of(&cell_at(&b, 0, 0)),
                         Some(("https://x/\u{2705}", ""))
                     );
                     assert_eq!(cell_at(&b, 0, 0).content(), "a");
-                    assert!(cell_at(&b, 1, 0).style.link.is_none());
+                    assert!(cell_at(&b, 1, 0).style().link.as_deref().is_none());
                     assert_eq!(cell_at(&b, 1, 0).content(), "b");
                 }
             }
@@ -768,8 +767,8 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
-        assert_eq!(link_of(&cell_at(&b, 1, 0).style), Some(("https://x", "")));
+        assert_eq!(link_of(&cell_at(&b, 0, 0)), Some(("https://x", "")));
+        assert_eq!(link_of(&cell_at(&b, 1, 0)), Some(("https://x", "")));
     }
 
     #[test]
@@ -933,11 +932,11 @@ mod tests {
             WrapMode::Truncate,
             Style::default(),
         );
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(!cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
         let z = cell_at(&b, 0, 1);
         assert_eq!(z.content(), "z");
-        assert!(z.style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(link_of(&z.style), Some(("https://x", "")));
+        assert!(z.style().attrs.contains(AttrFlags::BOLD));
+        assert_eq!(link_of(&z), Some(("https://x", "")));
     }
 
     #[test]
@@ -1046,12 +1045,12 @@ mod tests {
             WrapMode::Truncate,
             Style::default().bold().link("https://x", ""),
         );
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
+        assert!(cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
+        assert_eq!(link_of(&cell_at(&b, 0, 0)), Some(("https://x", "")));
         // Second call with `_with` and an empty style must reset.
         Painter::new(&mut b).set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(cell_at(&b, 1, 0).style.link.is_none());
+        assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
+        assert!(cell_at(&b, 1, 0).style().link.as_deref().is_none());
     }
 
     #[test]
@@ -1062,8 +1061,8 @@ mod tests {
         p.set_str_wrap((0, 0), "\x1b[1ma", WrapMode::Truncate, Style::default());
         // The next call starts fresh from its base: no bold carries over.
         p.set_str_wrap((1, 0), "b", WrapMode::Truncate, Style::default());
-        assert!(cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert!(!cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
+        assert!(!cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
@@ -1075,12 +1074,12 @@ mod tests {
         // rather than to a fully default style.
         Painter::new(&mut b).set_str_wrap((0, 0), "a\x1b[1mb\x1b[0mc", WrapMode::Truncate, base);
         let red = Some(Color::Red);
-        assert_eq!(cell_at(&b, 0, 0).style.fg, red);
-        assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 1, 0).style.fg, red);
-        assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(cell_at(&b, 2, 0).style.fg, red);
-        assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 0, 0).style().fg, red);
+        assert!(!cell_at(&b, 0, 0).style().attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 1, 0).style().fg, red);
+        assert!(cell_at(&b, 1, 0).style().attrs.contains(AttrFlags::BOLD));
+        assert_eq!(cell_at(&b, 2, 0).style().fg, red);
+        assert!(!cell_at(&b, 2, 0).style().attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
@@ -1160,7 +1159,7 @@ mod tests {
             Style::default().fg(Color::Red),
         );
         // The tail cell gets the supplied base style.
-        assert_eq!(cell_at(&b, 4, 0).style.fg, Some(Color::Red));
+        assert_eq!(cell_at(&b, 4, 0).style().fg, Some(Color::Red));
     }
 
     #[test]
@@ -1218,8 +1217,8 @@ mod tests {
                                 let ch = expected.as_bytes()[usize::from(x - offset)] as char;
                                 match ch {
                                     ' ' => Cell::BLANK,
-                                    '.' => Cell::new(".", 1).style(&tail_style),
-                                    _ => Cell::new(ch.to_string(), 1).style(&style),
+                                    '.' => Cell::new(".", 1, &tail_style),
+                                    _ => Cell::new(ch.to_string(), 1, &style),
                                 }
                             } else {
                                 Cell::BLANK
@@ -1257,9 +1256,9 @@ mod tests {
                 );
             }
             for x in 0..4 {
-                assert_eq!(cell_at(&b, x, 0).style, text_style.clone().bold());
+                assert_eq!(cell_at(&b, x, 0).style(), text_style.clone().bold());
             }
-            assert_eq!(cell_at(&b, 4, 0).style, tail_style.italic());
+            assert_eq!(cell_at(&b, 4, 0).style(), tail_style.italic());
         }
     }
 
@@ -1274,7 +1273,7 @@ mod tests {
             Style::default(),
         );
         // The tail's inline SGR bolds it even though the base style is empty.
-        assert!(cell_at(&b, 4, 0).style.attrs.contains(AttrFlags::BOLD));
+        assert!(cell_at(&b, 4, 0).style().attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]

@@ -40,6 +40,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::Style;
     use crate::{buffer::Surface, layout::Position};
 
     #[test]
@@ -50,7 +51,7 @@ mod tests {
             .into_iter()
             .enumerate()
         {
-            front.set_cell((0, row as u16), &Cell::new(value, width));
+            front.set_cell((0, row as u16), &Cell::new(value, width, Style::EMPTY));
         }
         renderer.cur_buf = Some(front.clone());
         renderer.back_buf = front.clone();
@@ -86,8 +87,8 @@ mod tests {
         let mut renderer = Renderer::new();
         let mut front = RenderBuffer::new(8, 3);
         let mut current = RenderBuffer::new(8, 2);
-        current.buffer.set((0, 0), &Cell::new("a", 1));
-        current.buffer.set((0, 1), &Cell::new("b", 1));
+        current.buffer.set((0, 0), &Cell::new("a", 1, Style::EMPTY));
+        current.buffer.set((0, 1), &Cell::new("b", 1, Style::EMPTY));
         renderer.cur_buf = Some(current.clone());
         renderer.back_buf = RenderBuffer::new(7, 3);
         renderer.saved.set_pos(Position::new(2, 2));
