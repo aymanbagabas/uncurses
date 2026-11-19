@@ -421,36 +421,11 @@ fn paint_literal<S: SurfaceMut + ?Sized>(
         }
     };
     if width > 0 && clip.contains(start) && !overruns(start.x, u16::from(width), clip.right()) {
-        paint_cluster(target, start, s, width, style);
+        let cell = Cell::new(s, width, style);
+        target.set_cell(start, &cell);
         return Position::new(start.x + u16::from(width), start.y);
     }
     paint_literal_inner(target, start, clip, s, wrap, mode, eaw_wide, style, None)
-}
-
-#[inline]
-fn paint_cluster<S: SurfaceMut + ?Sized>(
-    target: &mut S,
-    pos: Position,
-    text: &str,
-    width: u8,
-    style: &Style,
-) {
-    if width == 1
-        && let Some(old) = target.cell(pos)
-        && old.width() == 1
-    {
-        if old.content == text && old.matches_style(style) {
-            return;
-        }
-        if let Some(cell) = target.cell_mut(pos) {
-            cell.content.clear();
-            cell.content.push_str(text);
-            cell.set_style(style);
-            return;
-        }
-    }
-    let cell = Cell::new(text, width, style);
-    target.set_cell(pos, &cell);
 }
 
 /// Paint `s` literally with [`WrapMode::Truncate`], stamping `tail` on overflow.
@@ -568,7 +543,8 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
             }
         }
         if clip.contains(Position::new(x, y)) {
-            paint_cluster(target, Position::new(x, y), cluster, cw, style);
+            let cell = Cell::new(cluster, cw, style);
+            target.set_cell(Position::new(x, y), &cell);
         }
         x += w;
     }
@@ -606,6 +582,75 @@ mod tests {
     use crate::buffer::{Buffer, Surface, TextBuffer};
     use crate::color::Color;
     use crate::style::Style;
+
+    #[test]
+    fn matching_text_creates_a_local_override_on_read_through_surfaces() {
+        use crate::buffer::Bounded;
+
+        struct ReadThrough {
+            inherited: Cell,
+            local: Option<Cell>,
+        }
+
+        impl Bounded for ReadThrough {
+            fn bounds(&self) -> Rect {
+                Rect::new(0, 0, 1, 1)
+            }
+        }
+
+        impl Surface for ReadThrough {
+            fn cell(&self, pos: Position) -> Option<&Cell> {
+                self.contains(pos)
+                    .then(|| self.local.as_ref().unwrap_or(&self.inherited))
+            }
+        }
+
+        impl SurfaceMut for ReadThrough {
+            fn set_cell(&mut self, pos: Position, cell: &Cell) {
+                if self.contains(pos) {
+                    self.local = Some(cell.clone());
+                }
+            }
+
+            fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
+                if self.contains(pos) {
+                    self.local.as_mut()
+                } else {
+                    None
+                }
+            }
+        }
+
+        impl TextSurface for ReadThrough {
+            fn width_mode(&self) -> WidthMode {
+                WidthMode::Wc
+            }
+
+            fn eaw_wide(&self) -> bool {
+                false
+            }
+        }
+
+        for text in ["A", "A\u{301}"] {
+            let expected = Cell::new(
+                text,
+                1,
+                Style::new()
+                    .fg(Color::Green)
+                    .link("https://example.test/override", ""),
+            );
+            let mut surface = ReadThrough {
+                inherited: expected.clone(),
+                local: None,
+            };
+            assert_eq!(
+                surface.set_str((0, 0), text, expected.style()),
+                Position::new(1, 0)
+            );
+            surface.inherited = Cell::new("Z", 1, Style::EMPTY);
+            assert_eq!(surface.cell((0, 0).into()), Some(&expected), "{text:?}");
+        }
+    }
 
     #[test]
     fn literal_shortcuts_preserve_general_positions_and_cells() {
