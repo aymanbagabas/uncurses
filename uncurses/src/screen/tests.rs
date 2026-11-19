@@ -35,6 +35,21 @@ fn shrink_then_grow_preserves_a_retained_wide_glyph() {
         screen.render().unwrap();
         let output = std::str::from_utf8(screen.writer()).unwrap();
         assert!(output.contains(glyph), "render_clipped={render_clipped}");
+
+        screen.writer_mut().clear();
+        screen.cell_mut((2, 0)).unwrap();
+        screen.render().unwrap();
+        assert!(
+            screen.writer().is_empty(),
+            "render_clipped={render_clipped}"
+        );
+
+        screen.writer_mut().clear();
+        screen.set_cell((2, 0), &Cell::new("X", 1, Style::EMPTY));
+        screen.render().unwrap();
+        let output = std::str::from_utf8(screen.writer()).unwrap();
+        assert!(output.contains('X'), "render_clipped={render_clipped}");
+        assert_eq!(screen.diverge(), None, "render_clipped={render_clipped}");
     }
 }
 

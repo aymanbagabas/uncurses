@@ -85,7 +85,8 @@ impl Renderer {
     /// # Behavior
     ///
     /// Copies primary cells within `front`'s touched spans and restores
-    /// independent continuation styles. Clears `front`'s touched flags.
+    /// independent continuation styles. Repairs missing continuation cells
+    /// under retained, fully visible primaries. Clears `front`'s touched flags.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
         let width = front.width();
         let height = front.height();
@@ -125,6 +126,13 @@ impl Renderer {
                 }
                 // Resize can leave blanks inside a retained primary's footprint.
                 if x < next_primary {
+                    if let Some(continuation) = self
+                        .back_buf
+                        .cell(pos)
+                        .filter(|cell| cell.is_continuation())
+                    {
+                        front.line_mut(y).unwrap()[usize::from(x)].clone_from(continuation);
+                    }
                     continue;
                 }
                 // `RenderBuffer::set_cell` does a value-equality
