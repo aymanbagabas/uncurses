@@ -19,6 +19,48 @@ fn screen_is_send_sync() {
 }
 
 #[test]
+fn shrink_then_grow_preserves_a_retained_wide_glyph() {
+    let glyph = "\u{1f469}\u{200d}\u{1f4bb}";
+    for render_clipped in [false, true] {
+        let mut screen = Screen::new(Vec::new(), (5, 1));
+        screen.set_cell((0, 0), &Cell::new(glyph, 4, Style::EMPTY));
+        screen.render().unwrap();
+
+        screen.resize((2, 1));
+        if render_clipped {
+            screen.render().unwrap();
+        }
+        screen.resize((5, 1));
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        let output = std::str::from_utf8(screen.writer()).unwrap();
+        assert!(output.contains(glyph), "render_clipped={render_clipped}");
+    }
+}
+
+#[test]
+fn clipped_continuation_style_does_not_color_a_visible_blank() {
+    let mut screen = Screen::new(Vec::new(), (5, 1));
+    screen.set_color_profile(Profile::TrueColor);
+    screen.set_cell(
+        (0, 0),
+        &Cell::new("\u{1f469}\u{200d}\u{1f4bb}", 4, Style::EMPTY),
+    );
+    screen.render().unwrap();
+    screen.resize((2, 1));
+    screen.render().unwrap();
+    assert!(screen.cell((1, 0).into()).unwrap().is_continuation());
+
+    screen.writer_mut().clear();
+    screen
+        .cell_mut((1, 0))
+        .unwrap()
+        .set_style(Style::new().bg(Color::Blue));
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
 fn continuation_style_changes_reach_the_renderer() {
     let mut screen = Screen::new(Vec::new(), (4, 1));
     screen.set_cell((0, 0), &Cell::new("界", 2, Style::EMPTY));
