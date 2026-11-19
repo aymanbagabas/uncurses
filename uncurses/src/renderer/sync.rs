@@ -60,6 +60,7 @@ impl Renderer {
         {
             last += 1;
         }
+        // Per-cell equality checks can cost more than inline clones.
         self.back_buf.line_mut(y).unwrap()[start + first..start + last]
             .clone_from_slice(&source[first..last]);
         self.back_buf
@@ -102,6 +103,7 @@ impl Renderer {
             if self.sync_owned_span(front, y, span) {
                 continue;
             }
+            let mut next_primary = span.first;
             for x in span.first..=span.last {
                 let pos = (x, y).into();
                 let Some(new_cell) = front.cell(pos) else {
@@ -112,7 +114,7 @@ impl Renderer {
                     if self
                         .back_buf
                         .cell(pos)
-                        .is_some_and(|old| !old.same_style(new_cell))
+                        .is_some_and(|old| old.is_continuation() && !old.same_style(new_cell))
                     {
                         self.back_buf
                             .cell_mut(pos)
@@ -121,10 +123,15 @@ impl Renderer {
                     }
                     continue;
                 }
+                // Resize can leave blanks inside a retained primary's footprint.
+                if x < next_primary {
+                    continue;
+                }
                 // `RenderBuffer::set_cell` does a value-equality
                 // check before writing, so unchanged cells pay no
                 // clone and no touch.
                 self.back_buf.set_cell(pos, new_cell);
+                next_primary = x.saturating_add(u16::from(new_cell.width()));
             }
         }
         front.clear_touched();
@@ -166,6 +173,11 @@ mod tests {
                 &mut r.back_buf
             };
             broken.set_cell((1, 0), &Cell::new("wide", 4, Style::EMPTY));
+            let continuation_style = Style::new().bg(crate::color::Color::Blue);
+            broken
+                .cell_mut((2, 0))
+                .unwrap()
+                .set_style(&continuation_style);
             broken.resize(3, 1);
             broken.resize(8, 1);
             assert_eq!(broken.cell((1, 0).into()).unwrap().width(), 4);
@@ -174,20 +186,20 @@ mod tests {
             front.set_cell((7, 0), &cell("R"));
             front.touch_all();
 
-            let mut expected = r.back_buf.buffer.clone();
-            for (x, cell) in front.line(0).unwrap().iter().enumerate() {
-                let pos = (x as u16, 0);
-                if cell.is_continuation() {
-                    expected
-                        .cell_mut(pos.into())
-                        .unwrap()
-                        .set_style(cell.style());
-                } else {
-                    expected.set(pos, cell);
-                }
+            let mut expected = [Cell::BLANK; 8];
+            expected[0] = cell("L");
+            expected[7] = cell("R");
+            if broken_front {
+                expected[1] = Cell::new("wide", 4, Style::EMPTY);
+                expected[2..5].fill(Cell::CONTINUATION);
+                expected[2].set_style(continuation_style);
             }
             r.sync_front(&mut front);
-            assert_eq!(r.back_buf.line(0), expected.line(0), "front={broken_front}");
+            assert_eq!(
+                r.back_buf.line(0).unwrap(),
+                expected.as_slice(),
+                "front={broken_front}"
+            );
         }
     }
 
