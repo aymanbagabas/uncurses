@@ -54,6 +54,46 @@ fn shrink_then_grow_preserves_a_retained_wide_glyph() {
 }
 
 #[test]
+fn shrink_then_grow_preserves_an_explicit_write_before_render() {
+    let glyph = "\u{1f469}\u{200d}\u{1f4bb}";
+    for (render_clipped, write_width, content) in [
+        (false, 5, "X"),
+        (true, 5, "X"),
+        (false, 3, "X"),
+        (false, 5, " "),
+    ] {
+        let mut screen = Screen::new(Vec::new(), (5, 1));
+        screen.set_cell((0, 0), &Cell::new(glyph, 4, Style::EMPTY));
+        screen.render().unwrap();
+
+        screen.resize((2, 1));
+        if render_clipped {
+            screen.render().unwrap();
+        }
+        screen.resize((write_width, 1));
+        screen.writer_mut().clear();
+        let write = Cell::new(content, 1, Style::EMPTY);
+        screen.set_cell((2, 0), &write);
+        if write_width < 5 {
+            screen.resize((5, 1));
+        }
+        screen.render().unwrap();
+
+        assert_eq!(
+            screen.cell((2, 0).into()).unwrap().content(),
+            content,
+            "render_clipped={render_clipped}"
+        );
+        let output = std::str::from_utf8(screen.writer()).unwrap();
+        if content == "X" {
+            assert!(output.contains('X'), "render_clipped={render_clipped}");
+        }
+        assert!(!output.contains(glyph), "render_clipped={render_clipped}");
+        assert_eq!(screen.diverge(), None, "render_clipped={render_clipped}");
+    }
+}
+
+#[test]
 fn clipped_continuation_style_does_not_color_a_visible_blank() {
     let mut screen = Screen::new(Vec::new(), (5, 1));
     screen.set_color_profile(Profile::TrueColor);

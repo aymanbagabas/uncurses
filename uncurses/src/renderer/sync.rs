@@ -186,8 +186,8 @@ mod tests {
                 .cell_mut((2, 0))
                 .unwrap()
                 .set_style(&continuation_style);
-            broken.resize(3, 1);
-            broken.resize(8, 1);
+            broken.buffer.resize(3, 1);
+            broken.buffer.resize(8, 1);
             assert_eq!(broken.cell((1, 0).into()).unwrap().width(), 4);
             assert!(!broken.cell((3, 0).into()).unwrap().is_continuation());
             front.set_cell((0, 0), &cell("L"));
