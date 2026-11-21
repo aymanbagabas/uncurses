@@ -168,7 +168,9 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
         // row resets to default, so everything past `last_visible` is dropped.
         let last_visible = (bounds.x..x_end).rev().find(|&x| {
             surface.cell(Position::new(x, y)).is_some_and(|cell| {
-                !cell.is_blank() || !convert_style(&cell.style, profile).is_empty()
+                !cell.is_blank()
+                    || (profile != Profile::Disabled
+                        && !convert_style(cell.style(), profile).is_empty())
             })
         });
         let Some(last_visible) = last_visible else {
@@ -190,9 +192,11 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
 
             // Downsample to the target profile, then emit the SGR and OSC 8
             // hyperlink delta from the current pen.
-            let to = convert_style(&cell.style, profile);
-            write_style_diff(w, &pen, &to)?;
-            pen = to;
+            if profile != Profile::Disabled {
+                let to = convert_style(cell.style(), profile);
+                write_style_diff(w, &pen, &to)?;
+                pen = to;
+            }
             w.write_all(cell.draw_bytes())?;
         }
 
@@ -329,7 +333,9 @@ mod tests {
         use crate::color::{Color, Profile};
         let mut buf = Buffer::new(3, 1);
         buf.set_cell((0, 0).into(), &Cell::new("a", 1, Style::EMPTY));
-        let bg = Style::new().bg(Color::Red);
+        let bg = Style::new()
+            .bg(Color::Red)
+            .link("https://example.test/tail", "");
         buf.set_cell((2, 0).into(), &Cell::new(" ", 1, &bg));
         // Under Disabled the background is dropped, so the trailing space is
         // unstyled and gets trimmed along with the interior blank.
@@ -340,7 +346,10 @@ mod tests {
     fn profile_disabled_drops_all_styling() {
         use crate::color::{Color, Profile};
         let mut buf = Buffer::new(2, 1);
-        let styled = Style::new().bold().fg(Color::Red);
+        let styled = Style::new()
+            .bold()
+            .fg(Color::Red)
+            .link("https://example.test/text", "");
         buf.set_cell((0, 0).into(), &Cell::new("h", 1, &styled));
         buf.set_cell((1, 0).into(), &Cell::new("i", 1, &styled));
         // Disabled strips every escape: only the text remains.

@@ -13,21 +13,22 @@ impl Renderer {
     /// the default style (emits SGR reset and/or hyperlink terminator
     /// only when the current pen actually has something set).
     pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
-        let target_style = match cell {
-            Some(c) => &c.style,
-            None => &Style::default(),
-        };
-
         // Raw-equality fast path: most cells in a styled run share the
         // exact same style (including any open link) as the last cell
-        // that updated the pen, so a single PartialEq check (no clones,
+        // that updated the pen, so a direct comparison (no clones,
         // no color-profile conversion) short-circuits the whole
         // function.
-        if target_style == self.cur.style() {
+        if cell.map_or_else(
+            || self.cur.style().is_empty(),
+            |cell| cell.matches_style(self.cur.style()),
+        ) {
             return Ok(());
         }
 
-        let to = self.color_profile.convert_style(target_style);
+        // Extract only after the comparison, so unchanged runs do not clone
+        // the hyperlink. Keep the raw style for the tracked pen.
+        let target_style = cell.map_or_else(Style::default, Cell::style);
+        let to = self.color_profile.convert_style(&target_style);
         let from = self.color_profile.convert_style(self.cur.style());
 
         // `write_style_diff` emits both the SGR delta and the OSC 8 hyperlink
@@ -36,7 +37,7 @@ impl Renderer {
         // there with no special-case code here.
         write_style_diff(out, &from, &to)?;
 
-        self.cur.set_style(target_style.clone());
+        self.cur.set_style(target_style);
         Ok(())
     }
 
