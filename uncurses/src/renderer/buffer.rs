@@ -313,10 +313,26 @@ impl RenderBuffer {
     /// - `width`: new column count.
     /// - `height`: new row count.
     ///
-    /// Existing contents are preserved according to [`Buffer::resize`];
-    /// newly exposed cells are blank.
+    /// Existing contents are preserved according to [`Buffer::resize`].
+    /// Newly exposed cells extend retained wide primaries with
+    /// continuations; other new cells are blank.
     pub fn resize(&mut self, width: u16, height: u16) {
+        let old_width = self.width();
+        let retained_height = height.min(self.height());
         self.buffer.resize(width, height);
+        if old_width > 0 && width > old_width {
+            for y in 0..retained_height {
+                let owner = usize::from(self.owned_from(Position::new(old_width - 1, y)));
+                let line = self.buffer.line_mut(y).unwrap();
+                let end = (owner + usize::from(line[owner].width())).min(usize::from(width));
+                if end > usize::from(old_width) {
+                    // Restore ownership before writes can replace newly exposed columns.
+                    let mut continuation = Cell::CONTINUATION;
+                    continuation.copy_style_from(&line[owner]);
+                    line[usize::from(old_width)..end].fill(continuation);
+                }
+            }
+        }
         self.touched.resize(height as usize, None);
         self.touch_all();
     }
