@@ -82,6 +82,7 @@ use bitflags::bitflags;
 use crate::ansi::{mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
+use crate::event::decode::{ExpectedReplies, ExpectedReply};
 use crate::event::{DecoderFlags, Event, EventSource};
 use crate::layout::{Position, Size};
 use crate::renderer::Optimizations;
@@ -151,6 +152,9 @@ where
     /// Ordered cursor requests and Primary DA batch boundaries. Cursor
     /// reports carry no request ID, so origin and width probes share a queue.
     pending_queries: VecDeque<PendingQuery>,
+    /// Decoder-side request order, advanced as bytes arrive rather than when
+    /// the application observes events. This also covers shared async readers.
+    expected_replies: ExpectedReplies,
 }
 
 /// Options for session setup, capability queries, and mode preferences.
@@ -827,7 +831,7 @@ where
                         self.screen.set_ambiguous_wide(position.x == 2);
                     }
                 }
-                Some(PendingQuery::CursorPosition) => {
+                Some(PendingQuery::CursorPosition | PendingQuery::ExtendedCursorPosition) => {
                     self.pending_queries.pop_front();
                 }
                 _ => {}
@@ -857,6 +861,20 @@ where
             _ => {}
         }
         Ok(())
+    }
+
+    fn track_query(&mut self, query: PendingQuery) {
+        let expected = match query {
+            PendingQuery::CursorPosition | PendingQuery::Origin | PendingQuery::EawWidth => {
+                Some(ExpectedReply::CursorPosition)
+            }
+            PendingQuery::PrimaryDeviceAttributes => Some(ExpectedReply::PrimaryDeviceAttributes),
+            PendingQuery::ExtendedCursorPosition => None,
+        };
+        if let Some(expected) = expected {
+            self.expected_replies.lock().unwrap().push_back(expected);
+        }
+        self.pending_queries.push_back(query);
     }
 
     /// Enable [`TABS`](Optimizations::TABS) and [`BS`](Optimizations::BS),
@@ -983,6 +1001,7 @@ where
         screen.set_optimizations(optimizations);
 
         let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
+        let expected_replies = source.lock().unwrap().expected_replies();
         #[cfg(windows)]
         let source_waker = source.lock().unwrap().waker();
         Ok(Self {
@@ -1000,6 +1019,7 @@ where
             cell_pixels: None,
             origin: Position::ORIGIN,
             pending_queries: VecDeque::new(),
+            expected_replies,
         })
     }
 
@@ -1027,6 +1047,8 @@ where
     /// [`Screen::set_ambiguous_wide`]. Rewrite existing text after a policy change.
     /// Cursor reports from `extra` remain ordinary events; use the program's
     /// cursor request methods when other cursor queries are outstanding.
+    /// While a standard cursor reply is pending, the decoder treats its
+    /// first-row sequence as CPR rather than a modified F3 key.
     ///
     /// The DECRQM, XTVERSION, and XTGETTCAP queries are skipped on Apple's
     /// `Terminal.app`, which mishandles them. Nothing is recorded in their
@@ -1091,7 +1113,7 @@ where
             if let Some(position) = self.screen.tracked_cursor() {
                 self.screen.set_tracked_cursor(Position::new(0, position.y));
             }
-            self.pending_queries.push_back(PendingQuery::EawWidth);
+            self.track_query(PendingQuery::EawWidth);
             self.screen.invalidate();
         }
 
@@ -1155,8 +1177,7 @@ where
 
         self.screen.write_all(extra)?;
         self.screen.write_all(REQUEST_PRIMARY_DA)?;
-        self.pending_queries
-            .push_back(PendingQuery::PrimaryDeviceAttributes);
+        self.track_query(PendingQuery::PrimaryDeviceAttributes);
         self.screen.flush()
     }
 }

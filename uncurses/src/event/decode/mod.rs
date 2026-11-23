@@ -66,7 +66,16 @@ pub use flags::DecoderFlags;
 use result::ParseResult;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 pub(crate) use util::is_c1_introducer;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExpectedReply {
+    CursorPosition,
+    PrimaryDeviceAttributes,
+}
+
+pub(crate) type ExpectedReplies = Arc<Mutex<VecDeque<ExpectedReply>>>;
 
 /// Stateful byte parser that produces [`Event`] values.
 ///
@@ -86,6 +95,9 @@ pub struct Decoder {
     /// Decoder behavior flags (disambiguation toggles for legacy keys).
     pub(super) flags: DecoderFlags,
     backspace_mode: bool,
+    /// Program registers requests without taking the source lock, which a
+    /// concurrent reader can hold while it waits for the terminal's reply.
+    expected_replies: Option<ExpectedReplies>,
     /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
     pub(super) in_paste: bool,
     pub(super) in_clipboard: bool,
@@ -128,6 +140,7 @@ impl Decoder {
             buf: Vec::with_capacity(256),
             flags,
             backspace_mode: false,
+            expected_replies: None,
             in_paste: false,
             in_clipboard: false,
             waiting_for_terminator: false,
@@ -197,6 +210,10 @@ impl Decoder {
     /// Select the Backarrow mode used for future legacy key decoding.
     pub fn set_backspace_mode(&mut self, enabled: bool) {
         self.backspace_mode = enabled;
+    }
+
+    pub(crate) fn expected_replies(&mut self) -> ExpectedReplies {
+        Arc::clone(self.expected_replies.get_or_insert_with(Default::default))
     }
 
     /// Enable or disable UTF-8 mouse decoding (xterm mode 1005).
@@ -677,6 +694,54 @@ mod tests {
             Event::CursorPosition { position, page: 0 }
                 if position == crate::layout::Position::new(8, 0)
         ));
+    }
+
+    #[test]
+    fn cursor_reply_expectations_follow_decoding_and_primary_da_boundaries() {
+        use crate::layout::Position;
+
+        // A private reply precedes the first standard reply. The second
+        // standard request goes unanswered, and F3 follows the final batch.
+        let wire = b"\x1b[?1;2R\x1b[1;2R\x1b[?1;2c\x1b[?1;2c\x1b[1;3R\x1b[?1;2c\x1b[1;2R";
+        for split in 0..=wire.len() {
+            let mut decoder = Decoder::default();
+            decoder.expected_replies().lock().unwrap().extend([
+                ExpectedReply::CursorPosition,
+                ExpectedReply::PrimaryDeviceAttributes,
+                ExpectedReply::CursorPosition,
+                ExpectedReply::PrimaryDeviceAttributes,
+                ExpectedReply::CursorPosition,
+                ExpectedReply::PrimaryDeviceAttributes,
+            ]);
+            let mut events = decoder.parse(&wire[..split]);
+            events.extend(decoder.parse(&wire[split..]));
+            assert_eq!(
+                events,
+                [
+                    Event::CursorPosition {
+                        position: Position::new(1, 0),
+                        page: 0,
+                    },
+                    Event::CursorPosition {
+                        position: Position::new(1, 0),
+                        page: 0,
+                    },
+                    Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                    Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                    Event::CursorPosition {
+                        position: Position::new(2, 0),
+                        page: 0,
+                    },
+                    Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                    Event::KeyPress(Key::new(KeyCode::F(3), KeyModifiers::SHIFT)),
+                    Event::CursorPosition {
+                        position: Position::new(1, 0),
+                        page: 0,
+                    },
+                ],
+                "split {split}"
+            );
+        }
     }
 
     #[test]

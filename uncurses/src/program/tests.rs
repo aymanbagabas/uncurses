@@ -50,9 +50,9 @@ fn extended_cursor_position_request_flushes() {
     let out = RefCell::new(Vec::new());
     let mut program = Program::for_test(&out, (80, 24));
     program.request_extended_cursor_position().unwrap();
-    assert_eq!(written(&out), "\x1b[?6n");
+    assert_eq!(written(&out), "\x1b[?6n\x1b[c");
     program.request_cursor_position().unwrap();
-    assert_eq!(written(&out), "\x1b[?6n\x1b[6n");
+    assert_eq!(written(&out), "\x1b[?6n\x1b[c\x1b[6n");
 }
 
 impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
@@ -80,6 +80,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
         screen.set_color_profile(color_profile);
         screen.set_optimizations(optimizations);
         let source = Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap()));
+        let expected_replies = source.lock().unwrap().expected_replies();
         #[cfg(windows)]
         let source_waker = source.lock().unwrap().waker();
         Self {
@@ -97,6 +98,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
             cell_pixels: None,
             origin: Position::ORIGIN,
             pending_queries: VecDeque::new(),
+            expected_replies,
         }
     }
 }
@@ -313,32 +315,92 @@ fn eaw_width_probe_repaints_erased_content_even_when_width_is_unchanged() {
 #[cfg(unix)]
 #[test]
 fn eaw_width_replies_update_measurement_and_remain_visible_to_the_caller() {
-    for width in [1, 2] {
-        let buf = RefCell::new(Vec::new());
-        let (input, mut replies) = std::io::pipe().unwrap();
-        let terminal = Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
-        let mut program = Program::with_render(terminal, (20, 1)).unwrap();
-        program.screen_mut().set_ambiguous_wide(width == 1);
-        program.query_capabilities(&[]).unwrap();
-        buf.borrow_mut().clear();
-        write!(replies, "\x1b[5;{}R\x1b[?1;2c", width + 1).unwrap();
+    use crate::event::{Key, KeyCode, KeyModifiers};
 
-        assert_eq!(
-            program.read_event().unwrap(),
-            Event::CursorPosition {
-                position: Position::new(width, 4),
-                page: 0,
+    for width in [1, 2] {
+        for shared_reader in [false, true] {
+            let buf = RefCell::new(Vec::new());
+            let (input, mut replies) = std::io::pipe().unwrap();
+            let terminal =
+                Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            program.screen_mut().set_ambiguous_wide(width == 1);
+            program.query_capabilities(&[]).unwrap();
+            buf.borrow_mut().clear();
+            write!(replies, "\x1b[1;{}R\x1b[?1;2c\x1b[1;9R", width + 1).unwrap();
+
+            for expected in [
+                Event::CursorPosition {
+                    position: Position::new(width, 0),
+                    page: 0,
+                },
+                Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                Event::KeyPress(Key::new(KeyCode::F(3), KeyModifiers::SUPER)),
+                Event::CursorPosition {
+                    position: Position::new(8, 0),
+                    page: 0,
+                },
+            ] {
+                let event = if shared_reader {
+                    let event = program.event_source().lock().unwrap().read().unwrap();
+                    program.observe_event(&event).unwrap();
+                    event
+                } else {
+                    program.read_event().unwrap()
+                };
+                assert_eq!(event, expected);
             }
-        );
-        assert_eq!(program.capabilities().eaw_width(), Some(width as u8));
-        assert_eq!(program.screen().str_width("\u{2026}"), width);
-        assert_eq!(program.origin(), Position::ORIGIN);
-        assert!(matches!(
-            program.read_event().unwrap(),
-            Event::PrimaryDeviceAttributes(_)
-        ));
-        assert!(program.pending_queries.is_empty());
-        assert!(buf.borrow().is_empty());
+            assert_eq!(program.capabilities().eaw_width(), Some(width as u8));
+            assert_eq!(program.screen().str_width("\u{2026}"), width);
+            assert_eq!(program.origin(), Position::ORIGIN);
+            assert!(program.pending_queries.is_empty());
+            assert!(buf.borrow().is_empty());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn extended_cursor_boundaries_preserve_later_standard_replies() {
+    for query_width in [false, true] {
+        for extended_reply in [false, true] {
+            let buf = RefCell::new(Vec::new());
+            let (input, mut replies) = std::io::pipe().unwrap();
+            let terminal =
+                Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            program.window_cells = Some(Size::new(20, 24));
+            program.request_extended_cursor_position().unwrap();
+            if query_width {
+                program.query_capabilities(&[]).unwrap();
+            } else {
+                program.request_origin().unwrap();
+            }
+            if extended_reply {
+                replies.write_all(b"\x1b[?1;3R").unwrap();
+                assert_eq!(
+                    program.read_event().unwrap(),
+                    Event::CursorPosition {
+                        position: Position::new(2, 0),
+                        page: 0,
+                    }
+                );
+            }
+            replies.write_all(b"\x1b[?1;2c\x1b[5;3R").unwrap();
+            assert!(matches!(
+                program.read_event().unwrap(),
+                Event::PrimaryDeviceAttributes(_)
+            ));
+            assert!(matches!(
+                program.read_event().unwrap(),
+                Event::CursorPosition { .. }
+            ));
+            if query_width {
+                assert_eq!(program.capabilities().eaw_width(), Some(2));
+            } else {
+                assert_eq!(program.origin(), Position::new(2, 4));
+            }
+        }
     }
 }
 
@@ -390,6 +452,9 @@ fn eaw_width_queries_share_cursor_reports_in_request_order() {
         .unwrap();
     assert_eq!(program.origin(), Position::new(7, 6));
     assert_eq!(program.capabilities().eaw_width(), Some(1));
+    program
+        .observe_event(&Event::PrimaryDeviceAttributes(vec![]))
+        .unwrap();
     assert!(program.pending_queries.is_empty());
 }
 

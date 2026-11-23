@@ -929,7 +929,7 @@ impl<I: Input, O: Write> Program<I, O> {
             .stage_move_cursor_to(crate::layout::Position::ORIGIN);
         self.screen
             .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
-        self.pending_queries.push_back(PendingQuery::Origin);
+        self.track_query(PendingQuery::Origin);
         self.screen.flush()
     }
 
@@ -1002,7 +1002,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn request_cursor_position(&mut self) -> io::Result<()> {
         self.screen
             .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
-        self.pending_queries.push_back(PendingQuery::CursorPosition);
+        self.track_query(PendingQuery::CursorPosition);
         self.screen.flush()
     }
 
@@ -1012,10 +1012,17 @@ impl<I: Input, O: Write> Program<I, O> {
     /// with zero-based cell coordinates and a one-based page number when
     /// reported. An absent page is zero. The private reply distinguishes cursor
     /// reports from modified F3.
+    ///
+    /// A Primary DA request follows DECXCPR. Its reply retires an unanswered
+    /// extended request before subsequent cursor queries. Consume this boundary
+    /// before using Primary DA to end a later capability batch.
     pub fn request_extended_cursor_position(&mut self) -> io::Result<()> {
         self.screen
             .write_all(crate::ansi::status::REQUEST_EXTENDED_CURSOR_POSITION)?;
-        self.pending_queries.push_back(PendingQuery::CursorPosition);
+        self.track_query(PendingQuery::ExtendedCursorPosition);
+        self.screen
+            .write_all(crate::ansi::ctrl::REQUEST_PRIMARY_DA)?;
+        self.track_query(PendingQuery::PrimaryDeviceAttributes);
         self.screen.flush()
     }
 

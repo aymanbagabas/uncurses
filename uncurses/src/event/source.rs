@@ -379,6 +379,10 @@ where
         self.parser.flags()
     }
 
+    pub(crate) fn expected_replies(&mut self) -> super::decode::ExpectedReplies {
+        self.parser.expected_replies()
+    }
+
     /// Return the decoder's current Backarrow mode (DECBKM).
     ///
     /// Defaults to reset (`false`).

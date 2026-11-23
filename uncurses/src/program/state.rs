@@ -34,6 +34,7 @@ use super::ProgressState;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PendingQuery {
     CursorPosition,
+    ExtendedCursorPosition,
     Origin,
     EawWidth,
     PrimaryDeviceAttributes,
