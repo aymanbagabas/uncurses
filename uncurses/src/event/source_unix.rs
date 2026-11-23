@@ -1096,7 +1096,14 @@ mod tests {
         let mut src = new_reader(rx).with_clipboard_idle_timeout(Some(Duration::from_millis(40)));
         src.feed_bytes(b"\x1b]52;c;");
         assert!(matches!(src.try_read(), Some(Event::ClipboardStart { .. })));
+        let start = Instant::now();
         assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "elapsed = {:?}",
+            elapsed
+        );
         assert_eq!(
             src.try_read(),
             Some(Event::ClipboardEnd { complete: false })

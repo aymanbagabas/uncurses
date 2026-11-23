@@ -295,10 +295,15 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_clipboard_headers_keep_string_framing() {
-        for body in [b"52;c".as_slice(), b"52;c\x07;QQ==", b"52;c\x1b[A;QQ=="] {
+    fn clipboard_headers_stop_at_string_boundaries() {
+        for (body, expected) in [
+            (b"52;c".as_slice(), Event::UnknownOsc(b"52;c".to_vec())),
+            (b"52;c\x07;QQ==", Event::UnknownOsc(b"52;c".to_vec())),
+            (b"52;c\x1b[A;QQ==", Event::Unknown(b"\x1b]52;c".to_vec())),
+        ] {
             let mut decoder = Decoder::default();
             let events = decoder.parse(&[b"\x1b]".as_slice(), body, b"\x07"].concat());
+            assert_eq!(events.first(), Some(&expected));
             assert!(
                 !events
                     .iter()
