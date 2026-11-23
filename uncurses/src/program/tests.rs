@@ -96,7 +96,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
             window_pixels: None,
             cell_pixels: None,
             origin: Position::ORIGIN,
-            origin_queries_pending: 0,
+            pending_queries: VecDeque::new(),
         }
     }
 }
@@ -241,6 +241,194 @@ fn backspace_mode_setter_and_lifecycle() {
 }
 
 #[test]
+fn eaw_width_query_is_default_optional_and_erases_the_probe() {
+    use crate::terminal::EnvList;
+
+    for apple in [false, true] {
+        for enabled in [false, true] {
+            let buf = RefCell::new(Vec::new());
+            let input = null_input();
+            let terminal = Terminal::from_parts(
+                &input,
+                TestOut(&buf),
+                EnvList::from_pairs([(
+                    "TERM_PROGRAM",
+                    if apple { "Apple_Terminal" } else { "xterm" },
+                )]),
+            );
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            assert!(program.options.query_eaw_width);
+            program.options.query_eaw_width = enabled;
+            program.query_capabilities(b"extra").unwrap();
+
+            let output = written(&buf);
+            let probe = "\r\u{2026}\x1b[6n\r\x1b[2X";
+            assert_eq!(output.matches(probe).count(), usize::from(enabled));
+            assert!(!output.contains("\x1b7"));
+            assert!(!output.contains("\x1b8"));
+            assert!(output.ends_with("extra\x1b[c"));
+            assert_eq!(program.options.query_eaw_width, enabled);
+            assert_eq!(program.capabilities().eaw_width(), None);
+        }
+    }
+}
+
+#[test]
+fn eaw_width_probe_requires_room_for_the_cursor_advance() {
+    for width in [1, 2, 3] {
+        let buf = RefCell::new(Vec::new());
+        let input = null_input();
+        let terminal = Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+        let mut program = Program::with_render(terminal, (width, 1)).unwrap();
+        program.query_capabilities(&[]).unwrap();
+        assert_eq!(written(&buf).contains('\u{2026}'), width >= 3);
+    }
+}
+
+#[test]
+fn eaw_width_probe_repaints_erased_content_even_when_width_is_unchanged() {
+    let buf = RefCell::new(Vec::new());
+    let input = null_input();
+    let terminal = Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+    let mut program = Program::with_render(terminal, (20, 3)).unwrap();
+    program
+        .screen_mut()
+        .set_str((0, 0), "hello", crate::style::Style::default());
+    program.screen_mut().set_cursor_position((7, 1));
+    program.screen_mut().render().unwrap();
+    assert_eq!(program.screen().tracked_cursor(), Some(Position::new(7, 1)));
+    program.query_capabilities(&[]).unwrap();
+    assert_eq!(program.screen().tracked_cursor(), Some(Position::new(0, 1)));
+    program
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(1, 0),
+            page: 0,
+        })
+        .unwrap();
+    buf.borrow_mut().clear();
+    program.screen_mut().render().unwrap();
+    assert!(written(&buf).contains("hello"));
+}
+
+#[cfg(unix)]
+#[test]
+fn eaw_width_replies_update_measurement_and_remain_visible_to_the_caller() {
+    for width in [1, 2] {
+        let buf = RefCell::new(Vec::new());
+        let (input, mut replies) = std::io::pipe().unwrap();
+        let terminal = Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+        let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+        program.screen_mut().set_ambiguous_wide(width == 1);
+        program.query_capabilities(&[]).unwrap();
+        buf.borrow_mut().clear();
+        write!(replies, "\x1b[5;{}R\x1b[?1;2c", width + 1).unwrap();
+
+        assert_eq!(
+            program.read_event().unwrap(),
+            Event::CursorPosition {
+                position: Position::new(width, 4),
+                page: 0,
+            }
+        );
+        assert_eq!(program.capabilities().eaw_width(), Some(width as u8));
+        assert_eq!(program.screen().str_width("\u{2026}"), width);
+        assert_eq!(program.origin(), Position::ORIGIN);
+        assert!(matches!(
+            program.read_event().unwrap(),
+            Event::PrimaryDeviceAttributes(_)
+        ));
+        assert!(program.pending_queries.is_empty());
+        assert!(buf.borrow().is_empty());
+    }
+}
+
+#[test]
+fn eaw_width_queries_share_cursor_reports_in_request_order() {
+    let buf = RefCell::new(Vec::new());
+    let input = null_input();
+    let terminal = Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+    let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+    program.window_cells = Some(Size::new(20, 24));
+    program.request_cursor_position().unwrap();
+    program.request_origin().unwrap();
+    program.query_capabilities(&[]).unwrap();
+    program.request_origin().unwrap();
+    program.query_capabilities(&[]).unwrap();
+    program.request_extended_cursor_position().unwrap();
+
+    for x in [9, 4, 2] {
+        program
+            .observe_event(&Event::CursorPosition {
+                position: Position::new(x, 5),
+                page: 0,
+            })
+            .unwrap();
+    }
+    assert_eq!(program.origin(), Position::new(4, 5));
+    assert_eq!(program.capabilities().eaw_width(), Some(2));
+    program
+        .observe_event(&Event::PrimaryDeviceAttributes(vec![]))
+        .unwrap();
+    for x in [7, 1] {
+        program
+            .observe_event(&Event::CursorPosition {
+                position: Position::new(x, 6),
+                page: 0,
+            })
+            .unwrap();
+    }
+    assert_eq!(program.origin(), Position::new(7, 6));
+    assert_eq!(program.capabilities().eaw_width(), Some(1));
+    program
+        .observe_event(&Event::PrimaryDeviceAttributes(vec![]))
+        .unwrap();
+    program
+        .observe_event(&Event::CursorPosition {
+            position: Position::new(2, 8),
+            page: 1,
+        })
+        .unwrap();
+    assert_eq!(program.origin(), Position::new(7, 6));
+    assert_eq!(program.capabilities().eaw_width(), Some(1));
+    assert!(program.pending_queries.is_empty());
+}
+
+#[test]
+fn invalid_or_missing_eaw_replies_do_not_capture_later_origin_reports() {
+    for width in [None, Some(0), Some(3)] {
+        let buf = RefCell::new(Vec::new());
+        let input = null_input();
+        let terminal = Terminal::from_parts(&input, TestOut(&buf), crate::terminal::EnvList::new());
+        let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+        program.window_cells = Some(Size::new(20, 24));
+        program.screen_mut().set_ambiguous_wide(true);
+        program.query_capabilities(&[]).unwrap();
+        program.request_origin().unwrap();
+        if let Some(width) = width {
+            program
+                .observe_event(&Event::CursorPosition {
+                    position: Position::new(width, 0),
+                    page: 0,
+                })
+                .unwrap();
+        }
+        program
+            .observe_event(&Event::PrimaryDeviceAttributes(vec![]))
+            .unwrap();
+        program
+            .observe_event(&Event::CursorPosition {
+                position: Position::new(1, 5),
+                page: 0,
+            })
+            .unwrap();
+        assert_eq!(program.capabilities().eaw_width(), None);
+        assert!(program.screen().eaw_wide());
+        assert_eq!(program.origin(), Position::new(1, 5));
+        assert!(program.pending_queries.is_empty());
+    }
+}
+
+#[test]
 fn backspace_mode_query_is_optional_and_preserves_options() {
     use crate::terminal::{EnvList, Terminal};
 
@@ -308,6 +496,7 @@ fn query_options_do_not_query_during_init() {
     let output = drain(&master);
     let output = String::from_utf8_lossy(&output);
     for query in [
+        "\u{2026}",
         "\x1b[?67",
         "\x1b]10;?",
         "\x1b]11;?",
@@ -1449,7 +1638,7 @@ fn origin_captured_from_cursor_position_reply() {
     let mut program = Program::for_test(&buf, (10, 3));
     program.window_cells = Some(Size::new(10, 8));
     // Simulate an outstanding `CSI 6n` origin request.
-    program.origin_queries_pending = 1;
+    program.pending_queries.push_back(PendingQuery::Origin);
     // The reply is observed (never consumed) and captured as the origin,
     // clipped so the 3-row area stays on program in an 8-row terminal.
     program
@@ -1458,7 +1647,7 @@ fn origin_captured_from_cursor_position_reply() {
             page: 0,
         })
         .unwrap();
-    assert_eq!(program.origin_queries_pending, 0);
+    assert!(program.pending_queries.is_empty());
     assert_eq!(program.origin(), Position::new(2, 5));
 
     // A later stray CursorPosition (no request pending) is ignored.
@@ -1479,7 +1668,7 @@ fn a_burst_of_origin_requests_keeps_the_last_reply() {
     // Two requests in flight, e.g. two resize reports during a window drag.
     program.request_origin().unwrap();
     program.request_origin().unwrap();
-    assert_eq!(program.origin_queries_pending, 2);
+    assert_eq!(program.pending_queries.len(), 2);
     // A single flag would keep the first reply and drop the second, leaving
     // the origin at the position the drag started from.
     program
@@ -1494,7 +1683,7 @@ fn a_burst_of_origin_requests_keeps_the_last_reply() {
             page: 0,
         })
         .unwrap();
-    assert_eq!(program.origin_queries_pending, 0);
+    assert!(program.pending_queries.is_empty());
     assert_eq!(program.origin(), Position::new(0, 9));
 }
 
@@ -1513,7 +1702,7 @@ fn an_unread_event_is_not_observed_a_second_time() {
             page: 0,
         })
         .unwrap();
-    assert_eq!(program.origin_queries_pending, 0);
+    assert!(program.pending_queries.is_empty());
 
     // A second request is now in flight, and the app hands the spent reply
     // back. Reading it again must not consume that request.
@@ -1527,7 +1716,7 @@ fn an_unread_event_is_not_observed_a_second_time() {
         program.read_event().unwrap(),
         Event::CursorPosition { .. }
     ));
-    assert_eq!(program.origin_queries_pending, 1);
+    assert_eq!(program.pending_queries.len(), 1);
 }
 
 #[cfg(unix)]
@@ -1679,8 +1868,8 @@ fn a_synchronous_read_observes_without_a_second_call() {
             "{ev:?}"
         );
         // No observe_event call here on purpose.
-        assert_eq!(
-            program.origin_queries_pending, 0,
+        assert!(
+            program.pending_queries.is_empty(),
             "the read did not observe"
         );
         assert_eq!(program.origin(), Position::new(2, 4));
@@ -1728,7 +1917,7 @@ fn observing_a_resize_records_the_size_without_writing() {
     program.observe_event(&Event::Resize(ws)).unwrap();
 
     assert_eq!(program.window_cells, Some(Size::new(40, 12)));
-    assert_eq!(program.origin_queries_pending, 0);
+    assert!(program.pending_queries.is_empty());
     assert!(written(&buf).is_empty(), "{:?}", written(&buf));
 }
 
@@ -1739,7 +1928,7 @@ fn enabling_the_mouse_does_not_query_the_origin() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (10, 3));
     program.enable_mouse(MouseTracking::empty()).unwrap();
-    assert_eq!(program.origin_queries_pending, 0);
+    assert!(program.pending_queries.is_empty());
     assert!(!written(&buf).contains("\x1b[6n"), "{:?}", written(&buf));
 }
 
@@ -1752,7 +1941,7 @@ fn request_origin_parks_the_cursor_and_asks_where_it_landed() {
 
     let out = written(&buf);
     assert!(out.ends_with("\x1b[6n"), "{out:?}");
-    assert_eq!(program.origin_queries_pending, 1);
+    assert_eq!(program.pending_queries.len(), 1);
 
     // The reply is captured as the origin, and observing stays pure.
     buf.borrow_mut().clear();
@@ -1763,7 +1952,7 @@ fn request_origin_parks_the_cursor_and_asks_where_it_landed() {
         })
         .unwrap();
     assert_eq!(program.origin(), Position::new(2, 5));
-    assert_eq!(program.origin_queries_pending, 0);
+    assert!(program.pending_queries.is_empty());
     assert!(written(&buf).is_empty());
 }
 
@@ -1773,7 +1962,7 @@ fn request_origin_is_a_no_op_in_fullscreen() {
     let mut program = Program::for_test(&buf, (10, 3));
     program.screen_mut().set_fullscreen(true);
     program.request_origin().unwrap();
-    assert_eq!(program.origin_queries_pending, 0);
+    assert!(program.pending_queries.is_empty());
     assert!(written(&buf).is_empty(), "{:?}", written(&buf));
 }
 

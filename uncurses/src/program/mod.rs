@@ -70,6 +70,7 @@ mod tests;
 
 pub use crate::ansi::program_status::{ProgramStatus, ProgramStatusKind, ProgramStatusState};
 pub use state::Capabilities;
+use state::PendingQuery;
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -147,12 +148,9 @@ where
     /// `(0, 0)`. Refreshed by [`request_origin`](Self::request_origin), whose
     /// reply is captured in [`observe_event`](Self::observe_event).
     origin: Position,
-    /// How many origin `CSI 6n` requests are outstanding, so
-    /// [`observe_event`](Self::observe_event) knows which
-    /// [`CursorPosition`](Event::CursorPosition) replies are ours to capture.
-    /// A count rather than a flag so a burst of requests keeps the last
-    /// reply instead of the first.
-    origin_queries_pending: u16,
+    /// Ordered cursor requests and Primary DA batch boundaries. Cursor
+    /// reports carry no request ID, so origin and width probes share a queue.
+    pending_queries: VecDeque<PendingQuery>,
 }
 
 /// Options for session setup, capability queries, and mode preferences.
@@ -208,6 +206,13 @@ pub struct ProgramOptions {
     ///
     /// [`Screen::set_synchronized_output`]: crate::screen::Screen::set_synchronized_output
     pub prefer_synchronized_output: bool,
+    /// Measure East Asian Ambiguous width in [`Program::query_capabilities`].
+    ///
+    /// Defaults to `true`. The probe writes U+2026 at the start of the current
+    /// row, requests the cursor position, then erases the first two cells.
+    /// Call the query on a blank row before drawing, or disable this option
+    /// to preserve existing row content. The cursor stays at column zero.
+    pub query_eaw_width: bool,
     /// Include Backarrow mode (DECBKM) in [`Program::query_capabilities`].
     ///
     /// Defaults to `false`. Initialization sends no queries.
@@ -306,6 +311,7 @@ impl Default for ProgramOptions {
             prefer_grapheme_clusters: true,
             prefer_in_band_resize: true,
             prefer_synchronized_output: true,
+            query_eaw_width: true,
             query_backspace_mode: false,
             query_foreground_color: false,
             query_background_color: false,
@@ -752,6 +758,13 @@ where
                 // Stored unparsed: the attribute numbers are a terminal-author
                 // extension point, so callers test the ones they care about.
                 self.caps.primary_device_attributes = Some(attrs.clone());
+                if let Some(end) = self
+                    .pending_queries
+                    .iter()
+                    .position(|query| *query == PendingQuery::PrimaryDeviceAttributes)
+                {
+                    self.pending_queries.drain(..=end);
+                }
             }
             Event::SecondaryDeviceAttributes(ref attrs) => {
                 self.caps.secondary_device_attributes = Some(attrs.clone());
@@ -800,13 +813,25 @@ where
             Event::CellPixelSize { width, height } => {
                 self.cell_pixels = Some(Size::new(width, height));
             }
-            // Capture the reply to our own `request_origin`. Observing never
-            // consumes, so an application that also queries the cursor still
-            // sees this event.
-            Event::CursorPosition { position, .. } if self.origin_queries_pending > 0 => {
-                self.origin_queries_pending -= 1;
-                self.origin = self.clip_origin(position);
-            }
+            Event::CursorPosition { position, .. } => match self.pending_queries.front() {
+                Some(PendingQuery::Origin) => {
+                    self.pending_queries.pop_front();
+                    self.origin = self.clip_origin(position);
+                }
+                Some(PendingQuery::EawWidth) => {
+                    self.pending_queries.pop_front();
+                    // CPR coordinates are zero-based, so x is the measured
+                    // advance from the carriage return.
+                    if matches!(position.x, 1 | 2) {
+                        self.caps.eaw_width = Some(position.x as u8);
+                        self.screen.set_ambiguous_wide(position.x == 2);
+                    }
+                }
+                Some(PendingQuery::CursorPosition) => {
+                    self.pending_queries.pop_front();
+                }
+                _ => {}
+            },
             Event::Termcap {
                 recognized,
                 ref entries,
@@ -974,7 +999,7 @@ where
             window_pixels: None,
             cell_pixels: None,
             origin: Position::ORIGIN,
-            origin_queries_pending: 0,
+            pending_queries: VecDeque::new(),
         })
     }
 
@@ -982,15 +1007,26 @@ where
     ///
     /// A [`Program`] never queries the terminal on its own — call this when
     /// you want [`capabilities`](Self::capabilities) populated. It writes the
-    /// default query set (Kitty keyboard, the DECRQM modes behind
-    /// [`Capabilities`], XTVERSION, xterm modifyOtherKeys, and — when the
-    /// environment did not already imply true color — XTGETTCAP `RGB`/`Tc`),
+    /// default query set (East Asian Ambiguous width, Kitty keyboard, the
+    /// DECRQM modes behind [`Capabilities`], XTVERSION, xterm modifyOtherKeys,
+    /// and — when the environment did not already imply true color —
+    /// XTGETTCAP `RGB`/`Tc`),
     /// then the optional queries selected in [`ProgramOptions`], then `extra`,
     /// then a Primary DA request.
     ///
     /// `extra` is written verbatim, so it can carry any additional query
     /// escapes you want answered under the same Primary DA terminator. Pass
     /// `&[]` for none.
+    ///
+    /// The width probe emits `CR`, writes U+2026, requests CPR, then emits
+    /// `CR` and `ECH 2`. It erases the first two cells of the current row
+    /// and leaves the cursor at column zero. Use a blank row before drawing,
+    /// or set [`ProgramOptions::query_eaw_width`] to `false` to preserve it.
+    /// Terminals narrower than three columns skip the probe to avoid wrapping.
+    /// A width of one or two columns updates [`Capabilities::eaw_width`] and
+    /// [`Screen::set_ambiguous_wide`]. Rewrite existing text after a policy change.
+    /// Cursor reports from `extra` remain ordinary events; use the program's
+    /// cursor request methods when other cursor queries are outstanding.
     ///
     /// The DECRQM, XTVERSION, and XTGETTCAP queries are skipped on Apple's
     /// `Terminal.app`, which mishandles them. Nothing is recorded in their
@@ -1047,6 +1083,17 @@ where
         // apply_env_color_profile; read it back to decide whether there is
         // headroom to upgrade via XTGETTCAP.
         let profile = self.screen.color_profile();
+
+        if self.options.query_eaw_width
+            && self.window_cells.unwrap_or(self.screen.size()).width >= 3
+        {
+            self.screen.write_all(b"\r\xe2\x80\xa6\x1b[6n\r\x1b[2X")?;
+            if let Some(position) = self.screen.tracked_cursor() {
+                self.screen.set_tracked_cursor(Position::new(0, position.y));
+            }
+            self.pending_queries.push_back(PendingQuery::EawWidth);
+            self.screen.invalidate();
+        }
 
         // Always-safe queries.
         self.screen.write_all(REQUEST_KITTY_KEYBOARD)?;
@@ -1108,6 +1155,8 @@ where
 
         self.screen.write_all(extra)?;
         self.screen.write_all(REQUEST_PRIMARY_DA)?;
+        self.pending_queries
+            .push_back(PendingQuery::PrimaryDeviceAttributes);
         self.screen.flush()
     }
 }

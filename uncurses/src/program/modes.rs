@@ -19,6 +19,7 @@ use crate::event::Input;
 use super::MouseTracking;
 use super::Program;
 use super::ProgressState;
+use super::state::PendingQuery;
 use crate::ansi::cursor::{CursorShape, CursorStyle};
 
 /// DEC private modes for the mouse tracking modes and encodings this
@@ -928,7 +929,7 @@ impl<I: Input, O: Write> Program<I, O> {
             .stage_move_cursor_to(crate::layout::Position::ORIGIN);
         self.screen
             .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
-        self.origin_queries_pending = self.origin_queries_pending.saturating_add(1);
+        self.pending_queries.push_back(PendingQuery::Origin);
         self.screen.flush()
     }
 
@@ -1001,6 +1002,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn request_cursor_position(&mut self) -> io::Result<()> {
         self.screen
             .write_all(crate::ansi::status::REQUEST_CURSOR_POSITION)?;
+        self.pending_queries.push_back(PendingQuery::CursorPosition);
         self.screen.flush()
     }
 
@@ -1013,6 +1015,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn request_extended_cursor_position(&mut self) -> io::Result<()> {
         self.screen
             .write_all(crate::ansi::status::REQUEST_EXTENDED_CURSOR_POSITION)?;
+        self.pending_queries.push_back(PendingQuery::CursorPosition);
         self.screen.flush()
     }
 
