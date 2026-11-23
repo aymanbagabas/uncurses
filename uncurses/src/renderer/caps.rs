@@ -403,15 +403,25 @@ impl Optimizations {
     /// Windows Terminal. Terminals outside it fall back to the portable
     /// TBC-then-HTS reset, so a false negative only costs a few extra
     /// bytes, never correctness. This inspects the environment only and
-    /// never probes the terminal.
+    /// never probes the terminal. tmux and GNU Screen use the portable
+    /// reset even when they inherit an outer terminal's environment.
     pub(crate) fn supports_decst8c(env: &dyn Env) -> bool {
+        let term = env.get("TERM");
+        if env.has("TMUX")
+            || env.has("STY")
+            || term.as_deref().is_some_and(|term| {
+                matches!(term.split(['-', '.']).next(), Some("tmux" | "screen"))
+            })
+        {
+            return false;
+        }
         // Windows Terminal announces itself with a session token rather
         // than through $TERM.
         if env.has("WT_SESSION") {
             return true;
         }
         // kitty, Alacritty, and iTerm2 export a session/window id that
-        // survives login shells and multiplexers rewriting $TERM.
+        // survives login shells rewriting $TERM.
         if env.has("KITTY_WINDOW_ID")
             || env.has("ALACRITTY_WINDOW_ID")
             || env.has("ITERM_SESSION_ID")
@@ -434,7 +444,7 @@ impl Optimizations {
         {
             return true;
         }
-        let Some(term) = env.get("TERM") else {
+        let Some(term) = term else {
             return false;
         };
         // Match the bare vendor head and the xterm-<vendor> promotion
@@ -502,6 +512,34 @@ mod tests {
     }
 
     #[test]
+    fn supports_decst8c_rejects_multiplexers_with_outer_terminal_hints() {
+        for pairs in [
+            [("TERM", "tmux"), ("WT_SESSION", "abc")],
+            [("TERM", "tmux-256color"), ("KITTY_WINDOW_ID", "1")],
+            [("TERM", "screen"), ("TERM_PROGRAM", "ghostty")],
+            [("TERM", "screen-256color"), ("LC_TERMINAL", "iTerm2")],
+            [
+                ("TERM", "screen.xterm-256color"),
+                ("ITERM_SESSION_ID", "w0t0p0:abc"),
+            ],
+            [
+                ("TERM", "xterm-kitty"),
+                ("TMUX", "/tmp/tmux-1000/default,123,0"),
+            ],
+            [("TERM", "alacritty"), ("STY", "123.session")],
+            [
+                ("ALACRITTY_WINDOW_ID", "1"),
+                ("TMUX", "/tmp/tmux-1000/default,123,0"),
+            ],
+        ] {
+            assert!(
+                !Optimizations::supports_decst8c(&env_with(&pairs)),
+                "multiplexer must use the portable tab reset: {pairs:?}",
+            );
+        }
+    }
+
+    #[test]
     fn supports_decst8c_detects_terminals_via_env_tokens() {
         // Windows Terminal and window-id exporters are recognized even when
         // $TERM is rewritten to a generic value.
@@ -518,7 +556,7 @@ mod tests {
             ("ALACRITTY_WINDOW_ID", "1"),
         ])));
         assert!(Optimizations::supports_decst8c(&env_with(&[
-            ("TERM", "screen"),
+            ("TERM", "xterm-256color"),
             ("TERM_PROGRAM", "ghostty"),
         ])));
         // iTerm2 keeps $TERM generic and identifies itself through its own

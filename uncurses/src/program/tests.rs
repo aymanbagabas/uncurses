@@ -1168,37 +1168,29 @@ fn reset_lnm_emits_ansi_mode_20_reset() {
 }
 
 #[test]
-fn reset_tab_stops_emits_even_when_tabs_disabled() {
-    let buf = RefCell::new(Vec::new());
-    {
-        let opts = Optimizations::default().difference(Optimizations::TABS);
-        let mut program = Program::for_test(&buf, (20, 1));
-        program.screen_mut().set_optimizations(opts);
-        program.reset_tab_stops().unwrap();
+fn reset_tab_stops_uses_terminal_env_with_tabs_enabled_or_disabled() {
+    let portable = "\r\x1b[3g\x1b[8C\x1bH\x1b[8C\x1bH\r";
+    for (term, expected) in [
+        ("xterm-kitty", "\x1b[?5W"),
+        ("tmux-256color", portable),
+        ("screen-256color", portable),
+    ] {
+        for tabs in [false, true] {
+            let buf = RefCell::new(Vec::new());
+            let input = null_input();
+            let terminal = Terminal::from_parts(
+                &input,
+                TestOut(&buf),
+                crate::terminal::EnvList::from_pairs([("TERM", term), ("KITTY_WINDOW_ID", "1")]),
+            );
+            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
+            program
+                .screen_mut()
+                .set_optimizations(Optimizations::from_term(term).with_tabs(tabs));
+            program.reset_tab_stops().unwrap();
+            assert_eq!(written(&buf), expected, "TERM={term}, tabs={tabs}");
+        }
     }
-    assert!(
-        !buf.borrow().is_empty(),
-        "tab stops belong to the terminal, not to our willingness to use them: \
-         turning TABS on later must not find them unknown"
-    );
-}
-
-#[test]
-fn reset_tab_stops_emits_reset_when_tabs_enabled() {
-    let buf = RefCell::new(Vec::new());
-    {
-        let opts = Optimizations::default().union(Optimizations::TABS);
-        let mut program = Program::for_test(&buf, (20, 1));
-        program.screen_mut().set_optimizations(opts);
-        program.reset_tab_stops().unwrap();
-    }
-    let out = written(&buf);
-    // Either the DECST8C one-shot or the portable TBC clear-all, depending
-    // on the terminal detected from the environment.
-    assert!(
-        out.contains("\x1b[?5W") || out.contains("\x1b[3g"),
-        "expected a tab-stop reset: {out:?}"
-    );
 }
 
 #[test]
