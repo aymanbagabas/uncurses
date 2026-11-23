@@ -8,18 +8,17 @@ default width backend or pick another one, and you are ready to draw.
 
 ## Add the dependency
 
-Published releases of [uncurses](https://crates.io/crates/uncurses) and
-[uncurses-ratatui](https://crates.io/crates/uncurses-ratatui) are available on
-crates.io. Select the matching docs.rs reference for your release:
-[uncurses](https://docs.rs/uncurses) or
-[uncurses-ratatui](https://docs.rs/uncurses-ratatui).
+Install v0.0.8 of [uncurses](https://crates.io/crates/uncurses) and
+[uncurses-ratatui](https://crates.io/crates/uncurses-ratatui) from crates.io.
+Use the matching API reference:
+[uncurses v0.0.8](https://docs.rs/uncurses/0.0.8) or
+[uncurses-ratatui v0.0.8](https://docs.rs/uncurses-ratatui/0.0.8).
 
-This website follows the current repository source. For its examples and
-features, use a git dependency:
+The dependency examples on this page target v0.0.8:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses = "0.0.8"
 ```
 
 Using the [Ratatui](https://docs.rs/ratatui) backend too? Add the core crate,
@@ -27,10 +26,14 @@ the backend crate, and Ratatui:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
-uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses = "0.0.8"
+uncurses-ratatui = "0.0.8"
 ratatui = "0.30"
 ```
+
+The rest of this website follows the current repository source.
+For unreleased APIs, use matching git dependencies from
+[the repository](https://github.com/aymanbagabas/uncurses).
 
 ## Feature flags
 
@@ -49,14 +52,14 @@ for correctness, switch to `icu`:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses", default-features = false, features = ["icu"] }
+uncurses = { version = "0.0.8", default-features = false, features = ["icu"] }
 ```
 
 To await events instead of blocking a thread, add `async`:
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses", features = ["async"] }
+uncurses = { version = "0.0.8", features = ["async"] }
 ```
 
 ## Supported platforms
