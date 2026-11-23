@@ -148,6 +148,26 @@ fn tabs_off_advances_with_cuf_and_overwrite() {
     assert_golden(actual, b"\r\x1b[8CX\x1b[7CY\r");
 }
 
+#[test]
+fn multiplexer_profiles_use_cuf_for_long_jumps_and_tabs_for_short_jumps() {
+    fn scenario(r: &mut Renderer) -> Vec<u8> {
+        let mut buf = RenderBuffer::new(80, 1);
+        buf.set_cell((0, 0), &Cell::new("|", 1));
+        buf.set_cell((48, 0), &Cell::new("X", 1));
+        buf.set_cell((56, 0), &Cell::new("Y", 1));
+        render_to_vec(r, &mut buf)
+    }
+
+    for term in ["tmux", "tmux-256color", "screen", "screen-256color"] {
+        assert_both(
+            Optimizations::from_term(term),
+            scenario,
+            b"\r|\x1b[47CX\tY\r",
+            b"\r|\x1b[47CX\x1b[7CY\r",
+        );
+    }
+}
+
 // --- ONLCR ------------------------------------------------------------------
 
 #[test]

@@ -372,8 +372,11 @@ impl Optimizations {
             // set. Alacritty falls into this bucket too; the detector
             // uses the shared modern baseline rather than maintaining a
             // vendor-specific single-flag variant here.
-            "alacritty" | "contour" | "foot" | "ghostty" | "kitty" | "rio" | "st" | "tmux"
-            | "wezterm" => Self::modern(),
+            "alacritty" | "contour" | "foot" | "ghostty" | "kitty" | "rio" | "st" | "wezterm" => {
+                Self::modern()
+            }
+            // tmux 3.8 ignores CHT; literal tabs still work.
+            "tmux" => Self::modern().difference(Self::CHT),
             "xterm" => Self::xterm(),
             "screen" => Self::screen(),
             "linux" => Self::linux(),
@@ -716,15 +719,20 @@ mod tests {
 
     #[test]
     fn screen_term_uses_screen_profile() {
-        assert_eq!(
-            Optimizations::from_term("screen-256color"),
-            Optimizations::screen(),
-        );
+        for term in ["screen", "screen-256color"] {
+            assert_eq!(Optimizations::from_term(term), Optimizations::screen());
+        }
     }
 
     #[test]
-    fn tmux_term_supports_vpa() {
-        assert!(Optimizations::from_term("tmux-256color").contains(Optimizations::VPA));
+    fn tmux_term_excludes_cht() {
+        for term in ["tmux", "tmux-256color"] {
+            assert_eq!(
+                Optimizations::from_term(term),
+                Optimizations::modern().difference(Optimizations::CHT),
+                "TERM={term}",
+            );
+        }
     }
 
     #[test]
