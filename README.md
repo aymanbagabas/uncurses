@@ -180,16 +180,16 @@ For more, browse the [`examples/`](examples/examples) directory.
 
 ## Install
 
-Published releases are available on [crates.io](https://crates.io/crates/uncurses).
-The examples in this checkout follow the current source. Use its git dependency:
+Install v0.0.8 from [crates.io](https://crates.io/crates/uncurses):
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses = "0.0.8"
 ```
 
-For a published release, use its version and the matching
-[API reference on docs.rs](https://docs.rs/uncurses).
+Use the [v0.0.8 API reference](https://docs.rs/uncurses/0.0.8).
+Checkout examples follow their source revision. Use a matching git dependency
+for unreleased APIs.
 See [installation](https://uncurses.org/docs/getting-started/installation/)
 for feature choices and supported platforms.
 

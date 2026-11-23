@@ -71,20 +71,19 @@ That's the shape of it; the full API and guides live at
 
 ## Install
 
-Published releases are available on
-[crates.io](https://crates.io/crates/uncurses-ratatui).
-For examples from a checkout of the repository's default branch, use matching git
-dependencies:
+Install v0.0.8 from
+[crates.io](https://crates.io/crates/uncurses-ratatui):
 
 ```toml
 [dependencies]
-uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
-uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses" }
+uncurses = "0.0.8"
+uncurses-ratatui = "0.0.8"
 ratatui = "0.30"
 ```
 
-For a published release, use its version and the matching
-[API reference on docs.rs](https://docs.rs/uncurses-ratatui).
+Use the [v0.0.8 API reference](https://docs.rs/uncurses-ratatui/0.0.8).
+Checkout examples follow their source revision. Use matching git dependencies
+for unreleased APIs.
 
 Features mirror the core crate: `unicode-rs` *(default)*, `icu`, and runtime-agnostic
 `async` for `event_stream()` with no tokio dependency.
