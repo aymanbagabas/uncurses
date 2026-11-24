@@ -30,6 +30,16 @@ use crate::event::{ColorScheme, ModifyOtherKeysMode, ProgramStatusCapabilities};
 use super::MouseTracking;
 use super::ProgressState;
 
+/// Requests whose replies delimit or consume the shared cursor-report queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PendingQuery {
+    CursorPosition,
+    ExtendedCursorPosition,
+    Origin,
+    EawWidth,
+    PrimaryDeviceAttributes,
+}
+
 /// Tracked non-render mode state for save/restore.
 #[derive(Debug, Clone)]
 pub(super) struct State {
@@ -194,6 +204,7 @@ impl Default for State {
 /// [`Program::capabilities`](super::Program::capabilities).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Capabilities {
+    pub(super) eaw_width: Option<u8>,
     pub(super) modes: BTreeMap<Mode, ModeSetting>,
     pub(super) primary_device_attributes: Option<Vec<Option<u32>>>,
     pub(super) secondary_device_attributes: Option<Vec<Option<u32>>>,
@@ -213,6 +224,16 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// Measured East Asian Ambiguous width: one or two terminal columns.
+    ///
+    /// `None` means the probe has not returned a valid width.
+    /// [`Program::query_capabilities`](super::Program::query_capabilities)
+    /// measures U+2026 (HORIZONTAL ELLIPSIS) by default. Observation also
+    /// applies the result to [`Screen::set_ambiguous_wide`](crate::screen::Screen::set_ambiguous_wide).
+    pub fn eaw_width(&self) -> Option<u8> {
+        self.eaw_width
+    }
+
     /// The [`ModeSetting`] the terminal reported for `mode`, or `None` if it
     /// never reported on that mode.
     ///

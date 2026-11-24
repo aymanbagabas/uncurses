@@ -66,7 +66,16 @@ pub use flags::DecoderFlags;
 use result::ParseResult;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 pub(crate) use util::is_c1_introducer;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExpectedReply {
+    CursorPosition,
+    PrimaryDeviceAttributes,
+}
+
+pub(crate) type ExpectedReplies = Arc<Mutex<VecDeque<ExpectedReply>>>;
 
 /// Stateful byte parser that produces [`Event`] values.
 ///
@@ -86,6 +95,9 @@ pub struct Decoder {
     /// Decoder behavior flags (disambiguation toggles for legacy keys).
     pub(super) flags: DecoderFlags,
     backspace_mode: bool,
+    /// Program registers requests without taking the source lock, which a
+    /// concurrent reader can hold while it waits for the terminal's reply.
+    expected_replies: Option<ExpectedReplies>,
     /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
     pub(super) in_paste: bool,
     pub(super) in_clipboard: bool,
@@ -128,6 +140,7 @@ impl Decoder {
             buf: Vec::with_capacity(256),
             flags,
             backspace_mode: false,
+            expected_replies: None,
             in_paste: false,
             in_clipboard: false,
             waiting_for_terminator: false,
@@ -199,6 +212,10 @@ impl Decoder {
         self.backspace_mode = enabled;
     }
 
+    pub(crate) fn expected_replies(&mut self) -> ExpectedReplies {
+        Arc::clone(self.expected_replies.get_or_insert_with(Default::default))
+    }
+
     /// Enable or disable UTF-8 mouse decoding (xterm mode 1005).
     ///
     /// When enabled, X10-style `CSI M` mouse reports read their three values as
@@ -250,6 +267,7 @@ impl Decoder {
 
         match self.try_parse(data) {
             ParseResult::Event(event, consumed) => {
+                let event = self.commit_reply(event, &data[..consumed]);
                 if matches!(event, Event::PasteStart) {
                     self.in_paste = true;
                 }
@@ -282,6 +300,35 @@ impl Decoder {
                 }
             }
         }
+    }
+
+    /// Retire replies only after the driver accepts a non-paste event.
+    /// Lookahead and paste scanning must leave the expectations intact.
+    fn commit_reply(&self, mut event: Event, bytes: &[u8]) -> Event {
+        let Some(expected) = &self.expected_replies else {
+            return event;
+        };
+        if matches!(event, Event::PrimaryDeviceAttributes(_)) {
+            let mut expected = expected.lock().unwrap();
+            if let Some(end) = expected
+                .iter()
+                .position(|reply| *reply == ExpectedReply::PrimaryDeviceAttributes)
+            {
+                expected.drain(..=end);
+            }
+        } else if matches!(event, Event::CursorPosition { .. } | Event::Multi(_))
+            && !matches!(bytes, [0x1b, b'[', b'?', ..] | [0x9b, b'?', ..])
+        {
+            let mut expected = expected.lock().unwrap();
+            if expected.front() == Some(&ExpectedReply::CursorPosition) {
+                expected.pop_front();
+                if let Event::Multi(mut events) = event {
+                    // The recognizer places CPR after its ambiguous F3.
+                    event = events.pop().unwrap();
+                }
+            }
+        }
+        event
     }
 
     /// `true` while the decoder is between `PasteStart` and `PasteEnd`.
@@ -447,6 +494,7 @@ impl Decoder {
 
             match self.try_parse(&self.buf) {
                 ParseResult::Event(event, consumed) => {
+                    let event = self.commit_reply(event, &self.buf[..consumed]);
                     let is_paste_start = matches!(event, Event::PasteStart);
                     self.in_clipboard = matches!(event, Event::ClipboardStart { .. });
                     // Flatten `Event::Multi` into individual events so callers
@@ -677,6 +725,129 @@ mod tests {
             Event::CursorPosition { position, page: 0 }
                 if position == crate::layout::Position::new(8, 0)
         ));
+    }
+
+    #[test]
+    fn cursor_reply_expectations_follow_decoding_and_primary_da_boundaries() {
+        use crate::layout::Position;
+
+        // Private replies in both CSI forms precede the first standard reply.
+        // The second request goes unanswered, and F3 follows the final batch.
+        let wire = b"\x1b[?1;2R\x9b?1;2R\x9b1;2R\x1b[?1;2c\x1b[?1;2c\x1b[1;3R\x1b[?1;2c\x1b[1;2R";
+        for split in 0..=wire.len() {
+            let mut decoder = Decoder::default();
+            decoder.expected_replies().lock().unwrap().extend([
+                ExpectedReply::CursorPosition,
+                ExpectedReply::PrimaryDeviceAttributes,
+                ExpectedReply::CursorPosition,
+                ExpectedReply::PrimaryDeviceAttributes,
+                ExpectedReply::CursorPosition,
+                ExpectedReply::PrimaryDeviceAttributes,
+            ]);
+            let mut events = decoder.parse(&wire[..split]);
+            events.extend(decoder.parse(&wire[split..]));
+            assert_eq!(
+                events,
+                [
+                    Event::CursorPosition {
+                        position: Position::new(1, 0),
+                        page: 0,
+                    },
+                    Event::CursorPosition {
+                        position: Position::new(1, 0),
+                        page: 0,
+                    },
+                    Event::CursorPosition {
+                        position: Position::new(1, 0),
+                        page: 0,
+                    },
+                    Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                    Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                    Event::CursorPosition {
+                        position: Position::new(2, 0),
+                        page: 0,
+                    },
+                    Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                    Event::KeyPress(Key::new(KeyCode::F(3), KeyModifiers::SHIFT)),
+                    Event::CursorPosition {
+                        position: Position::new(1, 0),
+                        page: 0,
+                    },
+                ],
+                "split {split}"
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_reply_expectations_survive_lookahead_and_paste() {
+        use crate::layout::Position;
+
+        for (prefix, prefix_events) in [
+            (
+                b"\x1b".as_slice(),
+                vec![Event::KeyPress(Key::new(
+                    KeyCode::Escape,
+                    KeyModifiers::empty(),
+                ))],
+            ),
+            (
+                b"\x1b[200~\x1b[1;2R\x1b[201~",
+                vec![
+                    Event::PasteStart,
+                    Event::PasteChunk(b"\x1b[1;2R".to_vec()),
+                    Event::PasteEnd { complete: true },
+                ],
+            ),
+            (
+                b"\x1b[200~\x1b[?1;2c\x1b[201~",
+                vec![
+                    Event::PasteStart,
+                    Event::PasteChunk(b"\x1b[?1;2c".to_vec()),
+                    Event::PasteEnd { complete: true },
+                ],
+            ),
+        ] {
+            let wire = [prefix, b"\x1b[1;2R\x1b[?1;2c\x1b[1;9R"].concat();
+            let mut expected = prefix_events;
+            expected.extend([
+                Event::CursorPosition {
+                    position: Position::new(1, 0),
+                    page: 0,
+                },
+                Event::PrimaryDeviceAttributes(vec![Some(1), Some(2)]),
+                Event::KeyPress(Key::new(KeyCode::F(3), KeyModifiers::SUPER)),
+                Event::CursorPosition {
+                    position: Position::new(8, 0),
+                    page: 0,
+                },
+            ]);
+            for split in 0..=wire.len() {
+                let mut decoder = Decoder::default();
+                decoder.expected_replies().lock().unwrap().extend([
+                    ExpectedReply::CursorPosition,
+                    ExpectedReply::PrimaryDeviceAttributes,
+                ]);
+                let mut pending = Vec::new();
+                let mut events = Vec::new();
+                for chunk in [&wire[..split], &wire[split..]] {
+                    pending.extend_from_slice(chunk);
+                    loop {
+                        let (consumed, event) = decoder.parse_one(&pending);
+                        if consumed == 0 && event.is_none() {
+                            break;
+                        }
+                        pending.drain(..consumed);
+                        if let Some(event) = event {
+                            events.push(event);
+                        }
+                    }
+                }
+                assert_eq!(events, expected, "prefix {prefix:?}, split {split}");
+                assert!(pending.is_empty());
+                assert!(decoder.expected_replies().lock().unwrap().is_empty());
+            }
+        }
     }
 
     #[test]
