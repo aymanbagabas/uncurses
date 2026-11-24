@@ -30,7 +30,6 @@
 //! packets also stay inline because they can queue repeated key events.
 use super::Decoder;
 use super::DecoderFlags;
-use super::ExpectedReply;
 use super::kitty;
 use super::result::ParseResult;
 use super::util::{
@@ -156,31 +155,8 @@ impl Decoder {
         // The builtin recogniser, then `Event::UnknownCsi`. The lazy
         // [`Params`] walker is stateless and cheap to re-create.
         let raw_with_intro = &buf[..consumed];
-        let mut evt = recognize(&view, raw_with_intro, self.flags)
+        let evt = recognize(&view, raw_with_intro, self.flags)
             .unwrap_or_else(|| Event::UnknownCsi(raw_with_intro.to_vec()));
-        if let Some(expected) = &self.expected_replies {
-            if matches!(evt, Event::PrimaryDeviceAttributes(_)) {
-                let mut expected = expected.lock().unwrap();
-                if let Some(end) = expected
-                    .iter()
-                    .position(|reply| *reply == ExpectedReply::PrimaryDeviceAttributes)
-                {
-                    expected.drain(..=end);
-                }
-            } else if !has_private
-                && final_byte == b'R'
-                && matches!(evt, Event::CursorPosition { .. } | Event::Multi(_))
-            {
-                let mut expected = expected.lock().unwrap();
-                if expected.front() == Some(&ExpectedReply::CursorPosition) {
-                    expected.pop_front();
-                    if let Event::Multi(mut events) = evt {
-                        // The recognizer places CPR after its ambiguous F3.
-                        evt = events.pop().unwrap();
-                    }
-                }
-            }
-        }
         ParseResult::Event(evt, consumed)
     }
 }

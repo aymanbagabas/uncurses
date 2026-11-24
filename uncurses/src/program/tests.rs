@@ -327,9 +327,10 @@ fn eaw_width_replies_update_measurement_and_remain_visible_to_the_caller() {
             program.screen_mut().set_ambiguous_wide(width == 1);
             program.query_capabilities(&[]).unwrap();
             buf.borrow_mut().clear();
-            write!(replies, "\x1b[1;{}R\x1b[?1;2c\x1b[1;9R", width + 1).unwrap();
+            write!(replies, "\x1b\x1b[1;{}R\x1b[?1;2c\x1b[1;9R", width + 1).unwrap();
 
             for expected in [
+                Event::KeyPress(Key::new(KeyCode::Escape, KeyModifiers::empty())),
                 Event::CursorPosition {
                     position: Position::new(width, 0),
                     page: 0,
