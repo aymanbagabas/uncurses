@@ -700,8 +700,8 @@ impl<I: Input, O: Write> Program<I, O> {
         if self.state.cursor_color.is_some() {
             self.screen.write_all(color::RESET_CURSOR_COLOR)?;
         }
-        if !self.state.palette.is_empty() {
-            self.screen.write_all(color::RESET_PALETTE_COLORS)?;
+        for &index in self.state.palette.keys() {
+            color::write_reset_palette_color(&mut self.screen, index)?;
         }
         match (&self.state.window_title, &self.state.icon_name) {
             // Both set to the same string (e.g. via `set_title`): clear both

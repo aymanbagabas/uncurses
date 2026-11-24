@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::color::Color;
 use crate::event::{ProgramStatusCapabilities, SettingReport};
 use crate::text::TextSurface;
 
@@ -373,6 +374,62 @@ fn color_queries_are_optional_and_preserve_options() {
             }
         }
     }
+}
+
+#[test]
+fn palette_cleanup_resets_only_owned_entries() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.set_palette_color(255, Color::Rgb(1, 2, 3)).unwrap();
+    buf.borrow_mut().clear();
+    program.reset().unwrap();
+    program.screen.flush().unwrap();
+    let output = written(&buf);
+    assert!(output.contains("\x1b]104;255\x07"), "{output:?}");
+    assert!(!output.contains("\x1b]104\x07"), "{output:?}");
+
+    buf.borrow_mut().clear();
+    program.restore().unwrap();
+    program.screen.flush().unwrap();
+    assert!(written(&buf).contains("\x1b]4;255;rgb:0101/0202/0303\x07"));
+
+    buf.borrow_mut().clear();
+    program.reset_palette_colors().unwrap();
+    assert_eq!(written(&buf), "\x1b]104\x07");
+    buf.borrow_mut().clear();
+    program.reset().unwrap();
+    program.restore().unwrap();
+    program.screen.flush().unwrap();
+    assert!(!written(&buf).contains("\x1b]104"));
+    assert!(!written(&buf).contains("\x1b]4;"));
+}
+
+#[cfg(all(unix, not(target_os = "l4re")))]
+#[test]
+fn palette_pause_resume_and_finish_preserve_unowned_entries() {
+    use crate::terminal::{EnvList, Terminal};
+    use crate::testutil::{drain, open_pty_pair};
+
+    let (master, slave) = open_pty_pair().expect("PTY");
+    let terminal = Terminal::new(&slave, &slave, EnvList::new());
+    let mut program = Program::new(terminal).unwrap();
+    program.init_with(ProgramOptions::default()).unwrap();
+    program.set_palette_color(0, Color::Rgb(1, 2, 3)).unwrap();
+    drain(&master);
+    program.pause().unwrap();
+    let output = String::from_utf8(drain(&master)).unwrap();
+    assert!(output.contains("\x1b]104;0\x07"), "{output:?}");
+    assert!(!output.contains("\x1b]104\x07"), "{output:?}");
+    program.resume().unwrap();
+    let output = String::from_utf8(drain(&master)).unwrap();
+    assert!(
+        output.contains("\x1b]4;0;rgb:0101/0202/0303\x07"),
+        "{output:?}"
+    );
+    program.finish().unwrap();
+    let output = String::from_utf8(drain(&master)).unwrap();
+    assert!(output.contains("\x1b]104;0\x07"), "{output:?}");
+    assert!(!output.contains("\x1b]104\x07"), "{output:?}");
 }
 
 #[cfg(unix)]
