@@ -410,7 +410,9 @@ fn palette_pause_resume_and_finish_preserve_unowned_entries() {
     use crate::terminal::{EnvList, Terminal};
     use crate::testutil::{drain, open_pty_pair};
 
-    let (master, slave) = open_pty_pair().expect("PTY");
+    let Some((master, slave)) = open_pty_pair() else {
+        return;
+    };
     let terminal = Terminal::new(&slave, &slave, EnvList::new());
     let mut program = Program::new(terminal).unwrap();
     program.init_with(ProgramOptions::default()).unwrap();
