@@ -191,6 +191,7 @@ impl<I: Input, O: Write> Program<I, O> {
         mode::write_reset_mode(&mut self.screen, MOUSE_MODES)?;
         self.write_mouse_modes(tracking, true)?;
         self.state.mouse = Some(tracking);
+        self.state.chosen.insert(mode::Mode::MOUSE_NORMAL);
         self.screen.flush()
     }
 
@@ -198,6 +199,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn disable_mouse(&mut self) -> io::Result<()> {
         mode::write_reset_mode(&mut self.screen, MOUSE_MODES)?;
         self.state.mouse = None;
+        self.state.chosen.insert(mode::Mode::MOUSE_NORMAL);
         self.screen.flush()
     }
 
@@ -230,6 +232,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn enable_bracketed_paste(&mut self) -> io::Result<()> {
         mode::Mode::BRACKETED_PASTE.set(&mut self.screen)?;
         self.state.bracketed_paste = true;
+        self.state.chosen.insert(mode::Mode::BRACKETED_PASTE);
         self.screen.flush()
     }
 
@@ -237,6 +240,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn disable_bracketed_paste(&mut self) -> io::Result<()> {
         mode::Mode::BRACKETED_PASTE.reset(&mut self.screen)?;
         self.state.bracketed_paste = false;
+        self.state.chosen.insert(mode::Mode::BRACKETED_PASTE);
         self.screen.flush()
     }
 
@@ -244,6 +248,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn enable_focus_events(&mut self) -> io::Result<()> {
         mode::Mode::FOCUS.set(&mut self.screen)?;
         self.state.focus_events = true;
+        self.state.chosen.insert(mode::Mode::FOCUS);
         self.screen.flush()
     }
 
@@ -251,6 +256,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn disable_focus_events(&mut self) -> io::Result<()> {
         mode::Mode::FOCUS.reset(&mut self.screen)?;
         self.state.focus_events = false;
+        self.state.chosen.insert(mode::Mode::FOCUS);
         self.screen.flush()
     }
 
@@ -264,6 +270,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn enable_color_scheme_updates(&mut self) -> io::Result<()> {
         mode::Mode::LIGHT_DARK.set(&mut self.screen)?;
         self.state.color_scheme_updates = true;
+        self.state.chosen.insert(mode::Mode::LIGHT_DARK);
         self.screen.flush()
     }
 
@@ -272,6 +279,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn disable_color_scheme_updates(&mut self) -> io::Result<()> {
         mode::Mode::LIGHT_DARK.reset(&mut self.screen)?;
         self.state.color_scheme_updates = false;
+        self.state.chosen.insert(mode::Mode::LIGHT_DARK);
         self.screen.flush()
     }
 
@@ -296,6 +304,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn enable_visibility_reports(&mut self) -> io::Result<()> {
         mode::Mode::VISIBILITY_REPORTS.set(&mut self.screen)?;
         self.state.visibility_reports = true;
+        self.state.chosen.insert(mode::Mode::VISIBILITY_REPORTS);
         self.screen.flush()
     }
 
@@ -303,6 +312,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn disable_visibility_reports(&mut self) -> io::Result<()> {
         mode::Mode::VISIBILITY_REPORTS.reset(&mut self.screen)?;
         self.state.visibility_reports = false;
+        self.state.chosen.insert(mode::Mode::VISIBILITY_REPORTS);
         self.screen.flush()
     }
 
@@ -423,9 +433,19 @@ impl<I: Input, O: Write> Program<I, O> {
         if enter {
             mode::Mode::ALT_SCREEN_SAVE_CURSOR.set(&mut self.screen)?;
         } else {
+            // This buffer can remain inactive through finish. Clear its frame
+            // before leaving, while preserving the choice for the main buffer.
+            if changed && self.state.kitty_keyboard_chosen {
+                kitty::write_set_kitty_keyboard(
+                    &mut self.screen,
+                    kitty::KittyKeyboardFlags::empty(),
+                    kitty::KittyKeyboardMode::Set,
+                )?;
+            }
             mode::Mode::ALT_SCREEN_SAVE_CURSOR.reset(&mut self.screen)?;
         }
         self.state.alt_screen = enter;
+        self.state.chosen.insert(mode::Mode::ALT_SCREEN_SAVE_CURSOR);
         if changed {
             self.screen.set_fullscreen(enter);
             // Some terminals track DECTCEM and the Kitty keyboard stack per
@@ -455,6 +475,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn show_cursor(&mut self) -> io::Result<()> {
         mode::Mode::CURSOR_VISIBLE.set(&mut self.screen)?;
         self.state.cursor_visible = true;
+        self.state.chosen.insert(mode::Mode::CURSOR_VISIBLE);
         self.screen.set_cursor_visible(true);
         self.screen.flush()
     }
@@ -463,6 +484,7 @@ impl<I: Input, O: Write> Program<I, O> {
     pub fn hide_cursor(&mut self) -> io::Result<()> {
         mode::Mode::CURSOR_VISIBLE.reset(&mut self.screen)?;
         self.state.cursor_visible = false;
+        self.state.chosen.insert(mode::Mode::CURSOR_VISIBLE);
         self.screen.set_cursor_visible(false);
         self.screen.flush()
     }
@@ -572,6 +594,7 @@ impl<I: Input, O: Write> Program<I, O> {
             ModifyOtherKeysMode::Mode2 => self.screen.write_all(xterm::SET_MODIFY_OTHER_KEYS_2)?,
         }
         self.state.modify_other_keys = mode;
+        self.state.modify_other_keys_chosen = true;
         self.screen.flush()
     }
 
@@ -736,7 +759,7 @@ impl<I: Input, O: Write> Program<I, O> {
         let fullscreen = self.state.alt_screen;
         // Clear the alt screen's kitty keyboard frame *before* leaving the alt
         // screen — the stack is per-screen-buffer.
-        if fullscreen && !self.state.kitty_keyboard.is_empty() {
+        if fullscreen && self.state.kitty_keyboard_chosen {
             kitty::write_set_kitty_keyboard(
                 &mut self.screen,
                 kitty::KittyKeyboardFlags::empty(),
@@ -748,7 +771,7 @@ impl<I: Input, O: Write> Program<I, O> {
             self.screen.restore_cursor();
         }
         // Now on the main screen — clear its frame too.
-        if !self.state.kitty_keyboard.is_empty() {
+        if self.state.kitty_keyboard_chosen {
             kitty::write_set_kitty_keyboard(
                 &mut self.screen,
                 kitty::KittyKeyboardFlags::empty(),
@@ -770,6 +793,15 @@ impl<I: Input, O: Write> Program<I, O> {
     /// decoder's Backarrow mode. The caller flushes.
     pub(super) fn restore(&mut self) -> io::Result<()> {
         // --- Render-coupled modes ---
+        let fullscreen = self.state.alt_screen;
+        if !fullscreen
+            && self
+                .state
+                .chosen
+                .contains(&mode::Mode::ALT_SCREEN_SAVE_CURSOR)
+        {
+            mode::Mode::ALT_SCREEN_SAVE_CURSOR.reset(&mut self.screen)?;
+        }
         // Re-apply the desired kitty keyboard flags on the main screen
         // *before* entering the alt screen — the stack is per-buffer.
         if self.state.kitty_keyboard_chosen {
@@ -779,7 +811,6 @@ impl<I: Input, O: Write> Program<I, O> {
                 kitty::KittyKeyboardMode::Set,
             )?;
         }
-        let fullscreen = self.state.alt_screen;
         if fullscreen {
             self.screen.save_cursor();
             mode::Mode::ALT_SCREEN_SAVE_CURSOR.set(&mut self.screen)?;
@@ -793,26 +824,23 @@ impl<I: Input, O: Write> Program<I, O> {
                 kitty::KittyKeyboardMode::Set,
             )?;
         }
-        if self.state.grapheme_clusters {
-            mode::Mode::UNICODE_CORE.set(&mut self.screen)?;
-        }
+        self.restore_boolean_mode(mode::Mode::UNICODE_CORE, self.state.grapheme_clusters)?;
         if !self.state.cursor_visible {
             mode::Mode::CURSOR_VISIBLE.reset(&mut self.screen)?;
+        } else if self.state.chosen.contains(&mode::Mode::CURSOR_VISIBLE) {
+            mode::Mode::CURSOR_VISIBLE.set(&mut self.screen)?;
         }
 
         // --- Non-render modes ---
         if self.state.cursor_style != cursor::CursorStyle::Default {
             cursor::write_cursor_style(&mut self.screen, self.state.cursor_style)?;
         }
-        if self.state.color_scheme_updates {
-            mode::Mode::LIGHT_DARK.set(&mut self.screen)?;
-        }
-        if self.state.visibility_reports {
-            mode::Mode::VISIBILITY_REPORTS.set(&mut self.screen)?;
-        }
-        if self.state.in_band_resize {
-            mode::Mode::IN_BAND_RESIZE.set(&mut self.screen)?;
-        }
+        self.restore_boolean_mode(mode::Mode::LIGHT_DARK, self.state.color_scheme_updates)?;
+        self.restore_boolean_mode(
+            mode::Mode::VISIBILITY_REPORTS,
+            self.state.visibility_reports,
+        )?;
+        self.restore_boolean_mode(mode::Mode::IN_BAND_RESIZE, self.state.in_band_resize)?;
         if self.state.chosen.contains(&mode::Mode::BACKARROW_KEY) {
             self.write_backspace_mode(self.state.backspace_mode)?;
         }
@@ -823,16 +851,18 @@ impl<I: Input, O: Write> Program<I, O> {
             crate::event::ModifyOtherKeysMode::Mode2 => {
                 self.screen.write_all(xterm::SET_MODIFY_OTHER_KEYS_2)?;
             }
-            crate::event::ModifyOtherKeysMode::Disabled => {}
+            crate::event::ModifyOtherKeysMode::Disabled => {
+                if self.state.modify_other_keys_chosen {
+                    self.screen.write_all(xterm::RESET_MODIFY_OTHER_KEYS)?;
+                }
+            }
         }
-        if self.state.bracketed_paste {
-            mode::Mode::BRACKETED_PASTE.set(&mut self.screen)?;
-        }
-        if self.state.focus_events {
-            mode::Mode::FOCUS.set(&mut self.screen)?;
-        }
+        self.restore_boolean_mode(mode::Mode::BRACKETED_PASTE, self.state.bracketed_paste)?;
+        self.restore_boolean_mode(mode::Mode::FOCUS, self.state.focus_events)?;
         if let Some(pref) = self.state.mouse {
             self.write_mouse_modes(pref, true)?;
+        } else if self.state.chosen.contains(&mode::Mode::MOUSE_NORMAL) {
+            mode::write_reset_mode(&mut self.screen, MOUSE_MODES)?;
         }
         if let Some(c) = self.state.foreground_color {
             let (r, g, b) = c.to_rgb();
@@ -873,6 +903,17 @@ impl<I: Input, O: Write> Program<I, O> {
         }
         if let Some(progress) = self.state.progress {
             progress.write(&mut self.screen)?;
+        }
+        Ok(())
+    }
+
+    /// Explicit resets must survive a handoff too: a child can enable a mode
+    /// that this application selected off.
+    fn restore_boolean_mode(&mut self, mode: mode::Mode, enabled: bool) -> io::Result<()> {
+        if enabled {
+            mode.set(&mut self.screen)?;
+        } else if self.state.chosen.contains(&mode) {
+            mode.reset(&mut self.screen)?;
         }
         Ok(())
     }

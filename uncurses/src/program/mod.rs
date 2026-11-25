@@ -69,7 +69,7 @@ mod state;
 mod tests;
 
 pub use crate::ansi::program_status::{ProgramStatus, ProgramStatusKind, ProgramStatusState};
-pub use state::Capabilities;
+pub use state::{Capabilities, TrackedState};
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -520,6 +520,15 @@ where
     /// color-scheme change under DEC mode 2031.
     pub fn capabilities(&self) -> &Capabilities {
         &self.caps
+    }
+
+    /// Copy the session choices tracked at this point in event processing.
+    ///
+    /// This owned value stays unchanged as the session advances. It sends no
+    /// output and waits for no input. Use [`capabilities`](Self::capabilities)
+    /// for the terminal's reported state.
+    pub fn tracked_state(&self) -> TrackedState {
+        TrackedState(self.state.clone())
     }
 
     /// Last observed full terminal size in cells, or `None` before the first

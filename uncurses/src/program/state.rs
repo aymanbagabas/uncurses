@@ -31,7 +31,7 @@ use super::MouseTracking;
 use super::ProgressState;
 
 /// Tracked non-render mode state for save/restore.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct State {
     /// Cursor style.
     pub cursor_style: CursorStyle,
@@ -89,6 +89,8 @@ pub(super) struct State {
     /// Active xterm modifyOtherKeys mode (`CSI > 4 ; n m`). Drives
     /// `CSI > 4 m` on reset and re-emission on restore.
     pub modify_other_keys: ModifyOtherKeysMode,
+    /// Whether the application selected modifyOtherKeys, including disabled.
+    pub modify_other_keys_chosen: bool,
     /// Pointer (mouse cursor) shape override set via `OSC 22`. `None` when
     /// using the terminal default. Drives the `OSC 22` reset on reset and
     /// re-emission on restore.
@@ -99,7 +101,8 @@ pub(super) struct State {
     pub progress: Option<ProgressState>,
     /// Active Kitty keyboard enhancement flag set. The stack is
     /// per-screen-buffer, so the program re-emits this onto whichever buffer
-    /// becomes active. `NONE` means no frame is set.
+    /// becomes active. An empty set explicitly disables enhancements when
+    /// `kitty_keyboard_chosen` is true.
     pub kitty_keyboard: KittyKeyboardFlags,
     /// An explicit choice or discovery has settled the keyboard flags.
     pub kitty_keyboard_chosen: bool,
@@ -147,6 +150,7 @@ impl Default for State {
             cursor_color: None,
             palette: BTreeMap::new(),
             modify_other_keys: ModifyOtherKeysMode::Disabled,
+            modify_other_keys_chosen: false,
             pointer_shape: None,
             progress: None,
             kitty_keyboard: KittyKeyboardFlags::empty(),
@@ -157,6 +161,132 @@ impl Default for State {
             backspace_mode: false,
             chosen: BTreeSet::new(),
         }
+    }
+}
+
+/// An owned snapshot of the session choices tracked by [`Program`].
+///
+/// The values record requests staged through `Program`, including preferences
+/// adopted after discovery. They describe the state restored after a shell
+/// handoff, even while the program is paused. They do not confirm terminal
+/// acceptance or successful output after an I/O error. Direct writes and
+/// changes through `screen_mut` are outside this record.
+///
+/// [`Capabilities`] holds terminal replies separately. Startup configuration
+/// stays in [`ProgramOptions`](super::ProgramOptions). Taking a snapshot sends
+/// no queries and waits for no replies.
+///
+/// [`Program`]: super::Program
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedState(pub(super) State);
+
+impl TrackedState {
+    /// Cursor appearance selected through `Program`, or the terminal default.
+    pub fn cursor_style(&self) -> CursorStyle {
+        self.0.cursor_style
+    }
+
+    /// Requested cursor color override, or the terminal default.
+    pub fn cursor_color(&self) -> Option<Color> {
+        self.0.cursor_color
+    }
+
+    /// Requested hardware cursor visibility. Initially `true`.
+    pub fn cursor_visible(&self) -> bool {
+        self.0.cursor_visible
+    }
+
+    /// Whether the alternate screen buffer is selected.
+    pub fn alt_screen(&self) -> bool {
+        self.0.alt_screen
+    }
+
+    /// Selected mouse policy. `None` means no choice; `Some(None)` disables
+    /// tracking. `Some(Some(empty()))` requests basic button tracking.
+    pub fn mouse(&self) -> Option<Option<MouseTracking>> {
+        self.0
+            .chosen
+            .contains(&Mode::MOUSE_NORMAL)
+            .then_some(self.0.mouse)
+    }
+
+    /// Selected Kitty flags. `None` means no choice; `Some(empty())` explicitly
+    /// disables all enhancements. The selection follows buffer transitions.
+    pub fn kitty_keyboard(&self) -> Option<KittyKeyboardFlags> {
+        self.0
+            .kitty_keyboard_chosen
+            .then_some(self.0.kitty_keyboard)
+    }
+
+    /// Selected modifyOtherKeys mode, including an explicit disabled choice.
+    /// `None` means the application has made no choice.
+    pub fn modify_other_keys(&self) -> Option<ModifyOtherKeysMode> {
+        self.0
+            .modify_other_keys_chosen
+            .then_some(self.0.modify_other_keys)
+    }
+
+    /// Selected value of a tracked boolean mode.
+    ///
+    /// `None` means no choice was made through `Program`, or the mode is
+    /// outside this record. `Some(false)` is an explicit reset. Supported modes
+    /// are alternate screen (1049), cursor visibility (25), bracketed paste
+    /// (2004), focus (1004), color scheme (2031), visibility reports (2033),
+    /// in-band resize (2048), Unicode core (2027), and Backarrow (67).
+    ///
+    /// This records application choices and adopted preferences, independently
+    /// of the last report in [`Capabilities::mode`].
+    pub fn mode(&self, mode: Mode) -> Option<bool> {
+        if !self.0.chosen.contains(&mode) {
+            return None;
+        }
+        Some(match mode {
+            Mode::ALT_SCREEN_SAVE_CURSOR => self.0.alt_screen,
+            Mode::CURSOR_VISIBLE => self.0.cursor_visible,
+            Mode::BRACKETED_PASTE => self.0.bracketed_paste,
+            Mode::FOCUS => self.0.focus_events,
+            Mode::LIGHT_DARK => self.0.color_scheme_updates,
+            Mode::VISIBILITY_REPORTS => self.0.visibility_reports,
+            Mode::IN_BAND_RESIZE => self.0.in_band_resize,
+            Mode::UNICODE_CORE => self.0.grapheme_clusters,
+            Mode::BACKARROW_KEY => self.0.backspace_mode,
+            _ => return None,
+        })
+    }
+
+    /// Requested default foreground override.
+    pub fn foreground_color(&self) -> Option<Color> {
+        self.0.foreground_color
+    }
+
+    /// Requested default background override.
+    pub fn background_color(&self) -> Option<Color> {
+        self.0.background_color
+    }
+
+    /// Requested indexed palette overrides.
+    pub fn palette(&self) -> &BTreeMap<u8, Color> {
+        &self.0.palette
+    }
+
+    /// Requested window title override.
+    pub fn window_title(&self) -> Option<&str> {
+        self.0.window_title.as_deref()
+    }
+
+    /// Requested icon name override.
+    pub fn icon_name(&self) -> Option<&str> {
+        self.0.icon_name.as_deref()
+    }
+
+    /// Requested pointer shape override.
+    pub fn pointer_shape(&self) -> Option<&str> {
+        self.0.pointer_shape.as_deref()
+    }
+
+    /// Requested progress indicator.
+    pub fn progress(&self) -> Option<ProgressState> {
+        self.0.progress
     }
 }
 

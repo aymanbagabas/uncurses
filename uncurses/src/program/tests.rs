@@ -1383,43 +1383,126 @@ fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
         program.screen_mut().flush().unwrap();
         let out = written(&buf);
         let bits = flags.bits();
-        // Initial set + alt-enter re-apply + alt-leave re-apply = 3 emissions.
-        assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 3);
+        // The departing alternate buffer also receives an empty selection.
+        let expected = if flags.is_empty() { 4 } else { 3 };
+        assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), expected);
     }
+}
+
+#[test]
+fn leaving_alt_screen_clears_its_keyboard_flags_before_main_selection_changes() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program
+        .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
+        .unwrap();
+    program.enter_alt_screen().unwrap();
+    buf.borrow_mut().clear();
+    program.exit_alt_screen().unwrap();
+    program.set_kitty_keyboard(None).unwrap();
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
+    let out = written(&buf);
+    let leave = out.find("\x1b[?1049l").unwrap();
+    assert!(
+        out[..leave].contains("\x1b[=0;1u"),
+        "the departing buffer retains its flags: {out:?}"
+    );
+    assert_eq!(
+        program.tracked_state().kitty_keyboard(),
+        Some(KittyKeyboardFlags::empty())
+    );
+}
+
+#[test]
+fn restore_selects_explicit_main_buffer_before_its_keyboard_flags() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.exit_alt_screen().unwrap();
+    program.set_kitty_keyboard(None).unwrap();
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
+    buf.borrow_mut().clear();
+    program.restore().unwrap();
+    program.screen_mut().flush().unwrap();
+    assert_eq!(written(&buf), "\x1b[?1049l\x1b[=0;1u");
+    assert_eq!(
+        program
+            .tracked_state()
+            .mode(mode::Mode::ALT_SCREEN_SAVE_CURSOR),
+        Some(false)
+    );
 }
 
 #[test]
 fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
     use crate::ansi::kitty::KittyKeyboardFlags;
-    let buf = RefCell::new(Vec::new());
-    {
+    for selected in [
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+        KittyKeyboardFlags::empty(),
+    ] {
+        let buf = RefCell::new(Vec::new());
         let mut program = Program::for_test(&buf, (20, 1));
         program
             .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
             .unwrap();
         program.set_alt_screen(true).unwrap();
+        program.set_kitty_keyboard(Some(selected)).unwrap();
+        buf.borrow_mut().clear();
         program.reset().unwrap();
         // State preserved across reset for restore to use.
-        assert_eq!(
-            program.state.kitty_keyboard,
-            KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
-        );
+        assert_eq!(program.state.kitty_keyboard, selected);
         program.screen_mut().flush().unwrap();
+        let out = written(&buf);
+        let leave = out.find("\x1b[?1049l").expect("alt-program leave");
+        let head = &out[..leave];
+        let tail = &out[leave..];
+        assert!(
+            head.contains("\x1b[=0;1u"),
+            "alt clear missing: head={head:?}"
+        );
+        assert!(
+            tail.contains("\x1b[=0;1u"),
+            "main clear missing: tail={tail:?}"
+        );
     }
+}
+
+#[test]
+fn explicitly_disabled_modes_are_reasserted_on_restore() {
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    program.disable_mouse().unwrap();
+    program.disable_bracketed_paste().unwrap();
+    program.disable_focus_events().unwrap();
+    program.disable_color_scheme_updates().unwrap();
+    program.disable_visibility_reports().unwrap();
+    program.disable_in_band_resize().unwrap();
+    program.disable_grapheme_clusters().unwrap();
+    program.show_cursor().unwrap();
+    program
+        .set_modify_other_keys(crate::event::ModifyOtherKeysMode::Disabled)
+        .unwrap();
+    program.reset().unwrap();
+    program.screen_mut().flush().unwrap();
+    buf.borrow_mut().clear();
+
+    program.restore().unwrap();
+    program.screen_mut().flush().unwrap();
     let out = written(&buf);
-    let leave = out.find("\x1b[?1049l").expect("alt-program leave");
-    let head = &out[..leave];
-    let tail = &out[leave..];
-    // A clear targets the alt buffer before leaving, and another
-    // clear targets the main buffer afterwards.
-    assert!(
-        head.contains("\x1b[=0;1u"),
-        "alt clear missing: head={head:?}"
-    );
-    assert!(
-        tail.contains("\x1b[=0;1u"),
-        "main clear missing: tail={tail:?}"
-    );
+    for expected in [
+        "\x1b[?2004l",
+        "\x1b[?1004l",
+        "\x1b[?2031l",
+        "\x1b[?2033l",
+        "\x1b[?2048l",
+        "\x1b[?2027l",
+        "\x1b[?25h",
+        "\x1b[>4m",
+        "\x1b[?9;1000;1002;1003;1006;1016l",
+    ] {
+        assert!(out.contains(expected), "missing {expected:?}: {out:?}");
+    }
 }
 
 #[test]
@@ -2633,6 +2716,115 @@ fn explicit_kitty_keyboard_choices_take_precedence_over_discovery() {
 }
 
 #[test]
+fn tracked_snapshots_separate_owned_choices_reports_and_screen_properties() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (20, 1));
+    let untouched = program.tracked_state();
+    assert_eq!(untouched.mouse(), None);
+    assert_eq!(untouched.kitty_keyboard(), None);
+    assert_eq!(untouched.modify_other_keys(), None);
+    assert_eq!(untouched.mode(Mode::IN_BAND_RESIZE), None);
+    assert!(untouched.cursor_visible());
+    assert!(!untouched.alt_screen());
+    assert!(buf.borrow().is_empty());
+
+    program.disable_mouse().unwrap();
+    program.set_kitty_keyboard(None).unwrap();
+    program
+        .set_modify_other_keys(crate::event::ModifyOtherKeysMode::Disabled)
+        .unwrap();
+    program.disable_in_band_resize().unwrap();
+    program.set_backspace_mode(false).unwrap();
+    program.enable_bracketed_paste().unwrap();
+    program.enable_focus_events().unwrap();
+    program.enable_color_scheme_updates().unwrap();
+    program.enable_visibility_reports().unwrap();
+    program.hide_cursor().unwrap();
+    program.enter_alt_screen().unwrap();
+    program
+        .set_cursor_style(crate::ansi::cursor::CursorShape::Bar, false)
+        .unwrap();
+    program.set_cursor_color(Color::rgb(10, 20, 30)).unwrap();
+    program.set_window_title("first title").unwrap();
+    let selected = program.tracked_state();
+    assert_eq!(selected.mouse(), Some(None));
+    assert_eq!(selected.kitty_keyboard(), Some(KittyKeyboardFlags::empty()));
+    assert_eq!(
+        selected.modify_other_keys(),
+        Some(crate::event::ModifyOtherKeysMode::Disabled)
+    );
+    for (mode, expected) in [
+        (Mode::IN_BAND_RESIZE, false),
+        (Mode::BACKARROW_KEY, false),
+        (Mode::BRACKETED_PASTE, true),
+        (Mode::FOCUS, true),
+        (Mode::LIGHT_DARK, true),
+        (Mode::VISIBILITY_REPORTS, true),
+        (Mode::CURSOR_VISIBLE, false),
+        (Mode::ALT_SCREEN_SAVE_CURSOR, true),
+    ] {
+        assert_eq!(selected.mode(mode), Some(expected));
+    }
+    assert_eq!(
+        selected.cursor_style(),
+        crate::ansi::cursor::CursorStyle::new(crate::ansi::cursor::CursorShape::Bar, false)
+    );
+    assert_eq!(selected.cursor_color(), Some(Color::rgb(10, 20, 30)));
+    assert!(!selected.cursor_visible());
+    assert!(selected.alt_screen());
+    assert_eq!(selected.window_title(), Some("first title"));
+
+    // Late and duplicate replies remain observations, not new choices.
+    for _ in 0..2 {
+        program
+            .observe_event(&Event::KittyKeyboardEnhancements(
+                KittyKeyboardFlags::REPORT_ALTERNATE_KEYS,
+            ))
+            .unwrap();
+        program
+            .observe_event(&Event::ModeReport {
+                mode: Mode::IN_BAND_RESIZE,
+                setting: ModeSetting::Reset,
+            })
+            .unwrap();
+    }
+    let reports = program.capabilities().clone();
+    assert_eq!(program.tracked_state(), selected);
+    assert_eq!(reports.mode(Mode::IN_BAND_RESIZE), Some(ModeSetting::Reset));
+    assert_eq!(
+        reports.kitty_keyboard(),
+        Some(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
+    );
+    assert!(program.options.prefer_in_band_resize);
+    assert_eq!(
+        program.options.prefer_kitty_keyboard,
+        Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
+
+    program.reset().unwrap();
+    assert_eq!(program.tracked_state(), selected);
+    program.restore().unwrap();
+    assert_eq!(program.tracked_state(), selected);
+    program.enable_mouse(MouseTracking::empty()).unwrap();
+    program.set_window_title("second title").unwrap();
+    program.screen_mut().set_cursor_visible(true);
+    assert!(!program.tracked_state().cursor_visible());
+    assert_eq!(selected.mouse(), Some(None));
+    assert_eq!(selected.window_title(), Some("first title"));
+    assert_eq!(untouched.window_title(), None);
+    assert_eq!(
+        program.tracked_state().mouse(),
+        Some(Some(MouseTracking::empty()))
+    );
+    assert_eq!(reports, *program.capabilities());
+    buf.borrow_mut().clear();
+    let _snapshot = program.tracked_state();
+    assert!(buf.borrow().is_empty(), "inspection must not emit queries");
+}
+
+#[test]
 fn a_disabled_modify_other_keys_reply_still_proves_support() {
     use crate::event::ModifyOtherKeysMode;
 
@@ -3042,7 +3234,7 @@ fn reset_and_restore_round_trip_visibility_reports() {
 }
 
 #[test]
-fn disabled_visibility_reports_are_not_reset_or_restored() {
+fn disabled_visibility_reports_are_only_reasserted_on_restore() {
     let buf = RefCell::new(Vec::new());
     {
         let mut program = Program::for_test(&buf, (20, 1));
@@ -3050,13 +3242,15 @@ fn disabled_visibility_reports_are_not_reset_or_restored() {
         program.disable_visibility_reports().unwrap();
         buf.borrow_mut().clear();
         program.reset().unwrap();
+        program.screen_mut().flush().unwrap();
+        assert!(!written(&buf).contains("\x1b[?2033"));
         program.restore().unwrap();
         program.screen_mut().flush().unwrap();
     }
     let out = written(&buf);
     assert!(
-        !out.contains("\x1b[?2033"),
-        "unexpected 2033 traffic: {out:?}"
+        out.matches("\x1b[?2033l").count() == 1 && !out.contains("\x1b[?2033h"),
+        "expected the selected reset on restore: {out:?}"
     );
 }
 
