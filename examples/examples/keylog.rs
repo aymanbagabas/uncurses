@@ -141,7 +141,6 @@ impl App {
         // into the scrollback above it.
         let cols = program.screen().width();
         program.screen_mut().resize((cols, 2));
-        program.query_capabilities(&[])?;
         Ok(Self {
             program,
             last: String::from("(waiting for input)"),
@@ -154,6 +153,7 @@ impl App {
     }
 
     fn run(&mut self) -> std::io::Result<()> {
+        self.program.query_capabilities(&[])?;
         self.render()?;
 
         while let Ok(ev) = self.program.read_event() {
