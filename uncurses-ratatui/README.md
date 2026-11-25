@@ -71,17 +71,17 @@ That's the shape of it; the full API and guides live at
 
 ## Install
 
-Install v0.0.8 from
+Install v0.0.9 from
 [crates.io](https://crates.io/crates/uncurses-ratatui):
 
 ```toml
 [dependencies]
-uncurses = "0.0.8"
-uncurses-ratatui = "0.0.8"
+uncurses = "0.0.9"
+uncurses-ratatui = "0.0.9"
 ratatui = "0.30"
 ```
 
-Use the [v0.0.8 API reference](https://docs.rs/uncurses-ratatui/0.0.8).
+Use the [v0.0.9 API reference](https://docs.rs/uncurses-ratatui/0.0.9).
 Checkout examples follow their source revision. Use matching git dependencies
 for unreleased APIs.
 

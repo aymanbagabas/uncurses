@@ -109,14 +109,14 @@ That's the shape of it; the full API and guides live at
 
 ## Install
 
-Install v0.0.8 from [crates.io](https://crates.io/crates/uncurses):
+Install v0.0.9 from [crates.io](https://crates.io/crates/uncurses):
 
 ```toml
 [dependencies]
-uncurses = "0.0.8"
+uncurses = "0.0.9"
 ```
 
-Use the [v0.0.8 API reference](https://docs.rs/uncurses/0.0.8).
+Use the [v0.0.9 API reference](https://docs.rs/uncurses/0.0.9).
 Checkout examples follow their source revision. Use a matching git dependency
 for unreleased APIs.
 

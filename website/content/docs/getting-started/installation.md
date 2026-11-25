@@ -8,17 +8,17 @@ default width backend or pick another one, and you are ready to draw.
 
 ## Add the dependency
 
-Install v0.0.8 of [uncurses](https://crates.io/crates/uncurses) and
+Install v0.0.9 of [uncurses](https://crates.io/crates/uncurses) and
 [uncurses-ratatui](https://crates.io/crates/uncurses-ratatui) from crates.io.
 Use the matching API reference:
-[uncurses v0.0.8](https://docs.rs/uncurses/0.0.8) or
-[uncurses-ratatui v0.0.8](https://docs.rs/uncurses-ratatui/0.0.8).
+[uncurses v0.0.9](https://docs.rs/uncurses/0.0.9) or
+[uncurses-ratatui v0.0.9](https://docs.rs/uncurses-ratatui/0.0.9).
 
-The dependency examples on this page target v0.0.8:
+The dependency examples on this page target v0.0.9:
 
 ```toml
 [dependencies]
-uncurses = "0.0.8"
+uncurses = "0.0.9"
 ```
 
 Using the [Ratatui](https://docs.rs/ratatui) backend too? Add the core crate,
@@ -26,8 +26,8 @@ the backend crate, and Ratatui:
 
 ```toml
 [dependencies]
-uncurses = "0.0.8"
-uncurses-ratatui = "0.0.8"
+uncurses = "0.0.9"
+uncurses-ratatui = "0.0.9"
 ratatui = "0.30"
 ```
 
@@ -52,14 +52,14 @@ for correctness, switch to `icu`:
 
 ```toml
 [dependencies]
-uncurses = { version = "0.0.8", default-features = false, features = ["icu"] }
+uncurses = { version = "0.0.9", default-features = false, features = ["icu"] }
 ```
 
 To await events instead of blocking a thread, add `async`:
 
 ```toml
 [dependencies]
-uncurses = { version = "0.0.8", features = ["async"] }
+uncurses = { version = "0.0.9", features = ["async"] }
 ```
 
 ## Supported platforms
