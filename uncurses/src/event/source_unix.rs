@@ -183,11 +183,27 @@ where
     /// Read ready input bytes and run them through the decoder.
     ///
     /// Platform hook for [`EventSource::fill`]. `Interrupted` and `WouldBlock`
-    /// reads are treated as a transient absence of bytes. A zero-length read is
-    /// surfaced as [`io::ErrorKind::UnexpectedEof`]. If the pending buffer is
-    /// already full, it is cleared because its capacity is the hard cap on one
-    /// undecoded sequence.
+    /// reads are treated as a transient absence of bytes. A trailing lone Escape
+    /// gets one ready continuation byte before queued events reach the caller.
+    /// A zero-length read is surfaced as [`io::ErrorKind::UnexpectedEof`]. If the
+    /// pending buffer is already full, it is cleared because its capacity is
+    /// the hard cap on one undecoded sequence.
     pub(super) fn drain_input(&mut self) -> io::Result<()> {
+        self.read_bytes(self.pending.capacity())?;
+        if self.pending.slice() == b"\x1b" && self.esc_deadline.is_some() {
+            let mut ready = [false; READY_SLOTS];
+            self.poller
+                .poll(&mut ready, Some(std::time::Duration::ZERO))?;
+            if ready[READY_INPUT] {
+                // One byte resolves Escape or makes it a partial sequence, which
+                // gets a readiness check before expiry. Do not drain a new burst.
+                self.read_bytes(1)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn read_bytes(&mut self, limit: usize) -> io::Result<()> {
         // If the buffer is full and the parser still couldn't extract
         // an event, the contract says the buffer size is the hard cap
         // on any single sequence — drop the buffer silently and resume.
@@ -195,7 +211,9 @@ where
             self.pending.clear();
             self.esc_deadline = None;
         }
-        let n = match self.input.read(self.pending.spare_mut()) {
+        let spare = self.pending.spare_mut();
+        let len = spare.len().min(limit);
+        let n = match self.input.read(&mut spare[..len]) {
             Ok(n) => n,
             Err(e) => {
                 if matches!(
@@ -660,6 +678,43 @@ mod tests {
         write_byte(&tx, b'A');
         assert!(src.poll(Some(Duration::ZERO)).unwrap());
         assert!(matches!(src.try_read(), Some(Event::KeyPress(key)) if key.code == KeyCode::Up));
+    }
+
+    #[test]
+    fn queued_escape_continuation_survives_batch_boundary() {
+        struct ShortReads(File);
+
+        impl std::os::fd::AsFd for ShortReads {
+            fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+                self.0.as_fd()
+            }
+        }
+
+        impl std::io::Read for ShortReads {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let len = buf.len().min(64);
+                self.0.read(&mut buf[..len])
+            }
+        }
+
+        let (rx, tx) = make_pipe();
+        let mut src = EventSource::new(ShortReads(rx))
+            .unwrap()
+            .with_esc_timeout(Duration::ZERO);
+        write_bytes(&tx, &b"\x1b[B".repeat(29));
+        src.waker().wake().unwrap();
+        assert!(src.poll(Some(Duration::ZERO)).unwrap());
+        for _ in 0..29 {
+            assert!(src.poll(Some(Duration::from_secs(1))).unwrap());
+            assert!(
+                matches!(src.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Down)
+            );
+        }
+        assert!(src.try_read().is_none());
+        assert_eq!(
+            src.fill(Some(Duration::ZERO)).unwrap_err().kind(),
+            io::ErrorKind::Interrupted,
+        );
     }
 
     #[test]

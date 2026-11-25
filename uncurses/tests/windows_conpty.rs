@@ -731,6 +731,64 @@ fn child_wake_resize() {
 }
 
 #[test]
+fn queued_escape_continuation_survives_record_boundary() {
+    run_conpty("child_batched_escape", &[]);
+}
+
+#[test]
+#[ignore = "fixture launched inside a ConPTY by queued_escape_continuation_survives_record_boundary"]
+fn child_batched_escape() {
+    run_wake_child(|input, source| {
+        let records: Vec<_> = b"\x1b[B"
+            .repeat(29)
+            .into_iter()
+            .map(|byte| {
+                let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
+                record.EventType = KEY_EVENT as u16;
+                record.Event.KeyEvent.bKeyDown = 1;
+                record.Event.KeyEvent.wRepeatCount = 1;
+                record.Event.KeyEvent.uChar.UnicodeChar = u16::from(byte);
+                record
+            })
+            .collect();
+        for ignored_records in [0, 64] {
+            let mut burst = records[..64].to_vec();
+            let mut key_up = records[0];
+            key_up.Event.KeyEvent.bKeyDown = 0;
+            burst.extend(std::iter::repeat_n(key_up, ignored_records));
+            burst.extend_from_slice(&records[64..]);
+            write_records(input, &burst);
+            source.waker().wake().unwrap();
+            assert!(source.poll(Some(Duration::ZERO)).unwrap());
+            std::thread::sleep(source.esc_timeout() + Duration::from_millis(20));
+            for index in 0..29 {
+                assert!(source.poll(Some(TIMEOUT)).unwrap());
+                let event = source.read().unwrap();
+                assert!(
+                    matches!(event, Event::KeyPress(ref key) if key.code == KeyCode::Down),
+                    "ignored={ignored_records}, index={index}, event={event:?}"
+                );
+            }
+            assert!(source.try_read().is_none());
+            assert!(!source.poll(Some(Duration::ZERO)).unwrap());
+        }
+        write_records(input, &records[..1]);
+        assert!(!source.poll(Some(Duration::ZERO)).unwrap());
+        std::thread::sleep(source.esc_timeout() + Duration::from_millis(20));
+        let mut late_key = records[0];
+        late_key.Event.KeyEvent.uChar.UnicodeChar = u16::from(b'a');
+        write_records(input, &[late_key]);
+        for expected in [KeyCode::Escape, KeyCode::Char('a')] {
+            assert!(source.poll(Some(TIMEOUT)).unwrap());
+            assert!(matches!(
+                source.read().unwrap(),
+                Event::KeyPress(key) if key.code == expected && key.modifiers.is_empty()
+            ));
+        }
+    });
+}
+
+#[test]
 fn partial_input_and_deadlines_handle_wakes() {
     run_conpty("child_wake_partial_input", &[]);
 }

@@ -203,12 +203,23 @@ where
 
     /// Read ready console records and serialize them through the decoder.
     ///
-    /// Platform hook for [`EventSource::fill`]. This drains at most one record
-    /// batch, translates records to bytes, appends them to the pending buffer,
-    /// and queues decoded events. OS errors from console APIs are returned to
-    /// the caller.
+    /// Platform hook for [`EventSource::fill`]. This reads one record batch and
+    /// continues through already queued records if the decoder retains a lone
+    /// Escape. The initial record count bounds the work. OS errors from console
+    /// APIs are returned to the caller.
     pub(super) fn drain_input(&mut self) -> io::Result<()> {
-        self.read_records()
+        let mut available: u32 = 0;
+        if unsafe { GetNumberOfConsoleInputEvents(self.input_handle(), &mut available) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        while available > 0 {
+            let read = self.read_records(available)?;
+            if read == 0 || self.pending.slice() != b"\x1b" || self.esc_deadline.is_none() {
+                break;
+            }
+            available -= read;
+        }
+        Ok(())
     }
 
     fn input_handle(&self) -> HANDLE {
@@ -216,14 +227,7 @@ where
         self.input.as_handle().as_raw_handle() as HANDLE
     }
 
-    fn read_records(&mut self) -> io::Result<()> {
-        let mut available: u32 = 0;
-        if unsafe { GetNumberOfConsoleInputEvents(self.input_handle(), &mut available) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if available == 0 {
-            return Ok(());
-        }
+    fn read_records(&mut self, available: u32) -> io::Result<u32> {
         let to_read = (available as usize).min(READ_BATCH);
         let mut records: [INPUT_RECORD; READ_BATCH] = unsafe { std::mem::zeroed() };
         let mut read_n: u32 = 0;
@@ -246,7 +250,7 @@ where
         if !bytes.is_empty() {
             self.feed_bytes(&bytes);
         }
-        Ok(())
+        Ok(read_n)
     }
 
     fn serialize_record(&mut self, record: &INPUT_RECORD, buf: &mut Vec<u8>) {
