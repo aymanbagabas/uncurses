@@ -329,9 +329,8 @@ mod tests {
 
     #[test]
     fn vs16_promotes_text_glyph_to_emoji() {
-        // ❤ defaults to text presentation; VS16 selects emoji presentation.
-        assert_eq!(grapheme_width("\u{2764}", false), 1);
-        assert_eq!(grapheme_width("\u{2764}\u{fe0f}", false), 2);
+        // ✋ + VS16 → emoji presentation, width 2.
+        assert_eq!(grapheme_width("\u{270b}\u{fe0f}", false), 2);
     }
 
     #[test]

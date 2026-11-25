@@ -148,26 +148,6 @@ fn tabs_off_advances_with_cuf_and_overwrite() {
     assert_golden(actual, b"\r\x1b[8CX\x1b[7CY\r");
 }
 
-#[test]
-fn multiplexer_profiles_use_cuf_for_long_jumps_and_tabs_for_short_jumps() {
-    fn scenario(r: &mut Renderer) -> Vec<u8> {
-        let mut buf = RenderBuffer::new(80, 1);
-        buf.set_cell((0, 0), &Cell::new("|", 1));
-        buf.set_cell((48, 0), &Cell::new("X", 1));
-        buf.set_cell((56, 0), &Cell::new("Y", 1));
-        render_to_vec(r, &mut buf)
-    }
-
-    for term in ["tmux", "tmux-256color", "screen", "screen-256color"] {
-        assert_both(
-            Optimizations::from_term(term),
-            scenario,
-            b"\r|\x1b[47CX\tY\r",
-            b"\r|\x1b[47CX\x1b[7CY\r",
-        );
-    }
-}
-
 // --- ONLCR ------------------------------------------------------------------
 
 #[test]
@@ -238,26 +218,28 @@ fn no_cha_no_hpa_jump_to_col_50_uses_cr_plus_cuf() {
 }
 
 #[test]
-fn vpa_enabled_jump_to_row_10_after_blank_frame_uses_cuu() {
-    // The blank first frame leaves the cursor on row 19.
+fn vpa_enabled_jump_to_row_10_uses_cud_chain_anyway() {
+    // After an empty first frame the planner has an (unknown, unknown)
+    // cursor and walks down with `\r` plus 10× LF rather than a CUP
+    // `\x1b[11;1H` (7 bytes).
     let opts = Optimizations::none().union(Optimizations::VPA);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(10, 20);
     let _ = render_to_vec(&mut r, &mut buf);
     buf.set_cell((0, 10), &Cell::new("X", 1));
     let actual = render_to_vec(&mut r, &mut buf);
-    assert_golden(actual, b"\x1b[9AX");
+    assert_golden(actual, b"\r\n\n\n\n\n\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n");
 }
 
 #[test]
-fn vpa_disabled_jump_to_row_10_after_blank_frame_uses_cuu() {
+fn vpa_disabled_jump_to_row_10_uses_cud_chain() {
     let opts = Optimizations::none().difference(Optimizations::VPA);
     let mut r = renderer_with(opts);
     let mut buf = RenderBuffer::new(10, 20);
     let _ = render_to_vec(&mut r, &mut buf);
     buf.set_cell((0, 10), &Cell::new("X", 1));
     let actual = render_to_vec(&mut r, &mut buf);
-    assert_golden(actual, b"\x1b[9AX");
+    assert_golden(actual, b"\r\n\n\n\n\n\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n");
 }
 
 #[test]

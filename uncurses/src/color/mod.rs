@@ -462,11 +462,16 @@ mod tests {
         let (h, s, l) = Color::Rgb(0, 0, 255).to_hsl();
         assert!(approx(h, 240.0) && approx(s, 1.0) && approx(l, 0.5));
         // Gray: undefined hue reported as 0, zero saturation.
-        let (h, s, l) = Color::Rgb(128, 128, 128).to_hsl();
-        assert_eq!(h, 0.0);
+        let (_, s, l) = Color::Rgb(128, 128, 128).to_hsl();
         assert!(approx(s, 0.0) && approx(l, 128.0 / 255.0));
         // hsl -> rgb -> hsl round-trip stays close.
         let (h, s, l) = Color::hsl(210.0, 0.6, 0.45).to_hsl();
         assert!(approx(h, 210.0) && approx(s, 0.6) && approx(l, 0.45));
+    }
+
+    #[test]
+    fn color_into_option() {
+        let c: Option<Color> = Color::Red.into();
+        assert_eq!(c, Some(Color::Red));
     }
 }

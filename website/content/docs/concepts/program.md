@@ -13,11 +13,6 @@ about itself and which modes it switched on, and owns a
 
 ```mermaid
 flowchart TB
-  accTitle: The parts of a Program
-  accDescr {
-    Program brings together a terminal connection, input events, enabled modes,
-    terminal capability replies, and the Screen renderer.
-  }
   program["Program"] --> terminal["The terminal connection"]
   program --> events["Keys, mouse, and other events"]
   program --> modes["The modes it switched on"]

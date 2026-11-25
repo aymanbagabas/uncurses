@@ -60,7 +60,6 @@ pub mod cost;
 pub mod ctrl;
 pub mod cursor;
 pub mod cwd;
-pub mod drag_drop;
 pub mod finalterm;
 pub mod focus;
 pub mod graphics;
@@ -112,11 +111,13 @@ mod utf8_boundaries {
     /// Sequences whose payload contains a character with a C1 continuation
     /// byte, followed by visible text.
     ///
-    /// `\u{2705}` is `E2 9C 85` and `\u{dc}` is `C3 9C`.
-    /// Both contain a continuation byte that has the same value as raw ST.
+    /// `\u{2705}` is `E2 9C 85` and carries 8-bit ST; `\u{9c}` is `C2 9C` and
+    /// *is* that byte, encoded; `\u{9d}` is `C2 9D`, the OSC introducer
+    /// encoded. Each appears in a terminated sequence, so what follows is
+    /// text a caller can see.
     const INPUTS: &[&str] = &[
         "\x1b]0;\u{2705}\x07visible",
-        "\x1b]0;a\u{dc}b\x07visible",
+        "\x1b]0;a\u{9c}b\x07visible",
         "\x1b]0;a\u{9d}b\x07visible",
         "\x1b]8;;https://example.com/\u{2705}\x07visible\x1b]8;;\x07",
         "\x1bP1$r\u{2705}\x1b\\visible",
@@ -127,8 +128,6 @@ mod utf8_boundaries {
         // `scan_esc_intermediate`'s half of the same bug.
         "\x1b#\u{2705}visible",
         "\x1b\u{2705}visible",
-        "\u{9b}31mvisible\u{9b}m",
-        "\u{9d}0;title\u{9c}visible",
         // A payload that is not terminated at all: the whole tail is one
         // escape token, and it still must not stop mid-character.
         "\x1b]0;caf\u{e9} \u{2705} \u{4e00} \u{1f600}",
@@ -142,20 +141,17 @@ mod utf8_boundaries {
             // UTF-8 before `from_utf8_unchecked` takes it on trust. A scanner
             // that stops mid-character makes these panic under
             // `debug_assertions` and makes them UB without.
-            for limit in [0usize, 1, 3, 7] {
-                wrap::hardwrap(input, limit, false);
-            }
             for limit in [0usize, 1, 3, 7, 100] {
+                wrap::hardwrap(input, limit, false);
                 wrap::hardwrap(input, limit, true);
                 wrap::wordwrap(input, limit, wrap::DEFAULT_BREAKPOINTS);
                 wrap::wrap(input, limit, wrap::DEFAULT_BREAKPOINTS);
                 truncate::truncate(input, limit, "…");
                 truncate::truncate_left(input, limit, "…");
                 truncate::cut(input, limit / 2, limit);
+                strip(input);
             }
         }
-        wrap::hardwrap(INPUTS[INPUTS.len() - 1], 100, false);
-        strip(INPUTS[INPUTS.len() - 1]);
     }
 
     /// The visible text survives the sequence, which is the user-facing half
@@ -232,8 +228,11 @@ mod fuzz {
         "e\u{301}",
         "a\u{200d}b",
         "\u{2705}",
-        "\u{dc}",
-        "\u{dd}",
+        // C1 code points as characters. In UTF-8 the lead byte is `C2`, so
+        // these are text, not controls - the distinction the tokenizer exists
+        // to make.
+        "\u{9c}",
+        "\u{9d}",
     ];
 
     /// Sequences that terminate and sequences that do not, with payloads that
@@ -243,16 +242,6 @@ mod fuzz {
         "\x1b[31m",
         "\x1b[0m",
         "\x1b[1;2;3m",
-        "\u{9b}31m",
-        "\u{9b}m",
-        "\u{80}",
-        "\u{9c}",
-        "\u{9d}",
-        "\u{90}",
-        "\u{98}",
-        "\u{9e}",
-        "\u{9f}",
-        "\u{9d}0;title\u{9c}",
         "\x1b]8;;https://example.com/\u{2705}\x1b\\",
         "\x1b]0;title\x07",
         "\x1bP1$r\u{2705}\x1b\\",

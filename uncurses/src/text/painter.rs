@@ -62,7 +62,7 @@
 
 use crate::ansi::hyperlink::parse_hyperlink;
 use crate::ansi::params::Params;
-use crate::ansi::text::{TokenKind, string_width, tokenize};
+use crate::ansi::text::{Token, string_width, tokenize};
 use crate::buffer::{Bounded, Surface, SurfaceMut};
 use crate::cell::Cell;
 use crate::layout::{Position, Rect, overruns};
@@ -201,7 +201,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
             // A zero-width grapheme appends to the pending cell without
             // finalizing it. Everything else finalizes the pending cell first,
             // writing it with the current style: the pen inherited onto base.
-            if !(tok.kind == TokenKind::Text && tok.width == 0)
+            if !matches!(tok, Token::Text { width: 0, .. })
                 && let Some((px, py, content, w)) = pending.take()
                 && clip.contains(Position::new(px, py))
             {
@@ -210,22 +210,19 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     .set_cell(Position::new(px, py), &cell.style(pen.inherit(&base)));
             }
 
-            match tok.kind {
+            match tok {
                 // SAFETY (all `from_utf8_unchecked`): the tokenizer cuts on
                 // grapheme-cluster boundaries of a valid `&str`, so each slice
                 // is valid UTF-8. Checked under `debug_assert!` for the same
                 // reason as `ansi::wrap::bs` - the invariant is the tokenizer's
                 // to keep, and when it stopped keeping it this was UB.
-                TokenKind::Text if tok.width == 0 => {
-                    let text = tok.bytes;
+                Token::Text { text, width: 0 } => {
                     if let Some((_, _, ref mut content, _)) = pending {
                         debug_assert!(std::str::from_utf8(text).is_ok());
                         content.push_str(unsafe { std::str::from_utf8_unchecked(text) });
                     }
                 }
-                TokenKind::Text => {
-                    let text = tok.bytes;
-                    let width = tok.width;
+                Token::Text { text, width } => {
                     debug_assert!(std::str::from_utf8(text).is_ok());
                     if truncated {
                         continue;
@@ -257,8 +254,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                     pending = Some((x, y, g.to_string(), cw));
                     x += cw as u16;
                 }
-                TokenKind::Escape => {
-                    let seq = tok.bytes;
+                Token::Escape(seq) => {
                     if seq.last() == Some(&b'm')
                         && let Some(body) = csi_body(seq)
                     {
@@ -269,7 +265,7 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                         pen = pen.link(url, params);
                     }
                 }
-                TokenKind::Control if tok.control == b'\n' => {
+                Token::Control(0x0A) => {
                     y = y.saturating_add(1);
                     x = clip.left();
                     truncated = false;
@@ -277,11 +273,11 @@ impl<'s, S: TextSurface + ?Sized> Painter<'s, S> {
                         return Position::new(x, y);
                     }
                 }
-                TokenKind::Control if tok.control == b'\r' => {
+                Token::Control(0x0D) => {
                     x = clip.left();
                     truncated = false;
                 }
-                TokenKind::Control => {}
+                Token::Control(_) => {}
             }
         }
 
@@ -581,11 +577,11 @@ struct Tail<'a> {
 
 /// Return the body of a CSI sequence (between introducer and final byte).
 ///
-/// Recognizes 7-bit, raw C1, and UTF-8 C1 forms, with a final byte
-/// in `0x40..=0x7e`. Returns `None` for any
+/// Recognises both `\x1b[ … <final>` (7-bit) and `\x9b … <final>` (8-bit)
+/// forms where `<final>` is in `0x40..=0x7e`. Returns `None` for any
 /// other escape or for an incomplete sequence missing its final byte.
 fn csi_body(seq: &[u8]) -> Option<&[u8]> {
-    let body_start = if seq.starts_with(b"\x1b[") || seq.starts_with(b"\xc2\x9b") {
+    let body_start = if seq.len() >= 2 && seq[0] == 0x1b && seq[1] == b'[' {
         2
     } else if !seq.is_empty() && seq[0] == 0x9b {
         1
@@ -600,12 +596,12 @@ fn csi_body(seq: &[u8]) -> Option<&[u8]> {
 }
 
 /// Return the body of an OSC sequence (between introducer and string
-/// terminator). Recognizes 7-bit, raw C1, and UTF-8 C1 forms.
-/// A terminator is BEL or ST in any supported encoding. An incomplete sequence
+/// terminator). Recognises `\x1b] … (BEL | ESC \\ | 0x9c)?` (7-bit) and
+/// `\x9d … (BEL | 0x9c | ESC \\)?` (8-bit) forms. An incomplete sequence
 /// missing its terminator still returns its content; a non-OSC sequence
 /// returns `None`.
 fn osc_body(seq: &[u8]) -> Option<&[u8]> {
-    let body_start = if seq.starts_with(b"\x1b]") || seq.starts_with(b"\xc2\x9d") {
+    let body_start = if seq.len() >= 2 && seq[0] == 0x1b && seq[1] == b']' {
         2
     } else if !seq.is_empty() && seq[0] == 0x9d {
         1
@@ -615,7 +611,7 @@ fn osc_body(seq: &[u8]) -> Option<&[u8]> {
     if seq.len() <= body_start {
         return Some(&[]);
     }
-    let end = if seq.ends_with(b"\x1b\\") || seq.ends_with(b"\xc2\x9c") {
+    let end = if seq.ends_with(b"\x1b\\") {
         seq.len() - 2
     } else if matches!(seq.last(), Some(0x07 | 0x9c)) {
         seq.len() - 1
@@ -651,35 +647,31 @@ mod tests {
 
     #[test]
     fn plain_text() {
-        for mode in [WidthMode::Wc, WidthMode::Grapheme] {
-            let mut b = buf(10, 1).with_width_mode(mode);
-            let end = Painter::new(&mut b).set_str_wrap(
-                (0, 0),
-                "abc",
-                WrapMode::Truncate,
-                Style::default(),
-            );
-            assert_eq!(end, Position::new(3, 0));
-            assert_eq!(cell_at(&b, 0, 0).content(), "a");
-            assert_eq!(cell_at(&b, 2, 0).content(), "c");
-        }
+        let mut b = buf(10, 1);
+        let end =
+            Painter::new(&mut b).set_str_wrap((0, 0), "abc", WrapMode::Truncate, Style::default());
+        assert_eq!(end, Position::new(3, 0));
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert_eq!(cell_at(&b, 2, 0).content(), "c");
     }
 
     #[test]
     fn sgr_updates_style_mid_stream() {
-        for csi in ["\x1b[", "\u{9b}"] {
-            let mut b = buf(10, 1);
-            let end = Painter::new(&mut b).set_str_wrap(
-                (0, 0),
-                &format!("a{csi}1mb{csi}mc"),
-                WrapMode::Truncate,
-                Style::default(),
-            );
-            assert_eq!(end, Position::new(3, 0));
-            assert!(!cell_at(&b, 0, 0).style.attrs.contains(AttrFlags::BOLD));
-            assert!(cell_at(&b, 1, 0).style.attrs.contains(AttrFlags::BOLD));
-            assert!(!cell_at(&b, 2, 0).style.attrs.contains(AttrFlags::BOLD));
-        }
+        let mut b = buf(10, 1);
+        let mut p = Painter::new(&mut b);
+        let end = p.set_str_wrap(
+            (0, 0),
+            "a\x1b[1mb\x1b[mc",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(end, Position::new(3, 0));
+        let c0 = cell_at(&b, 0, 0);
+        let c1 = cell_at(&b, 1, 0);
+        let c2 = cell_at(&b, 2, 0);
+        assert!(!c0.style.attrs.contains(AttrFlags::BOLD));
+        assert!(c1.style.attrs.contains(AttrFlags::BOLD));
+        assert!(!c2.style.attrs.contains(AttrFlags::BOLD));
     }
 
     #[test]
@@ -700,12 +692,12 @@ mod tests {
     /// Every other painter test uses ASCII-only escape payloads, so reverting
     /// the scanner fix left them all green while the painter took ill-formed
     /// bytes on trust. `\u{2705}` is `E2 9C 85` and carries an 8-bit ST byte;
-    /// `\u{dc}` carries a continuation byte equal to ST.
+    /// `\u{9c}` and `\u{9d}` encode the ST and OSC bytes themselves.
     #[test]
     fn utf8_payloads_in_sequences_paint_the_text_after_them() {
         for input in [
             "\x1b]0;\u{2705}\x07ab",
-            "\x1b]0;x\u{dc}y\x07ab",
+            "\x1b]0;x\u{9c}y\x07ab",
             "\x1b]0;x\u{9d}y\x07ab",
             "\x1bP1$r\u{2705}\x1b\\ab",
             "\x1b_G\u{2705}\x1b\\ab",
@@ -732,28 +724,33 @@ mod tests {
     /// with the whole URL, and the styled text after it.
     #[test]
     fn osc8_with_a_utf8_url() {
-        for osc in ["\x1b]", "\u{9d}"] {
-            for end in ["\x07", "\x1b\\", "\u{9c}"] {
-                for close in ["\x07", "\x1b\\", "\u{9c}"] {
-                    let mut b = buf(10, 1);
-                    let input = format!("{osc}8;;https://x/\u{2705}{end}a{osc}8;;{close}b");
-                    let position = Painter::new(&mut b).set_str_wrap(
-                        (0, 0),
-                        &input,
-                        WrapMode::Truncate,
-                        Style::default(),
-                    );
-                    assert_eq!(position, Position::new(2, 0), "{input:?}");
-                    assert_eq!(
-                        link_of(&cell_at(&b, 0, 0).style),
-                        Some(("https://x/\u{2705}", ""))
-                    );
-                    assert_eq!(cell_at(&b, 0, 0).content(), "a");
-                    assert!(cell_at(&b, 1, 0).style.link.is_none());
-                    assert_eq!(cell_at(&b, 1, 0).content(), "b");
-                }
-            }
-        }
+        let mut b = buf(10, 1);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "\x1b]8;;https://x/\u{2705}\x1b\\a\x1b]8;;\x1b\\b",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(
+            link_of(&cell_at(&b, 0, 0).style),
+            Some(("https://x/\u{2705}", ""))
+        );
+        assert_eq!(cell_at(&b, 0, 0).content(), "a");
+        assert!(cell_at(&b, 1, 0).style.link.is_none());
+        assert_eq!(cell_at(&b, 1, 0).content(), "b");
+    }
+
+    #[test]
+    fn osc8_toggles_link() {
+        let mut b = buf(10, 1);
+        Painter::new(&mut b).set_str_wrap(
+            (0, 0),
+            "\x1b]8;;https://x\x1b\\a\x1b]8;;\x1b\\b",
+            WrapMode::Truncate,
+            Style::default(),
+        );
+        assert_eq!(link_of(&cell_at(&b, 0, 0).style), Some(("https://x", "")));
+        assert!(cell_at(&b, 1, 0).style.link.is_none());
     }
 
     #[test]
@@ -1320,12 +1317,12 @@ mod tests {
         let mut b = buf(5, 1);
         Painter::new(&mut b).set_str_truncate(
             (0, 0),
-            "abc中def",
+            "ab中def",
             Style::default(),
             "…",
             Style::default(),
         );
-        // "abc" + wide "中" fills columns 0..5; the tail overwrites column 4,
+        // "ab" + wide "中" fills columns 0..4; the tail overwrites column 4,
         // which is the continuation of "中", so the wide primary at 3 must be
         // blanked rather than left dangling.
         assert_eq!(cell_at(&b, 4, 0).content(), "…");

@@ -12,52 +12,41 @@ diff frames and ship the minimal bytes. A single `UncursesBackend` wraps a
 `program().screen()`.
 
 <p align="center">
-  <img src="https://media.githubusercontent.com/media/aymanbagabas/uncurses/main/assets/ratatui_popup.gif" width="440" alt="Ratatui popup rendered through uncurses">
+  <img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/ratatui_popup.gif" width="440" alt="ratatui popup example">
 </p>
 
 ## Usage
 
-Construct the backend and ratatui terminal before session setup. This keeps
-restoration available if setup fails. `draw()` renders widgets, and
-`backend_mut().read_event()` reads input.
+`try_init()` gives you a ratatui terminal wired to uncurses; `restore()` puts
+the terminal back. In between, `draw()` renders widgets and
+`backend_mut().read_event()` pulls input.
 
 ```rust,ignore
 use ratatui::widgets::Paragraph;
 use uncurses::event::{Event, Key};
 
 fn main() -> std::io::Result<()> {
-    let backend = uncurses_ratatui::UncursesBackend::stdio()?;
-    let mut terminal = ratatui::Terminal::new(backend)?;
+    let mut terminal = uncurses_ratatui::try_init()?;
 
-    let result = (|| {
-        let program = terminal.backend_mut().program_mut();
-        program.init()?;
-        program.enter_alt_screen()?;
-        program.hide_cursor()?;
+    let q: Key = "q".parse().unwrap();
+    loop {
+        terminal.draw(|frame| {
+            frame.render_widget(
+                Paragraph::new("from ratatui, via uncurses, press q to quit"),
+                frame.area(),
+            );
+        })?;
 
-        let q: Key = "q".parse().unwrap();
-        loop {
-            terminal.draw(|frame| {
-                frame.render_widget(
-                    Paragraph::new("from ratatui, via uncurses, press q to quit"),
-                    frame.area(),
-                );
-            })?;
-
-            let ev = terminal.backend_mut().read_event()?;
-            if matches!(ev, Event::KeyPress(k) if k == q) {
-                break;
-            }
+        let ev = terminal.backend_mut().read_event()?;
+        if matches!(ev, Event::KeyPress(k) if k == q) {
+            break;
         }
-        Ok(())
-    })();
-    let restore = uncurses_ratatui::try_restore(&mut terminal);
-    result.and(restore)
+    }
+
+    uncurses_ratatui::restore(&mut terminal);
+    Ok(())
 }
 ```
-
-Restoration runs after setup, drawing, or input errors. `try_restore()` reports
-restoration errors when the session succeeds.
 
 The backend exposes the wrapped program as `program()` and `program_mut()`.
 Synchronous reads go through `Program`, so capability replies are observed for
@@ -71,19 +60,13 @@ That's the shape of it; the full API and guides live at
 
 ## Install
 
-Install v0.0.9 from
-[crates.io](https://crates.io/crates/uncurses-ratatui):
+Not on crates.io yet, so depend on it straight from git:
 
 ```toml
 [dependencies]
-uncurses = "0.0.9"
-uncurses-ratatui = "0.0.9"
+uncurses-ratatui = { git = "https://github.com/aymanbagabas/uncurses" }
 ratatui = "0.30"
 ```
-
-Use the [v0.0.9 API reference](https://docs.rs/uncurses-ratatui/0.0.9).
-Checkout examples follow their source revision. Use matching git dependencies
-for unreleased APIs.
 
 Features mirror the core crate: `unicode-rs` *(default)*, `icu`, and runtime-agnostic
 `async` for `event_stream()` with no tokio dependency.

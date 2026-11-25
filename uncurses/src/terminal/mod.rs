@@ -77,9 +77,4 @@ pub use stdio::{Stderr, StderrLock, Stdin, StdinLock, Stdout, StdoutLock, stderr
 pub use tty::{TtyInput, TtyOutput};
 
 #[cfg(unix)]
-pub(crate) use std::os::fd::AsFd as AsTerminalHandle;
-#[cfg(windows)]
-pub(crate) use std::os::windows::io::AsHandle as AsTerminalHandle;
-
-#[cfg(unix)]
 pub(crate) use size::get_window_size;

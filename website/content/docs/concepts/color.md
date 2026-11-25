@@ -38,12 +38,6 @@ profile decides how it comes out.
 
 ```mermaid
 flowchart TB
-  accTitle: Color profile conversion
-  accDescr {
-    TrueColor keeps the selected color.
-    Ansi256 and Ansi select a nearby palette color.
-    Ascii and Disabled remove color.
-  }
   color["a color you set (Rgb / Indexed / named)"]
   color --> tc["TrueColor: the original color"]
   color --> a256["Ansi256: nearest palette index"]
@@ -90,7 +84,7 @@ nothing; it only changes how the next frame is encoded.
 {{< callout type="info" >}}
 `Program`'s own reads record capabilities for you, so a normal
 `read_event` loop picks up the direct-color reply with no extra work. The same
-holds for the Ratatui `UncursesBackend`, whose synchronous reads go through
+holds for the ratatui `UncursesBackend`, whose synchronous reads go through
 `Program`. Feeding events through
 [`observe_event`](/api/uncurses/program/struct.Program.html#method.observe_event)
 by hand is only needed when the events reach you some other way, such as the

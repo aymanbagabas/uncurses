@@ -21,8 +21,8 @@
 //! or malformed parameter groups return `None` so CSI fallback can preserve the
 //! raw sequence as unknown.
 use crate::ansi::params::{Group, Params};
-use crate::event::decode::util::{csi_kitty_phase, key_event_for_phase, key_modifiers};
-use crate::event::{Event, Key, KeyCode};
+use crate::event::decode::util::{csi_kitty_phase, key_event_for_phase};
+use crate::event::{Event, Key, KeyCode, KeyModifiers};
 
 /// Decode a Kitty keyboard CSI u sequence into an [`Event`].
 ///
@@ -41,7 +41,7 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     let shifted = code_sub.nth(1).filter(|&c| c != 0);
     let base = code_sub.nth(2).filter(|&c| c != 0);
 
-    let modifiers = key_modifiers(mod_sub.first().unwrap_or(1));
+    let modifiers = decode_kitty_modifiers(mod_sub.first().unwrap_or(1));
     let phase = csi_kitty_phase(params);
 
     let code = kitty_keycode_to_keycode(keycode)?;
@@ -73,6 +73,36 @@ pub fn decode_kitty_key(params: Params<'_>, _intermediates: &[u8]) -> Option<Eve
     key.normalize();
 
     Some(key_event_for_phase(key, phase))
+}
+
+fn decode_kitty_modifiers(m: u32) -> KeyModifiers {
+    let m = m.saturating_sub(1); // Kitty uses 1-based modifier encoding
+    let mut mods = KeyModifiers::empty();
+    if m & 1 != 0 {
+        mods |= KeyModifiers::SHIFT;
+    }
+    if m & 2 != 0 {
+        mods |= KeyModifiers::ALT;
+    }
+    if m & 4 != 0 {
+        mods |= KeyModifiers::CTRL;
+    }
+    if m & 8 != 0 {
+        mods |= KeyModifiers::SUPER;
+    }
+    if m & 16 != 0 {
+        mods |= KeyModifiers::HYPER;
+    }
+    if m & 32 != 0 {
+        mods |= KeyModifiers::META;
+    }
+    if m & 64 != 0 {
+        mods |= KeyModifiers::CAPS_LOCK;
+    }
+    if m & 128 != 0 {
+        mods |= KeyModifiers::NUM_LOCK;
+    }
+    mods
 }
 
 fn kitty_keycode_to_keycode(code: u32) -> Option<KeyCode> {
@@ -181,7 +211,6 @@ fn kitty_keycode_to_keycode(code: u32) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::KeyModifiers;
 
     /// Build a raw parameter body from groups of u32 values.
     /// `&[&[97]]` → `b"97"`; `&[&[97, 65, 97], &[2]]` → `b"97:65:97;2"`.
@@ -204,6 +233,22 @@ mod tests {
     fn decode(groups: &[&[u32]]) -> Event {
         let body = raw(groups);
         decode_kitty_key(Params::from_raw(&body), &[]).unwrap()
+    }
+
+    #[test]
+    fn test_decode_simple_char() {
+        let ev = decode(&[&[97]]);
+        let key = ev.as_key().unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert_eq!(key.modifiers, KeyModifiers::empty());
+    }
+
+    #[test]
+    fn test_decode_with_modifiers() {
+        let ev = decode(&[&[97], &[5]]);
+        let key = ev.as_key().unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.modifiers.contains(KeyModifiers::CTRL));
     }
 
     #[test]
@@ -240,7 +285,6 @@ mod tests {
         let ev = decode(&[&[97]]);
         let key = ev.as_key().unwrap();
         assert_eq!(key.code, KeyCode::Char('a'));
-        assert_eq!(key.modifiers, KeyModifiers::empty());
         assert_eq!(key.text.as_deref(), Some("a"));
     }
 

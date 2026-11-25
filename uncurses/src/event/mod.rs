@@ -28,15 +28,13 @@
 //! chord, so matching a shortcut is plain equality.
 //!
 //! ```no_run
-//! use uncurses::event::{Event, EventSource, Key};
+//! use uncurses::event::{Event, EventSource, Key, SourceFlags};
 //! use uncurses::terminal::Terminal;
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let mut term = Terminal::stdio();
 //! term.make_raw()?;
-//! let mut events = EventSource::new(term.input())?;
-//! #[cfg(windows)]
-//! events.set_vt_input(true);
+//! let mut events = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
 //!
 //! let quit: Key = "ctrl+c".parse().unwrap();
 //! loop {
@@ -89,8 +87,7 @@ pub use decode::DecoderFlags;
 pub use key::{Key, KeyCode, KeyModifiers, ParseKeyError};
 pub use mouse::{Mouse, MouseButton, mouse_pixel_to_cell};
 pub use source::{
-    DEFAULT_CLIPBOARD_IDLE_TIMEOUT, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource,
-    Input, Waker,
+    DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, SourceFlags, Waker,
 };
 #[cfg(feature = "async")]
 pub use stream::EventStream;
@@ -263,13 +260,7 @@ pub enum Event {
     /// Bracketed paste started.
     PasteStart,
     /// Bracketed paste ended.
-    ///
-    /// Idle recovery, explicit recovery, and input read failures produce an
-    /// incomplete end after any retained payload bytes.
-    PasteEnd {
-        /// Whether the terminal sent the paste terminator.
-        complete: bool,
-    },
+    PasteEnd,
     /// Streaming chunk of pasted bytes emitted between [`Event::PasteStart`]
     /// and [`Event::PasteEnd`]. Pastes that exceed the source's read
     /// buffer are split across multiple chunks; reassembly and any
@@ -396,47 +387,18 @@ pub enum Event {
     ProgramStatus(ProgramStatusCapabilities),
 
     // -- Clipboard / graphics ------------------------------------------------
-    /// Start of an OSC 52 clipboard reply, after its header.
-    ///
-    /// Every recognized reply starts with this event, including empty replies.
-    /// Zero or more chunks follow with the wire payload, normally base64.
-    ClipboardStart {
+    /// OSC 52 clipboard content reply.
+    Clipboard {
         /// Clipboard selection that was reported.
         selection: ClipboardSelection,
-    },
-    /// Raw OSC 52 payload bytes, excluding the header and terminator.
-    ///
-    /// Chunk boundaries follow input availability, not base64 groups or text
-    /// boundaries. Callers can consume chunks incrementally or assemble them.
-    ClipboardChunk(Vec<u8>),
-    /// End of an OSC 52 clipboard reply.
-    ///
-    /// Caller timeouts and wakes preserve an active reply, subject to the
-    /// source's independent clipboard idle timeout. Idle or explicit recovery
-    /// flushes retained bytes and ends the reply with `complete: false`.
-    /// An interrupting escape sequence ends it before that sequence is decoded.
-    /// An input read failure flushes retained bytes and ends it before the error.
-    /// Readiness errors propagate directly and can leave a reply unfinished.
-    ClipboardEnd {
-        /// Whether BEL or ST terminated the reply normally.
-        complete: bool,
+        /// Clipboard content.
+        content: String,
     },
     /// Kitty graphics response (APC `G ...` payload).
     KittyGraphics {
         /// Response options.
         options: Vec<(String, String)>,
         /// Response payload bytes.
-        payload: Vec<u8>,
-    },
-    /// One Kitty OSC 72 drag and drop message.
-    ///
-    /// Metadata and payload are wire values. Callers retain the first chunk's
-    /// metadata, decode base64 when applicable, and manage transfer lifetime.
-    /// An empty final data response ends a transfer; `m=0` alone ends a message.
-    DragDrop {
-        /// Colon-separated metadata pairs, including extension and routing keys.
-        options: Vec<(String, String)>,
-        /// Unchanged payload bytes, including base64 for binary data.
         payload: Vec<u8>,
     },
 
@@ -457,9 +419,7 @@ pub enum Event {
     UnknownPm(Vec<u8>),
     /// Unknown APC sequence (payload).
     UnknownApc(Vec<u8>),
-    /// Catch-all for unrecognized byte sequences, including incomplete control
-    /// strings interrupted by another Escape sequence. These incomplete strings
-    /// include their introducer bytes.
+    /// Catch-all for unrecognized byte sequences.
     Unknown(Vec<u8>),
 }
 

@@ -212,6 +212,14 @@ mod tests {
     }
 
     #[test]
+    fn default_surface_trims_to_empty_rows() {
+        let buf = Buffer::new(3, 2);
+        // Every cell is an unstyled blank space, so each row trims to nothing,
+        // leaving two empty rows separated by CRLF.
+        assert_eq!(buf.display().to_string(), "\r\n");
+    }
+
+    #[test]
     fn styled_run_emits_one_opener_and_a_trailing_reset() {
         let mut buf = Buffer::new(2, 1);
         let bold = Style::new().bold();
@@ -253,6 +261,7 @@ mod tests {
         buf.set_cell((0, 0).into(), &Cell::new("世", 2));
         // (1,0) is the continuation placeholder written by set_cell.
         let out = buf.display().to_string();
+        assert!(out.starts_with("世"), "wide grapheme emitted once: {out:?}");
         // No stray empty content or extra cell after the wide grapheme.
         assert_eq!(out, "世");
     }

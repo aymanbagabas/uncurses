@@ -2,9 +2,6 @@
 //!
 //! Run with `cargo run --example legacy_keys`. Press F2 to switch legacy LF
 //! between Ctrl+J and Enter, then press Ctrl+J to see the decoded key.
-//! Press Alt+[ or Alt+] to see an ambiguous legacy prefix resolve after idle.
-//! Press Super+Left or Super+Delete to inspect modifier decoding.
-//! CSI keys use Kitty's ordering: Super, Hyper, then Meta.
 //! Press q or Ctrl-C to quit.
 
 use std::io;
@@ -27,18 +24,14 @@ fn main() -> io::Result<()> {
 fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
     let cols = program.screen().width();
     program.screen_mut().resize((cols, 1));
-    program
-        .screen_mut()
-        .set_str((0, 0), "F2: LF; q/Ctrl-C: quit.", Style::default());
+    program.screen_mut().set_str(
+        (0, 0),
+        "F2: toggle LF; Ctrl+J: test it; q/Ctrl-C: quit.",
+        Style::default(),
+    );
     program
         .screen_mut()
         .insert_above("Legacy LF reads as Ctrl+J")?;
-    program
-        .screen_mut()
-        .insert_above("Try Alt+[ and Alt+]: legacy prefixes resolve after idle.")?;
-    program
-        .screen_mut()
-        .insert_above("CSI modifier bits: 8 = Super, 16 = Hyper, 32 = Meta.")?;
     program.screen_mut().render()?;
 
     loop {
@@ -61,11 +54,6 @@ fn run(program: &mut Program<Stdin, Stdout>) -> io::Result<()> {
                 program
                     .screen_mut()
                     .insert_above(&format!("Key: {key:?}"))?;
-            }
-            Event::Unknown(bytes) => {
-                program
-                    .screen_mut()
-                    .insert_above(&format!("Unknown input: {bytes:?}"))?;
             }
             Event::Resize(_) => program.autoresize()?,
             _ => {}

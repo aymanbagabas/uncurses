@@ -433,11 +433,6 @@ impl Buffer {
         }
 
         let new_total = (width as usize) * (height as usize);
-        if width == self.width {
-            self.cells.resize(new_total, Cell::BLANK);
-            self.height = height;
-            return;
-        }
         let mut new_cells = vec![Cell::BLANK; new_total];
 
         let copy_w = width.min(self.width) as usize;

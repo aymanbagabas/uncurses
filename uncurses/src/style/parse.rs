@@ -284,6 +284,13 @@ mod tests {
     }
 
     #[test]
+    fn from_subparam_body() {
+        let s = rs(b"1;31");
+        assert!(s.attrs.contains(AttrFlags::BOLD));
+        assert_eq!(s.fg, Some(Color::Red));
+    }
+
+    #[test]
     fn omitted_top_level_param_acts_as_reset() {
         // `CSI ; m` — leading empty slot decodes as `0` ⇒ reset.
         let mut s = Style::default().bold();

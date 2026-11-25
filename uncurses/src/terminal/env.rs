@@ -230,20 +230,21 @@ mod tests {
 
     #[test]
     fn boxed_env_forwards_has_override() {
-        struct TrackedEnv(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-        impl Env for TrackedEnv {
+        // An implementor that treats a set-but-empty value as present, which
+        // is the opposite of the default `has`. Boxing must not silently
+        // reinstate the default.
+        struct EmptyCounts;
+        impl Env for EmptyCounts {
             fn get(&self, _key: &str) -> Option<String> {
                 Some(String::new())
             }
             fn has(&self, _key: &str) -> bool {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                false
+                true
             }
         }
 
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let e: Box<dyn Env> = Box::new(TrackedEnv(calls.clone()));
-        assert!(!e.has("ANYTHING"));
-        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let e: Box<dyn Env> = Box::new(EmptyCounts);
+        assert!(e.has("ANYTHING"));
+        assert!(e.as_ref().has("ANYTHING"));
     }
 }

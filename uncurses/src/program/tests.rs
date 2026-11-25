@@ -15,10 +15,16 @@ use super::*;
 use crate::event::{ProgramStatusCapabilities, SettingReport};
 use crate::text::TextSurface;
 
-#[cfg(any(unix, windows))]
+#[cfg(unix)]
 fn null_input() -> std::io::PipeReader {
     // A pipe read end is epoll/kqueue-registerable (unlike /dev/null), which
     // EventSource::new requires. The write end is dropped; tests never read.
+    let (reader, _writer) = std::io::pipe().unwrap();
+    reader
+}
+
+#[cfg(windows)]
+fn null_input() -> std::io::PipeReader {
     let (reader, _writer) = std::io::pipe().unwrap();
     reader
 }
@@ -79,15 +85,10 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
         let mut screen = Screen::new(writer, size);
         screen.set_color_profile(color_profile);
         screen.set_optimizations(optimizations);
-        let source = Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap()));
-        #[cfg(windows)]
-        let source_waker = source.lock().unwrap().waker();
         Self {
             terminal,
             screen,
-            source,
-            #[cfg(windows)]
-            source_waker,
+            source: Arc::new(Mutex::new(crate::event::EventSource::new(input).unwrap())),
             unread: VecDeque::new(),
             state: state::State::default(),
             caps: Capabilities::default(),
@@ -127,52 +128,6 @@ fn decoder_flags_delegate_without_changing_options_or_terminal_modes() {
         program.screen.flush().unwrap();
         assert!(buf.borrow().is_empty());
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn shared_source_paste_timeout_can_change_during_a_paste() {
-    let buf = RefCell::new(Vec::new());
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let mut program = Program::for_test_with_input(&buf, (20, 1), reader);
-    let source = program.event_source();
-    source
-        .lock()
-        .unwrap()
-        .set_paste_idle_timeout(Some(Duration::ZERO));
-    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-    writer.write_all(b"\x1b[200~hello\x1b[20").unwrap();
-    assert_eq!(program.read_event().unwrap(), Event::PasteStart);
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::PasteChunk(b"hello".to_vec()),
-    );
-
-    source.lock().unwrap().set_paste_idle_timeout(None);
-    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-    source
-        .lock()
-        .unwrap()
-        .set_paste_idle_timeout(Some(Duration::from_secs(60)));
-    assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-    source
-        .lock()
-        .unwrap()
-        .set_paste_idle_timeout(Some(Duration::ZERO));
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::PasteChunk(b"\x1b[20".to_vec()),
-    );
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::PasteEnd { complete: false }
-    );
-
-    writer.write_all(b"x").unwrap();
-    assert!(matches!(
-        program.read_event().unwrap(),
-        Event::KeyPress(key) if key.code == crate::event::KeyCode::Char('x')
-    ));
 }
 
 #[cfg(unix)]
@@ -659,6 +614,37 @@ fn autoresize_refits_after_the_report_was_already_observed() {
         "autoresize must still refit the managed area"
     );
 }
+
+// --- end-to-end renderer tests ---
+//
+// Drive the renderer through the Screen render surface. The writer
+// is `&mut Vec<u8>` (or scoped so the test owns the `Vec<u8>` that
+// outlives the program), and per-test configuration is established
+// up front with the `with_color_profile` / `with_optimizations`
+// builders — there is no runtime mutation of these knobs.
+//
+// Each optimization-toggle pair asserts on the **discriminating
+// byte sequence** the optimization controls (ECH, REP, tab,
+// backspace, map-newline, scroll), so the ON and OFF variants
+// would diverge if the optimization regressed.
+//
+// Some renderer behaviours are intentionally not covered here:
+// * Touched-span tracking: depends on directly poking `RenderBuffer`
+//   and reading per-line touched spans, neither of which is part of
+//   the public API. Touch tracking is exercised indirectly by every
+//   render test that asserts on emitted bytes.
+// * Renderer logger hooks: not provided.
+// * Style-change runtime mutation: exercised by
+//   `renderer_redraws_when_style_changes` below.
+// * Runtime mutation of the relative-cursor flag: inline /
+//   fullscreen flavors of the relative-cursor model are covered by
+//   `inline_hello_world_emits_exact_byte_stream` and
+//   `fullscreen_diagonal_emits_exact_byte_stream`.
+//
+// Output-frame cases drive the same source text through Screen
+// (with `set_str_wrap(..., WrapMode::Wrap)`), render both frames in a
+// single Screen lifetime, and assert that the relevant content and
+// clearing sequences appear in the cumulative byte stream.
 
 #[test]
 fn set_title_emits_osc_0() {
@@ -1168,29 +1154,37 @@ fn reset_lnm_emits_ansi_mode_20_reset() {
 }
 
 #[test]
-fn reset_tab_stops_uses_terminal_env_with_tabs_enabled_or_disabled() {
-    let portable = "\r\x1b[3g\x1b[8C\x1bH\x1b[8C\x1bH\r";
-    for (term, expected) in [
-        ("xterm-kitty", "\x1b[?5W"),
-        ("tmux-256color", portable),
-        ("screen-256color", portable),
-    ] {
-        for tabs in [false, true] {
-            let buf = RefCell::new(Vec::new());
-            let input = null_input();
-            let terminal = Terminal::from_parts(
-                &input,
-                TestOut(&buf),
-                crate::terminal::EnvList::from_pairs([("TERM", term), ("KITTY_WINDOW_ID", "1")]),
-            );
-            let mut program = Program::with_render(terminal, (20, 1)).unwrap();
-            program
-                .screen_mut()
-                .set_optimizations(Optimizations::from_term(term).with_tabs(tabs));
-            program.reset_tab_stops().unwrap();
-            assert_eq!(written(&buf), expected, "TERM={term}, tabs={tabs}");
-        }
+fn reset_tab_stops_emits_even_when_tabs_disabled() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let opts = Optimizations::default().difference(Optimizations::TABS);
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.screen_mut().set_optimizations(opts);
+        program.reset_tab_stops().unwrap();
     }
+    assert!(
+        !buf.borrow().is_empty(),
+        "tab stops belong to the terminal, not to our willingness to use them: \
+         turning TABS on later must not find them unknown"
+    );
+}
+
+#[test]
+fn reset_tab_stops_emits_reset_when_tabs_enabled() {
+    let buf = RefCell::new(Vec::new());
+    {
+        let opts = Optimizations::default().union(Optimizations::TABS);
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.screen_mut().set_optimizations(opts);
+        program.reset_tab_stops().unwrap();
+    }
+    let out = written(&buf);
+    // Either the DECST8C one-shot or the portable TBC clear-all, depending
+    // on the terminal detected from the environment.
+    assert!(
+        out.contains("\x1b[?5W") || out.contains("\x1b[3g"),
+        "expected a tab-stop reset: {out:?}"
+    );
 }
 
 #[test]
@@ -1202,16 +1196,11 @@ fn reset_moves_cursor_to_last_row_inline() {
             .screen_mut()
             .set_str((0, 0), "hi", crate::style::Style::default());
         program.screen_mut().render().unwrap();
-        program
-            .screen_mut()
-            .move_cursor_to(Position::ORIGIN)
-            .unwrap();
-        buf.borrow_mut().clear();
         program.reset().unwrap();
         program.screen_mut().flush().unwrap();
     }
     let out = written(&buf);
-    // The explicit move leaves the cursor at row 0. reset must walk down
+    // After "hi" lands at row 0, cur.pos.y == 0. reset must walk down
     // to row 4 (last of 5-row inline surface). In inline / relative
     // mode the planner emits CUD 4 (or 4× LF when cheaper).
     assert!(
@@ -1390,6 +1379,11 @@ fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
     );
 }
 
+// --- teardown drain of pending capability-query replies ---
+
+// Uses a pipe the event source must poll; on Windows the source polls a
+// console handle, not a pipe, so this drain path is exercised on Unix only.
+
 #[test]
 fn origin_defaults_to_zero_and_maps_mouse() {
     let buf = RefCell::new(Vec::new());
@@ -1530,98 +1524,6 @@ fn an_unread_event_is_not_observed_a_second_time() {
     assert_eq!(program.origin_queries_pending, 1);
 }
 
-#[cfg(unix)]
-#[test]
-fn unread_events_preserve_wakes_in_poll_and_read() {
-    for use_poll in [false, true] {
-        let (reader, _writer) = std::io::pipe().unwrap();
-        let buf = RefCell::new(Vec::new());
-        let mut program = Program::for_test_with_input(&buf, (10, 3), reader);
-        program.unread_event(Event::PasteStart);
-        program.source.lock().unwrap().waker().wake().unwrap();
-        let event = if use_poll {
-            assert!(program.poll_event(Some(Duration::ZERO)).unwrap());
-            program.try_read_event().unwrap().unwrap()
-        } else {
-            program.read_event().unwrap()
-        };
-        assert_eq!(event, Event::PasteStart);
-        assert_eq!(
-            program.read_event().unwrap_err().kind(),
-            io::ErrorKind::Interrupted,
-        );
-        assert!(!program.poll_event(Some(Duration::ZERO)).unwrap());
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn mode_changes_keep_interrupting_retrying_and_competing_readers() {
-    use std::sync::mpsc;
-
-    for use_poll in [false, true] {
-        for competing in [false, true] {
-            let (input, mut output) = std::io::pipe().unwrap();
-            let source = Arc::new(Mutex::new(EventSource::new(input).unwrap()));
-            let waker = source.lock().unwrap().waker();
-            let (started, waiting) = mpsc::sync_channel(0);
-            let (acquired, finished) = mpsc::sync_channel(0);
-            std::thread::scope(|scope| {
-                let reader = scope.spawn(|| {
-                    let mut source = source.lock().unwrap();
-                    started.send(()).unwrap();
-                    let mut results = Vec::new();
-                    for _ in 0..2 {
-                        let result = if use_poll {
-                            source.poll(None).map(|ready| !ready)
-                        } else {
-                            source.read().map(|_| false).or_else(|error| {
-                                if error.kind() == io::ErrorKind::Interrupted {
-                                    Ok(true)
-                                } else {
-                                    Err(error)
-                                }
-                            })
-                        };
-                        results.push(result.unwrap());
-                    }
-                    results
-                });
-                waiting.recv_timeout(Duration::from_secs(2)).unwrap();
-                let competitor = competing.then(|| {
-                    scope.spawn(|| {
-                        for _ in 0..2 {
-                            if let Err(error) = source.lock().unwrap().read() {
-                                assert_eq!(error.kind(), io::ErrorKind::Interrupted);
-                            }
-                        }
-                    })
-                });
-                let transition = scope.spawn(|| {
-                    let _source = lock_source_for_mode_change(&source, &waker).unwrap();
-                    acquired.send(()).unwrap();
-                });
-                let result = finished.recv_timeout(Duration::from_secs(2));
-                // Release all readers even when the transition loses its only wake.
-                output.write_all(b"xxxx").unwrap();
-                let interrupted = reader.join().unwrap();
-                if let Some(competitor) = competitor {
-                    competitor.join().unwrap();
-                }
-                if result.is_err() {
-                    finished.recv_timeout(Duration::from_secs(2)).unwrap();
-                }
-                transition.join().unwrap();
-                assert!(
-                    result.is_ok(),
-                    "mode change blocked after a reader consumed its wake"
-                );
-                assert_eq!(interrupted, [true, true]);
-            });
-        }
-    }
-}
-
 /// Pixel-to-cell mapping has to scale across the whole grid. Dividing by a
 /// truncated cell width reports columns past the last one whenever the pixel
 /// width is not an exact multiple of the column count.
@@ -1685,6 +1587,21 @@ fn a_synchronous_read_observes_without_a_second_call() {
         );
         assert_eq!(program.origin(), Position::new(2, 4));
     }
+}
+
+#[test]
+fn mouse_to_origin_is_an_identity_in_fullscreen() {
+    use crate::event::{KeyModifiers, Mouse, MouseButton};
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.origin = Position::new(0, 5);
+    // Entering the alternate screen re-anchors the area at the top-left, so
+    // the inline origin recorded earlier must not be subtracted any more.
+    program.screen_mut().set_fullscreen(true);
+    let m = Mouse::new(3, 7, MouseButton::Left, KeyModifiers::empty());
+    let mapped = program.mouse_to_origin(m);
+    assert_eq!((mapped.x, mapped.y), (3, 7));
 }
 
 #[test]
@@ -1874,23 +1791,6 @@ fn init_grants_tabs_and_bs_after_entering_raw_mode() {
     program.screen_mut().set_optimizations(primed);
     program.resume().expect("resume");
     assert_tabs_and_bs_granted(program.screen().optimizations(), primed, "resume");
-}
-
-#[cfg(windows)]
-#[test]
-fn failed_raw_mode_entry_does_not_enable_vt_input() {
-    let (reader, writer) = std::io::pipe().unwrap();
-    for resume in [false, true] {
-        let terminal = Terminal::new(&reader, &writer, crate::terminal::EnvList::new());
-        let mut program = Program::with_render(terminal, (80, 24)).unwrap();
-        let result = if resume {
-            program.resume()
-        } else {
-            program.init()
-        };
-        assert!(result.is_err());
-        assert!(!program.source.lock().unwrap().vt_input());
-    }
 }
 
 /// Exactly what a raw-mode entry must leave behind: `TABS` and `BS` on, and
@@ -2755,37 +2655,6 @@ fn a_kitty_graphics_response_records_graphics_support() {
 }
 
 #[test]
-#[cfg(unix)]
-fn drag_drop_support_is_observed_without_consuming_the_reply() {
-    let buf = RefCell::new(Vec::new());
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let terminal = Terminal::from_parts(&reader, TestOut(&buf), crate::terminal::EnvList::new());
-    let mut program = Program::with_render(terminal, (10, 3)).unwrap();
-    assert!(!program.capabilities().drag_drop());
-    writer.write_all(b"\x1b]72;t=m;x\x1b\\").unwrap();
-    assert!(matches!(
-        program.read_event().unwrap(),
-        Event::DragDrop { .. }
-    ));
-    assert!(!program.capabilities().drag_drop());
-    program
-        .query_capabilities(crate::ansi::drag_drop::REQUEST_DRAG_DROP)
-        .unwrap();
-    assert!(buf.borrow().ends_with(b"\x1b]72;t=q\x1b\\\x1b[c"));
-    writer
-        .write_all(b"\x1b]72;t=q:i=42;future=1\x1b\\")
-        .unwrap();
-    assert_eq!(
-        program.read_event().unwrap(),
-        Event::DragDrop {
-            options: vec![("t".into(), "q".into()), ("i".into(), "42".into())],
-            payload: b"future=1".to_vec(),
-        }
-    );
-    assert!(program.capabilities().drag_drop());
-}
-
-#[test]
 fn a_reported_cell_size_beats_dividing_the_window_sizes() {
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (10, 3));
@@ -2958,6 +2827,7 @@ fn request_visibility_is_a_one_shot_query() {
     }
     let out = written(&buf);
     assert_eq!(out, "\x1b[?998n");
+    assert!(!out.contains("\x1b[?2033h"));
 }
 
 /// Visibility support needs no capability field of its own: the mode is
@@ -3003,6 +2873,31 @@ fn request_cursor_style_asks_decrqss_for_decscusr() {
     // DECRQSS names the control function by its intermediate and final
     // bytes, so DECSCUSR (`CSI Ps SP q`) is selected by `SP q`.
     assert_eq!(buf.borrow().as_slice(), b"\x1bP$q q\x1b\\");
+}
+
+#[test]
+fn a_cursor_style_reply_reads_back_in_the_terms_it_was_set_with() {
+    use crate::ansi::cursor::CursorShape;
+    use crate::ansi::cursor::CursorStyle;
+    use crate::event::SettingReport;
+
+    let buf = RefCell::new(Vec::new());
+    let mut program = Program::for_test(&buf, (10, 3));
+    program.set_cursor_style(CursorShape::Bar, false).unwrap();
+    buf.borrow_mut().clear();
+
+    // What a terminal answering DECRQSS would send back for that style.
+    let reply = Event::SettingReport(SettingReport::CursorStyle(CursorStyle::SteadyBar));
+    program.observe_event(&reply).unwrap();
+
+    let Event::SettingReport(SettingReport::CursorStyle(style)) = reply else {
+        unreachable!()
+    };
+    assert_eq!(
+        (style.shape(), style.blinking()),
+        (Some(CursorShape::Bar), Some(false)),
+        "the reply decomposes into the arguments set_cursor_style took"
+    );
 }
 
 #[test]

@@ -54,6 +54,7 @@ fn emit_range_plain_when_no_optimizations() {
 
     let out = transform_output(&mut renderer, &new_buf);
     assert_eq!(out, b"abcde");
+    assert!(!out.windows(2).any(|w| w == b"\x1b["));
 }
 
 #[test]
@@ -91,6 +92,7 @@ fn emit_range_plain_for_ten_blank_run_due_cursor_cost() {
     // is longer than the in-place cursor-move cost, so it is jumped
     // over with a CUF rather than repainted.
     assert_eq!(out, b"\x1b[5C          \x1b[5CZ");
+    assert!(!out.windows(b"\x1b[10X".len()).any(|w| w == b"\x1b[10X"));
 }
 
 #[test]
@@ -121,6 +123,7 @@ fn emit_range_rep_skipped_for_non_ascii() {
     }
 
     let out = transform_output(&mut renderer, &new_buf);
+    assert!(!out.windows(3).any(|w| w == b"\x1b[" && w[2] != b'm'));
     assert_eq!(String::from_utf8_lossy(&out), "éééééééé");
 }
 
@@ -149,6 +152,7 @@ fn emit_range_plain_beats_rep_for_short_repeat() {
 
     let out = transform_output(&mut renderer, &new_buf);
     assert_eq!(out, b"AAZ");
+    assert!(!out.windows(3).any(|w| w == b"\x1b[b"));
 }
 
 #[test]

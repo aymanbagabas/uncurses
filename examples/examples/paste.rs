@@ -4,13 +4,10 @@
 //! pasted text in [`Event::PasteStart`] / [`Event::PasteEnd`] and streams
 //! the body as [`Event::PasteChunk`] payloads. That lets you tell a paste
 //! apart from someone typing fast, and reassemble it by accumulating the
-//! chunks into a `Vec<u8>`. This app shows the last paste and its completion flag.
+//! chunks into a `Vec<u8>`. This app shows the last thing you pasted.
 //!
 //! Run with `cargo run --example paste`. Paste some text (try a few
-//! lines). Press F2 between pastes to toggle the two-second idle timeout.
-//! Press `q` or `Ctrl-C` to quit.
-
-use std::time::Duration;
+//! lines); press `q` or `Ctrl-C` to quit.
 
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::color::Color;
@@ -34,40 +31,30 @@ fn main() -> std::io::Result<()> {
 
 fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     let quit: [Key; 3] = ["q", "esc", "ctrl+c"].map(|s| s.parse().unwrap());
-    let mut last: Option<(String, bool)> = None;
-    let mut timeout_enabled = true;
+    let mut last: Option<String> = None;
     // Holds chunk bytes between PasteStart and PasteEnd.
     let mut pending: Option<Vec<u8>> = None;
-    render(program.screen_mut(), last.as_ref(), timeout_enabled);
+    render(program.screen_mut(), last.as_deref());
 
     loop {
         let ev = program.read_event()?;
         match ev {
             Event::KeyPress(ref k) if quit.contains(k) => break,
-            Event::KeyPress(key) if key.matches("f2") => {
-                timeout_enabled = !timeout_enabled;
-                program
-                    .event_source()
-                    .lock()
-                    .unwrap()
-                    .set_paste_idle_timeout(timeout_enabled.then_some(Duration::from_secs(2)));
-                render(program.screen_mut(), last.as_ref(), timeout_enabled);
-            }
             Event::PasteStart => pending = Some(Vec::new()),
             Event::PasteChunk(bytes) => {
                 if let Some(buf) = pending.as_mut() {
                     buf.extend_from_slice(&bytes);
                 }
             }
-            Event::PasteEnd { complete } => {
+            Event::PasteEnd => {
                 if let Some(buf) = pending.take() {
-                    last = Some((String::from_utf8_lossy(&buf).into_owned(), complete));
-                    render(program.screen_mut(), last.as_ref(), timeout_enabled);
+                    last = Some(String::from_utf8_lossy(&buf).into_owned());
+                    render(program.screen_mut(), last.as_deref());
                 }
             }
             Event::Resize(_) => {
                 program.autoresize()?;
-                render(program.screen_mut(), last.as_ref(), timeout_enabled);
+                render(program.screen_mut(), last.as_deref());
             }
             _ => {}
         }
@@ -75,34 +62,19 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn render(screen: &mut Screen<Stdout>, last: Option<&(String, bool)>, timeout_enabled: bool) {
+fn render(screen: &mut Screen<Stdout>, last: Option<&str>) {
     screen.clear();
     let dim = Style::default().fg(Color::BrightBlack);
-    screen.set_str(
-        (0, 0),
-        "Paste some text. F2: idle timeout. q quits.",
-        dim.clone(),
-    );
-    let setting = if timeout_enabled {
-        "2 seconds"
-    } else {
-        "disabled"
-    };
-    screen.set_str(
-        (0, 1),
-        &format!("Paste idle timeout: {setting}"),
-        dim.clone(),
-    );
+    screen.set_str((0, 0), "Paste some text. q quits.", dim.clone());
 
     match last {
         None => {
             screen.set_str((0, 2), "(nothing pasted yet)", dim);
         }
-        Some((text, complete)) => {
+        Some(text) => {
             let lines = text.lines().count().max(1);
             let chars = text.chars().count();
-            let summary =
-                format!("pasted {chars} chars across {lines} line(s); complete: {complete}");
+            let summary = format!("pasted {chars} chars across {lines} line(s):");
             screen.set_str((0, 2), &summary, Style::default());
 
             let body = Style::default().fg(Color::BrightGreen);

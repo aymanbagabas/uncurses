@@ -49,20 +49,18 @@ impl Decoder {
                 continue;
             }
             match self.try_parse(&data[scan..]) {
-                ParseResult::Event(Event::PasteEnd { complete: true }, consumed) => {
+                ParseResult::Event(Event::PasteEnd, consumed) => {
                     self.in_paste = false;
                     if scan == 0 {
-                        return (consumed, Some(Event::PasteEnd { complete: true }));
+                        return (consumed, Some(Event::PasteEnd));
                     }
-                    self.pending
-                        .borrow_mut()
-                        .push_back(Event::PasteEnd { complete: true });
+                    self.pending.borrow_mut().push_back(Event::PasteEnd);
                     return (
                         scan + consumed,
                         Some(Event::PasteChunk(data[..scan].to_vec())),
                     );
                 }
-                ParseResult::Incomplete | ParseResult::IncompleteString => {
+                ParseResult::Incomplete => {
                     if scan == 0 {
                         return (0, None);
                     }

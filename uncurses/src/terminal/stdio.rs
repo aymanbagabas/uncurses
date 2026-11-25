@@ -1037,6 +1037,13 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    fn stdout_handle_constructible() {
+        let _ = stdout();
+        let _ = stderr();
+        let _ = stdin();
+    }
+
+    #[test]
     fn stdout_write_empty_ok() {
         // Writing zero bytes must be a no-op regardless of attachment.
         let mut out = stdout();

@@ -20,7 +20,6 @@
 //! These helpers deliberately do not inspect [`Decoder`](super::Decoder) state.
 //! Functions that need paste mode, UTF-8 mouse mode, pending event queues, or
 //! Windows surrogate state live on the decoder impls instead.
-use super::result::ParseResult;
 use crate::event::{Event, Key, KeyCode, KeyModifiers, decode::DecoderFlags};
 
 pub(super) use crate::ansi::params::{ControlSequence, Params};
@@ -92,85 +91,25 @@ pub(crate) fn is_c1_introducer(b: u8) -> bool {
     matches!(b, 0x8f | 0x90 | 0x98 | 0x9b | 0x9d | 0x9e | 0x9f)
 }
 
-/// Recover a sequence prefix without consuming the next Escape.
-/// A bare two-byte introducer also represents an Alt-modified key.
-pub(super) fn sequence_fallback(data: &[u8], consumed: usize) -> ParseResult {
-    let event = if data[0] == 0x1b && consumed == 2 {
-        Event::KeyPress(Key::new(KeyCode::Char(data[1] as char), KeyModifiers::ALT).normalized())
-    } else {
-        Event::Unknown(data[..consumed].to_vec())
-    };
-    ParseResult::Event(event, consumed)
-}
-
-/// Frame a control string and pass its complete body to `finalize`.
+/// Search `data` for a string terminator and return `(payload_end, st_len)`.
 ///
-/// Recognizes `ESC \` and standalone `0x9C`. Only OSC enables BEL.
-/// Another Escape sequence interrupts the string and stays unconsumed.
-/// A trailing Escape waits for the next byte to distinguish these cases.
-/// Complete UTF-8 characters stay in the payload; incomplete characters wait
-/// for more input. Invalid bytes advance one byte at a time.
-pub(super) fn parse_string(
-    data: &[u8],
-    allow_bel: bool,
-    finalize: impl FnOnce(&[u8]) -> Event,
-) -> ParseResult {
-    let prefix_len = intro_prefix_len(data[0]);
-    if data.len() == prefix_len {
-        return ParseResult::Incomplete;
-    }
-    let (len, end) = scan_string(&data[prefix_len..], allow_bel);
-    match end {
-        StringEnd::Terminator(n) => ParseResult::Event(
-            finalize(&data[prefix_len..prefix_len + len]),
-            prefix_len + len + n,
-        ),
-        StringEnd::Escape => sequence_fallback(data, prefix_len + len),
-        StringEnd::Incomplete => ParseResult::IncompleteString,
-    }
-}
-
-pub(super) enum StringEnd {
-    Terminator(usize),
-    Escape,
-    Incomplete,
-}
-
-/// Return the safe payload prefix and the boundary that follows it.
-pub(super) fn scan_string(data: &[u8], allow_bel: bool) -> (usize, StringEnd) {
+/// Recognises both the 7-bit form `ESC \` (2 bytes) and the 8-bit form
+/// `0x9C` (1 byte). BEL is intentionally NOT accepted here — it is a
+/// terminator for OSC sequences only and is handled separately in
+/// [`Decoder::parse_osc`].
+pub(super) fn find_string_terminator(data: &[u8]) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < data.len() {
         let b = data[i];
-        if b == 0x9c || (allow_bel && b == 0x07) {
-            return (i, StringEnd::Terminator(1));
+        if b == 0x9c {
+            return Some((i, 1));
         }
-        if b == 0x1b {
-            return match data.get(i + 1) {
-                Some(b'\\') => (i, StringEnd::Terminator(2)),
-                Some(_) => (i, StringEnd::Escape),
-                None => (i, StringEnd::Incomplete),
-            };
-        }
-        let width = match b {
-            0xc2..=0xdf => 2,
-            0xe0..=0xef => 3,
-            0xf0..=0xf4 => 4,
-            _ => 1,
-        };
-        if width > 1 {
-            let end = (i + width).min(data.len());
-            match std::str::from_utf8(&data[i..end]) {
-                Ok(_) => {
-                    i = end;
-                    continue;
-                }
-                Err(err) if err.error_len().is_none() => return (i, StringEnd::Incomplete),
-                Err(_) => {}
-            }
+        if b == 0x1b && i + 1 < data.len() && data[i + 1] == b'\\' {
+            return Some((i, 2));
         }
         i += 1;
     }
-    (i, StringEnd::Incomplete)
+    None
 }
 
 /// Parse a Kitty Graphics options string like `a=T,f=32,s=10,v=5`.
@@ -194,7 +133,7 @@ pub(super) fn parse_kitty_options(s: &[u8]) -> Vec<(String, String)> {
 
 pub(super) fn csi_modifiers(params: Params<'_>) -> KeyModifiers {
     // Modifier param defaults to 1 (= no modifiers) per the xterm protocol.
-    key_modifiers(params.get_or(1, 1))
+    xterm_modifiers(params.get_or(1, 1) as u16)
 }
 
 /// Read the Kitty keyboard-protocol event-type sub-parameter from the
@@ -313,11 +252,22 @@ pub(super) fn remap_tilde(n: u16, code: KeyCode, flags: DecoderFlags) -> KeyCode
     }
 }
 
-pub(super) fn key_modifiers(parameter: u32) -> KeyModifiers {
-    // Use Kitty's ordering for all CSI key forms. Xterm assigns bit 8 to Meta;
-    // we intentionally interpret it as Super instead of guessing the terminal.
-    // Only the protocol's low eight bits apply; Scroll Lock is a local flag.
-    KeyModifiers::from_bits_truncate((parameter.saturating_sub(1) & 0xff) as u16)
+pub(super) fn xterm_modifiers(n: u16) -> KeyModifiers {
+    let n = n.saturating_sub(1);
+    let mut mods = KeyModifiers::empty();
+    if n & 1 != 0 {
+        mods |= KeyModifiers::SHIFT;
+    }
+    if n & 2 != 0 {
+        mods |= KeyModifiers::ALT;
+    }
+    if n & 4 != 0 {
+        mods |= KeyModifiers::CTRL;
+    }
+    if n & 8 != 0 {
+        mods |= KeyModifiers::META;
+    }
+    mods
 }
 
 pub(super) fn key_with_mods(code: KeyCode, mods: KeyModifiers) -> Key {

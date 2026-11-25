@@ -66,6 +66,31 @@ impl RenderBuffer {
         self.buffer.height()
     }
 
+    /// Mark one cell position as touched.
+    ///
+    /// Expands the row's existing touched span to include `pos.x`.
+    /// Out-of-bounds rows are ignored.
+    #[allow(dead_code)]
+    pub fn touch(&mut self, pos: impl Into<Position>) {
+        let pos = pos.into();
+        let y = pos.y as usize;
+        if y >= self.touched.len() {
+            return;
+        }
+        match &mut self.touched[y] {
+            Some(span) => {
+                span.first = span.first.min(pos.x);
+                span.last = span.last.max(pos.x);
+            }
+            None => {
+                self.touched[y] = Some(TouchedSpan {
+                    first: pos.x,
+                    last: pos.x,
+                });
+            }
+        }
+    }
+
     /// Mark an inclusive column range on one row as touched.
     ///
     /// # Parameters
@@ -314,16 +339,6 @@ impl RenderBuffer {
         self.touch_all();
     }
 
-    /// Change height, retaining dirty spans and marking only added rows.
-    pub(crate) fn resize_height(&mut self, height: u16) {
-        let old_height = self.height();
-        self.buffer.resize(self.width(), height);
-        self.touched.resize(height as usize, None);
-        for y in old_height..height {
-            self.touch_line(y, 0, self.width().saturating_sub(1));
-        }
-    }
-
     /// Borrow one row.
     ///
     /// # Returns
@@ -527,25 +542,6 @@ impl SurfaceMut for RenderBuffer {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn resize_height_preserves_marks_and_reuses_storage() {
-        let mut buffer = super::RenderBuffer::new(4, 5);
-        buffer.set_cell((1, 1), &crate::cell::Cell::new("a", 1));
-        let storage = buffer.touched.as_ptr();
-        buffer.resize_height(3);
-        buffer.resize_height(5);
-        assert_eq!(buffer.touched.as_ptr(), storage);
-        for (row, touched) in [false, true, false, true, true].into_iter().enumerate() {
-            assert_eq!(buffer.touched(row as u16).is_some(), touched);
-        }
-        let span = buffer.touched(1).unwrap();
-        assert_eq!((span.first, span.last), (1, 1));
-        buffer.resize_height(2);
-        buffer.resize_height(3);
-        assert!(buffer.touched(2).is_some());
-        assert_eq!(buffer.line(2).unwrap(), &[crate::cell::Cell::BLANK; 4]);
-    }
-
     use super::*;
 
     /// Assert that every column the operation rewrote lies inside `span`.
@@ -646,7 +642,16 @@ mod tests {
     /// neighbour alone, so the damage may not claim it.
     #[test]
     fn damage_reaches_back_only_to_a_primary_that_owns_the_column() {
-        let cases: [(&str, Vec<Cell>, u16); 2] = [
+        let cases: [(&str, Vec<Cell>, u16); 3] = [
+            (
+                "a wide owner is reached",
+                vec![
+                    Cell::new("\u{4e16}", 2),
+                    Cell::CONTINUATION,
+                    Cell::CONTINUATION,
+                ],
+                0,
+            ),
             (
                 "a narrow neighbour is left alone",
                 vec![Cell::new("a", 1), Cell::CONTINUATION, Cell::CONTINUATION],
@@ -877,7 +882,6 @@ mod tests {
         // Odd width with a 2-wide fill leaves one trailing slot that
         // can't hold a primary; it must become a blank, not garbage.
         let mut rb = RenderBuffer::new(8, 1);
-        rb.set_cell((4, 0), &Cell::new("X", 1));
         let wide = Cell::new("漢", 2);
         rb.fill_rect(Rect::new(0, 0, 5, 1), &wide);
         assert_eq!(rb.buffer.cell(Position::new(0, 0)).unwrap().width(), 2);

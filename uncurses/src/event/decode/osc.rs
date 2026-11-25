@@ -14,75 +14,30 @@
 //!
 //! ## Gotchas
 //!
-//! OSC 52 clipboard content streams as raw wire bytes; decoding or
+//! OSC 52 clipboard content is surfaced as the wire payload string; decoding or
 //! interpreting that content is left to callers. Color channels with 1-4 hex
 //! digits are scaled down to 8-bit RGB.
 use super::Decoder;
 use super::result::ParseResult;
-use super::util::{StringEnd, intro_prefix_len, parse_string, scan_string};
+use super::util::intro_prefix_len;
 use crate::color::Color;
 use crate::event::{ClipboardSelection, Event, ProgramStatusCapabilities};
 
 impl Decoder {
     pub(super) fn parse_osc(&self, buf: &[u8]) -> ParseResult {
-        let prefix = intro_prefix_len(buf[0]);
-        let body = &buf[prefix..];
-        if let Some(command_end) = body.iter().position(|&b| b == b';')
-            && std::str::from_utf8(&body[..command_end])
-                .ok()
-                .and_then(|command| command.parse::<u32>().ok())
-                == Some(52)
-        {
-            let rest = &body[command_end + 1..];
-            if let Some(selection_end) = rest.iter().position(|&b| b == b';') {
-                let selection_bytes = &rest[..selection_end];
-                let (safe, _) = scan_string(selection_bytes, true);
-                if safe == selection_bytes.len() {
-                    let selection = match selection_bytes.first().copied() {
-                        Some(b'c') | None => ClipboardSelection::System,
-                        Some(b'p') => ClipboardSelection::Primary,
-                        Some(c) => ClipboardSelection::Other(c as char),
-                    };
-                    return ParseResult::Event(
-                        Event::ClipboardStart { selection },
-                        prefix + command_end + 1 + selection_end + 1,
-                    );
-                }
+        let prefix_len = intro_prefix_len(buf[0]);
+        // Find a terminator: BEL (OSC-only), 8-bit ST (0x9C), or 7-bit ST (ESC \).
+        for i in prefix_len..buf.len() {
+            if buf[i] == 0x07 || buf[i] == 0x9c {
+                let payload = &buf[prefix_len..i];
+                return ParseResult::Event(finalize_osc(payload), i + 1);
+            }
+            if buf[i] == 0x1b && i + 1 < buf.len() && buf[i + 1] == b'\\' {
+                let payload = &buf[prefix_len..i];
+                return ParseResult::Event(finalize_osc(payload), i + 2);
             }
         }
-        parse_string(buf, true, finalize_osc)
-    }
-
-    pub(super) fn parse_clipboard_chunk(&mut self, data: &[u8]) -> (usize, Option<Event>) {
-        let (len, end) = scan_string(data, true);
-        if len > 0 {
-            return (len, Some(Event::ClipboardChunk(data[..len].to_vec())));
-        }
-        match end {
-            StringEnd::Terminator(n) => {
-                self.in_clipboard = false;
-                (n, Some(Event::ClipboardEnd { complete: true }))
-            }
-            StringEnd::Escape => (0, self.end_clipboard()),
-            StringEnd::Incomplete => (0, None),
-        }
-    }
-
-    /// Whether an OSC 52 reply is active.
-    pub fn in_clipboard(&self) -> bool {
-        self.in_clipboard
-    }
-
-    /// Force-exit an OSC 52 reply and return an incomplete end event.
-    ///
-    /// Returns `None` outside a reply. The caller must handle any unconsumed
-    /// payload bytes before it delivers this event.
-    pub fn end_clipboard(&mut self) -> Option<Event> {
-        if std::mem::replace(&mut self.in_clipboard, false) {
-            Some(Event::ClipboardEnd { complete: false })
-        } else {
-            None
-        }
+        ParseResult::Incomplete
     }
 }
 
@@ -106,36 +61,10 @@ fn recognize(payload: &[u8]) -> Option<Event> {
         10 => parse_osc_color(rest).map(Event::ForegroundColor),
         11 => parse_osc_color(rest).map(Event::BackgroundColor),
         12 => parse_osc_color(rest).map(Event::CursorColor),
-        72 => parse_drag_drop(rest),
+        52 => parse_osc_clipboard(rest),
         7501 => parse_osc_program_status(rest),
         _ => None,
     }
-}
-
-fn parse_drag_drop(rest: &[u8]) -> Option<Event> {
-    let (metadata, payload) = match rest.iter().position(|&b| b == b';') {
-        Some(index) => (&rest[..index], &rest[index + 1..]),
-        None => (rest, &[][..]),
-    };
-    if payload.len() > 4096 {
-        return None;
-    }
-    let metadata = std::str::from_utf8(metadata).ok()?;
-    let options = metadata
-        .split(':')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| {
-            let (key, value) = pair.split_once('=')?;
-            if key.is_empty() || pair.chars().any(char::is_control) {
-                return None;
-            }
-            Some((key.to_owned(), value.to_owned()))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(Event::DragDrop {
-        options,
-        payload: payload.to_vec(),
-    })
 }
 
 fn parse_osc_program_status(s: &[u8]) -> Option<Event> {
@@ -211,157 +140,25 @@ fn parse_hex_channel(s: &str) -> Option<u8> {
     Some(scaled)
 }
 
+/// Parse an OSC 52 payload: `<selection>;<base64-content-or-?>`.
+fn parse_osc_clipboard(s: &[u8]) -> Option<Event> {
+    let semi = s.iter().position(|&b| b == b';')?;
+    let sel_bytes = &s[..semi];
+    let content = &s[semi + 1..];
+    let selection = match sel_bytes.first().copied() {
+        Some(b'c') => ClipboardSelection::System,
+        Some(b'p') => ClipboardSelection::Primary,
+        Some(c) => ClipboardSelection::Other(c as char),
+        None => ClipboardSelection::System,
+    };
+    let content = std::str::from_utf8(content).ok()?.to_string();
+    Some(Event::Clipboard { selection, content })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::event::DecoderFlags;
-
-    #[test]
-    fn clipboard_replies_stream_across_every_split() {
-        for intro in [b"\x1b]".as_slice(), b"\x9d"] {
-            for ending in [b"\x07".as_slice(), b"\x1b\\", b"\x9c"] {
-                for (selector, selection) in [
-                    (b"c".as_slice(), ClipboardSelection::System),
-                    (b"p", ClipboardSelection::Primary),
-                    (b"", ClipboardSelection::System),
-                    (b"q", ClipboardSelection::Other('q')),
-                ] {
-                    for payload in [
-                        b"".as_slice(),
-                        b"YWJjZA==",
-                        b"?\xc2\x9c\xf0\x9f\x98\x80\xff",
-                    ] {
-                        let wire = [intro, b"52;", selector, b";", payload, ending, b"x"].concat();
-                        for split in 0..=wire.len() {
-                            let mut decoder = Decoder::default();
-                            let mut pending = Vec::new();
-                            let mut events = Vec::new();
-                            for part in [&wire[..split], &wire[split..]] {
-                                pending.extend_from_slice(part);
-                                loop {
-                                    let (consumed, event) = decoder.parse_one(&pending);
-                                    if consumed == 0 && event.is_none() {
-                                        break;
-                                    }
-                                    pending.drain(..consumed);
-                                    events.extend(event);
-                                }
-                            }
-                            assert!(pending.is_empty());
-                            assert!(matches!(events.pop(), Some(Event::KeyPress(key))
-                                if key.code == crate::event::KeyCode::Char('x')));
-                            assert_eq!(events.first(), Some(&Event::ClipboardStart { selection }));
-                            assert_eq!(
-                                events.last(),
-                                Some(&Event::ClipboardEnd { complete: true })
-                            );
-                            let mut bytes = Vec::new();
-                            for event in &events[1..events.len() - 1] {
-                                let Event::ClipboardChunk(chunk) = event else {
-                                    panic!("unexpected clipboard event: {event:?}");
-                                };
-                                assert!(!chunk.is_empty());
-                                bytes.extend_from_slice(chunk);
-                            }
-                            assert_eq!(bytes, payload, "split {split}");
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn interrupted_clipboard_preserves_the_next_escape_sequence() {
-        let mut decoder = Decoder::default();
-        assert_eq!(
-            decoder.parse(b"\x1b]52;c;QQ==\x1b[A\x1b]52;p;\x07"),
-            [
-                Event::ClipboardStart {
-                    selection: ClipboardSelection::System
-                },
-                Event::ClipboardChunk(b"QQ==".to_vec()),
-                Event::ClipboardEnd { complete: false },
-                Event::KeyPress(crate::event::Key::new(
-                    crate::event::KeyCode::Up,
-                    crate::event::KeyModifiers::empty()
-                )),
-                Event::ClipboardStart {
-                    selection: ClipboardSelection::Primary
-                },
-                Event::ClipboardEnd { complete: true },
-            ]
-        );
-    }
-
-    #[test]
-    fn incomplete_clipboard_headers_keep_string_framing() {
-        for body in [b"52;c".as_slice(), b"52;c\x07;QQ==", b"52;c\x1b[A;QQ=="] {
-            let mut decoder = Decoder::default();
-            let events = decoder.parse(&[b"\x1b]".as_slice(), body, b"\x07"].concat());
-            assert!(
-                !events
-                    .iter()
-                    .any(|event| matches!(event, Event::ClipboardStart { .. }))
-            );
-        }
-    }
-
-    #[test]
-    fn drag_drop_messages_preserve_metadata_and_wire_payloads() {
-        for intro in [b"\x1b]".as_slice(), b"\x9d"] {
-            for ending in [b"\x07".as_slice(), b"\x1b\\", b"\x9c"] {
-                for (body, options, payload) in [
-                    (b"t=q".as_slice(), vec![("t", "q")], b"".as_slice()),
-                    (
-                        b"t=r:x=1:i=42:m=1:future=value;YW",
-                        vec![
-                            ("t", "r"),
-                            ("x", "1"),
-                            ("i", "42"),
-                            ("m", "1"),
-                            ("future", "value"),
-                        ],
-                        b"YW",
-                    ),
-                    (b"m=0;Jj", vec![("m", "0")], b"Jj"),
-                    (b"t=r:x=1;", vec![("t", "r"), ("x", "1")], b""),
-                    (b"t=R;EIO:unavailable", vec![("t", "R")], b"EIO:unavailable"),
-                ] {
-                    let wire = [intro, b"72;", body, ending].concat();
-                    let expected = Event::DragDrop {
-                        options: options
-                            .iter()
-                            .map(|(k, v)| ((*k).into(), (*v).into()))
-                            .collect(),
-                        payload: payload.to_vec(),
-                    };
-                    for split in 0..=wire.len() {
-                        let mut decoder = Decoder::default();
-                        let mut events = decoder.parse(&wire[..split]);
-                        events.extend(decoder.parse(&wire[split..]));
-                        assert_eq!(events, std::slice::from_ref(&expected), "split {split}");
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn drag_drop_invalid_messages_remain_unknown() {
-        for body in [b"72;t".as_slice(), b"72;=r;", b"72;t=\xff;", b"72;t=r\n;"] {
-            let mut decoder = Decoder::default();
-            assert_eq!(
-                decoder.parse(&[b"\x1b]".as_slice(), body, b"\x1b\\"].concat()),
-                [Event::UnknownOsc(body.to_vec())]
-            );
-        }
-        let body = [b"72;t=r;".as_slice(), &[b'A'; 4097]].concat();
-        assert_eq!(
-            Decoder::default().parse(&[b"\x1b]".as_slice(), &body, b"\x1b\\"].concat()),
-            [Event::UnknownOsc(body)]
-        );
-    }
 
     #[test]
     fn program_status_support_reply_accepts_extensions_and_split_input() {

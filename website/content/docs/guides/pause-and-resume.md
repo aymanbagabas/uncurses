@@ -70,12 +70,6 @@ need a clean slate.
 
 ```mermaid
 flowchart TB
-  accTitle: Pause, run a child, and resume
-  accDescr {
-    The application pauses and restores the terminal's previous state.
-    A child process reads and draws.
-    After the child exits, the application resumes its terminal modes.
-  }
   app["your program (raw mode, alt screen, ...)"]
   app -->|pause| released["terminal restored to its pre-init state"]
   released -->|run child| child["$EDITOR draws and reads"]
@@ -136,7 +130,7 @@ you can keep the `EventStream` live across `pause`, `resume`, and `finish`; you
 do not have to drop and rebuild it. Program reads auto-observe events, so
 capability and size tracking update as replies and resize reports are read. If
 you consume an event from somewhere else, pass it to `program.observe_event(&ev)?`
-to apply the same tracking. The Ratatui backend follows the same rule. Events go
+to apply the same tracking. The ratatui backend follows the same rule. Events go
 to whichever consumer drains first, so avoid polling app input while the child
 program owns the terminal.
 {{< /callout >}}

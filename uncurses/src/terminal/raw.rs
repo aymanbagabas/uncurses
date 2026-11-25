@@ -268,16 +268,6 @@ pub fn get_state<I: AsHandle, O: AsHandle>(input: I, output: O) -> io::Result<St
 ///
 /// This function does not intentionally panic.
 pub fn set_state<I: AsHandle, O: AsHandle>(input: I, output: O, state: &State) -> io::Result<()> {
-    set_state_with_input(input, output, state, |_| {})
-}
-
-#[cfg(windows)]
-pub(super) fn set_state_with_input<I: AsHandle, O: AsHandle>(
-    input: I,
-    output: O,
-    state: &State,
-    on_input: impl FnOnce(u32),
-) -> io::Result<()> {
     use windows_sys::Win32::System::Console::SetConsoleMode;
 
     fn try_write(handle: HANDLE, mode: u32) -> io::Result<()> {
@@ -291,10 +281,6 @@ pub(super) fn set_state_with_input<I: AsHandle, O: AsHandle>(
     let oh = output.as_handle().as_raw_handle() as HANDLE;
 
     let applied_input = try_write(ih, state.input);
-    if applied_input.is_ok() {
-        // Input observers must update even if the output mode fails.
-        on_input(state.input);
-    }
     let applied_output = try_write(oh, state.output);
     applied_input.and(applied_output)
 }

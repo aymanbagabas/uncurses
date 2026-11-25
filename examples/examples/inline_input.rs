@@ -216,9 +216,10 @@ impl App {
     }
 
     fn run(&mut self) -> std::io::Result<()> {
+        let w = self.program.screen().width();
         self.program
             .screen_mut()
-            .resize_height(self.buffer.lines.len() as u16);
+            .resize((w, self.buffer.lines.len() as u16));
         self.render()?;
 
         while let Ok(ev) = self.program.read_event() {
@@ -261,8 +262,7 @@ impl App {
                         p.extend_from_slice(&bytes);
                     }
                 }
-                // Retain partial pastes after recovery too.
-                Event::PasteEnd { .. } => {
+                Event::PasteEnd => {
                     if let Some(p) = self.paste.take() {
                         let text = String::from_utf8_lossy(&p).into_owned();
                         self.buffer.insert_str(&text);
@@ -274,8 +274,14 @@ impl App {
                 _ => {}
             }
 
+            // The prompt grows and shrinks with the buffer. Resizing
+            // re-establishes the region, so do it when the line count actually
+            // changes rather than on every keystroke.
             let height = self.buffer.lines.len() as u16;
-            self.program.screen_mut().resize_height(height);
+            if self.program.screen().height() != height {
+                let width = self.program.screen().width();
+                self.program.screen_mut().resize((width, height));
+            }
             self.render()?;
         }
         Ok(())

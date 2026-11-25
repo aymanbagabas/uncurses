@@ -18,5 +18,5 @@ a runnable example from the repository.
   {{< card link="async-events" title="Async event loops" subtitle="Drive Program input with a futures stream." >}}
   {{< card link="pause-and-resume" title="Pause and resume" subtitle="Shell out to $EDITOR and come back cleanly." >}}
   {{< card link="offscreen-rendering" title="Offscreen rendering" subtitle="Render to a buffer for snapshots and transcripts." >}}
-  {{< card link="ratatui-backend" title="The Ratatui backend" subtitle="Render Ratatui widgets through uncurses." >}}
+  {{< card link="ratatui-backend" title="The ratatui backend" subtitle="Render ratatui widgets through uncurses." >}}
 {{< /cards >}}

@@ -410,6 +410,7 @@ mod tests {
     /// had to re-check the width every time to tell them apart.
     #[test]
     fn only_a_cell_drawing_one_blank_column_is_blank() {
+        assert!(Cell::BLANK.is_blank());
         assert!(Cell::new(" ", 1).is_blank());
         // Storing nothing in one column still draws a space there, which is
         // what `draw_bytes` puts on the screen.
@@ -423,6 +424,8 @@ mod tests {
         // A span of blank columns is not one blank column.
         assert!(!Cell::new(" ", 2).is_blank());
         assert!(!Cell::new("", 2).is_blank());
+        // No column at all is not one blank column either.
+        assert!(!Cell::CONTINUATION.is_blank());
         assert!(!Cell::new("x", 1).is_blank());
     }
 
@@ -453,6 +456,7 @@ mod tests {
         // continuation, a narrow cell, and a wide one. Content never enters
         // into it: a cell that claims no column has none to draw in, and one
         // that stores nothing still owns every column it claims.
+        assert!(Cell::CONTINUATION.is_continuation());
         assert!(Cell::new("a", 0).is_continuation());
         assert!(Cell::new("", 2).is_wide());
         assert!(Cell::new("\u{1f469}", 2).is_wide());

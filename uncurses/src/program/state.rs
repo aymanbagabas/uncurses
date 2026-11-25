@@ -208,7 +208,6 @@ pub struct Capabilities {
     pub(super) palette: BTreeMap<u8, Color>,
     pub(super) color_scheme: Option<ColorScheme>,
     pub(super) kitty_graphics: bool,
-    pub(super) drag_drop: bool,
     pub(super) program_status: Option<ProgramStatusCapabilities>,
 }
 
@@ -281,15 +280,6 @@ impl Capabilities {
     /// stays silent.
     pub fn kitty_graphics(&self) -> bool {
         self.kitty_graphics
-    }
-
-    /// Whether an OSC 72 support reply has been observed.
-    ///
-    /// `false` means support remains unconfirmed. Pass
-    /// [`REQUEST_DRAG_DROP`](crate::ansi::drag_drop::REQUEST_DRAG_DROP) to
-    /// [`Program::query_capabilities`](super::Program::query_capabilities).
-    pub fn drag_drop(&self) -> bool {
-        self.drag_drop
     }
 
     /// Accepted OSC 7501 states and kinds, or `None` before a reply.

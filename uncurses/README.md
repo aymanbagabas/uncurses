@@ -16,7 +16,7 @@ can ask the terminal what it supports and runs across Linux, macOS, and
 Windows.
 
 <p align="center">
-  <img src="https://media.githubusercontent.com/media/aymanbagabas/uncurses/main/assets/tour.gif" width="440" alt="Animated uncurses rendering tour">
+  <img src="https://raw.githubusercontent.com/aymanbagabas/uncurses/main/assets/tour.gif" width="440" alt="tour example">
 </p>
 
 ## Usage
@@ -33,17 +33,13 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    let result = (|| {
-        program.init()?;
-        program.enter_alt_screen()?;
-        let screen = program.screen_mut();
-        screen.set_str((0, 0), "hello, uncurses", Style::new());
-        screen.render()?;
-        while !matches!(program.read_event()?, Event::KeyPress(_)) {}
-        Ok(())
-    })();
-    let finish = program.finish();
-    result.and(finish)
+    program.init()?;
+    program.enter_alt_screen()?; // take over the full screen
+    let screen = program.screen_mut();
+    screen.set_str((0, 0), "hello, uncurses", Style::new());
+    screen.render()?;
+    while !matches!(program.read_event()?, Event::KeyPress(_)) {} // wait for a key
+    program.finish()
 }
 ```
 
@@ -61,34 +57,31 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    let result = (|| {
-        program.init()?;
+    program.init()?; // raw mode; inline, cursor visible
 
-        let screen = program.screen_mut();
-        let w = screen.width();
-        screen.resize((w, 2));
-        screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
-        screen.render()?;
+    let screen = program.screen_mut();
+    let w = screen.width();
+    screen.resize((w, 2)); // inline: one text row plus a trailing blank line
+    screen.set_str((0, 0), "Hello! Press q to quit.", Style::new());
+    screen.render()?;
 
-        let q: Key = "q".parse().unwrap();
-        loop {
-            let ev = program.read_event()?;
-            if matches!(ev, Event::KeyPress(k) if k == q) {
-                break;
-            }
+    let q: Key = "q".parse().unwrap();
+    loop {
+        let ev = program.read_event()?;
+        if matches!(ev, Event::KeyPress(k) if k == q) {
+            break;
         }
-        Ok(())
-    })();
-    let finish = program.finish();
-    result.and(finish)
+    }
+
+    program.finish() // restore the terminal, always, one call
 }
 ```
 
-Both examples call `finish()` after success or an error. The closure preserves
-the session error while the final call attempts terminal restoration.
-
-For capability discovery, see
-[Querying the terminal](https://uncurses.org/docs/guides/querying-the-terminal/).
+`init()` sets up the session and sends no capability query, so discovery is
+yours to start: call `program.query_capabilities(&[])?` and keep reading events
+until the Primary DA reply arrives; ordinary `read_event` and `try_read_event`
+calls observe those replies automatically. `observe_event` is only needed when
+events come from outside the program, such as `event_stream()`.
 
 Only need output? A `Screen` stands alone over any `Write`, independent of any
 terminal session:
@@ -109,16 +102,12 @@ That's the shape of it; the full API and guides live at
 
 ## Install
 
-Install v0.0.9 from [crates.io](https://crates.io/crates/uncurses):
+Not on crates.io yet, so depend on it straight from git:
 
 ```toml
 [dependencies]
-uncurses = "0.0.9"
+uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
-
-Use the [v0.0.9 API reference](https://docs.rs/uncurses/0.0.9).
-Checkout examples follow their source revision. Use a matching git dependency
-for unreleased APIs.
 
 Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
 the latest stable Rust (currently 1.88 or newer).

@@ -28,11 +28,6 @@ Linux, macOS, and Windows.
 
 Full guides, concepts, and API reference: [uncurses.org](https://uncurses.org)
 
-The [uncurses skill](skills/README.md) helps coding assistants write uncurses
-applications and find relevant examples.
-
-For repository development, read the [contributor guide](CONTRIBUTING.md).
-
 ## Features
 
 Nothing is read from terminfo. `Program` asks the terminal what it supports,
@@ -46,7 +41,6 @@ reads the reply, and uses only what is actually there.
 - [Clickable hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) (OSC 8)
 - [Unicode core](https://contour-terminal.org/vt-extensions/unicode-core/) (Mode 2027): width by grapheme cluster
 - Unambiguous keys, with release: [kitty keyboard](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) or [`modifyOtherKeys`](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Alt-and-Meta-Keys)
-- [Win32 input mode](https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md#win32-input-mode-sequences) (Mode 9001): key presses, releases, and repeats
 - [Mouse](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking) clicks, motion, wheel, and [pixel positions](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Extended-coordinates)
 - [Pointer shapes](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 22)
 - [Bracketed paste](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-ordered-by-the-final-character_s_) (Mode 2004)
@@ -57,7 +51,6 @@ reads the reply, and uses only what is actually there.
 - Terminal colors: read, set, reset (OSC 4/10/11/12)
 - [Color scheme updates](https://contour-terminal.org/vt-extensions/color-palette-update-notifications/) (Mode 2031): follow light and dark
 - [Clipboard](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (OSC 52), system and primary
-- [Drag and drop](https://sw.kovidgoyal.net/kitty/dnd-protocol/) (OSC 72): raw messages and support detection
 - Window title and icon name (OSC 0/1/2)
 - [Taskbar progress](https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC) (OSC 9;4)
 - [Program status](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501): task states, messages, and child records
@@ -77,25 +70,17 @@ use uncurses::text::TextSurface;
 
 fn main() -> std::io::Result<()> {
     let mut program = Program::stdio()?;
-    let result = (|| {
-        program.init()?;
-        program.enter_alt_screen()?;
+    program.init()?;
+    program.enter_alt_screen()?; // take over the full screen
 
-        let screen = program.screen_mut();
-        screen.set_str((0, 0), "hello, uncurses!", Style::new());
-        screen.render()?;
+    let screen = program.screen_mut();
+    screen.set_str((0, 0), "hello, uncurses!", Style::new());
+    screen.render()?;
 
-        while !matches!(program.read_event()?, Event::KeyPress(_)) {}
-        Ok(())
-    })();
-    let finish = program.finish();
-    result.and(finish)
+    while !matches!(program.read_event()?, Event::KeyPress(_)) {} // wait for a key
+    program.finish() // restores the main screen
 }
 ```
-
-The closure records the session result. `finish()` runs after success or an
-error, including an initialization error. See the executable
-[`hello_world` example](examples/examples/hello_world.rs).
 
 Only need output? A `Screen` stands alone over any `Write`, with no terminal
 session at all:
@@ -119,10 +104,6 @@ Per-crate guides and more examples:
 ### Examples
 
 A curated few, each `cargo run -p examples --example <name>`:
-
-**`drag_drop`**
-
-Receive text drops and offer text drags with a thumbnail in Kitty.
 
 **`tour`**
 
@@ -180,18 +161,12 @@ For more, browse the [`examples/`](examples/examples) directory.
 
 ## Install
 
-Install v0.0.9 from [crates.io](https://crates.io/crates/uncurses):
+Not on crates.io yet, so depend on it straight from git:
 
 ```toml
 [dependencies]
-uncurses = "0.0.9"
+uncurses = { git = "https://github.com/aymanbagabas/uncurses" }
 ```
-
-Use the [v0.0.9 API reference](https://docs.rs/uncurses/0.0.9).
-Checkout examples follow their source revision. Use a matching git dependency
-for unreleased APIs.
-See [installation](https://uncurses.org/docs/getting-started/installation/)
-for feature choices and supported platforms.
 
 Runs on Linux, macOS, Windows, and the BSDs. Uses the 2024 edition and tracks
 the latest stable Rust (currently 1.88 or newer).

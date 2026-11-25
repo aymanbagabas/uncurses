@@ -260,6 +260,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn program_status_names_have_value_equality() {
+        use std::collections::HashSet;
+
+        for state in [
+            ProgramStatusState::IDLE,
+            ProgramStatusState::WORKING,
+            ProgramStatusState::DONE,
+            ProgramStatusState::BLOCKED,
+            ProgramStatusState::ERROR,
+            ProgramStatusState::CLEAR,
+        ] {
+            let name = state.as_str().to_owned();
+            let constructed = ProgramStatusState::new(&name);
+            assert_eq!(state, constructed);
+            assert_eq!(HashSet::from([state, constructed]).len(), 1);
+        }
+        for kind in [
+            ProgramStatusKind::PERMISSION,
+            ProgramStatusKind::QUESTION,
+            ProgramStatusKind::AUTH,
+        ] {
+            let name = kind.as_str().to_owned();
+            let constructed = ProgramStatusKind::new(&name);
+            assert_eq!(kind, constructed);
+            assert_eq!(HashSet::from([kind, constructed]).len(), 1);
+        }
+        assert_ne!(
+            ProgramStatusState::new("paused"),
+            ProgramStatusState::WORKING
+        );
+        assert_ne!(ProgramStatusKind::new("confirm"), ProgramStatusKind::AUTH);
+    }
+
+    #[test]
     fn program_status_states_and_clear_records() {
         for (state, value) in [
             (ProgramStatusState::IDLE, "idle"),
@@ -367,7 +401,9 @@ mod tests {
 
     #[test]
     fn program_status_rejects_invalid_extension_names_before_output() {
-        for name in ["", "a:b", "a;b", "a b", "\x1b\\", "\u{e9}", "\u{9c}"] {
+        for name in [
+            "", "a:b", "a;b", "a b", "a\tb", "a\nb", "\x1b\\", "\u{e9}", "\u{9c}",
+        ] {
             invalid(&ProgramStatus::new(ProgramStatusState::new(name)));
             let mut report = ProgramStatus::new(ProgramStatusState::BLOCKED);
             report.kind = Some(ProgramStatusKind::new(name));

@@ -15,7 +15,7 @@
 //!
 //! ## Gotchas
 //!
-//! Adjacent paste or clipboard chunks are merged before comparison because
+//! Adjacent [`Event::PasteChunk`] values are merged before comparison because
 //! chunk granularity is not semantic; reassembled bytes are.
 #![cfg(test)]
 
@@ -46,16 +46,22 @@ fn parse_split_at(data: &[u8], i: usize) -> Vec<Event> {
     events
 }
 
-/// Merge adjacent chunks so comparisons depend on content, not input splits.
-pub(super) fn normalize(events: Vec<Event>) -> Vec<Event> {
+/// Merge adjacent `PasteChunk` events so that chunk granularity does
+/// not artificially differ under different feeding strategies. The
+/// parser legitimately emits one `PasteChunk` per `parse()` call that
+/// sees paste-mode bytes, so the *content* (not the boundary) is the
+/// invariant we care about across feed strategies.
+fn normalize(events: Vec<Event>) -> Vec<Event> {
     let mut out: Vec<Event> = Vec::with_capacity(events.len());
     for ev in events {
-        match (out.last_mut(), ev) {
-            (Some(Event::PasteChunk(prev)), Event::PasteChunk(bytes))
-            | (Some(Event::ClipboardChunk(prev)), Event::ClipboardChunk(bytes)) => {
+        if let Event::PasteChunk(bytes) = ev {
+            if let Some(Event::PasteChunk(prev)) = out.last_mut() {
                 prev.extend(bytes);
+                continue;
             }
-            (_, ev) => out.push(ev),
+            out.push(Event::PasteChunk(bytes));
+        } else {
+            out.push(ev);
         }
     }
     out
@@ -79,7 +85,7 @@ fn assert_split_invariant(label: &str, data: &[u8]) {
     }
 }
 
-/// Representative terminal input cases. Each entry is
+/// Cases that exercise every reachable parser branch. Each entry is
 /// fed through `assert_split_invariant`.
 fn corpus() -> Vec<(&'static str, &'static [u8])> {
     vec![
@@ -141,12 +147,6 @@ fn corpus() -> Vec<(&'static str, &'static [u8])> {
             b"\x1b]10;rgb:abcd/ef01/2345\x07",
         ),
         ("osc clipboard query", b"\x1b]52;c;?\x07"),
-        ("osc clipboard payload", b"\x1b]52;c;YWJjZA==\x1b\\"),
-        ("escape before clipboard", b"\x1b\x1b]52;c;YWJjZA==\x07"),
-        (
-            "clipboard inside paste",
-            b"\x1b[200~\x1b]52;c;YWJjZA==\x07\x1b[201~",
-        ),
         // ----- DCS ----------------------------------------------------
         ("dcs xtversion", b"\x1bP>|uncurses 0.1.0\x1b\\"),
         ("dcs tertiary DA", b"\x1bP!|00000000\x1b\\"),
@@ -197,6 +197,13 @@ fn corpus_concatenated_round_trips_byte_by_byte() {
     }
     let whole = normalize(parse_whole(&joined));
     let bbb = normalize(parse_byte_by_byte(&joined));
+    assert_eq!(
+        whole.len(),
+        bbb.len(),
+        "concatenated corpus produced different event counts: whole={} b-by-b={}",
+        whole.len(),
+        bbb.len(),
+    );
     assert_eq!(whole, bbb, "concatenated corpus byte-by-byte mismatch");
 }
 
@@ -229,4 +236,5 @@ fn corpus_concatenated_round_trips_under_random_chunking() {
 #[test]
 fn empty_input_yields_no_events() {
     assert!(parse_whole(b"").is_empty());
+    assert!(parse_byte_by_byte(b"").is_empty());
 }

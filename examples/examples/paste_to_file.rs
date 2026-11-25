@@ -118,8 +118,7 @@ fn run(program: &mut Program<Stdin, Stdout>) -> std::io::Result<()> {
                     s.push(&bytes)?;
                 }
             }
-            // Retain partial pastes after recovery too.
-            Event::PasteEnd { .. } => {
+            Event::PasteEnd => {
                 if let Some(s) = sink.take() {
                     last = Some(s.finish()?);
                     render(program.screen_mut(), last.as_ref());

@@ -57,8 +57,7 @@ fn golden_empty_frame_80x24() {
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
-    assert_golden(actual, b"\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
-    assert_golden(render_to_vec(&mut renderer, &mut buf), b"");
+    assert_golden(actual, b"");
 }
 
 #[test]
@@ -70,7 +69,10 @@ fn golden_single_cell_change_at_origin() {
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
-    assert_golden(actual, b"\x1b[23AX");
+    assert_golden(
+        actual,
+        b"\rX\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    );
 }
 
 #[test]
@@ -82,7 +84,10 @@ fn golden_single_cell_change_at_middle() {
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
-    assert_golden(actual, b"\x1b[11A\x1b[40CX");
+    assert_golden(
+        actual,
+        b"\r\n\n\n\n\n\n\n\n\n\n\n\n\x1b[40CX\r\n\n\n\n\n\n\n\n\n\n\n",
+    );
 }
 
 fn scroll_up_by_1_full_width(renderer: &mut Renderer) -> Vec<u8> {
@@ -125,7 +130,10 @@ fn golden_force_clear_frame() {
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
-    assert_golden(actual, b"\x1b[23A\x1b[J");
+    assert_golden(
+        actual,
+        b"\r\x1b[J\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    );
 }
 
 #[test]
@@ -152,7 +160,10 @@ fn golden_relative_cursor_mode() {
 
     let actual = render_to_vec(&mut renderer, &mut buf);
 
-    assert_golden(actual, b"\x1b[18AX");
+    assert_golden(
+        actual,
+        b"\r\n\n\n\n\nX\r\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+    );
 }
 
 #[test]
@@ -197,7 +208,7 @@ fn golden_a_ligatable_cluster_repaints_the_row_from_the_cluster() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "\x1b[A  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Z\x1b[?7h\r".as_bytes(),
+        "\r  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Z\x1b[?7h\r\n".as_bytes(),
     );
 }
 
@@ -216,8 +227,7 @@ fn golden_a_change_after_a_ligatable_cluster_repaints_from_the_cluster() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Y\x1b[?7h\r"
-            .as_bytes(),
+        "\x1b[A  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Y\x1b[?7h\r".as_bytes(),
     );
 }
 
@@ -233,7 +243,7 @@ fn golden_a_change_before_a_ligatable_cluster_keeps_the_diff() {
     // does, so the ordinary diff still holds there.
     buf.set_cell((0, 0), &Cell::new("A", 1));
 
-    assert_golden(render_to_vec(&mut renderer, &mut buf), b"A ");
+    assert_golden(render_to_vec(&mut renderer, &mut buf), b"\x1b[AA ");
 }
 
 #[test]
@@ -252,7 +262,7 @@ fn golden_removing_a_ligatable_cluster_repaints_from_where_it_stood() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        b"  \x1b[K\x1b[?7l        Z\x1b[?7h\r",
+        b"\x1b[A  \x1b[K\x1b[?7l        Z\x1b[?7h\r",
     );
 }
 
@@ -270,8 +280,7 @@ fn golden_a_shrinking_tail_leaves_no_residue() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}H\x1b[?7h\r"
-            .as_bytes(),
+        "\x1b[A  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}H\x1b[?7h\r".as_bytes(),
     );
 }
 
@@ -291,7 +300,7 @@ fn golden_an_unclearable_right_edge_is_written_out() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "\x1b[A\x1b[4m  \x1b[?7l\x1b[m\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[4m  \x1b[?7h\r\x1b[m".as_bytes(),
+        "\r\x1b[4m  \x1b[?7l\x1b[m\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[4m  \x1b[?7h\r\n\x1b[m".as_bytes(),
     );
 }
 
@@ -312,7 +321,7 @@ fn golden_a_colored_tail_is_erased_with_bce() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "\x1b[A\x1b[41m  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[?7h\r\x1b[m".as_bytes(),
+        "\r\x1b[41m  \x1b[K\x1b[?7l\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}\x1b[?7h\r\x1b[m\n".as_bytes(),
     );
 }
 
@@ -330,7 +339,7 @@ fn golden_a_single_code_point_wide_cell_needs_no_repaint() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "\x1b[A  \u{4E16}Z".as_bytes(),
+        "\r  \u{4E16}Z\r\n".as_bytes(),
     );
 }
 
@@ -349,7 +358,7 @@ fn golden_grapheme_widths_need_no_repaint() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "\x1b[A  \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Z".as_bytes(),
+        "\r  \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466}Z\r\n".as_bytes(),
     );
 }
 
@@ -407,7 +416,7 @@ fn golden_a_variation_selector_makes_its_row_uncertain() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "a\x1b[K\x1b[?7l\u{2764}\u{FE0F}Y\x1b[?7h\r".as_bytes(),
+        "\x1b[Aa\x1b[K\x1b[?7l\u{2764}\u{FE0F}Y\x1b[?7h\r".as_bytes(),
     );
 }
 
@@ -434,7 +443,7 @@ fn golden_a_keycap_without_a_selector_makes_its_row_uncertain() {
 
     assert_golden(
         render_to_vec(&mut renderer, &mut buf),
-        "a\x1b[K\x1b[?7l1\u{20E3}Y\x1b[?7h\r".as_bytes(),
+        "\x1b[Aa\x1b[K\x1b[?7l1\u{20E3}Y\x1b[?7h\r".as_bytes(),
     );
 }
 
@@ -455,5 +464,8 @@ fn golden_a_combining_mark_keeps_the_diff() {
 
     buf.set_cell((1, 0), &Cell::new("Y", 1));
 
-    assert_golden(render_to_vec(&mut renderer, &mut buf), b"\x1b[DY");
+    assert_golden(
+        render_to_vec(&mut renderer, &mut buf),
+        "\x1b[A\x1b[CY".as_bytes(),
+    );
 }

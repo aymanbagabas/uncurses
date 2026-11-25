@@ -15,32 +15,24 @@ A paste arrives as a stream: one `Event::PasteStart`, zero or more
 `Event::PasteChunk` payloads, then one `Event::PasteEnd`. The chunks are raw
 bytes, because a paste can be large and a chunk might not be valid UTF-8 on its
 own: a multibyte character can be split across a chunk boundary.
-`PasteEnd { complete: true }` reports the terminal's paste terminator.
-`complete: false` reports recovery or an input read failure.
 
 ```mermaid
 flowchart TB
-  accTitle: The paste event sequence
-  accDescr {
-    PasteStart begins a paste.
-    Zero or more PasteChunk events carry its bytes.
-    PasteEnd finishes the paste, including an empty paste.
-  }
   s["Event::PasteStart"]
   s --> c["Event::PasteChunk(Vec&lt;u8&gt;) ... zero or more"]
-  s --> e["Event::PasteEnd { complete }"]
+  s --> e["Event::PasteEnd"]
   c --> e
 ```
 
 ## Collecting a paste
 
 The common case: accumulate the chunks into a buffer, then decode once at
-`PasteEnd`. This current-source sample returns the text and its completion flag.
+`PasteEnd`.
 
 ```rust
 use uncurses::event::Event;
 
-fn collect_paste(ev: Event, paste: &mut Option<Vec<u8>>) -> Option<(String, bool)> {
+fn collect_paste(ev: Event, paste: &mut Option<Vec<u8>>) -> Option<String> {
     match ev {
         Event::PasteStart => {
             *paste = Some(Vec::new());
@@ -50,9 +42,9 @@ fn collect_paste(ev: Event, paste: &mut Option<Vec<u8>>) -> Option<(String, bool
             paste.as_mut()?.extend_from_slice(&bytes);
             None
         }
-        Event::PasteEnd { complete } => paste
+        Event::PasteEnd => paste
             .take()
-            .map(|buf| (String::from_utf8_lossy(&buf).into_owned(), complete)),
+            .map(|buf| String::from_utf8_lossy(&buf).into_owned()),
         _ => None,
     }
 }
@@ -107,33 +99,6 @@ Because chunks arrive one event at a time, you make this decision incrementally
 and never hold the whole paste at once. The `paste_to_file` example implements
 exactly this sink and reports whether the paste stayed in memory or landed in a
 file.
-
-## Idle recovery
-
-The source ends an unfinished paste after two seconds without new input.
-It emits any held bytes as a final `Event::PasteChunk`, then emits
-`Event::PasteEnd { complete: false }`. Later bytes count as ordinary input.
-
-Use `EventSource::with_paste_idle_timeout` to choose another timeout.
-Pass `None` to wait for the real paste terminator.
-For an existing `Program`, use
-`program.event_source().lock().unwrap().set_paste_idle_timeout(timeout)`.
-The setter restarts the idle wait during a paste.
-An active async stream also refreshes its wait to use the new deadline.
-
-Call `EventSource::end_paste()` for explicit recovery.
-It delivers retained bytes before an incomplete end event.
-An active async stream wakes to deliver these events.
-Input read failures also deliver retained bytes and an incomplete end before
-the error.
-
-Idle recovery assumes that the paste stopped.
-Keys before expiry can become payload and extend the wait.
-Delayed payload after expiry can become keyboard input.
-Disable the timer when your application must preserve framing through long pauses.
-
-The `paste` example uses this setter. Press F2 between pastes to toggle
-the idle timeout. Its display includes the completion flag.
 
 ## Turning it on and off
 

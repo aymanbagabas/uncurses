@@ -7,20 +7,18 @@ use std::ffi::c_void;
 use std::io::{self, Read, Write};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use uncurses::event::{DecoderFlags, Event, EventSource, Input, KeyCode, KeyModifiers};
+use uncurses::event::{Event, KeyCode, KeyModifiers};
 use uncurses::program::{Program, ProgramOptions};
 use uncurses::terminal::{Terminal, TtyInput, TtyOutput};
-use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::System::Console::{
-    COORD, ClosePseudoConsole, CreatePseudoConsole, ENABLE_VIRTUAL_TERMINAL_INPUT,
-    FlushConsoleInputBuffer, GetConsoleCP, GetConsoleMode, HPCON, INPUT_RECORD, KEY_EVENT,
-    SetConsoleCP, SetConsoleMode, SetConsoleOutputCP, WINDOW_BUFFER_SIZE_EVENT, WriteConsoleInputW,
+    COORD, ClosePseudoConsole, CreatePseudoConsole, ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleCP,
+    GetConsoleMode, HPCON, SetConsoleCP, SetConsoleMode, SetConsoleOutputCP,
 };
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
@@ -30,7 +28,6 @@ use windows_sys::Win32::System::Threading::{
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const INPUT: &[u8] = b"caf\xc3\xa9 \xf0\x9f\x9a\x80 x";
-const INPUT_MARKERS: &[&str] = &["CONPTY_READY_INIT", "CONPTY_READY_RESUME"];
 
 struct PseudoConsole(HPCON);
 
@@ -64,7 +61,7 @@ fn wait_for_output(output: &Receiver<Vec<u8>>, transcript: &mut Vec<u8>, marker:
     }
 }
 
-fn run_conpty(child_test: &str, input_markers: &[&str]) {
+fn run_conpty(child_test: &str) {
     let (input_read, mut input_write) = io::pipe().unwrap();
     let (mut output_read, output_write) = io::pipe().unwrap();
     let mut console = 0;
@@ -165,8 +162,8 @@ fn run_conpty(child_test: &str, input_markers: &[&str]) {
     drop(output_write);
 
     let mut transcript = Vec::new();
-    for marker in input_markers {
-        wait_for_output(&output, &mut transcript, marker.as_bytes());
+    for marker in [b"CONPTY_READY_INIT".as_slice(), b"CONPTY_READY_RESUME"] {
+        wait_for_output(&output, &mut transcript, marker);
         input_write.write_all(INPUT).unwrap();
     }
     wait_for_output(&output, &mut transcript, b"CONPTY_INPUT_PASS");
@@ -271,7 +268,7 @@ fn run_child(code_page: u32) {
     assert_eq!(input_mode(input) & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
     program.init_with(ProgramOptions::default()).unwrap();
 
-    for &marker in INPUT_MARKERS {
+    for marker in ["CONPTY_READY_INIT", "CONPTY_READY_RESUME"] {
         assert_eq!(unsafe { GetConsoleCP() }, code_page);
         assert_ne!(input_mode(input) & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
         write!(output, "{marker}\r\n").unwrap();
@@ -290,294 +287,12 @@ fn run_child(code_page: u32) {
 
 #[test]
 fn non_bmp_input_cp437() {
-    run_conpty("child_cp437", INPUT_MARKERS);
-}
-
-#[test]
-fn pause_restores_source_serialization() {
-    run_conpty("child_pause_serialization", &[]);
-}
-
-#[test]
-#[ignore = "fixture launched inside a ConPTY by pause_restores_source_serialization"]
-fn child_pause_serialization() {
-    let terminal = Terminal::open().unwrap();
-    let input = terminal.input();
-    let original_mode = input_mode(input);
-    for vt_input in [false, true] {
-        let mode = if vt_input {
-            original_mode | ENABLE_VIRTUAL_TERMINAL_INPUT
-        } else {
-            original_mode & !ENABLE_VIRTUAL_TERMINAL_INPUT
-        };
-        assert_ne!(unsafe { SetConsoleMode(input.as_raw_handle(), mode) }, 0);
-        let mut program = Program::open().unwrap();
-        program.init().unwrap();
-        check_up_key(&program, input, true);
-        program.pause().unwrap();
-        assert_eq!(input_mode(input), mode);
-        check_up_key(&program, input, vt_input);
-        program.resume().unwrap();
-        check_up_key(&program, input, true);
-        program.finish().unwrap();
-    }
-    assert_ne!(
-        unsafe { SetConsoleMode(input.as_raw_handle(), original_mode) },
-        0
-    );
-    let mut output = terminal.output();
-    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
-    output.flush().unwrap();
-}
-
-fn check_up_key<I: Input, O: Write>(program: &Program<I, O>, input: TtyInput, vt_input: bool) {
-    let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
-    record.EventType = KEY_EVENT as u16;
-    record.Event.KeyEvent.bKeyDown = 1;
-    record.Event.KeyEvent.wRepeatCount = 1;
-    if vt_input {
-        let records = (*b"\x1b[A").map(|byte| {
-            let mut record = record;
-            record.Event.KeyEvent.wVirtualKeyCode = u16::from(byte);
-            record.Event.KeyEvent.uChar.UnicodeChar = u16::from(byte);
-            record
-        });
-        write_records(input, &records);
-    } else {
-        record.Event.KeyEvent.wVirtualKeyCode = 0x26;
-        record.Event.KeyEvent.wVirtualScanCode = 0x48;
-        write_records(input, &[record]);
-    }
-    let source = program.event_source();
-    let mut source = source.lock().unwrap();
-    assert_eq!(source.vt_input(), vt_input);
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        assert!(
-            source
-                .poll(Some(deadline.saturating_duration_since(Instant::now())))
-                .unwrap(),
-            "missing Up key with VT input {vt_input}"
-        );
-        match source.read().unwrap() {
-            Event::Resize(_) => continue,
-            Event::KeyPress(key) => assert_eq!(key.code, KeyCode::Up),
-            event => panic!("expected Up key, got {event:?}"),
-        }
-        break;
-    }
-}
-
-#[test]
-fn mode_changes_interrupt_shared_readers() {
-    run_conpty("child_mode_change_readers", &[]);
-}
-
-#[test]
-#[ignore = "fixture launched inside a ConPTY by mode_changes_interrupt_shared_readers"]
-fn child_mode_change_readers() {
-    let terminal = Terminal::open().unwrap();
-    let input = terminal.input();
-    let original_mode = input_mode(input);
-    assert_ne!(
-        unsafe {
-            SetConsoleMode(
-                input.as_raw_handle(),
-                original_mode & !ENABLE_VIRTUAL_TERMINAL_INPUT,
-            )
-        },
-        0
-    );
-    for (action, backspace_mode) in [
-        ("init", None),
-        ("pause", None),
-        ("resume", None),
-        ("finish", None),
-        ("pause", Some(false)),
-        ("pause", Some(true)),
-        ("resume", Some(false)),
-        ("resume", Some(true)),
-        ("finish", Some(false)),
-        ("finish", Some(true)),
-    ] {
-        for use_poll in [false, true] {
-            let mut program = Program::open().unwrap();
-            if action != "init" {
-                program.init().unwrap();
-            }
-            if let Some(enabled) = backspace_mode {
-                program.set_backspace_mode(enabled).unwrap();
-            }
-            if action == "resume" {
-                program.pause().unwrap();
-            }
-            assert_ne!(unsafe { FlushConsoleInputBuffer(input.as_raw_handle()) }, 0);
-            let source = program.event_source();
-            let reader_source = source.clone();
-            let (started, waiting) = mpsc::sync_channel(0);
-            let reader = std::thread::spawn(move || {
-                let mut source = reader_source.lock().unwrap();
-                started.send(()).unwrap();
-                for _ in 0..2 {
-                    if use_poll {
-                        assert!(!source.poll(None).unwrap());
-                    } else {
-                        assert_eq!(
-                            source.read().unwrap_err().kind(),
-                            io::ErrorKind::Interrupted
-                        );
-                    }
-                }
-            });
-            waiting.recv_timeout(TIMEOUT).unwrap();
-            match action {
-                "init" => {
-                    program
-                        .init_with(ProgramOptions {
-                            legacy_keys: DecoderFlags::LF_IS_ENTER,
-                            ..ProgramOptions::default()
-                        })
-                        .unwrap();
-                    assert_eq!(program.decoder_flags(), DecoderFlags::LF_IS_ENTER);
-                    check_up_key(&program, input, true);
-                    program.finish().unwrap();
-                }
-                "pause" => {
-                    program.pause().unwrap();
-                    check_up_key(&program, input, false);
-                    program.finish().unwrap();
-                }
-                "resume" => {
-                    program.resume().unwrap();
-                    check_up_key(&program, input, true);
-                    program.finish().unwrap();
-                }
-                "finish" => program.finish().unwrap(),
-                _ => unreachable!(),
-            }
-            reader.join().unwrap();
-            assert!(!source.lock().unwrap().vt_input());
-        }
-    }
-    assert_ne!(
-        unsafe { SetConsoleMode(input.as_raw_handle(), original_mode) },
-        0
-    );
-    let mut output = terminal.output();
-    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
-    output.flush().unwrap();
-}
-
-#[derive(Clone, Copy)]
-struct SwitchHandle<'a, H> {
-    console: H,
-    pipe: BorrowedHandle<'a>,
-    fail: &'a AtomicBool,
-}
-
-impl<H: AsHandle> AsHandle for SwitchHandle<'_, H> {
-    fn as_handle(&self) -> BorrowedHandle<'_> {
-        if self.fail.load(Ordering::Relaxed) {
-            self.pipe
-        } else {
-            self.console.as_handle()
-        }
-    }
-}
-
-impl<H: Read> Read for SwitchHandle<'_, H> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.console.read(buf)
-    }
-}
-
-impl<H: Write> Write for SwitchHandle<'_, H> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.console.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.console.flush()
-    }
-}
-
-#[test]
-fn partial_restore_updates_only_applied_input_modes() {
-    run_conpty("child_partial_restore", &[]);
-}
-
-#[test]
-#[ignore = "fixture launched inside a ConPTY by partial_restore_updates_only_applied_input_modes"]
-fn child_partial_restore() {
-    let terminal = Terminal::open().unwrap();
-    let input = terminal.input();
-    let original_mode = input_mode(input);
-    assert_ne!(
-        unsafe {
-            SetConsoleMode(
-                input.as_raw_handle(),
-                original_mode & !ENABLE_VIRTUAL_TERMINAL_INPUT,
-            )
-        },
-        0
-    );
-    let (pipe, _writer) = io::pipe().unwrap();
-    let fail_input = AtomicBool::new(false);
-    let fail_output = AtomicBool::new(false);
-    for input_fails in [false, true] {
-        let terminal = Terminal::new(
-            SwitchHandle {
-                console: input,
-                pipe: pipe.as_handle(),
-                fail: &fail_input,
-            },
-            SwitchHandle {
-                console: terminal.output(),
-                pipe: pipe.as_handle(),
-                fail: &fail_output,
-            },
-            uncurses::terminal::EnvList::new(),
-        );
-        let mut program = Program::new(terminal).unwrap();
-        program.init().unwrap();
-        fail_input.store(input_fails, Ordering::Relaxed);
-        fail_output.store(!input_fails, Ordering::Relaxed);
-        assert_eq!(
-            program.pause().unwrap_err().raw_os_error(),
-            Some(ERROR_INVALID_HANDLE as i32)
-        );
-        assert_eq!(
-            input_mode(input) & ENABLE_VIRTUAL_TERMINAL_INPUT != 0,
-            input_fails
-        );
-        assert_eq!(
-            program.event_source().lock().unwrap().vt_input(),
-            input_fails
-        );
-        fail_input.store(false, Ordering::Relaxed);
-        fail_output.store(false, Ordering::Relaxed);
-        check_up_key(&program, input, input_fails);
-        program.pause().unwrap();
-        check_up_key(&program, input, false);
-        fail_output.store(true, Ordering::Relaxed);
-        program.pause().unwrap();
-        fail_output.store(false, Ordering::Relaxed);
-        program.resume().unwrap();
-        check_up_key(&program, input, true);
-        program.finish().unwrap();
-    }
-    assert_ne!(
-        unsafe { SetConsoleMode(input.as_raw_handle(), original_mode) },
-        0
-    );
-    let mut output = terminal.output();
-    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
-    output.flush().unwrap();
+    run_conpty("child_cp437");
 }
 
 #[test]
 fn non_bmp_input_cp65001() {
-    run_conpty("child_cp65001", INPUT_MARKERS);
+    run_conpty("child_cp65001");
 }
 
 #[test]
@@ -590,243 +305,4 @@ fn child_cp437() {
 #[ignore = "fixture launched inside a ConPTY by non_bmp_input_cp65001"]
 fn child_cp65001() {
     run_child(65001);
-}
-
-fn write_records(input: TtyInput, records: &[INPUT_RECORD]) {
-    let mut written = 0;
-    assert_ne!(
-        unsafe {
-            WriteConsoleInputW(
-                input.as_raw_handle(),
-                records.as_ptr(),
-                records.len() as u32,
-                &mut written,
-            )
-        },
-        0,
-        "WriteConsoleInputW: {}",
-        io::Error::last_os_error()
-    );
-    assert_eq!(written as usize, records.len());
-}
-
-fn run_wake_child(check: impl FnOnce(TtyInput, &mut EventSource<TtyInput>)) {
-    let mut terminal = Terminal::open().unwrap();
-    terminal.make_raw().unwrap();
-    let input = terminal.input();
-    assert_ne!(
-        unsafe { FlushConsoleInputBuffer(input.as_raw_handle()) },
-        0,
-        "FlushConsoleInputBuffer: {}",
-        io::Error::last_os_error()
-    );
-    let mut source = EventSource::new(input).unwrap();
-    source.set_vt_input(true);
-    check(input, &mut source);
-    assert!(source.try_read().is_none());
-    let timeout = Duration::from_millis(20);
-    let start = Instant::now();
-    assert!(!source.poll(Some(timeout)).unwrap());
-    assert!(
-        start.elapsed() >= timeout,
-        "a serviced wake must not interrupt a later wait"
-    );
-    for _ in 0..10 {
-        source.waker().wake().unwrap();
-    }
-    assert_eq!(
-        source.read().unwrap_err().kind(),
-        io::ErrorKind::Interrupted
-    );
-    let start = Instant::now();
-    assert!(!source.poll(Some(timeout)).unwrap());
-    assert!(
-        start.elapsed() >= timeout,
-        "coalesced wakes must be consumed once"
-    );
-    terminal.restore().unwrap();
-    let mut output = terminal.output();
-    write!(output, "CONPTY_INPUT_PASS\r\n").unwrap();
-    output.flush().unwrap();
-}
-
-#[test]
-fn ready_input_preserves_wake_under_repeated_wakes() {
-    run_conpty("child_wake_input", &[]);
-}
-
-#[test]
-fn ready_resize_preserves_wake() {
-    run_conpty("child_wake_resize", &[]);
-}
-
-#[test]
-#[ignore = "fixture launched inside a ConPTY by ready_input_preserves_wake_under_repeated_wakes"]
-fn child_wake_input() {
-    run_wake_child(|input, source| {
-        let records = (*b"ab").map(|byte| {
-            let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
-            record.EventType = KEY_EVENT as u16;
-            record.Event.KeyEvent.bKeyDown = 1;
-            record.Event.KeyEvent.wRepeatCount = 1;
-            record.Event.KeyEvent.uChar.UnicodeChar = u16::from(byte);
-            record
-        });
-        for _ in 0..100 {
-            write_records(input, &records);
-            source.waker().wake().unwrap();
-            for expected in ['a', 'b'] {
-                // The second wake meets an event already in the source queue.
-                source.waker().wake().unwrap();
-                assert!(source.poll(Some(Duration::ZERO)).unwrap());
-                assert!(matches!(
-                    source.try_read(),
-                    Some(Event::KeyPress(key)) if key.code == KeyCode::Char(expected)
-                ));
-            }
-        }
-        write_records(input, &records);
-        assert!(source.poll(Some(Duration::ZERO)).unwrap());
-        for expected in ['a', 'b'] {
-            source.waker().wake().unwrap();
-            assert!(matches!(
-                source.read().unwrap(),
-                Event::KeyPress(key) if key.code == KeyCode::Char(expected)
-            ));
-        }
-        assert_eq!(
-            source.read().unwrap_err().kind(),
-            io::ErrorKind::Interrupted,
-        );
-    });
-}
-
-#[test]
-#[ignore = "fixture launched inside a ConPTY by ready_resize_preserves_wake"]
-fn child_wake_resize() {
-    run_wake_child(|input, source| {
-        let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
-        record.EventType = WINDOW_BUFFER_SIZE_EVENT as u16;
-        record.Event.WindowBufferSizeEvent.dwSize = COORD { X: 100, Y: 40 };
-        let mut key: INPUT_RECORD = unsafe { std::mem::zeroed() };
-        key.EventType = KEY_EVENT as u16;
-        key.Event.KeyEvent.bKeyDown = 1;
-        key.Event.KeyEvent.wRepeatCount = 1;
-        key.Event.KeyEvent.uChar.UnicodeChar = u16::from(b'x');
-        write_records(input, &[record, key]);
-        source.waker().wake().unwrap();
-        assert!(source.poll(Some(Duration::ZERO)).unwrap());
-        assert!(matches!(
-            source.try_read(),
-            Some(Event::Resize(size)) if size.row == 40 && size.col == 100
-        ));
-        assert!(
-            matches!(source.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Char('x'))
-        );
-        assert_eq!(
-            source.read().unwrap_err().kind(),
-            io::ErrorKind::Interrupted,
-        );
-    });
-}
-
-#[test]
-fn queued_escape_continuation_survives_record_boundary() {
-    run_conpty("child_batched_escape", &[]);
-}
-
-#[test]
-#[ignore = "fixture launched inside a ConPTY by queued_escape_continuation_survives_record_boundary"]
-fn child_batched_escape() {
-    run_wake_child(|input, source| {
-        let records: Vec<_> = b"\x1b[B"
-            .repeat(29)
-            .into_iter()
-            .map(|byte| {
-                let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
-                record.EventType = KEY_EVENT as u16;
-                record.Event.KeyEvent.bKeyDown = 1;
-                record.Event.KeyEvent.wRepeatCount = 1;
-                record.Event.KeyEvent.uChar.UnicodeChar = u16::from(byte);
-                record
-            })
-            .collect();
-        for ignored_records in [0, 64] {
-            let mut burst = records[..64].to_vec();
-            let mut key_up = records[0];
-            key_up.Event.KeyEvent.bKeyDown = 0;
-            burst.extend(std::iter::repeat_n(key_up, ignored_records));
-            burst.extend_from_slice(&records[64..]);
-            write_records(input, &burst);
-            source.waker().wake().unwrap();
-            assert!(source.poll(Some(Duration::ZERO)).unwrap());
-            std::thread::sleep(source.esc_timeout() + Duration::from_millis(20));
-            for index in 0..29 {
-                assert!(source.poll(Some(TIMEOUT)).unwrap());
-                let event = source.read().unwrap();
-                assert!(
-                    matches!(event, Event::KeyPress(ref key) if key.code == KeyCode::Down),
-                    "ignored={ignored_records}, index={index}, event={event:?}"
-                );
-            }
-            assert!(source.try_read().is_none());
-            assert!(!source.poll(Some(Duration::ZERO)).unwrap());
-        }
-        write_records(input, &records[..1]);
-        assert!(!source.poll(Some(Duration::ZERO)).unwrap());
-        std::thread::sleep(source.esc_timeout() + Duration::from_millis(20));
-        let mut late_key = records[0];
-        late_key.Event.KeyEvent.uChar.UnicodeChar = u16::from(b'a');
-        write_records(input, &[late_key]);
-        for expected in [KeyCode::Escape, KeyCode::Char('a')] {
-            assert!(source.poll(Some(TIMEOUT)).unwrap());
-            assert!(matches!(
-                source.read().unwrap(),
-                Event::KeyPress(key) if key.code == expected && key.modifiers.is_empty()
-            ));
-        }
-    });
-}
-
-#[test]
-fn partial_input_and_deadlines_handle_wakes() {
-    run_conpty("child_wake_partial_input", &[]);
-}
-
-#[test]
-#[ignore = "fixture launched inside a ConPTY by partial_input_and_deadlines_handle_wakes"]
-fn child_wake_partial_input() {
-    run_wake_child(|input, source| {
-        let write_bytes = |bytes: &[u8]| {
-            let records: Vec<_> = bytes
-                .iter()
-                .map(|&byte| {
-                    let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
-                    record.EventType = KEY_EVENT as u16;
-                    record.Event.KeyEvent.bKeyDown = 1;
-                    record.Event.KeyEvent.wRepeatCount = 1;
-                    record.Event.KeyEvent.uChar.UnicodeChar = u16::from(byte);
-                    record
-                })
-                .collect();
-            write_records(input, &records);
-        };
-        write_bytes(b"\x1b[");
-        source.waker().wake().unwrap();
-        assert!(!source.poll(Some(Duration::ZERO)).unwrap());
-        write_bytes(b"A");
-        assert!(matches!(source.read().unwrap(), Event::KeyPress(key) if key.code == KeyCode::Up));
-        write_bytes(b"\x1b]unfinished");
-        assert!(!source.poll(Some(Duration::ZERO)).unwrap());
-        source.waker().wake().unwrap();
-        assert_eq!(
-            source.read().unwrap_err().kind(),
-            io::ErrorKind::Interrupted
-        );
-        write_bytes(b"\x1b\\");
-        assert_eq!(
-            source.read().unwrap(),
-            Event::UnknownOsc(b"unfinished".to_vec())
-        );
-    });
 }

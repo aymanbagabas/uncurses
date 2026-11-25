@@ -135,7 +135,7 @@ impl<I: Input, O: Write> Program<I, O> {
     /// to `0..=100`.
     ///
     /// The state is recorded for save/restore: it is removed on a shell
-    /// handoff ([`pause`](Self::pause), Unix `suspend`,
+    /// handoff ([`pause`](Self::pause), [`suspend`](Self::suspend),
     /// [`finish`](Self::finish)) and re-reported by
     /// [`resume`](Self::resume). Take it down with
     /// [`reset_progress_state`](Self::reset_progress_state).
@@ -520,9 +520,6 @@ impl<I: Input, O: Write> Program<I, O> {
 
     fn write_backspace_mode(&mut self, enabled: bool) -> io::Result<()> {
         // Keep async decoding in step with the terminal mode change.
-        #[cfg(windows)]
-        let mut source = super::lock_source_for_mode_change(&self.source, &self.source_waker)?;
-        #[cfg(not(windows))]
         let mut source = self.source.lock().unwrap();
         if enabled {
             mode::Mode::BACKARROW_KEY.set(&mut self.screen)?;
@@ -1071,9 +1068,7 @@ impl<I: Input, O: Write> Program<I, O> {
     }
 
     /// Request the system clipboard contents (`OSC 52 ; c ; ?`). Reply:
-    /// [`Event::ClipboardStart`](crate::event::Event::ClipboardStart), raw
-    /// [`Event::ClipboardChunk`](crate::event::Event::ClipboardChunk) bytes,
-    /// then [`Event::ClipboardEnd`](crate::event::Event::ClipboardEnd).
+    /// [`Event::Clipboard`](crate::event::Event::Clipboard).
     pub fn request_system_clipboard(&mut self) -> io::Result<()> {
         crate::ansi::clipboard::write_request_clipboard(
             &mut self.screen,
@@ -1083,9 +1078,7 @@ impl<I: Input, O: Write> Program<I, O> {
     }
 
     /// Request the primary selection contents (`OSC 52 ; p ; ?`). Reply:
-    /// [`Event::ClipboardStart`](crate::event::Event::ClipboardStart), raw
-    /// [`Event::ClipboardChunk`](crate::event::Event::ClipboardChunk) bytes,
-    /// then [`Event::ClipboardEnd`](crate::event::Event::ClipboardEnd).
+    /// [`Event::Clipboard`](crate::event::Event::Clipboard).
     pub fn request_primary_clipboard(&mut self) -> io::Result<()> {
         crate::ansi::clipboard::write_request_clipboard(
             &mut self.screen,

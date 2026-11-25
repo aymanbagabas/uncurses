@@ -45,14 +45,10 @@ use std::fmt;
 bitflags! {
     /// Keyboard modifier flags.
     ///
-    /// The low eight bits follow Kitty's modifier ordering. CSI keyboard input
-    /// uses this ordering consistently, including legacy functional keys and
-    /// modifyOtherKeys. Xterm's Meta bit is intentionally interpreted as Super.
-    ///
     /// Modifiers split into two categories:
     ///
-    /// * **Binding modifiers** — `SHIFT`, `ALT`, `CTRL`, `SUPER`,
-    ///   `HYPER`, `META`. These participate in [`Key`] equality and
+    /// * **Binding modifiers** — `SHIFT`, `ALT`, `CTRL`, `META`,
+    ///   `HYPER`, `SUPER`. These participate in [`Key`] equality and
     ///   in [`Key::matches`].
     /// * **Lock states** — `CAPS_LOCK`, `NUM_LOCK`, `SCROLL_LOCK`,
     ///   collectively [`LOCK_MASK`](Self::LOCK_MASK). These report
@@ -68,12 +64,12 @@ bitflags! {
         const ALT         = 0b0000_0000_0000_0010;
         /// Control key modifier.
         const CTRL        = 0b0000_0000_0000_0100;
-        /// Super key modifier.
-        const SUPER       = 0b0000_0000_0000_1000;
+        /// Meta key modifier.
+        const META        = 0b0000_0000_0000_1000;
         /// Hyper key modifier.
         const HYPER       = 0b0000_0000_0001_0000;
-        /// Meta key modifier.
-        const META        = 0b0000_0000_0010_0000;
+        /// Super key modifier.
+        const SUPER       = 0b0000_0000_0010_0000;
         /// Caps Lock state.
         const CAPS_LOCK   = 0b0000_0000_0100_0000;
         /// Num Lock state.
@@ -1270,6 +1266,16 @@ mod tests {
     }
 
     #[test]
+    fn direct_field_mutation_overrides_auto_text() {
+        let mut k = Key::new(KeyCode::Char('2'), KeyModifiers::SHIFT).normalized();
+        // Simulate a decoder that knows the terminal-reported shifted glyph.
+        k.shifted_key = Some('@');
+        k.text = Some("@".to_string());
+        assert_eq!(k.text.as_deref(), Some("@"));
+        assert_eq!(k.shifted_key, Some('@'));
+    }
+
+    #[test]
     fn eq_ignores_informational_fields() {
         let bare = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT).normalized();
         let mut decorated = Key::new(KeyCode::Char('a'), KeyModifiers::SHIFT).normalized();
@@ -1725,6 +1731,7 @@ mod tests {
                     | KeyModifiers::HYPER
                     | KeyModifiers::META,
             ),
+            (KeyCode::Char('+'), KeyModifiers::CTRL),
             (KeyCode::Char('-'), KeyModifiers::CTRL),
             (KeyCode::Char('='), KeyModifiers::CTRL),
             (KeyCode::Char('-'), KeyModifiers::empty()),

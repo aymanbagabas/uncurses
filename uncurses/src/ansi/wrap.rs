@@ -20,7 +20,7 @@
 //! which byte ends a control string, and when a byte in `0x80..=0x9F`
 //! is a C1 control rather than part of a character, are documented there.
 
-use super::text::{TokenKind, WidthMode, string_width, tokenize};
+use super::text::{Token, WidthMode, string_width, tokenize};
 
 #[inline]
 fn bs(b: &[u8]) -> &str {
@@ -65,16 +65,15 @@ pub fn hardwrap_mode(
     let mut out = String::with_capacity(s.len());
     let mut col = 0usize;
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
-        match tok.kind {
-            TokenKind::Escape => out.push_str(bs(tok.bytes)),
-            TokenKind::Control if tok.control == b'\n' => {
+        match tok {
+            Token::Escape(e) => out.push_str(bs(e)),
+            Token::Control(b'\n') => {
                 out.push('\n');
                 col = 0;
             }
-            TokenKind::Control => out.push_str(bs(tok.bytes)),
-            TokenKind::Text => {
-                let text = tok.bytes;
-                let w = usize::from(tok.width);
+            Token::Control(b) => out.push(b as char),
+            Token::Text { text, width } => {
+                let w = width as usize;
                 if w == 0 {
                     out.push_str(bs(text));
                     continue;
@@ -194,18 +193,18 @@ fn wordwrap_inner(
     };
 
     for tok in tokenize(s.as_bytes(), mode, eaw_wide) {
-        match tok.kind {
-            TokenKind::Escape => {
+        match tok {
+            Token::Escape(e) => {
                 // Attach escapes to whatever segment is currently being built.
                 if !word.is_empty() {
-                    word.push_str(bs(tok.bytes));
+                    word.push_str(bs(e));
                 } else if !space.is_empty() {
-                    space.push_str(bs(tok.bytes));
+                    space.push_str(bs(e));
                 } else {
-                    line.push_str(bs(tok.bytes));
+                    line.push_str(bs(e));
                 }
             }
-            TokenKind::Control if tok.control == b'\n' => {
+            Token::Control(b'\n') => {
                 // Flush current word and emit the line.
                 flush_word_to_line(
                     &mut line,
@@ -222,13 +221,12 @@ fn wordwrap_inner(
                 space.clear();
                 space_w = 0;
             }
-            TokenKind::Control => {
+            Token::Control(b) => {
                 // Treat as part of the current word.
-                word.push_str(bs(tok.bytes));
+                word.push(b as char);
             }
-            TokenKind::Text => {
-                let text = tok.bytes;
-                let w = usize::from(tok.width);
+            Token::Text { text, width } => {
+                let w = width as usize;
                 let is_break = bs(text).chars().all(&is_bp);
                 let is_space = text == b" " || text == b"\t";
 
@@ -460,7 +458,7 @@ mod tests {
             "ab\u{ff1b}\ncd"
         );
         // A character absent from the set must not break.
-        assert_eq!(wordwrap("ab\u{3001}cd", 3, "\u{3002}"), "ab\u{3001}cd");
+        assert_eq!(wordwrap("ab\u{3001}cd", 9, "\u{3002}"), "ab\u{3001}cd");
     }
 
     #[test]

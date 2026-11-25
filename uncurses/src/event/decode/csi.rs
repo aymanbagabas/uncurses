@@ -34,8 +34,7 @@ use super::kitty;
 use super::result::ParseResult;
 use super::util::{
     ControlSequence, Params, csi_kitty_phase, csi_modifiers, intro_prefix_len, key_event_for_phase,
-    key_modifiers, key_with_mods, lookup_legacy_key, remap_tilde, sequence_fallback,
-    tilde_code_to_keycode,
+    key_with_mods, lookup_legacy_key, remap_tilde, tilde_code_to_keycode, xterm_modifiers,
 };
 use crate::event::mouse::{
     decode_sgr_mouse, decode_urxvt_mouse, decode_utf8_mouse, decode_x10_mouse,
@@ -60,9 +59,6 @@ impl Decoder {
 
         while i < buf.len() {
             let b = buf[i];
-            if b == 0x1b {
-                return sequence_fallback(buf, i);
-            }
             if (0x40..=0x7e).contains(&b) {
                 // Found final byte
                 let seq = &buf[prefix_len..=i];
@@ -235,7 +231,7 @@ fn recognize(
         }
         if no_private && params.len() == 2 {
             if row == 1 && col >= 1 && col - 1 <= 15 {
-                let mods = key_modifiers(col);
+                let mods = xterm_modifiers(col as u16);
                 let f3 = Event::KeyPress(Key::new(KeyCode::F(3), mods).normalized());
                 return Some(Event::Multi(vec![f3, cpr]));
             }
@@ -453,7 +449,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
 
     // XTerm modifyOtherKeys-2: CSI 27 ; <modifier> ; <code> ~
     if code == 27 && count == 3 {
-        let mods = csi_modifiers(params);
+        let mods = xterm_modifiers(params.get_or(1, 1) as u16);
         let r = params.get_or(2, 0);
         let key_code = match r {
             0x08 => KeyCode::Backspace,
@@ -477,7 +473,7 @@ fn recognize_tilde(params: Params<'_>, flags: DecoderFlags) -> Option<Event> {
         return Some(Event::PasteStart);
     }
     if code == 201 && count == 1 {
-        return Some(Event::PasteEnd { complete: true });
+        return Some(Event::PasteEnd);
     }
     let key_code = u16::try_from(code)
         .ok()

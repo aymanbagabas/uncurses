@@ -764,6 +764,10 @@ mod tests {
         Cell::new(s, 2)
     }
 
+    fn cont() -> Cell {
+        Cell::CONTINUATION
+    }
+
     #[test]
     fn draw_copies_normal_cells() {
         let mut src = Buffer::new(2, 1);
@@ -795,13 +799,13 @@ mod tests {
         // Construct a source whose first column is the orphan
         // continuation half of a wide cell that lives outside the
         // slice. The default must not propagate the orphan.
-        let mut src = Buffer::new(3, 1);
-        src.set((0, 0), &wide("世"));
-        src.set((2, 0), &Cell::new("X", 1));
-        let src = View::new(&mut src, Rect::new(1, 0, 2, 1));
+        let mut src = Buffer::new(2, 1);
+        src.set((0, 0), &cont());
+        src.set((1, 0), &Cell::new("X", 1));
 
         let mut dst = Buffer::new(2, 1);
-        // Seed the target with nonblank cells so a skipped write is visible.
+        // Pre-seed target with an unrelated wide cell to make sure
+        // we'd notice a corruption.
         dst.set((0, 0), &Cell::new("Y", 1));
         dst.set((1, 0), &Cell::new("Z", 1));
 
@@ -940,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn default_insert_cells_preserves_wide_that_still_fits() {
+    fn default_insert_cells_drops_wide_that_no_longer_fits() {
         // Row: A 世(prim) 世(cont) B, then insert 1 at col 1 with right=4.
         // 世's new primary would be at col 2, continuation at col 3.
         // That still fits (col 3 < right=4). So 世 is preserved.

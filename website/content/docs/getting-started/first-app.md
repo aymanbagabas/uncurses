@@ -15,14 +15,8 @@ the program and app state, a setup step, a loop, and a teardown step.
 
 ```mermaid
 flowchart TB
-  accTitle: The application lifecycle
-  accDescr {
-    The application opens its Program, initializes state, and configures the terminal.
-    It repeats the read, update, and redraw cycle, then finishes the Program.
-  }
-  begin["new: open the program, initialize state"]
-  begin --> setup["start: configure the terminal"]
-  setup --> eventloop["run: read event, update state, redraw"]
+  begin["start: open the program, init state"]
+  begin --> eventloop["run: read event, update state, redraw"]
   eventloop --> eventloop
   eventloop --> teardown["stop: finish the program"]
 ```
@@ -32,8 +26,8 @@ fragments from one complete file.
 
 ## Setting up
 
-`new` opens the program and seeds the counter at zero. `start` configures the
-terminal after the caller owns the app and can restore it on an error.
+`start` opens the program, takes over the full terminal, and seeds the counter
+at zero.
 
 ```rust
 use uncurses::buffer::SurfaceMut;
@@ -50,17 +44,12 @@ struct App {
 }
 
 impl App {
-    fn new() -> std::io::Result<Self> {
-        Ok(Self {
-            program: Program::stdio()?,
-            count: 0,
-        })
-    }
-
-    fn start(&mut self) -> std::io::Result<()> {
-        self.program.init()?;
-        self.program.enter_alt_screen()?;
-        self.program.hide_cursor()
+    fn start() -> std::io::Result<Self> {
+        let mut program = Program::stdio()?;
+        program.init()?;
+        program.enter_alt_screen()?;
+        program.hide_cursor()?;
+        Ok(Self { program, count: 0 })
     }
 }
 ```
@@ -137,9 +126,9 @@ terminal only repaints when the frame would actually differ.
 ## Putting the terminal back
 
 `stop` consumes the app and finishes the program, restoring the terminal exactly
-as it was. `main` calls `new`, `start`, `run`, and `stop` in order.
-It still calls `stop` if `start` or `run` returns an error.
-This gives terminal restoration a chance to run after setup or application errors.
+as it was. `main` wires the three lifecycle steps together and still runs `stop`
+when `run` returns an error, so an error mid-loop never leaves the terminal in an
+altered state.
 
 ```rust
 impl App {
@@ -149,10 +138,10 @@ impl App {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut app = App::new()?;
-    let result = app.start().and_then(|()| app.run());
-    let stop = app.stop();
-    result.and(stop)
+    let mut app = App::start()?;
+    let result = app.run();
+    app.stop()?;
+    result
 }
 ```
 

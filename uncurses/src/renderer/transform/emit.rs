@@ -522,6 +522,11 @@ mod cluster_bounds {
             "an orphan past the pair stands alone"
         );
         assert_eq!(cluster_start(&chained, 1), 0, "inside the pair");
+        assert_eq!(
+            cluster_start(&chained, 2),
+            cluster_end(&chained, 2),
+            "the mirrors must agree on a column that is its own cluster"
+        );
     }
 
     #[test]

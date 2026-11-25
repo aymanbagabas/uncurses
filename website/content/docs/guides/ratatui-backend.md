@@ -1,17 +1,17 @@
 ---
-title: "The Ratatui backend"
+title: "The ratatui backend"
 weight: 10
 ---
 
-If you already write your UI with [Ratatui](https://docs.rs/ratatui) widgets, you
+If you already write your UI with [ratatui](https://docs.rs/ratatui) widgets, you
 do not have to give that up to get uncurses underneath. The `uncurses-ratatui`
-crate is a Ratatui `Backend` that wraps an uncurses `Program`: Ratatui keeps
+crate is a ratatui `Backend` that wraps an uncurses `Program`: ratatui keeps
 writing widgets, the program owns input and terminal modes, and its `Screen`
 diffs the frames and writes only the necessary bytes.
 
 ## Install
 
-Add the backend alongside Ratatui:
+Add the backend alongside ratatui:
 
 ```toml
 [dependencies]
@@ -24,7 +24,7 @@ The features mirror the core crate: `unicode-rs` (default), `icu`, and `async`.
 ## Setup and teardown
 
 `try_init` enters raw mode, switches to the alternate screen, and hands you a
-ready Ratatui `Terminal`; `restore` restores the terminal state. One call each,
+ready ratatui `Terminal`; `restore` restores the terminal state. One call each,
 bracketing your app.
 
 ```rust
@@ -44,7 +44,7 @@ fn run(_: &mut uncurses_ratatui::DefaultTerminal) -> io::Result<()> {
 
 `try_init` returns an `io::Result`; if you would rather panic on failure, `init`
 gives you the terminal directly. There are `*_with_options` variants when you
-want to pass Ratatui `TerminalOptions` and uncurses `ProgramOptions`.
+want to pass ratatui `TerminalOptions` and uncurses `ProgramOptions`.
 `ProgramOptions` is re-exported from `uncurses_ratatui` and defined in
 `uncurses::program`. Its fields are `bracketed_paste`, `mouse`,
 `prefer_grapheme_clusters`, `prefer_in_band_resize`, and
@@ -78,7 +78,7 @@ fn main() -> io::Result<()> {
 
 ## Drawing and input
 
-`terminal.draw` is plain Ratatui. Render any widget into the frame; uncurses
+`terminal.draw` is plain ratatui. Render any widget into the frame; uncurses
 turns the resulting buffer into the smallest possible update. Input comes from
 uncurses through the backend.
 
@@ -110,7 +110,7 @@ fn run(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
 `backend_mut` exposes the same `read_event`, `poll_event`, and `try_read_event`
 you use on a bare `Program`, producing uncurses `Event` values. It also exposes
 the wrapped program as `program()` and `program_mut()`, so renderer access is
-`backend.program_mut().screen_mut()`. Your render layer is Ratatui and your
+`backend.program_mut().screen_mut()`. Your render layer is ratatui and your
 input layer is uncurses, each doing what it is best at. Features covered in the
 other guides, including [mouse input]({{< relref "mouse-input.md" >}}),
 [paste]({{< relref "handling-paste.md" >}}), [async events]({{< relref "async-events.md" >}}),

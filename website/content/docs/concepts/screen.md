@@ -17,11 +17,6 @@ transcripts, and offscreen rendering, use `Screen` by itself.
 
 ```mermaid
 flowchart TB
-  accTitle: The parts of a Screen
-  accDescr {
-    Program owns Screen in interactive applications.
-    Screen combines a cell grid, a renderer that finds changes, and an output writer.
-  }
   screen["Screen"] --> grid["The cells you paint"]
   screen --> renderer["The part that works out what changed"]
   screen --> writer["A writer: terminal, file, or buffer"]
@@ -61,11 +56,6 @@ from the program first.
 
 ```mermaid
 flowchart TB
-  accTitle: From a frame to output changes
-  accDescr {
-    The renderer compares the frame you paint with the tracked screen state.
-    It sends only the resulting changes to the writer.
-  }
   desired["The frame you painted"] --> diff["What actually changed"]
   tracked["What is already on screen"] --> diff
   diff --> bytes["Just those changes"]

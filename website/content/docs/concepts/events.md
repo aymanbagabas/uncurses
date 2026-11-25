@@ -16,11 +16,6 @@ The path from a keystroke to something you can match on has three stops.
 
 ```mermaid
 flowchart TB
-  accTitle: From input bytes to events
-  accDescr {
-    Input bytes pass from the tty through the decoder.
-    The decoder returns complete events to the application event loop.
-  }
   bytes["Raw bytes from the tty"] --> decoder["Decoder: parse escape sequences"]
   decoder --> event["Event: KeyPress, MouseClick, Resize, ..."]
   event --> loop["Your event loop"]
@@ -35,8 +30,6 @@ Events cover everything the terminal reports, not just keys:
 
 - **Input**: `KeyPress`, `KeyRepeat`, `KeyRelease`, and the mouse family
   (`MouseClick`, `MouseRelease`, `MouseWheel`, `MouseMove`).
-- **Desktop exchanges**: drag and drop messages carry offered formats and data.
-  See the [drag and drop guide]({{< relref "../guides/drag-and-drop.md" >}}).
 - **Lifecycle**: `Resize` when the window changes, `FocusIn` and `FocusOut`,
   `Visibility` when the view becomes observable or hidden, and
   bracketed-paste events: `PasteStart`, `PasteChunk`, and `PasteEnd`.

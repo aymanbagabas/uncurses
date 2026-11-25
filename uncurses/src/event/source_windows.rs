@@ -20,8 +20,8 @@
 //! ## Key types
 //!
 //! [`WindowsWakerInner`] owns the Win32 event used by
-//! [`Waker`](crate::event::Waker). The [`EventSource`] also stores the VT-input
-//! setting, pending surrogate halves, last window size, and last mouse
+//! [`Waker`](crate::event::Waker). The [`EventSource`] also stores VT-input
+//! mode detection, pending surrogate halves, last window size, and last mouse
 //! button state needed to translate console records accurately.
 //!
 //! ## Gotchas
@@ -34,7 +34,6 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
-#[cfg(feature = "async")]
 use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -48,37 +47,22 @@ use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
 use super::decode::{Decoder, DecoderFlags};
 use super::source::{
-    DEFAULT_BUFFER_CAPACITY, DEFAULT_CLIPBOARD_IDLE_TIMEOUT, DEFAULT_ESC_TIMEOUT,
-    DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input, READY_INPUT, READY_SLOTS, READY_WAKE, Waker,
+    DEFAULT_BUFFER_CAPACITY, DEFAULT_ESC_TIMEOUT, DEFAULT_PASTE_IDLE_TIMEOUT, EventSource, Input,
+    SourceFlags, Waker,
 };
 
 const READ_BATCH: usize = 64;
 
-/// Owns the manual-reset event used by the source's readiness poller.
+/// Inner waker state. Owns a Win32 `Event` HANDLE that signals the
+/// cancellation slot of [`WaitForMultipleObjects`]. The `HANDLE` value
+/// is also copied into [`EventSource::wake_event`] so the wait array
+/// can reference it without an `Arc` indirection; ownership remains
+/// with the waker (its `Drop` calls [`CloseHandle`]).
 pub(super) struct WindowsWakerInner {
     event: HANDLE,
 }
 
 impl WindowsWakerInner {
-    pub(super) fn new() -> io::Result<Self> {
-        let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
-        if event.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Self { event })
-    }
-
-    pub(super) fn raw_handle(&self) -> HANDLE {
-        self.event
-    }
-
-    pub(super) fn clear(&self) -> io::Result<()> {
-        if unsafe { ResetEvent(self.event) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
     pub(super) fn wake(&self) -> io::Result<()> {
         if unsafe { SetEvent(self.event) } == 0 {
             return Err(io::Error::last_os_error());
@@ -100,6 +84,11 @@ impl Drop for WindowsWakerInner {
 unsafe impl Send for WindowsWakerInner {}
 unsafe impl Sync for WindowsWakerInner {}
 
+// SAFETY: the contained HANDLE in `EventSource::wake_event` is a kernel
+// object, not a pointer into thread-local memory; the underlying read
+// handle is also thread-safe to use.
+unsafe impl<I> Send for EventSource<I> where I: Input {}
+
 impl<I> EventSource<I>
 where
     I: Input,
@@ -111,94 +100,67 @@ where
     /// Resize events arrive as `WINDOW_BUFFER_SIZE_EVENT` records on the input
     /// handle, so no separate signal or resize pipe is needed.
     ///
-    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`], [`DEFAULT_PASTE_IDLE_TIMEOUT`],
-    /// and [`DEFAULT_CLIPBOARD_IDLE_TIMEOUT`]. Override them with
-    /// [`EventSource::with_esc_timeout`], [`EventSource::with_paste_idle_timeout`],
-    /// and [`EventSource::with_clipboard_idle_timeout`].
+    /// Timeouts start at [`DEFAULT_ESC_TIMEOUT`] and
+    /// [`DEFAULT_PASTE_IDLE_TIMEOUT`]; override them with
+    /// [`EventSource::with_esc_timeout`] and
+    /// [`EventSource::with_paste_idle_timeout`].
     ///
-    /// Native console key serialization is the default. Call
-    /// [`Self::set_vt_input`] with `true` when the console uses
-    /// `ENABLE_VIRTUAL_TERMINAL_INPUT`, including after
-    /// [`Terminal::make_raw`](crate::terminal::Terminal::make_raw).
+    /// `flags` selects the input source behavior. Set [`SourceFlags::VT_INPUT`]
+    /// when the console uses virtual-terminal input.
     ///
     /// Returns any OS error from wake-event creation or poller construction. It
     /// does not read console records until [`EventSource::poll`] or
     /// [`EventSource::read`] is called.
-    pub fn new(input: I) -> io::Result<Self> {
+    pub fn new_with_flags(input: I, flags: SourceFlags) -> io::Result<Self> {
         let input_handle = {
             use std::os::windows::io::AsRawHandle;
             input.as_handle().as_raw_handle() as HANDLE
         };
 
-        let waker = Waker::new()?;
-        let wake_event = waker.poll_fd();
+        let wake_event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+        if wake_event.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let waker = Waker::from_windows_inner(Arc::new(WindowsWakerInner { event: wake_event }));
 
         // Watch input and wake handles — in the fixed index order the
         // wait path relies on. `input_is_tty` is meaningless on Windows
         // and ignored by the poller there.
         use std::os::windows::io::RawHandle;
-        let mut fds = [std::ptr::null_mut(); READY_SLOTS];
-        fds[READY_INPUT] = input_handle as RawHandle;
-        fds[READY_WAKE] = wake_event;
+        let fds = [
+            input_handle as *mut _ as RawHandle,
+            wake_event as *mut _ as RawHandle,
+        ];
         let poller = super::poll::new_poller(&fds, false)?;
 
         Ok(Self {
             input,
-            vt_input: false,
+            flags,
             parser: Decoder::new(DecoderFlags::empty()),
             pending: super::pending::Pending::with_capacity(DEFAULT_BUFFER_CAPACITY),
             esc_timeout: DEFAULT_ESC_TIMEOUT,
             esc_deadline: None,
             paste_idle_timeout: Some(DEFAULT_PASTE_IDLE_TIMEOUT),
             paste_deadline: None,
-            clipboard_idle_timeout: Some(DEFAULT_CLIPBOARD_IDLE_TIMEOUT),
-            clipboard_deadline: None,
-            #[cfg(feature = "async")]
-            deadline_wakers: Vec::new(),
             queue: VecDeque::with_capacity(16),
-            pending_error: None,
             waker,
             handle_resize: true,
             poller,
+            wake_event,
             pending_high_surrogate: [None, None],
             last_size: None,
             last_mouse_buttons: 0,
         })
     }
 
-    /// Return whether VT input serialization is enabled.
-    pub fn vt_input(&self) -> bool {
-        self.vt_input
-    }
-
-    /// Select how console key records are serialized.
+    /// Reset the wake event after a [`Waker`] fired.
     ///
-    /// Set `enabled` to match the console's `ENABLE_VIRTUAL_TERMINAL_INPUT` bit.
-    /// The default is `false`, which serializes native console keys through the
-    /// win32-input decoder. With `true`, character records supply VT input.
-    ///
-    /// [`Terminal::make_raw`](crate::terminal::Terminal::make_raw) enables VT input.
-    /// Update this setting after a successful console mode change and before
-    /// the next read. This method changes only serialization, not console modes
-    /// or decoder flags. A change discards incomplete UTF-16 pairs.
-    pub fn set_vt_input(&mut self, enabled: bool) {
-        if self.vt_input != enabled {
-            self.pending_high_surrogate = [None, None];
+    /// Platform hook for [`EventSource::fill`]. Resetting consumes the wake so a
+    /// later wait can block again.
+    pub(super) fn drain_wake(&mut self) {
+        unsafe {
+            ResetEvent(self.wake_event);
         }
-        self.vt_input = enabled;
-    }
-
-    #[cfg(feature = "async")]
-    pub(super) fn waiter_poller(
-        &self,
-        notification: &Waker,
-    ) -> io::Result<Arc<dyn super::poll::Poller>> {
-        use std::os::windows::io::AsRawHandle;
-        let mut fds = [std::ptr::null_mut(); READY_SLOTS + 1];
-        fds[READY_INPUT] = self.input.as_handle().as_raw_handle();
-        fds[READY_WAKE] = self.waker.poll_fd();
-        fds[READY_SLOTS] = notification.poll_fd();
-        super::poll::new_poller(&fds, false)
     }
 
     /// Read ready console records and serialize them through the decoder.
@@ -253,11 +215,31 @@ where
         Ok(read_n)
     }
 
+    fn feed_bytes(&mut self, bytes: &[u8]) {
+        #[cfg(debug_assertions)]
+        crate::trace::tee_input(bytes);
+        let cap = self.pending.capacity();
+        if self.pending.len().saturating_add(bytes.len()) > cap {
+            self.pending.clear();
+            self.esc_deadline = None;
+            if bytes.len() > cap {
+                return;
+            }
+        }
+        self.pending.append(bytes);
+        self.drain_parser();
+    }
+
     fn serialize_record(&mut self, record: &INPUT_RECORD, buf: &mut Vec<u8>) {
         match record.EventType as u32 {
             KEY_EVENT => {
                 let kev = unsafe { record.Event.KeyEvent };
-                serialize_key_event(&kev, self.vt_input, &mut self.pending_high_surrogate, buf);
+                serialize_key_event(
+                    &kev,
+                    self.flags.contains(SourceFlags::VT_INPUT),
+                    &mut self.pending_high_surrogate,
+                    buf,
+                );
             }
             MOUSE_EVENT => {
                 let mev = unsafe { record.Event.MouseEvent };
@@ -451,12 +433,38 @@ mod tests {
     };
 
     #[test]
+    fn surrogate_decoding_roundtrip() {
+        // U+1F600 -> high D83D, low DE00.
+        let c = char::decode_utf16([0xD83Du16, 0xDE00])
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(c as u32, 0x1F600);
+        // A non-surrogate followed by a lone low surrogate does not pair.
+        let mut iter = char::decode_utf16([0x0041u16, 0xDE00]);
+        assert_eq!(iter.next().unwrap().unwrap(), 'A');
+        assert!(iter.next().unwrap().is_err());
+    }
+
+    #[test]
     fn high_word_signed_extracts_signed_wheel_delta() {
         // 0x00780000 -> high word 0x0078 (+120, one notch up)
         assert_eq!(high_word_signed(0x0078_0000), 120);
         // 0xFF880000 -> high word 0xFF88 (-120, one notch down)
         assert_eq!(high_word_signed(0xFF88_0000), -120);
         assert_eq!(high_word_signed(0), 0);
+    }
+
+    #[test]
+    fn push_utf8_encodes_ascii_and_supplementary() {
+        let mut buf = Vec::new();
+        push_utf8(&mut buf, 'A');
+        assert_eq!(buf, b"A");
+
+        let mut buf = Vec::new();
+        push_utf8(&mut buf, '\u{1F600}');
+        // 4-byte UTF-8 encoding of U+1F600
+        assert_eq!(buf, [0xF0, 0x9F, 0x98, 0x80]);
     }
 
     #[test]
@@ -511,21 +519,21 @@ mod tests {
     }
 
     #[test]
-    fn serialize_record_uses_current_vt_input_setting() {
+    fn serialize_record_uses_current_source_flags() {
         let (reader, _writer) = io::pipe().unwrap();
-        let mut source = EventSource::new(reader).unwrap();
-        assert!(!source.vt_input);
+        let mut source = EventSource::new_with_flags(reader, SourceFlags::VT_INPUT).unwrap();
+        assert_eq!(source.flags(), SourceFlags::VT_INPUT);
         let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
         record.EventType = KEY_EVENT as u16;
         record.Event.KeyEvent = key_record(true, 0x41, 0x1E, b'A' as u16, 0, 1);
 
-        for (enabled, expected) in [
-            (false, b"\x1b[65;30;65;1;0;1_".as_slice()),
-            (true, b"A".as_slice()),
-            (false, b"\x1b[65;30;65;1;0;1_".as_slice()),
-            (true, b"A".as_slice()),
+        for (flags, expected) in [
+            (SourceFlags::VT_INPUT, b"A".as_slice()),
+            (SourceFlags::empty(), b"\x1b[65;30;65;1;0;1_".as_slice()),
+            (SourceFlags::VT_INPUT, b"A".as_slice()),
         ] {
-            source.set_vt_input(enabled);
+            source.set_flags(flags);
+            assert_eq!(source.flags(), flags);
             let mut buf = Vec::new();
             source.serialize_record(&record, &mut buf);
             assert_eq!(buf, expected);
@@ -533,24 +541,24 @@ mod tests {
     }
 
     #[test]
-    fn vt_input_changes_reset_surrogates() {
+    fn source_flags_reset_surrogates_on_vt_input_changes() {
         let (reader, _writer) = io::pipe().unwrap();
-        let mut source = EventSource::new(reader).unwrap();
+        let mut source = EventSource::new_with_flags(reader, SourceFlags::VT_INPUT).unwrap();
         let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
         record.EventType = KEY_EVENT as u16;
         let mut buf = Vec::new();
 
-        for (enabled, key_down, ch) in [
-            (true, true, 0xD83D),
-            (true, true, 0xDE80),
-            (true, true, 0xD83D),
-            (true, false, 0xD83D),
-            (false, true, b'a' as u16),
-            (true, true, 0xDE80),
-            (true, false, 0xDE80),
+        for (flags, key_down, ch) in [
+            (SourceFlags::VT_INPUT, true, 0xD83D),
+            (SourceFlags::VT_INPUT, true, 0xDE80),
+            (SourceFlags::VT_INPUT, true, 0xD83D),
+            (SourceFlags::VT_INPUT, false, 0xD83D),
+            (SourceFlags::empty(), true, b'a' as u16),
+            (SourceFlags::VT_INPUT, true, 0xDE80),
+            (SourceFlags::VT_INPUT, false, 0xDE80),
         ] {
-            source.set_vt_input(enabled);
-            if !enabled {
+            source.set_flags(flags);
+            if flags.is_empty() {
                 assert_eq!(source.pending_high_surrogate, [None, None]);
             }
             record.Event.KeyEvent = key_record(key_down, 0, 0, ch, 0, 1);
@@ -793,10 +801,7 @@ mod tests {
         let mut decoder = Decoder::new(DecoderFlags::empty());
         let events = decoder.parse(&bytes);
         assert!(matches!(events.first(), Some(Event::PasteStart)));
-        assert!(matches!(
-            events.last(),
-            Some(Event::PasteEnd { complete: true })
-        ));
+        assert!(matches!(events.last(), Some(Event::PasteEnd)));
 
         let mut assembled = Vec::new();
         for ev in &events {
@@ -805,6 +810,9 @@ mod tests {
             }
         }
         assert_eq!(assembled, body.as_bytes());
+        let decoded = String::from_utf8(assembled).expect("valid utf-8");
+        assert!(!decoded.contains('\u{FFFD}'));
+        assert_eq!(decoded, body);
     }
 
     /// Same as the round-trip test above, but the paste body is split
@@ -844,10 +852,7 @@ mod tests {
         let mut events = decoder.parse(&prefix);
         events.extend(decoder.parse(&suffix));
         assert!(matches!(events.first(), Some(Event::PasteStart)));
-        assert!(matches!(
-            events.last(),
-            Some(Event::PasteEnd { complete: true })
-        ));
+        assert!(matches!(events.last(), Some(Event::PasteEnd)));
 
         let mut assembled = Vec::new();
         for ev in &events {
@@ -856,5 +861,7 @@ mod tests {
             }
         }
         assert_eq!(assembled, body.as_bytes());
+        let decoded = String::from_utf8(assembled).expect("valid utf-8");
+        assert_eq!(decoded, body);
     }
 }

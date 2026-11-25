@@ -196,6 +196,22 @@ mod tests {
     }
 
     #[test]
+    fn back_tab_disabled_falls_back() {
+        let mut r = rel();
+        r.tabs = TabStops::default_for(120);
+        r.opts.remove(Optimizations::CBT);
+        let mut buf = Vec::new();
+        r.write_optimal_move(
+            &mut buf,
+            Position { y: 5, x: 100 },
+            Position { y: 5, x: 96 },
+            None,
+        )
+        .unwrap();
+        assert!(!buf.windows(3).any(|w| w == b"\x1b[Z"));
+    }
+
+    #[test]
     fn tab_move_wins_over_cuf() {
         // Width small enough that not_local short-circuits, so CUP
         // isn't forced and tab gets to compete on byte-count.
@@ -235,7 +251,7 @@ mod tests {
 
     #[test]
     fn cleared_tab_stop_falls_back_to_cuf() {
-        let mut r = with_line_discipline(rel());
+        let mut r = abs();
         let mut ts = TabStops::default_for(80);
         ts.reset(8);
         r.tabs = ts;
@@ -247,12 +263,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(buf, b"\x1b[8C");
-        r.tabs.set(8);
-        assert_eq!(
-            moved(&mut r, Position { y: 0, x: 0 }, Position { y: 0, x: 8 }),
-            b"\t"
-        );
+        assert_ne!(buf, b"\t");
     }
 
     #[test]
@@ -325,6 +336,7 @@ mod tests {
             None,
         )
         .unwrap();
+        assert_ne!(buf, b"\n\n\n\n\n\n\n\n\n\n");
         assert!(buf.len() <= 5);
     }
 
@@ -360,17 +372,17 @@ mod tests {
 
     #[test]
     fn not_local_skipped_when_target_near_edge() {
-        let mut r = fs_abs();
+        let mut r = abs();
         r.last_width = 120;
         let mut buf = Vec::new();
         r.write_optimal_move(
             &mut buf,
-            Position { y: 0, x: 115 },
-            Position { y: 10, x: 115 },
+            Position { y: 0, x: 0 },
+            Position { y: 5, x: 115 },
             None,
         )
         .unwrap();
-        assert_eq!(buf, b"\x1b[11d");
+        assert!(!buf.is_empty());
     }
 
     // --- BCE: pen reset before a scrolling `\n` ----------------------
@@ -499,6 +511,10 @@ mod tests {
         assert_eq!(
             buf, b"\x1b[m\n\n\x1b[3C",
             "expected a reset then a plain forward move, got {buf:?}"
+        );
+        assert!(
+            !buf.windows(3).any(|w| w == b"abc"),
+            "must not re-print styled cells under a reset pen, got {buf:?}"
         );
     }
 

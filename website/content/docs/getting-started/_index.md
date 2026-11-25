@@ -9,8 +9,6 @@ New to uncurses? Start here. These pages take you from a fresh `cargo new`
 project to a running terminal program, then help you choose the right layer for
 the app you are building.
 
-See the [feature overview]({{< relref "/docs/features.md" >}}) for supported capabilities and links to usage guides.
-
 {{< cards >}}
   {{< card link="installation" title="Installation" subtitle="Add uncurses and choose a width backend." >}}
   {{< card link="hello-world" title="Hello, terminal" subtitle="The smallest complete Program, explained line by line." >}}

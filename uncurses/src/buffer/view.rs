@@ -93,7 +93,8 @@ mod tests {
         let mut buf = Buffer::new(10, 5);
         buf.set_cell(Position::new(2, 1), &Cell::new("A", 1));
         buf.set_cell(Position::new(0, 0), &Cell::new("B", 1));
-        let v = View::new(&mut buf, Rect::new(2, 1, 3, 2));
+        let mut buf2 = buf.clone();
+        let v = View::new(&mut buf2, Rect::new(2, 1, 3, 2));
         assert_eq!(v.cell(Position::new(2, 1)).unwrap().content(), "A");
         assert!(v.cell(Position::new(0, 0)).is_none());
     }

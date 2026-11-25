@@ -146,4 +146,10 @@ mod tests {
         // `0xc3` starts a 2-byte sequence but the slice ends — incomplete.
         assert_eq!(escape_bytes(b"\xc3"), "\\xc3");
     }
+
+    #[test]
+    fn split_glyph_bytes_are_not_mangled_when_complete() {
+        // 'é' = 0xc3 0xa9 must render as the glyph, not \xc3\xa9.
+        assert_eq!(escape_bytes(&[0xc3, 0xa9]), "é");
+    }
 }

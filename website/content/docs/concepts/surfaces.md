@@ -16,12 +16,6 @@ Surfaces are described in layers, each one adding a capability to the last.
 
 ```mermaid
 flowchart TB
-  accTitle: The surface layers
-  accDescr {
-    Each surface layer builds on the previous one.
-    Bounded defines the area. Surface adds reads and drawing.
-    SurfaceMut adds cell changes. TextSurface adds text layout and width rules.
-  }
   bounded["Bounded: how big is it?"] --> surface["Surface: read a cell, blit onto another"]
   surface --> surfacemut["SurfaceMut: write and edit cells"]
   surfacemut --> textsurface["TextSurface: paint strings with width policy"]

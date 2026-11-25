@@ -39,9 +39,6 @@
 //! the deadline has expired, then calls [`Decoder::drain`] or the source-internal
 //! expiry path. During bracketed paste, timeout disambiguation is suspended and
 //! bytes are streamed as raw [`Event::PasteChunk`] payloads.
-//! Once bytes follow a string introducer, the decoder keeps the body out of
-//! Escape-timeout fallback. Another Escape sequence interrupts it, while a
-//! trailing Escape waits for the next byte to distinguish a terminator.
 use super::key::{Key, KeyCode, KeyModifiers};
 mod apc;
 // Benches need the test harness `#[bench]` runs under; without it the
@@ -88,8 +85,6 @@ pub struct Decoder {
     backspace_mode: bool,
     /// True while we are between `Event::PasteStart` and `Event::PasteEnd`.
     pub(super) in_paste: bool,
-    pub(super) in_clipboard: bool,
-    waiting_for_terminator: bool,
     /// When `true`, raw mouse coordinates after `CSI M` are decoded as UTF-8
     /// codepoints (mode 1005) instead of single bytes.
     utf8_mouse: bool,
@@ -129,8 +124,6 @@ impl Decoder {
             flags,
             backspace_mode: false,
             in_paste: false,
-            in_clipboard: false,
-            waiting_for_terminator: false,
             utf8_mouse: false,
             expired: false,
             pending: RefCell::new(VecDeque::new()),
@@ -142,14 +135,14 @@ impl Decoder {
     /// Returns `true` when the parser holds an unfinished escape sequence
     /// (a buffered partial input that begins with `ESC` or with one of the
     /// 8-bit C1 sequence introducers, and is not part of an active bracketed
-    /// paste or a string body).
+    /// paste).
     ///
     /// Callers can use this to drive an escape-sequence timeout: if no
     /// further bytes arrive before the timeout elapses, call
     /// [`Decoder::drain`] to resolve the partial sequence.
     #[cfg(test)]
     pub(crate) fn has_pending(&self) -> bool {
-        if self.buf.is_empty() || self.in_paste || self.waiting_for_terminator() {
+        if self.buf.is_empty() || self.in_paste {
             return false;
         }
         let b0 = self.buf[0];
@@ -161,10 +154,11 @@ impl Decoder {
     /// A leading `ESC` byte resolves to whichever key
     /// [`DecoderFlags::CTRL_OPEN_BRACKET`] says it is, the same answer the
     /// source's timeout path gives; the remaining bytes are then re-parsed
-    /// normally. An ambiguous two-byte introducer such as `ESC '['` resolves
-    /// to an Alt-modified key.
+    /// normally, so e.g. `ESC '['` becomes that keypress followed by a
+    /// `Char('[')` keypress.
     ///
-    /// Bracketed paste and string bodies wait for their terminators.
+    /// While a bracketed paste is in progress this is a no-op — paste content
+    /// is allowed to span arbitrary time.
     #[cfg(test)]
     pub(crate) fn drain(&mut self) -> Vec<Event> {
         if self.in_paste || self.buf.is_empty() {
@@ -223,9 +217,7 @@ impl Decoder {
     /// The parser does **not** retain `data` between calls. Any unconsumed
     /// bytes remain the caller's responsibility. Inside a bracketed
     /// paste, paste content streams as [`Event::PasteChunk`] — large
-    /// pastes split across multiple calls naturally. OSC 52 replies similarly
-    /// stream as [`Event::ClipboardStart`], [`Event::ClipboardChunk`], and
-    /// [`Event::ClipboardEnd`].
+    /// pastes split across multiple calls naturally.
     ///
     /// Escape-sequence timeout is **not** handled here; if `data`
     /// begins with `0x1B` and no continuation byte is available, this
@@ -233,7 +225,6 @@ impl Decoder {
     /// must apply its own timeout policy and synthesise a bare
     /// [`KeyCode::Escape`] when desired.
     pub fn parse_one(&mut self, data: &[u8]) -> (usize, Option<Event>) {
-        self.waiting_for_terminator = false;
         if let Some(evt) = self.pending.borrow_mut().pop_front() {
             return (0, Some(evt));
         }
@@ -244,17 +235,11 @@ impl Decoder {
         if self.in_paste {
             return self.parse_paste_chunk(data);
         }
-        if self.in_clipboard {
-            return self.parse_clipboard_chunk(data);
-        }
 
         match self.try_parse(data) {
             ParseResult::Event(event, consumed) => {
                 if matches!(event, Event::PasteStart) {
                     self.in_paste = true;
-                }
-                if matches!(event, Event::ClipboardStart { .. }) {
-                    self.in_clipboard = true;
                 }
                 match event {
                     Event::Multi(group) => {
@@ -269,10 +254,6 @@ impl Decoder {
                 }
             }
             ParseResult::Incomplete => (0, None),
-            ParseResult::IncompleteString => {
-                self.waiting_for_terminator = true;
-                (0, None)
-            }
             ParseResult::None(consumed) => {
                 if consumed > 0 {
                     (consumed, None)
@@ -291,12 +272,8 @@ impl Decoder {
         self.in_paste
     }
 
-    pub(crate) fn waiting_for_terminator(&self) -> bool {
-        self.waiting_for_terminator || self.in_clipboard
-    }
-
     /// Force-exit bracketed paste mode. If the decoder was inside a
-    /// paste, the flag is cleared and `Some(Event::PasteEnd { complete: false })` is
+    /// paste, the flag is cleared and `Some(Event::PasteEnd)` is
     /// returned for the caller to enqueue. Returns `None` when the
     /// decoder was not in paste.
     ///
@@ -306,7 +283,7 @@ impl Decoder {
     pub fn end_paste(&mut self) -> Option<Event> {
         if self.in_paste {
             self.in_paste = false;
-            Some(Event::PasteEnd { complete: false })
+            Some(Event::PasteEnd)
         } else {
             None
         }
@@ -376,7 +353,6 @@ impl Decoder {
         let mut events = Vec::new();
 
         loop {
-            self.waiting_for_terminator = false;
             // Drain any events queued by previously-parsed sequences (e.g. a
             // win32-input-mode key with a repeat count greater than one)
             // before consuming new bytes.
@@ -400,17 +376,17 @@ impl Decoder {
                         continue;
                     }
                     match self.try_parse(&self.buf[scan..]) {
-                        ParseResult::Event(Event::PasteEnd { complete: true }, consumed) => {
+                        ParseResult::Event(Event::PasteEnd, consumed) => {
                             if scan > 0 {
                                 events.push(Event::PasteChunk(self.buf[..scan].to_vec()));
                             }
                             self.buf.drain(..scan + consumed);
                             self.in_paste = false;
-                            events.push(Event::PasteEnd { complete: true });
+                            events.push(Event::PasteEnd);
                             terminated = true;
                             break;
                         }
-                        ParseResult::Incomplete | ParseResult::IncompleteString => {
+                        ParseResult::Incomplete => {
                             hold_from = Some(scan);
                             break;
                         }
@@ -433,22 +409,9 @@ impl Decoder {
                 break;
             }
 
-            if self.in_clipboard {
-                let bytes = std::mem::take(&mut self.buf);
-                let (consumed, event) = self.parse_clipboard_chunk(&bytes);
-                self.buf = bytes;
-                self.buf.drain(..consumed);
-                if let Some(event) = event {
-                    events.push(event);
-                    continue;
-                }
-                break;
-            }
-
             match self.try_parse(&self.buf) {
                 ParseResult::Event(event, consumed) => {
                     let is_paste_start = matches!(event, Event::PasteStart);
-                    self.in_clipboard = matches!(event, Event::ClipboardStart { .. });
                     // Flatten `Event::Multi` into individual events so callers
                     // that match by enum variant don't miss anything.
                     match event {
@@ -481,10 +444,6 @@ impl Decoder {
                         events.push(Event::Unknown(self.buf.clone()));
                         self.buf.clear();
                     }
-                    break;
-                }
-                ParseResult::IncompleteString => {
-                    self.waiting_for_terminator = true;
                     break;
                 }
                 ParseResult::None(consumed) => {
@@ -582,119 +541,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kitty_modifier_order_applies_across_csi_key_forms_and_input_splits() {
-        use crate::event::{Key, KeyCode, KeyModifiers};
-
-        for (body, expected) in [
-            (
-                b"1;9D".as_slice(),
-                Event::KeyPress(Key::new(KeyCode::Left, KeyModifiers::SUPER)),
-            ),
-            (
-                b"3;17~",
-                Event::KeyPress(Key::new(KeyCode::Delete, KeyModifiers::HYPER)),
-            ),
-            (
-                b"1;33H",
-                Event::KeyPress(Key::new(KeyCode::Home, KeyModifiers::META)),
-            ),
-            (
-                b"27;9;97~",
-                Event::KeyPress(Key::new(KeyCode::Char('a'), KeyModifiers::SUPER)),
-            ),
-            (
-                b"27;33;97~",
-                Event::KeyPress(Key::new(KeyCode::Char('a'), KeyModifiers::META)),
-            ),
-            (
-                b"127;9u",
-                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::SUPER)),
-            ),
-            (
-                b"127;33u",
-                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::META)),
-            ),
-            (
-                b"1;257D",
-                Event::KeyPress(Key::new(KeyCode::Left, KeyModifiers::empty())),
-            ),
-            (
-                b"127;265u",
-                Event::KeyPress(Key::new(KeyCode::Backspace, KeyModifiers::SUPER)),
-            ),
-            (
-                b"13;65:2~",
-                Event::KeyRepeat(Key::new(KeyCode::F(3), KeyModifiers::CAPS_LOCK)),
-            ),
-            (
-                b"1;129:3P",
-                Event::KeyRelease(Key::new(KeyCode::F(1), KeyModifiers::NUM_LOCK)),
-            ),
-            (
-                b"3;256~",
-                Event::KeyPress(Key::new(
-                    KeyCode::Delete,
-                    KeyModifiers::SHIFT
-                        | KeyModifiers::ALT
-                        | KeyModifiers::CTRL
-                        | KeyModifiers::SUPER
-                        | KeyModifiers::HYPER
-                        | KeyModifiers::META
-                        | KeyModifiers::CAPS_LOCK
-                        | KeyModifiers::NUM_LOCK,
-                )),
-            ),
-        ] {
-            for prefix in [b"\x1b[".as_slice(), b"\x9b"] {
-                let bytes = [prefix, body].concat();
-                for split in 0..=bytes.len() {
-                    let mut decoder = Decoder::default();
-                    let mut events = decoder.parse(&bytes[..split]);
-                    events.extend(decoder.parse(&bytes[split..]));
-                    assert_eq!(events, vec![expected.clone()], "{bytes:?}, split {split}");
-                    assert_eq!(
-                        events[0].as_key().unwrap().modifiers,
-                        expected.as_key().unwrap().modifiers,
-                        "{bytes:?}, split {split}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn ambiguous_f3_uses_kitty_modifier_order_and_keeps_cursor_report() {
-        use crate::event::{KeyCode, KeyModifiers};
-
-        let mut decoder = Decoder::default();
-        let events = decoder.parse(b"\x1b[1;9R");
-        assert_eq!(events.len(), 2);
-        let key = events[0].as_key().unwrap();
-        assert_eq!(key.code, KeyCode::F(3));
-        assert_eq!(key.modifiers, KeyModifiers::SUPER);
-        assert!(matches!(
-            events[1],
-            Event::CursorPosition { position, page: 0 }
-                if position == crate::layout::Position::new(8, 0)
-        ));
-    }
-
-    #[test]
-    fn legacy_preferences_preserve_kitty_modifier_order() {
-        use crate::event::{KeyCode, KeyModifiers};
-
-        let mut decoder = Decoder::new(DecoderFlags::CTRL_I);
-        assert_eq!(decoder.flags(), DecoderFlags::CTRL_I);
-        assert_eq!(first_press(&mut decoder, b"\t").code, KeyCode::Char('i'));
-        decoder.set_flags(DecoderFlags::CTRL_M);
-        assert_eq!(
-            first_press(&mut decoder, b"\x1b[1;9D").modifiers,
-            KeyModifiers::SUPER
-        );
-        assert_eq!(first_press(&mut decoder, b"\r").code, KeyCode::Char('m'));
-    }
-
-    #[test]
     fn backspace_mode_report_does_not_change_decoder_state() {
         let mut decoder = Decoder::default();
         let input = b"\x1b[?67;1$y\x08";
@@ -729,6 +575,7 @@ mod tests {
             (h_flag | c_flag, [h, bs, h, ctrl_bs]),
             (h_flag | c_flag | d_flag, [h, del, h, del]),
         ];
+        let mut checked = 0;
         for (flags, expected) in cases {
             for (enabled, offset) in [(false, 0), (true, 2)] {
                 for (i, byte) in [0x08, 0x7f].into_iter().enumerate() {
@@ -746,10 +593,12 @@ mod tests {
                             (input.len(), Some(Event::KeyPress(key.normalized()))),
                             "mode={enabled}, flags={flags:?}, input={input:?}"
                         );
+                        checked += 1;
                     }
                 }
             }
         }
+        assert_eq!(checked, 64);
     }
 
     #[test]
@@ -849,6 +698,19 @@ mod tests {
     use crate::event::ClipboardSelection;
     use crate::event::ColorScheme;
     use crate::event::SettingReport;
+
+    #[test]
+    fn test_parse_simple_char() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"a");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('a'));
+            }
+            _ => panic!("Expected Key event"),
+        }
+    }
 
     #[test]
     fn test_parse_ctrl_c() {
@@ -986,6 +848,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_cursor_position() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[5;10R");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::CursorPosition { position, page } => {
+                assert_eq!(position.y, 4);
+                assert_eq!(position.x, 9);
+                assert_eq!(*page, 0);
+            }
+            _ => panic!("Expected CursorPosition"),
+        }
+    }
+
+    #[test]
     fn test_parse_extended_cursor_position() {
         for prefix in [b"\x1b[".as_slice(), b"\x9b".as_slice()] {
             for (body, expected) in [
@@ -1083,6 +960,20 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_alt_char() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1ba");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('a'));
+                assert!(k.modifiers.contains(KeyModifiers::ALT));
+            }
+            _ => panic!("Expected Key event"),
+        }
+    }
+
+    #[test]
     fn test_parse_paste_bracketed() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         // Full paste sequence in one feed: start + content + end.
@@ -1090,7 +981,7 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
         assert_eq!(events[1], Event::PasteChunk(b"hello world".to_vec()));
-        assert_eq!(events[2], Event::PasteEnd { complete: true });
+        assert_eq!(events[2], Event::PasteEnd);
     }
 
     #[test]
@@ -1104,10 +995,7 @@ mod tests {
         let e2 = parser.parse(b"world\x1b[201~");
         assert_eq!(
             e2,
-            vec![
-                Event::PasteChunk(b"world".to_vec()),
-                Event::PasteEnd { complete: true }
-            ]
+            vec![Event::PasteChunk(b"world".to_vec()), Event::PasteEnd]
         );
     }
 
@@ -1120,7 +1008,7 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
         assert_eq!(events[1], Event::PasteChunk(b"a\x1b[Ab".to_vec()));
-        assert_eq!(events[2], Event::PasteEnd { complete: true });
+        assert_eq!(events[2], Event::PasteEnd);
     }
 
     #[test]
@@ -1134,7 +1022,7 @@ mod tests {
         //   * a nested PasteStart marker,
         //   * raw non-UTF-8 bytes (0xFF 0xFE).
         // Everything except the closing `\x1b[201~` must round-trip
-        // verbatim through the combined PasteChunk payloads.
+        // verbatim through a single PasteChunk.
         let body: Vec<u8> = [
             b"text".as_slice(),
             b"\x00\x07\x08\x09\x0a\x0b\x0c\x0d\x7f",
@@ -1157,7 +1045,7 @@ mod tests {
         let events = parser.parse(&wire);
 
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
 
         let mut assembled = Vec::new();
         for ev in &events {
@@ -1181,7 +1069,7 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[0], Event::PasteStart);
         assert_eq!(events[1], Event::PasteChunk(b"hello".to_vec()));
-        assert_eq!(events[2], Event::PasteEnd { complete: true });
+        assert_eq!(events[2], Event::PasteEnd);
     }
 
     #[test]
@@ -1204,11 +1092,11 @@ mod tests {
         let joined: Vec<u8> = chunks.concat();
         assert_eq!(joined, b"hello\xd1\x9b201~world");
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
         assert_eq!(
             events
                 .iter()
-                .filter(|e| matches!(e, Event::PasteEnd { complete: true }))
+                .filter(|e| matches!(e, Event::PasteEnd))
                 .count(),
             1,
             "exactly one PasteEnd; the 8-bit `\\x9b201~` substring must \
@@ -1251,11 +1139,11 @@ mod tests {
             .collect();
         assert_eq!(chunks, b"hello\xd1\x9b201~world");
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
         assert_eq!(
             events
                 .iter()
-                .filter(|e| matches!(e, Event::PasteEnd { complete: true }))
+                .filter(|e| matches!(e, Event::PasteEnd))
                 .count(),
             1,
         );
@@ -1272,7 +1160,7 @@ mod tests {
         assert!(parser.in_paste());
 
         let synth = parser.end_paste();
-        assert_eq!(synth, Some(Event::PasteEnd { complete: false }));
+        assert_eq!(synth, Some(Event::PasteEnd));
         assert!(!parser.in_paste());
 
         // Subsequent bytes are no longer treated as paste content.
@@ -1302,158 +1190,6 @@ mod tests {
                 assert!(k.modifiers.contains(KeyModifiers::CTRL));
             }
             _ => panic!("expected key"),
-        }
-    }
-
-    #[test]
-    fn interrupted_prefixes_preserve_following_keys_across_splits() {
-        let mut prefixes: Vec<_> = b"[]OP_X^"
-            .iter()
-            .map(|&intro| {
-                (
-                    vec![0x1b, intro],
-                    Event::KeyPress(
-                        Key::new(KeyCode::Char(intro as char), KeyModifiers::ALT).normalized(),
-                    ),
-                )
-            })
-            .collect();
-        for prefix in [b"\x1b[1;".as_slice(), b"\x9b1;"] {
-            prefixes.push((prefix.to_vec(), Event::Unknown(prefix.to_vec())));
-        }
-        for (prefix, recovered) in prefixes {
-            for next in [b"\x1b[A".as_slice(), b"\x1ba", b"\x1b\x1b[A"] {
-                let mut expected = vec![recovered.clone()];
-                expected.extend(Decoder::default().parse(next));
-                let wire = [prefix.as_slice(), next].concat();
-                for split in 0..=wire.len() {
-                    let mut decoder = Decoder::default();
-                    let mut events = decoder.parse(&wire[..split]);
-                    events.extend(decoder.parse(&wire[split..]));
-                    assert_eq!(events, expected, "wire={wire:?}, split={split}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn empty_strings_preserve_split_terminators() {
-        for (intro, expected) in [
-            (b']', Event::UnknownOsc(Vec::new())),
-            (b'P', Event::UnknownDcs(Vec::new())),
-            (b'_', Event::UnknownApc(Vec::new())),
-            (b'X', Event::UnknownSos(Vec::new())),
-            (b'^', Event::UnknownPm(Vec::new())),
-        ] {
-            let wire = [0x1b, intro, 0x1b, b'\\'];
-            for split in 0..=wire.len() {
-                let mut decoder = Decoder::default();
-                let mut events = decoder.parse(&wire[..split]);
-                events.extend(decoder.parse(&wire[split..]));
-                assert_eq!(
-                    events,
-                    vec![expected.clone()],
-                    "wire={wire:?}, split={split}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn interrupted_strings_preserve_following_escape_sequences() {
-        for intro in [
-            b"\x1b]".as_slice(),
-            b"\x9d",
-            b"\x1bP",
-            b"\x90",
-            b"\x1b_",
-            b"\x9f",
-            b"\x1bX",
-            b"\x98",
-            b"\x1b^",
-            b"\x9e",
-        ] {
-            let interrupted = [intro, b"qqqq"].concat();
-            for next in [
-                b"\x1b[A".as_slice(),
-                b"\x1b[<0;10;20M",
-                b"\x1ba",
-                b"\x1b]52;c;Zm9v\x1b\\",
-            ] {
-                let mut expected = vec![Event::Unknown(interrupted.clone())];
-                expected.extend(Decoder::default().parse(next));
-                let wire = [interrupted.as_slice(), next].concat();
-                for split in 0..=wire.len() {
-                    let mut decoder = Decoder::default();
-                    let mut events = decoder.parse(&wire[..split]);
-                    events.extend(decoder.parse(&wire[split..]));
-                    assert_eq!(
-                        crate::event::decode_safety_tests::normalize(events),
-                        expected,
-                        "wire={wire:?}, split={split}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn string_controls_preserve_utf8() {
-        let text = ["\u{dc}\u{271c}\u{1f71c}\u{9c}".as_bytes(), b"\xff\xc3x\xe0"].concat();
-        let with_bel = [text.as_slice(), b"\x07"].concat();
-        for (intros, body, expected, allow_bel) in [
-            (
-                [b"\x1b]".as_slice(), b"\x9d"],
-                [b"999;", text.as_slice()].concat(),
-                Event::UnknownOsc([b"999;", text.as_slice()].concat()),
-                true,
-            ),
-            (
-                [b"\x1bP".as_slice(), b"\x90"],
-                [b"q", with_bel.as_slice()].concat(),
-                Event::UnknownDcs([b"q", with_bel.as_slice()].concat()),
-                false,
-            ),
-            (
-                [b"\x1b_".as_slice(), b"\x9f"],
-                [b"Gi=1;", with_bel.as_slice()].concat(),
-                Event::KittyGraphics {
-                    options: vec![("i".into(), "1".into())],
-                    payload: with_bel.clone(),
-                },
-                false,
-            ),
-            (
-                [b"\x1bX".as_slice(), b"\x98"],
-                with_bel.clone(),
-                Event::UnknownSos(with_bel.clone()),
-                false,
-            ),
-            (
-                [b"\x1b^".as_slice(), b"\x9e"],
-                with_bel.clone(),
-                Event::UnknownPm(with_bel.clone()),
-                false,
-            ),
-        ] {
-            for intro in intros {
-                for ending in [b"\x1b\\".as_slice(), b"\x9c", b"\x07"] {
-                    if ending == b"\x07" && !allow_bel {
-                        continue;
-                    }
-                    let wire = [intro, &body, ending].concat();
-                    for split in 0..=wire.len() {
-                        let mut decoder = Decoder::default();
-                        let mut events = decoder.parse(&wire[..split]);
-                        events.extend(decoder.parse(&wire[split..]));
-                        assert_eq!(
-                            events,
-                            std::slice::from_ref(&expected),
-                            "wire={wire:?}, split={split}"
-                        );
-                    }
-                }
-            }
         }
     }
 
@@ -1526,6 +1262,13 @@ mod tests {
             }
             other => panic!("expected Key, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_parse_multiple_events() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"abc");
+        assert_eq!(events.len(), 3);
     }
 
     #[test]
@@ -1659,16 +1402,14 @@ mod tests {
     fn test_parse_osc_clipboard() {
         let mut parser = Decoder::new(DecoderFlags::empty());
         let events = parser.parse(b"\x1b]52;c;SGVsbG8=\x07");
-        assert_eq!(
-            events,
-            [
-                Event::ClipboardStart {
-                    selection: ClipboardSelection::System
-                },
-                Event::ClipboardChunk(b"SGVsbG8=".to_vec()),
-                Event::ClipboardEnd { complete: true },
-            ]
-        );
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::Clipboard { selection, content } => {
+                assert_eq!(*selection, ClipboardSelection::System);
+                assert_eq!(content, "SGVsbG8=");
+            }
+            other => panic!("Expected Clipboard, got {:?}", other),
+        }
     }
 
     #[test]
@@ -1851,6 +1592,20 @@ mod tests {
                 assert!(k.modifiers.contains(KeyModifiers::SHIFT));
             }
             other => panic!("Expected Key Up+Shift, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_legacy_key_urxvt_shift_f11() {
+        let mut parser = Decoder::new(DecoderFlags::empty());
+        let events = parser.parse(b"\x1b[23$");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::F(11));
+                assert!(k.modifiers.contains(KeyModifiers::SHIFT));
+            }
+            other => panic!("Expected Key F11+Shift, got {:?}", other),
         }
     }
 
@@ -2105,15 +1860,15 @@ mod tests {
                 ),
                 (
                     "200~\x1b[201~",
-                    Some(vec![Event::PasteStart, Event::PasteEnd { complete: true }]),
+                    Some(vec![Event::PasteStart, Event::PasteEnd]),
                 ),
-                ("201~", Some(vec![Event::PasteEnd { complete: true }])),
+                ("201~", Some(vec![Event::PasteEnd])),
                 (
                     "200~a\x1b[201;1~b\x1b[201~",
                     Some(vec![
                         Event::PasteStart,
                         Event::PasteChunk(b"a\x1b[201;1~b".to_vec()),
-                        Event::PasteEnd { complete: true },
+                        Event::PasteEnd,
                     ]),
                 ),
                 ("27~", None),
@@ -2140,6 +1895,21 @@ mod tests {
                 let mut parser = Decoder::new(DecoderFlags::empty());
                 assert_eq!(parser.parse(&wire), expected, "{wire:?}");
             }
+        }
+    }
+
+    #[test]
+    fn test_modify_other_keys_2() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // Ctrl+a via modifyOtherKeys-2: CSI 27;5;97~
+        let evs = p.parse(b"\x1b[27;5;97~");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::KeyPress(k) => {
+                assert_eq!(k.code, KeyCode::Char('a'));
+                assert!(k.modifiers.contains(KeyModifiers::CTRL));
+            }
+            other => panic!("expected Key, got {:?}", other),
         }
     }
 
@@ -2237,6 +2007,23 @@ mod tests {
                 height: 24
             }
         ));
+    }
+
+    #[test]
+    fn test_csi_48_t_emits_resize() {
+        let mut p = Decoder::new(DecoderFlags::empty());
+        // CSI 48 ; rows ; cols ; ypixel ; xpixel t (mode 2048 report).
+        let evs = p.parse(b"\x1b[48;24;80;480;1600t");
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            Event::Resize(ws) => {
+                assert_eq!(ws.row, 24);
+                assert_eq!(ws.col, 80);
+                assert_eq!(ws.ypixel, 480);
+                assert_eq!(ws.xpixel, 1600);
+            }
+            other => panic!("expected Resize, got {:?}", other),
+        }
     }
 
     #[test]
@@ -2346,7 +2133,7 @@ mod tests {
             Event::SettingReport(SettingReport::Raw("9 q".to_string()))
         );
 
-        // A blinking bar style decodes.
+        // Every style the terminal can name decodes.
         let evs = p.parse(b"\x1bP1$r5 q\x1b\\");
         assert_eq!(
             evs[0],
@@ -2484,6 +2271,15 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_one_expire_leading_esc() {
+        let p = Decoder::new(DecoderFlags::empty());
+        match p.expire_leading(0x1b) {
+            Some(Event::KeyPress(k)) => assert_eq!(k.code, KeyCode::Escape),
+            other => panic!("expected Escape, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_parse_one_paste_stream() {
         let mut p = Decoder::new(DecoderFlags::empty());
         // PasteStart
@@ -2511,7 +2307,7 @@ mod tests {
         // Drain the queued PasteEnd.
         let (n, ev) = p.parse_one(b"");
         assert_eq!(n, 0);
-        assert!(matches!(ev, Some(Event::PasteEnd { complete: true })));
+        assert!(matches!(ev, Some(Event::PasteEnd)));
     }
 
     #[test]
@@ -2563,6 +2359,11 @@ mod tests {
             events.extend(p.parse(std::slice::from_ref(b)));
         }
         events
+    }
+
+    #[test]
+    fn test_chunked_byte_by_byte_focus_in() {
+        assert_eq!(feed_byte_by_byte(b"\x1b[I"), vec![Event::FocusIn]);
     }
 
     #[test]
@@ -2626,7 +2427,7 @@ mod tests {
         // events in between whose concatenation matches the original
         // content exactly, regardless of UTF-8 byte boundaries.
         assert_eq!(events.first(), Some(&Event::PasteStart));
-        assert_eq!(events.last(), Some(&Event::PasteEnd { complete: true }));
+        assert_eq!(events.last(), Some(&Event::PasteEnd));
         let mut chunk_count = 0;
         let mut buf = Vec::new();
         for ev in &events {
@@ -2834,21 +2635,6 @@ mod tests {
     }
 
     #[test]
-    fn escape_before_string_body_keeps_payload_out_of_timeout_fallback() {
-        let mut p = Decoder::new(DecoderFlags::empty());
-        assert_eq!(
-            p.parse(b"\x1b\x1b]q"),
-            vec![Event::KeyPress(Key::new(
-                KeyCode::Escape,
-                KeyModifiers::empty()
-            ))],
-        );
-        assert!(!p.has_pending());
-        assert!(p.drain().is_empty());
-        assert_eq!(p.parse(b"\x1b\\"), vec![Event::UnknownOsc(b"q".to_vec())]);
-    }
-
-    #[test]
     fn esc_esc_alone_waits_for_timeout_then_alt_esc() {
         let mut p = Decoder::new(DecoderFlags::empty());
         // Before expiry, holding ESC ESC produces no event.
@@ -2934,22 +2720,16 @@ mod tests {
         // And the one at the head of a sequence that never finished, which
         // resolves as its own key with the rest re-parsed after it.
         let mut p = Decoder::new(DecoderFlags::CTRL_OPEN_BRACKET);
-        assert!(p.parse(b"\x1b[1").is_empty(), "a partial CSI waits");
+        assert!(p.parse(b"\x1b[").is_empty(), "a partial CSI waits");
         let events = p.drain();
         match events.as_slice() {
-            [
-                Event::KeyPress(esc),
-                Event::KeyPress(bracket),
-                Event::KeyPress(digit),
-            ] => {
+            [Event::KeyPress(esc), Event::KeyPress(bracket)] => {
                 assert_eq!(esc.code, KeyCode::Char('['));
                 assert_eq!(esc.modifiers, KeyModifiers::CTRL);
                 assert_eq!(bracket.code, KeyCode::Char('['));
                 assert_eq!(bracket.modifiers, KeyModifiers::empty());
-                assert_eq!(digit.code, KeyCode::Char('1'));
-                assert_eq!(digit.modifiers, KeyModifiers::empty());
             }
-            other => panic!("expected [ctrl+[, '[', '1'], got {other:?}"),
+            other => panic!("expected [ctrl+[, '['], got {other:?}"),
         }
     }
 

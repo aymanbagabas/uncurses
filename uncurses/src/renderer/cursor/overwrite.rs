@@ -302,6 +302,28 @@ mod still_useful {
 }
 
 #[cfg(test)]
+mod empty_content {
+    use super::*;
+    use crate::ansi::cost::overwrite_cost;
+
+    /// A cell that owns a column and has nothing to write cannot carry the
+    /// cursor across it.
+    ///
+    /// Its content is empty while its width is one, so pricing the move by
+    /// bytes would call it free and drawing it would cross no columns, while
+    /// the planner recorded one crossed. Refusing it keeps what the move
+    /// draws equal to the distance it claims.
+    #[test]
+    fn a_cell_with_nothing_to_write_cannot_carry_the_cursor() {
+        let line = vec![Cell::new("", 1), Cell::new("a", 1)];
+        let style = Style::default();
+        assert_eq!(overwrite_cost(&line, &style, 0, 1), None);
+        let mut out = Vec::new();
+        assert!(!collect_overwrite_bytes(&mut out, &line, &style, 0, 1));
+    }
+}
+
+#[cfg(test)]
 mod width_honesty {
     use super::*;
     use crate::ansi::cost::overwrite_cost;

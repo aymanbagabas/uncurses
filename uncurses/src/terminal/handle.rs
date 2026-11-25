@@ -24,7 +24,7 @@
 //! ```rust,ignore
 //! use std::io::Write;
 //! use uncurses::buffer::TextBuffer;
-//! use uncurses::event::EventSource;
+//! use uncurses::event::{EventSource, SourceFlags};
 //! use uncurses::terminal::Terminal;
 //! use uncurses::text::Encode;
 //!
@@ -32,9 +32,7 @@
 //! let _saved = term.make_raw()?;
 //! let size = term.get_window_size()?;
 //! let mut frame = TextBuffer::new(size.col, size.row);
-//! let mut source = EventSource::new(term.input())?;
-//! #[cfg(windows)]
-//! source.set_vt_input(true);
+//! let mut source = EventSource::new_with_flags(term.input(), SourceFlags::VT_INPUT)?;
 //!
 //! // Paint `frame`, read events from `source`.
 //! frame.encode(&mut term.output())?;
@@ -49,7 +47,6 @@ use std::os::fd::{AsFd, BorrowedFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsHandle, BorrowedHandle};
 
-use super::AsTerminalHandle;
 use super::env::{Env, ProcessEnv};
 use super::raw::{self, State};
 use super::size::{Winsize, get_window_size};
@@ -289,23 +286,23 @@ impl<I: AsHandle, O> AsHandle for Terminal<I, O> {
     }
 }
 
-impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
-    /// Build a terminal from input and output handles plus an [`Env`].
+#[cfg(unix)]
+impl<I: AsFd, O: AsFd> Terminal<I, O> {
+    /// Build a terminal from input and output descriptors plus an [`Env`].
     ///
     /// The environment is stored exactly as provided and is not required to
-    /// describe the given handles. Use [`Terminal::stdio`] or
+    /// describe the given descriptors. Use [`Terminal::stdio`] or
     /// [`Terminal::open`] to use the process environment automatically.
     ///
-    /// On Unix, the two descriptors need not refer to the same device. Raw
-    /// mode is applied to and restored from each one independently, so pairing
-    /// two different terminals configures both, and pairing a terminal with a
-    /// pipe configures only the terminal half.
-    /// On Windows, both handles must support console mode queries.
+    /// The two descriptors need not refer to the same device. Raw mode is
+    /// applied to and restored from each one independently, so pairing two
+    /// different terminals configures both, and pairing a terminal with a pipe
+    /// configures only the terminal half.
     ///
     /// # Parameters
     ///
-    /// * `input` — readable terminal handle.
-    /// * `output` — writable terminal handle.
+    /// * `input` — readable terminal descriptor.
+    /// * `output` — writable terminal descriptor.
     /// * `env` — environment this terminal reads variables from.
     ///
     /// # Returns
@@ -327,7 +324,7 @@ impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
     /// Put the terminal into raw mode and save the previous state.
     ///
     /// This calls `make_raw_mode` with the terminal's input and output
-    /// handles. The returned pre-raw [`State`] is cloned into the terminal
+    /// descriptors. The returned pre-raw [`State`] is cloned into the terminal
     /// so [`restore`](Self::restore) can later apply it without an argument.
     ///
     /// # Returns
@@ -367,22 +364,8 @@ impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
     ///
     /// This method does not intentionally panic.
     pub fn restore(&mut self) -> io::Result<()> {
-        #[cfg(windows)]
-        return self.restore_with_input(|_| {});
-
-        #[cfg(not(windows))]
         if let Some(state) = self.saved.as_ref() {
             raw::set_state(&self.input, &self.output, state)?;
-            self.saved = None;
-        }
-        #[cfg(not(windows))]
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn restore_with_input(&mut self, on_input: impl FnOnce(u32)) -> io::Result<()> {
-        if let Some(state) = self.saved.as_ref() {
-            raw::set_state_with_input(&self.input, &self.output, state, on_input)?;
             self.saved = None;
         }
         Ok(())
@@ -413,7 +396,7 @@ impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
     /// This does not update or clear the state cached by
     /// [`make_raw`](Self::make_raw). Use it for manual state management; use
     /// [`restore`](Self::restore) for the terminal-owned raw-mode lifecycle.
-    /// `state` should have been read from this terminal's own handles, since
+    /// `state` should have been read from this terminal's own descriptors, since
     /// a [`State`] records each half separately.
     ///
     /// # Parameters
@@ -456,8 +439,6 @@ impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
     /// On Unix this tries the output descriptor first and falls back to the
     /// input descriptor if the output query fails. If both fail, the output
     /// descriptor's error is returned.
-    /// On Windows this queries the output console screen buffer. Pixel
-    /// dimensions are unavailable and are reported as `0`.
     ///
     /// # Returns
     ///
@@ -466,16 +447,178 @@ impl<I: AsTerminalHandle, O: AsTerminalHandle> Terminal<I, O> {
     ///
     /// # Errors
     ///
-    /// Returns an OS error if the platform's size query fails.
+    /// Returns an OS error if the size cannot be queried from either half.
     ///
     /// # Panics
     ///
     /// This method does not intentionally panic.
     pub fn get_window_size(&self) -> io::Result<Winsize> {
-        let result = get_window_size(&self.output);
-        #[cfg(unix)]
-        let result = result.or_else(|e| get_window_size(&self.input).map_err(|_| e));
-        result
+        get_window_size(&self.output).or_else(|e| get_window_size(&self.input).map_err(|_| e))
+    }
+}
+
+#[cfg(windows)]
+impl<I: AsHandle, O: AsHandle> Terminal<I, O> {
+    /// Build a terminal from input and output handles plus an [`Env`].
+    ///
+    /// The environment is stored exactly as provided and is not required to
+    /// describe the given handles. Use [`Terminal::stdio`] or
+    /// [`Terminal::open`] to use the process environment automatically.
+    ///
+    /// # Parameters
+    ///
+    /// * `input` — readable console handle.
+    /// * `output` — writable console handle.
+    /// * `env` — environment this terminal reads variables from.
+    ///
+    /// # Returns
+    ///
+    /// A `Terminal` with no saved raw-mode state.
+    ///
+    /// # Errors and panics
+    ///
+    /// This constructor does not fail or intentionally panic.
+    pub fn new(input: I, output: O, env: impl Env + 'static) -> Self {
+        Self {
+            input,
+            output,
+            saved: None,
+            env: Box::new(env),
+        }
+    }
+
+    /// Put the terminal into raw mode and save the previous state.
+    ///
+    /// This calls `make_raw_mode` with the terminal's input and output
+    /// handles. The returned pre-raw [`State`] is cloned into the terminal so
+    /// [`restore`](Self::restore) can later apply it without an argument.
+    ///
+    /// # Returns
+    ///
+    /// The state that was active before raw mode was applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from reading the current state or applying the raw
+    /// state.
+    ///
+    /// # Panics
+    ///
+    /// This method does not intentionally panic.
+    pub fn make_raw(&mut self) -> io::Result<State> {
+        let prev = raw::make_raw_mode(&self.input, &self.output)?;
+        self.saved = Some(prev.clone());
+        Ok(prev)
+    }
+
+    /// Restore the state cached by the most recent [`make_raw`](Self::make_raw).
+    ///
+    /// If a state is cached, it is applied with `set_state` and then
+    /// cleared. If no state is cached, this is a no-op. The cache is kept when
+    /// applying fails, so a failed restore can be retried rather than losing
+    /// the only copy of the pre-raw state.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when no state was cached or restoration succeeded.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from applying the cached state.
+    ///
+    /// # Panics
+    ///
+    /// This method does not intentionally panic.
+    pub fn restore(&mut self) -> io::Result<()> {
+        if let Some(state) = self.saved.as_ref() {
+            raw::set_state(&self.input, &self.output, state)?;
+            self.saved = None;
+        }
+        Ok(())
+    }
+
+    /// Snapshot the current terminal mode.
+    ///
+    /// This reads the console modes without modifying the cached state used by
+    /// [`restore`](Self::restore).
+    ///
+    /// # Returns
+    ///
+    /// The current [`State`].
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from `get_state`.
+    ///
+    /// # Panics
+    ///
+    /// This method does not intentionally panic.
+    pub fn get_state(&self) -> io::Result<State> {
+        raw::get_state(&self.input, &self.output)
+    }
+
+    /// Apply a previously snapshotted terminal mode.
+    ///
+    /// This does not update or clear the state cached by
+    /// [`make_raw`](Self::make_raw). Use it for manual state management; use
+    /// [`restore`](Self::restore) for the terminal-owned raw-mode lifecycle.
+    /// `state` should have been read from this terminal's own descriptors, since
+    /// a [`State`] records each half separately.
+    ///
+    /// # Parameters
+    ///
+    /// * `state` — state to apply to the terminal.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` when the state was applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error from `set_state`.
+    ///
+    /// # Panics
+    ///
+    /// This method does not intentionally panic.
+    pub fn set_state(&self, state: &State) -> io::Result<()> {
+        raw::set_state(&self.input, &self.output, state)
+    }
+
+    /// Report whether the input and output halves are terminals.
+    ///
+    /// # Returns
+    ///
+    /// `(input_is_terminal, output_is_terminal)`.
+    ///
+    /// # Errors and panics
+    ///
+    /// This method does not fail or intentionally panic.
+    pub fn is_terminal(&self) -> (bool, bool) {
+        (
+            raw::is_terminal(&self.input),
+            raw::is_terminal(&self.output),
+        )
+    }
+
+    /// Query the current terminal window size.
+    ///
+    /// On Windows this queries the output console screen buffer. Pixel
+    /// dimensions are unavailable and are reported as `0`.
+    ///
+    /// # Returns
+    ///
+    /// The current visible console window size in cells.
+    ///
+    /// # Errors
+    ///
+    /// Returns an OS error if the output handle is not a console screen buffer
+    /// or the size query fails.
+    ///
+    /// # Panics
+    ///
+    /// This method does not intentionally panic.
+    pub fn get_window_size(&self) -> io::Result<Winsize> {
+        get_window_size(&self.output)
     }
 }
 
