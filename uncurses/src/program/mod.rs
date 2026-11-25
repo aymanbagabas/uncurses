@@ -53,9 +53,9 @@
 //! choose whether to enable bracketed paste and mouse tracking at startup.
 //! Those take effect immediately at init.
 //!
-//! The three `prefer_*` fields are discovery-driven instead: they enable
-//! grapheme-cluster mode, in-band resize, and synchronized output only once
-//! the terminal reports the mode as available. Since a program never probes
+//! The `prefer_*` fields are discovery-driven instead: they enable
+//! grapheme-cluster mode, in-band resize, synchronized output, and keyboard
+//! enhancements once the terminal reports support. Since a program never probes
 //! on its own, that means calling
 //! [`query_capabilities`](Program::query_capabilities) and
 //! reading the replies (see [`capabilities`](Program::capabilities)).
@@ -78,7 +78,7 @@ use std::time::Duration;
 
 use bitflags::bitflags;
 
-use crate::ansi::{mode, progress};
+use crate::ansi::{kitty::KittyKeyboardFlags, mode, progress};
 use crate::color::Profile;
 use crate::event::Input;
 use crate::event::{DecoderFlags, Event, EventSource};
@@ -208,6 +208,14 @@ pub struct ProgramOptions {
     ///
     /// [`Screen::set_synchronized_output`]: crate::screen::Screen::set_synchronized_output
     pub prefer_synchronized_output: bool,
+    /// Apply these Kitty keyboard flags once the terminal reports support.
+    ///
+    /// Defaults to `Some(DISAMBIGUATE_ESCAPE_CODES)`. `None` leaves keyboard
+    /// enhancements unchanged. An empty flag set explicitly disables them.
+    /// Call [`Program::query_capabilities`] or
+    /// [`Program::request_kitty_keyboard`] and read the reply to adopt them.
+    /// An explicit [`Program::set_kitty_keyboard`] call takes precedence.
+    pub prefer_kitty_keyboard: Option<KittyKeyboardFlags>,
     /// Include Backarrow mode (DECBKM) in [`Program::query_capabilities`].
     ///
     /// Defaults to `false`. Initialization sends no queries.
@@ -306,6 +314,7 @@ impl Default for ProgramOptions {
             prefer_grapheme_clusters: true,
             prefer_in_band_resize: true,
             prefer_synchronized_output: true,
+            prefer_kitty_keyboard: Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES),
             query_backspace_mode: false,
             query_foreground_color: false,
             query_background_color: false,
@@ -673,12 +682,12 @@ where
     /// you to match against what you asked.
     ///
     /// Observing is otherwise passive, with one class of exception: a mode
-    /// report proving support for grapheme clusters or in-band resize enables
-    /// that mode when the matching
-    /// [`ProgramOptions`] `prefer_*` field is set, which writes to the
-    /// terminal. That adoption happens only while the application has taken no
-    /// position of its own: calling the mode's `enable_*` or `disable_*`
-    /// method, in either direction and at any point, settles it for good, and
+    /// report proving support for grapheme clusters, in-band resize, or Kitty
+    /// keyboard enhancements applies the matching [`ProgramOptions`]
+    /// preference, which writes to the terminal. That adoption happens only
+    /// while the application has taken no position of its own. Calling
+    /// [`set_kitty_keyboard`](Self::set_kitty_keyboard) or the mode's `enable_*`
+    /// or `disable_*` method settles it for good, and
     /// adoption itself counts as settling it. So each mode is adopted at most
     /// once, and never against an explicit choice.
     ///
@@ -744,7 +753,14 @@ where
                     }
                 }
             }
-            Event::KittyKeyboardEnhancements(flags) => self.caps.kitty_keyboard = Some(flags),
+            Event::KittyKeyboardEnhancements(flags) => {
+                self.caps.kitty_keyboard = Some(flags);
+                if !self.state.kitty_keyboard_chosen
+                    && let Some(preferred) = self.options.prefer_kitty_keyboard
+                {
+                    self.set_kitty_keyboard(Some(preferred))?;
+                }
+            }
             // Any modifyOtherKeys report (`CSI > 4 ; n m`) answers our
             // query, so a reply means the terminal recognizes the feature.
             Event::ModifyOtherKeys(mode) => self.caps.modify_other_keys = Some(mode),

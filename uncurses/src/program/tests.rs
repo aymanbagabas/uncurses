@@ -1307,20 +1307,26 @@ fn set_kitty_keyboard_flags_always_emits_set() {
 #[test]
 fn kitty_keyboard_reapplies_on_alt_screen_toggle() {
     use crate::ansi::kitty::KittyKeyboardFlags;
-    let buf = RefCell::new(Vec::new());
-    {
+    for flags in [
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+        KittyKeyboardFlags::empty(),
+    ] {
+        let buf = RefCell::new(Vec::new());
         let mut program = Program::for_test(&buf, (20, 1));
+        program.options.prefer_kitty_keyboard = Some(flags);
         program
-            .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
+            .observe_event(&Event::KittyKeyboardEnhancements(
+                KittyKeyboardFlags::empty(),
+            ))
             .unwrap();
         program.set_alt_screen(true).unwrap();
         program.set_alt_screen(false).unwrap();
         program.screen_mut().flush().unwrap();
+        let out = written(&buf);
+        let bits = flags.bits();
+        // Initial set + alt-enter re-apply + alt-leave re-apply = 3 emissions.
+        assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 3);
     }
-    let out = written(&buf);
-    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-    // Initial set + alt-enter re-apply + alt-leave re-apply = 3 emissions.
-    assert_eq!(out.matches(&format!("\x1b[={bits};1u")).count(), 3);
 }
 
 #[test]
@@ -1359,35 +1365,36 @@ fn reset_clears_kitty_keyboard_on_both_buffers_when_alt_active() {
 
 #[test]
 fn restore_reapplies_kitty_keyboard_on_both_buffers_when_alt_active() {
-    let buf = RefCell::new(Vec::new());
     use crate::ansi::kitty::KittyKeyboardFlags;
-    {
+    for flags in [
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES,
+        KittyKeyboardFlags::empty(),
+    ] {
+        let buf = RefCell::new(Vec::new());
         let mut program = Program::for_test(&buf, (20, 1));
-        program
-            .set_kitty_keyboard(Some(KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES))
-            .unwrap();
+        program.set_kitty_keyboard(Some(flags)).unwrap();
         program.set_alt_screen(true).unwrap();
         program.reset().unwrap();
         // Swap writers so only restore-side bytes land in restore_buf.
         buf.borrow_mut().clear();
         program.restore().unwrap();
         program.screen_mut().flush().unwrap();
+        let out = written(&buf);
+        let bits = flags.bits();
+        let enter = out.find("\x1b[?1049h").expect("alt-program enter");
+        let head = &out[..enter];
+        let tail = &out[enter..];
+        // Set on main first (before the alt-program enter), then on alt
+        // (after entering).
+        assert!(
+            head.contains(&format!("\x1b[={bits};1u")),
+            "main set missing: head={head:?}"
+        );
+        assert!(
+            tail.contains(&format!("\x1b[={bits};1u")),
+            "alt set missing: tail={tail:?}"
+        );
     }
-    let out = written(&buf);
-    let bits = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES.bits();
-    let enter = out.find("\x1b[?1049h").expect("alt-program enter");
-    let head = &out[..enter];
-    let tail = &out[enter..];
-    // Set on main first (before the alt-program enter), then on alt
-    // (after entering).
-    assert!(
-        head.contains(&format!("\x1b[={bits};1u")),
-        "main set missing: head={head:?}"
-    );
-    assert!(
-        tail.contains(&format!("\x1b[={bits};1u")),
-        "alt set missing: tail={tail:?}"
-    );
 }
 
 #[test]
@@ -2517,6 +2524,53 @@ fn an_empty_kitty_reply_still_proves_support() {
         program.capabilities().kitty_keyboard(),
         Some(KittyKeyboardFlags::empty())
     );
+    assert_eq!(written(&buf), "\x1b[=1;1u");
+}
+
+#[test]
+fn kitty_preferences_wait_for_support_and_apply_once_without_changing_options() {
+    let flags =
+        KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES | KittyKeyboardFlags::REPORT_EVENT_TYPES;
+    for (preference, expected) in [
+        (None, ""),
+        (Some(KittyKeyboardFlags::empty()), "\x1b[=0;1u"),
+        (Some(flags), "\x1b[=3;1u"),
+    ] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.options.prefer_kitty_keyboard = preference;
+        program.request_kitty_keyboard().unwrap();
+        assert!(!written(&buf).contains("\x1b[="));
+        buf.borrow_mut().clear();
+
+        for reported in [
+            KittyKeyboardFlags::empty(),
+            KittyKeyboardFlags::REPORT_ALTERNATE_KEYS,
+        ] {
+            program
+                .observe_event(&Event::KittyKeyboardEnhancements(reported))
+                .unwrap();
+            assert_eq!(written(&buf), expected);
+            assert_eq!(program.capabilities().kitty_keyboard(), Some(reported));
+            assert_eq!(program.options.prefer_kitty_keyboard, preference);
+        }
+    }
+}
+
+#[test]
+fn explicit_kitty_keyboard_choices_take_precedence_over_discovery() {
+    for choice in [None, Some(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.set_kitty_keyboard(choice).unwrap();
+        buf.borrow_mut().clear();
+        program
+            .observe_event(&Event::KittyKeyboardEnhancements(
+                KittyKeyboardFlags::empty(),
+            ))
+            .unwrap();
+        assert_eq!(written(&buf), "");
+    }
 }
 
 #[test]

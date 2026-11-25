@@ -101,6 +101,8 @@ pub(super) struct State {
     /// per-screen-buffer, so the program re-emits this onto whichever buffer
     /// becomes active. `NONE` means no frame is set.
     pub kitty_keyboard: KittyKeyboardFlags,
+    /// An explicit choice or discovery has settled the keyboard flags.
+    pub kitty_keyboard_chosen: bool,
     /// Whether the facade has put the terminal on the alternate screen buffer
     /// (DECSET 1049). Mirrors [`Screen::fullscreen`](crate::screen::Screen::fullscreen)
     /// while the app drives the buffer through
@@ -148,6 +150,7 @@ impl Default for State {
             pointer_shape: None,
             progress: None,
             kitty_keyboard: KittyKeyboardFlags::empty(),
+            kitty_keyboard_chosen: false,
             alt_screen: false,
             cursor_visible: true,
             grapheme_clusters: false,

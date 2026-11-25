@@ -436,7 +436,7 @@ impl<I: Input, O: Write> Program<I, O> {
             } else {
                 mode::Mode::CURSOR_VISIBLE.set(&mut self.screen)?;
             }
-            if !self.state.kitty_keyboard.is_empty() {
+            if self.state.kitty_keyboard_chosen {
                 kitty::write_set_kitty_keyboard(
                     &mut self.screen,
                     self.state.kitty_keyboard,
@@ -548,6 +548,7 @@ impl<I: Input, O: Write> Program<I, O> {
         let flags = flags.unwrap_or_else(kitty::KittyKeyboardFlags::empty);
         kitty::write_set_kitty_keyboard(&mut self.screen, flags, kitty::KittyKeyboardMode::Set)?;
         self.state.kitty_keyboard = flags;
+        self.state.kitty_keyboard_chosen = true;
         self.screen.flush()
     }
 
@@ -771,7 +772,7 @@ impl<I: Input, O: Write> Program<I, O> {
         // --- Render-coupled modes ---
         // Re-apply the desired kitty keyboard flags on the main screen
         // *before* entering the alt screen — the stack is per-buffer.
-        if !self.state.kitty_keyboard.is_empty() {
+        if self.state.kitty_keyboard_chosen {
             kitty::write_set_kitty_keyboard(
                 &mut self.screen,
                 self.state.kitty_keyboard,
@@ -785,7 +786,7 @@ impl<I: Input, O: Write> Program<I, O> {
         }
         // Now on the alt screen (if alt was active) — re-apply on the alt
         // buffer too, since its stack is independent.
-        if fullscreen && !self.state.kitty_keyboard.is_empty() {
+        if fullscreen && self.state.kitty_keyboard_chosen {
             kitty::write_set_kitty_keyboard(
                 &mut self.screen,
                 self.state.kitty_keyboard,
