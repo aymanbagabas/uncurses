@@ -548,6 +548,7 @@ impl<I: Input, O: Write> Program<I, O> {
         let flags = flags.unwrap_or_else(kitty::KittyKeyboardFlags::empty);
         kitty::write_set_kitty_keyboard(&mut self.screen, flags, kitty::KittyKeyboardMode::Set)?;
         self.state.kitty_keyboard = flags;
+        self.state.kitty_keyboard_chosen = true;
         self.screen.flush()
     }
 

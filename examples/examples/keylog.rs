@@ -9,10 +9,13 @@
 //! Demonstrates the full breadth of events the source can produce: keys
 //! (with modifiers, repeat, release), mouse move / clicks / wheel,
 //! bracketed paste, focus changes, and window resizes.
+//! Kitty keyboard preferences enable distinct modified keys, repeats, and
+//! releases after the terminal answers the capability query.
 //!
 //! Press `q` or Ctrl-C to exit. On Unix, Ctrl-Z suspends the process and
 //! it resumes cleanly with `fg`.
 
+use uncurses::ansi::kitty::KittyKeyboardFlags;
 use uncurses::buffer::{Bounded, SurfaceMut};
 use uncurses::event::{Event, Key, KeyCode, KeyModifiers};
 use uncurses::program::{MouseTracking, Program, ProgramOptions};
@@ -126,6 +129,10 @@ impl App {
         // log shows the full breadth of events.
         program.init_with(ProgramOptions {
             mouse: Some(MouseTracking::MOTION),
+            prefer_kitty_keyboard: Some(
+                KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KittyKeyboardFlags::REPORT_EVENT_TYPES,
+            ),
             ..ProgramOptions::default()
         })?;
         program.enable_focus_events()?;
@@ -134,6 +141,7 @@ impl App {
         // into the scrollback above it.
         let cols = program.screen().width();
         program.screen_mut().resize((cols, 2));
+        program.query_capabilities(&[])?;
         Ok(Self {
             program,
             last: String::from("(waiting for input)"),
