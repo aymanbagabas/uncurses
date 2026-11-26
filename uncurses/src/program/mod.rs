@@ -69,7 +69,7 @@ mod state;
 mod tests;
 
 pub use crate::ansi::program_status::{ProgramStatus, ProgramStatusKind, ProgramStatusState};
-pub use state::Capabilities;
+pub use state::{Capabilities, State};
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -123,6 +123,9 @@ where
     /// would observe them a second time, and a reply counts once.
     unread: VecDeque<Event>,
     state: state::State,
+    /// Keep discovery bookkeeping separate from selected state. Repeated
+    /// reports must preserve a later frame-level choice.
+    synchronized_output_discovered: bool,
     /// Terminal capabilities, recorded by intercepting replies as they pass
     /// through the read path. Empty until [`Self::query_capabilities`] is
     /// called and the replies are read.
@@ -522,6 +525,15 @@ where
         &self.caps
     }
 
+    /// Borrow the session choices tracked at this point in event processing.
+    ///
+    /// Clone this value for an owned snapshot. Reading it sends no output and
+    /// waits for no input. Use [`capabilities`](Self::capabilities) for the
+    /// terminal's reported state.
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
     /// Last observed full terminal size in cells, or `None` before the first
     /// observation. This is the whole terminal, which inline differs from the
     /// managed area returned by [`Screen::size`].
@@ -737,11 +749,11 @@ where
                         // understands them is all it takes. Turn it off for the
                         // session with `prefer_synchronized_output`, or per
                         // frame with [`Screen::set_synchronized_output`].
-                        Mode::SYNCHRONIZED_OUTPUT => {
+                        Mode::SYNCHRONIZED_OUTPUT if !self.synchronized_output_discovered => {
                             if self.options.prefer_synchronized_output {
                                 self.screen.set_synchronized_output(true);
                             }
-                            self.state.chosen.insert(mode);
+                            self.synchronized_output_discovered = true;
                         }
                         Mode::UNICODE_CORE if self.options.prefer_grapheme_clusters => {
                             self.enable_grapheme_clusters()?;
@@ -984,6 +996,7 @@ where
             source_waker,
             unread: VecDeque::new(),
             state: state::State::default(),
+            synchronized_output_discovered: false,
             caps: Capabilities::default(),
             options: ProgramOptions::default(),
             window_cells: None,

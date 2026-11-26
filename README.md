@@ -120,6 +120,11 @@ Per-crate guides and more examples:
 
 A curated few, each `cargo run -p examples --example <name>`:
 
+**`session_state`**
+
+Inspect owned session choices and terminal reports separately. Select keyboard
+flags and paste modes, then carry the choices between screen buffers.
+
 **`drag_drop`**
 
 Receive text drops and offer text drags with a thumbnail in Kitty.
