@@ -69,7 +69,7 @@ mod state;
 mod tests;
 
 pub use crate::ansi::program_status::{ProgramStatus, ProgramStatusKind, ProgramStatusState};
-pub use state::{Capabilities, TrackedState};
+pub use state::{Capabilities, State};
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -522,13 +522,13 @@ where
         &self.caps
     }
 
-    /// Copy the session choices tracked at this point in event processing.
+    /// Borrow the session choices tracked at this point in event processing.
     ///
-    /// This owned value stays unchanged as the session advances. It sends no
-    /// output and waits for no input. Use [`capabilities`](Self::capabilities)
-    /// for the terminal's reported state.
-    pub fn tracked_state(&self) -> TrackedState {
-        TrackedState(self.state.clone())
+    /// Clone this value for an owned snapshot. Reading it sends no output and
+    /// waits for no input. Use [`capabilities`](Self::capabilities) for the
+    /// terminal's reported state.
+    pub fn state(&self) -> &State {
+        &self.state
     }
 
     /// Last observed full terminal size in cells, or `None` before the first

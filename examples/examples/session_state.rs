@@ -1,4 +1,4 @@
-//! Inspect owned session choices separately from terminal reports.
+//! Borrow session choices separately from terminal reports.
 //!
 //! Run with `cargo run -p examples --example session_state`.
 //! Press `e` to enable keyboard enhancements and paste, `d` to disable them,
@@ -21,8 +21,9 @@ fn run(program: &mut Program<TtyInput, TtyOutput>) -> io::Result<()> {
     program.enter_alt_screen()?;
     program.autoresize()?;
     loop {
-        let selected = program.tracked_state();
-        let reports = program.capabilities().clone();
+        let selected = program.state();
+        let reports = program.capabilities();
+        let alternate = selected.alt_screen();
         let keyboard = match selected.kitty_keyboard() {
             None => "undecided",
             Some(flags) if flags.is_empty() => "disabled",
@@ -30,14 +31,7 @@ fn run(program: &mut Program<TtyInput, TtyOutput>) -> io::Result<()> {
         };
         let lines = [
             "Session state: e enable, d disable, b buffer, r reports, q quit".to_owned(),
-            format!(
-                "buffer: {}",
-                if selected.alt_screen() {
-                    "alternate"
-                } else {
-                    "normal"
-                }
-            ),
+            format!("buffer: {}", if alternate { "alternate" } else { "normal" }),
             format!("keyboard: {keyboard}"),
             format!("paste choice: {:?}", selected.mode(Mode::BRACKETED_PASTE)),
             format!("reported keyboard: {:?}", reports.kitty_keyboard()),
@@ -77,7 +71,7 @@ fn run(program: &mut Program<TtyInput, TtyOutput>) -> io::Result<()> {
                 code: KeyCode::Char('b'),
                 ..
             }) => {
-                if selected.alt_screen() {
+                if alternate {
                     program.exit_alt_screen()?;
                     let width = program.screen().size().width;
                     program.screen_mut().resize((width, 6));

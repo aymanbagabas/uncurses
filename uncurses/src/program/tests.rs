@@ -1409,7 +1409,7 @@ fn leaving_alt_screen_clears_its_keyboard_flags_before_main_selection_changes() 
         "the departing buffer retains its flags: {out:?}"
     );
     assert_eq!(
-        program.tracked_state().kitty_keyboard(),
+        program.state().kitty_keyboard(),
         Some(KittyKeyboardFlags::empty())
     );
 }
@@ -1427,9 +1427,7 @@ fn restore_selects_explicit_main_buffer_before_its_keyboard_flags() {
     program.screen_mut().flush().unwrap();
     assert_eq!(written(&buf), "\x1b[?1049l\x1b[=0;1u");
     assert_eq!(
-        program
-            .tracked_state()
-            .mode(mode::Mode::ALT_SCREEN_SAVE_CURSOR),
+        program.state().mode(mode::Mode::ALT_SCREEN_SAVE_CURSOR),
         Some(false)
     );
 }
@@ -2721,7 +2719,7 @@ fn tracked_snapshots_separate_owned_choices_reports_and_screen_properties() {
 
     let buf = RefCell::new(Vec::new());
     let mut program = Program::for_test(&buf, (20, 1));
-    let untouched = program.tracked_state();
+    let untouched = program.state().clone();
     assert_eq!(untouched.mouse(), None);
     assert_eq!(untouched.kitty_keyboard(), None);
     assert_eq!(untouched.modify_other_keys(), None);
@@ -2748,7 +2746,7 @@ fn tracked_snapshots_separate_owned_choices_reports_and_screen_properties() {
         .unwrap();
     program.set_cursor_color(Color::rgb(10, 20, 30)).unwrap();
     program.set_window_title("first title").unwrap();
-    let selected = program.tracked_state();
+    let selected = program.state().clone();
     assert_eq!(selected.mouse(), Some(None));
     assert_eq!(selected.kitty_keyboard(), Some(KittyKeyboardFlags::empty()));
     assert_eq!(
@@ -2791,7 +2789,7 @@ fn tracked_snapshots_separate_owned_choices_reports_and_screen_properties() {
             .unwrap();
     }
     let reports = program.capabilities().clone();
-    assert_eq!(program.tracked_state(), selected);
+    assert_eq!(program.state(), &selected);
     assert_eq!(reports.mode(Mode::IN_BAND_RESIZE), Some(ModeSetting::Reset));
     assert_eq!(
         reports.kitty_keyboard(),
@@ -2804,23 +2802,20 @@ fn tracked_snapshots_separate_owned_choices_reports_and_screen_properties() {
     );
 
     program.reset().unwrap();
-    assert_eq!(program.tracked_state(), selected);
+    assert_eq!(program.state(), &selected);
     program.restore().unwrap();
-    assert_eq!(program.tracked_state(), selected);
+    assert_eq!(program.state(), &selected);
     program.enable_mouse(MouseTracking::empty()).unwrap();
     program.set_window_title("second title").unwrap();
     program.screen_mut().set_cursor_visible(true);
-    assert!(!program.tracked_state().cursor_visible());
+    assert!(!program.state().cursor_visible());
     assert_eq!(selected.mouse(), Some(None));
     assert_eq!(selected.window_title(), Some("first title"));
     assert_eq!(untouched.window_title(), None);
-    assert_eq!(
-        program.tracked_state().mouse(),
-        Some(Some(MouseTracking::empty()))
-    );
+    assert_eq!(program.state().mouse(), Some(Some(MouseTracking::empty())));
     assert_eq!(reports, *program.capabilities());
     buf.borrow_mut().clear();
-    let _snapshot = program.tracked_state();
+    let _state: &super::State = program.state();
     assert!(buf.borrow().is_empty(), "inspection must not emit queries");
 }
 
