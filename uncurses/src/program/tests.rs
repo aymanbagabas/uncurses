@@ -91,6 +91,7 @@ impl<'a> Program<std::io::PipeReader, TestOut<'a>> {
             source_waker,
             unread: VecDeque::new(),
             state: state::State::default(),
+            synchronized_output_discovered: false,
             caps: Capabilities::default(),
             options: ProgramOptions::default(),
             window_cells: None,
@@ -2817,6 +2818,50 @@ fn tracked_snapshots_separate_owned_choices_reports_and_screen_properties() {
     buf.borrow_mut().clear();
     let _state: &super::State = program.state();
     assert!(buf.borrow().is_empty(), "inspection must not emit queries");
+}
+
+#[test]
+fn synchronized_output_discovery_preserves_selected_state() {
+    use crate::ansi::mode::{Mode, ModeSetting};
+
+    for preferred in [false, true] {
+        let buf = RefCell::new(Vec::new());
+        let mut program = Program::for_test(&buf, (20, 1));
+        program.options.prefer_synchronized_output = preferred;
+        program.screen_mut().set_synchronized_output(false);
+        let selected = program.state().clone();
+
+        program
+            .observe_event(&Event::ModeReport {
+                mode: Mode::SYNCHRONIZED_OUTPUT,
+                setting: ModeSetting::Set,
+            })
+            .unwrap();
+        assert_eq!(program.state(), &selected);
+        assert_eq!(program.screen().synchronized_output(), preferred);
+        assert_eq!(
+            program.capabilities().mode(Mode::SYNCHRONIZED_OUTPUT),
+            Some(ModeSetting::Set)
+        );
+
+        program.screen_mut().set_synchronized_output(false);
+        for setting in [
+            ModeSetting::Set,
+            ModeSetting::NotRecognized,
+            ModeSetting::Set,
+        ] {
+            program
+                .observe_event(&Event::ModeReport {
+                    mode: Mode::SYNCHRONIZED_OUTPUT,
+                    setting,
+                })
+                .unwrap();
+        }
+        assert_eq!(program.state(), &selected);
+        assert!(!program.screen().synchronized_output());
+        assert_eq!(program.options.prefer_synchronized_output, preferred);
+        assert!(buf.borrow().is_empty());
+    }
 }
 
 #[test]
