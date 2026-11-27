@@ -971,11 +971,17 @@ where
     I: Input + Copy,
     O: Write + Copy,
 {
-    /// Build the screen and event source over `terminal`, sizing the managed
-    /// area to `size`. The color profile and renderer optimizations are
-    /// detected from the terminal's environment. The terminal is
-    /// left as-is.
+    /// Build the screen and input source without changing the terminal.
     fn with_render(terminal: Terminal<I, O>, size: (u16, u16)) -> io::Result<Self> {
+        let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
+        Ok(Self::render_with_source(terminal, size, source))
+    }
+
+    fn render_with_source(
+        terminal: Terminal<I, O>,
+        size: (u16, u16),
+        source: Arc<Mutex<EventSource<I>>>,
+    ) -> Self {
         let env = terminal.env();
         // Provisional profile; init_with reapplies it with the real
         // output-is-tty signal via apply_env_color_profile.
@@ -985,10 +991,9 @@ where
         screen.set_color_profile(color_profile);
         screen.set_optimizations(optimizations);
 
-        let source = Arc::new(Mutex::new(EventSource::new(terminal.input())?));
         #[cfg(windows)]
         let source_waker = source.lock().unwrap().waker();
-        Ok(Self {
+        Self {
             terminal,
             screen,
             source,
@@ -1004,7 +1009,7 @@ where
             cell_pixels: None,
             origin: Position::ORIGIN,
             origin_queries_pending: 0,
-        })
+        }
     }
 
     /// Probe the terminal for its capabilities, then flush.
@@ -1153,6 +1158,43 @@ where
     pub fn new(terminal: Terminal<I, O>) -> io::Result<Self> {
         let ws = terminal.get_window_size()?;
         Self::with_render(terminal, (ws.col, ws.row))
+    }
+
+    /// Construct a program over the same terminal input as a previous program.
+    ///
+    /// Use the previous program's [`Self::event_source`] to keep queued
+    /// events and incomplete input sequences across a hand-off. The source
+    /// must read from the same terminal as `terminal`. Pause the previous
+    /// program first and resume it only after this program finishes: read
+    /// from the shared source through one program at a time.
+    ///
+    /// Like [`Self::new`], this leaves the terminal modes unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the terminal size cannot be read.
+    ///
+    /// ```no_run
+    /// # fn main() -> std::io::Result<()> {
+    /// use uncurses::{program::Program, terminal::Terminal};
+    ///
+    /// let mut main = Program::open()?;
+    /// main.init()?;
+    /// main.pause()?;
+    /// let mut dialog = Program::with_event_source(Terminal::open()?, main.event_source())?;
+    /// dialog.init()?;
+    /// // Draw the dialog and read its input.
+    /// dialog.finish()?;
+    /// main.resume()?;
+    /// main.finish()
+    /// # }
+    /// ```
+    pub fn with_event_source(
+        terminal: Terminal<I, O>,
+        source: Arc<Mutex<EventSource<I>>>,
+    ) -> io::Result<Self> {
+        let ws = terminal.get_window_size()?;
+        Ok(Self::render_with_source(terminal, (ws.col, ws.row), source))
     }
 
     /// Begin a session with the default [`ProgramOptions`]. See
