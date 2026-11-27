@@ -1350,6 +1350,11 @@ where
         self.terminal.make_raw()?;
         #[cfg(windows)]
         source.set_vt_input(true);
+        #[cfg(unix)]
+        self.source
+            .lock()
+            .unwrap()
+            .set_handle_resize(!self.state.in_band_resize);
         Ok(())
     }
 
