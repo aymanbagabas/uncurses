@@ -179,6 +179,82 @@ fn shared_source_paste_timeout_can_change_during_a_paste() {
 
 #[cfg(unix)]
 #[test]
+fn shared_source_preserves_a_partial_paste_marker_when_a_program_finishes() {
+    let Some((mut keyboard, tty)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let terminal = || crate::terminal::Terminal::new(&tty, &tty, crate::terminal::EnvList::new());
+    let mut main = Program::new(terminal()).unwrap();
+    main.init().unwrap();
+    main.pause().unwrap();
+
+    let mut dialog = Program::with_event_source(terminal(), main.event_source()).unwrap();
+    dialog.init().unwrap();
+    keyboard.write_all(b"/\x1b[20").unwrap();
+    assert!(matches!(
+        dialog.read_event().unwrap(),
+        Event::KeyPress(key) if key.code == crate::event::KeyCode::Char('/')
+    ));
+    dialog.finish().unwrap();
+    main.resume().unwrap();
+    keyboard.write_all(b"0~one\ntwo\x1b[201~").unwrap();
+
+    let mut next = || {
+        assert!(main.poll_event(Some(Duration::from_secs(1))).unwrap());
+        main.try_read_event().unwrap().unwrap()
+    };
+    assert_eq!(next(), Event::PasteStart);
+    assert_eq!(next(), Event::PasteChunk(b"one\ntwo".to_vec()));
+    assert_eq!(next(), Event::PasteEnd { complete: true });
+    main.finish().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_source_restores_signal_resizes_for_a_new_program() {
+    let Some((_keyboard, tty)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let terminal = || crate::terminal::Terminal::new(&tty, &tty, crate::terminal::EnvList::new());
+    let mut main = Program::new(terminal()).unwrap();
+    main.init().unwrap();
+    main.enable_in_band_resize().unwrap();
+    assert!(!main.event_source().lock().unwrap().handle_resize());
+    main.pause().unwrap();
+
+    let mut dialog = Program::with_event_source(terminal(), main.event_source()).unwrap();
+    dialog.init().unwrap();
+    assert!(dialog.event_source().lock().unwrap().handle_resize());
+    dialog.finish().unwrap();
+    main.resume().unwrap();
+    assert!(!main.event_source().lock().unwrap().handle_resize());
+    main.finish().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_source_restores_signal_resizes_when_the_original_program_resumes() {
+    let Some((_keyboard, tty)) = crate::testutil::open_pty_pair() else {
+        return;
+    };
+    let terminal = || crate::terminal::Terminal::new(&tty, &tty, crate::terminal::EnvList::new());
+    let mut main = Program::new(terminal()).unwrap();
+    main.init().unwrap();
+    assert!(main.event_source().lock().unwrap().handle_resize());
+    main.pause().unwrap();
+
+    let mut dialog = Program::with_event_source(terminal(), main.event_source()).unwrap();
+    dialog.init().unwrap();
+    dialog.enable_in_band_resize().unwrap();
+    assert!(!dialog.event_source().lock().unwrap().handle_resize());
+    dialog.finish().unwrap();
+    main.resume().unwrap();
+    assert!(main.event_source().lock().unwrap().handle_resize());
+    main.finish().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn runtime_decoder_flags_apply_only_to_future_decoding() {
     use crate::event::KeyCode;
 
