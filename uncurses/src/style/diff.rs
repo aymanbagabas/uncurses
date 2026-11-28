@@ -18,6 +18,27 @@ use super::sgr::{
 };
 use super::{AttrFlags, Style, UnderlineStyle};
 
+struct PackedDiffParts {
+    fg: u64,
+    bg: u64,
+    underline_color: Option<crate::color::Color>,
+    underline: UnderlineStyle,
+    attrs: AttrFlags,
+}
+
+impl PackedDiffParts {
+    fn from_style(style: &Style) -> Self {
+        const COLOR_MASK: u64 = (1 << 25) - 1;
+        Self {
+            fg: style.sgr & COLOR_MASK,
+            bg: (style.sgr >> 25) & COLOR_MASK,
+            underline_color: style.ul_color(),
+            underline: style.underline_shape(),
+            attrs: style.attributes(),
+        }
+    }
+}
+
 /// Write the compact visual transition from `from` to `to`.
 ///
 /// This emits both the SGR delta (a single `CSI … m` sequence) and the OSC 8
@@ -70,6 +91,8 @@ fn write_sgr_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<b
     // Compute which attrs need to be cleared. SGR 22 clears both bold and
     // faint together; SGR 25 clears both blink kinds together. We coordinate
     // those by re-emitting any attrs in `to` that 22/25 would also wipe.
+    let from = PackedDiffParts::from_style(from);
+    let to = PackedDiffParts::from_style(to);
     let removed_attrs = from.attrs & !to.attrs;
 
     let mut seq = SgrSeq::new();
@@ -163,14 +186,14 @@ fn write_sgr_diff<W: Write>(w: &mut W, from: &Style, to: &Style) -> io::Result<b
 
     if from.fg != to.fg {
         push_sep(&mut seq, body_start);
-        match to.fg {
+        match crate::cell::storage::color_value(to.fg) {
             Some(c) => push_fg_params(&mut seq, c),
             None => seq.extend_from_slice(b"39"),
         }
     }
     if from.bg != to.bg {
         push_sep(&mut seq, body_start);
-        match to.bg {
+        match crate::cell::storage::color_value(to.bg) {
             Some(c) => push_bg_params(&mut seq, c),
             None => seq.extend_from_slice(b"49"),
         }
@@ -204,18 +227,12 @@ pub(crate) fn convert_style(style: &Style, profile: crate::color::Profile) -> St
     use crate::color::Profile;
     match profile {
         Profile::Disabled => Style::default(),
-        Profile::Ascii => Style {
-            fg: None,
-            bg: None,
-            underline_color: None,
-            ..style.clone()
-        },
-        _ => Style {
-            fg: style.fg.and_then(|c| profile.convert(c)),
-            bg: style.bg.and_then(|c| profile.convert(c)),
-            underline_color: style.underline_color.and_then(|c| profile.convert(c)),
-            ..style.clone()
-        },
+        Profile::Ascii => style.clone().fg(None).bg(None).underline_color(None),
+        _ => style
+            .clone()
+            .fg(style.fg_color().and_then(|c| profile.convert(c)))
+            .bg(style.bg_color().and_then(|c| profile.convert(c)))
+            .underline_color(style.ul_color().and_then(|c| profile.convert(c))),
     }
 }
 
@@ -224,17 +241,34 @@ pub(crate) fn convert_style(style: &Style, profile: crate::color::Profile) -> St
 /// via OSC 8 separately from SGR, so a hyperlink-only change doesn't
 /// require any SGR transition.
 fn sgr_eq(a: &Style, b: &Style) -> bool {
-    a.fg == b.fg
-        && a.bg == b.bg
-        && a.underline_color == b.underline_color
-        && a.underline == b.underline
-        && a.attrs == b.attrs
+    a.sgr == b.sgr && a.underline_color == b.underline_color
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::color::Color;
+
+    #[test]
+    fn diff_preserves_color_encodings_and_independent_underline() {
+        let from = Style::EMPTY
+            .bold()
+            .fg(Color::Red)
+            .bg(Color::Rgb(3, 5, 7))
+            .underline_color(Color::Red);
+        let to = Style::EMPTY
+            .faint()
+            .fg(Color::Indexed(1))
+            .bg(Color::Rgb(3, 5, 7))
+            .underline_color(Color::Indexed(1));
+        let mut bytes = Vec::new();
+        write_style_diff(&mut bytes, &from, &to).unwrap();
+        assert_eq!(bytes, b"\x1b[22;2;38;5;1;58:5:1m");
+        bytes.clear();
+        let changed = to.clone().bg(None).underline_color(None);
+        write_style_diff(&mut bytes, &to, &changed).unwrap();
+        assert_eq!(bytes, b"\x1b[49;59m");
+    }
 
     #[test]
     fn test_diff_no_change() {
@@ -289,11 +323,8 @@ mod tests {
     #[test]
     fn test_diff_remove_bold_keep_faint_uses_sgr22_then_2() {
         let mut buf = Vec::new();
-        let mut from = Style::default();
-        from.attrs |= AttrFlags::BOLD;
-        from.attrs |= AttrFlags::FAINT;
-        let mut to = Style::default();
-        to.attrs |= AttrFlags::FAINT;
+        let from = Style::default().bold().faint();
+        let to = Style::default().faint();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[22;2m");
@@ -326,8 +357,7 @@ mod tests {
     fn test_diff_add_slow_blink_only() {
         let mut buf = Vec::new();
         let from = Style::default().italic();
-        let mut to = Style::default();
-        to.attrs |= AttrFlags::ITALIC | AttrFlags::SLOW_BLINK;
+        let to = Style::default().italic().blink();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[5m");
@@ -336,11 +366,8 @@ mod tests {
     #[test]
     fn test_diff_remove_blink_uses_sgr25() {
         let mut buf = Vec::new();
-        let mut from = Style::default();
-        from.attrs |= AttrFlags::SLOW_BLINK;
-        from.attrs |= AttrFlags::ITALIC;
-        let mut to = Style::default();
-        to.attrs |= AttrFlags::ITALIC;
+        let from = Style::default().blink().italic();
+        let to = Style::default().italic();
         let wrote = write_style_diff(&mut buf, &from, &to).unwrap();
         assert!(wrote);
         assert_eq!(buf, b"\x1b[25m");
@@ -420,7 +447,7 @@ mod tests {
     fn test_convert_style_ascii() {
         let s = Style::default().bold().fg(Color::Red);
         let converted = convert_style(&s, crate::color::Profile::Ascii);
-        assert!(converted.attrs.contains(AttrFlags::BOLD));
-        assert_eq!(converted.fg, None);
+        assert!(converted.attributes().contains(AttrFlags::BOLD));
+        assert_eq!(converted.fg_color(), None);
     }
 }

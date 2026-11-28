@@ -251,4 +251,25 @@ mod tests {
         // ratatui gave the symbol a cell, so it keeps one here too.
         assert_eq!(width_of("\u{200b}"), 1);
     }
+
+    #[test]
+    fn imported_symbols_preserve_foreign_widths_and_styles() {
+        use uncurses::buffer::{Buffer, Surface};
+        use uncurses::color::Color;
+        use uncurses::text::WidthMode;
+
+        for (symbol, width) in [("abc", 3), ("\u{200b}", 1), ("\u{ff9e}", 1), ("界", 2)] {
+            let mut foreign = ratatui::buffer::Cell::default();
+            foreign.set_symbol(symbol);
+            foreign.set_fg(ratatui::style::Color::Rgb(7, 8, 9));
+            let owned = cell_from_ratatui(&foreign);
+            let mut buffer = Buffer::new(8, 1).with_width_mode(WidthMode::Grapheme);
+            buffer.set((0, 0), owned.as_ref());
+            drop(owned);
+            let imported = buffer.cell((0, 0).into()).unwrap();
+            assert_eq!(imported.content(), symbol);
+            assert_eq!(imported.width(), width);
+            assert_eq!(imported.fg_color(), Some(Color::Rgb(7, 8, 9)));
+        }
+    }
 }

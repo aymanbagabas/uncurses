@@ -12,12 +12,12 @@
 //! nothing about where the terminal put the cluster, and lets the terminal
 //! lay the rest of the row out on its own terms.
 
+use crate::buffer::CellRow;
 use std::io;
 
 use super::emit::cluster_start;
 use super::predicates::can_clear_with;
 use crate::ansi;
-use crate::cell::Cell;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 use crate::text::WidthMode;
@@ -41,8 +41,8 @@ impl Renderer {
     /// the full rows and skips identical rows before this check.
     pub(super) fn uncertain_bail(
         &self,
-        new_line: &[Cell],
-        old_line: Option<&[Cell]>,
+        new_line: CellRow<'_>,
+        old_line: Option<CellRow<'_>>,
         first_diff: usize,
     ) -> Option<usize> {
         let new_at = self.uncertain_from(new_line);
@@ -50,7 +50,8 @@ impl Renderer {
         // earlier cluster in the old row's changed tail can move the boundary.
         let old_end = new_at.unwrap_or(new_line.len());
         let old_at = old_line
-            .and_then(|l| l.get(first_diff..l.len().min(old_end)))
+            .filter(|l| first_diff <= l.len().min(old_end))
+            .map(|l| l.slice(first_diff..l.len().min(old_end)))
             .and_then(|l| self.uncertain_from(l))
             .map(|at| first_diff + at);
         let at = old_at.or(new_at)?;
@@ -61,7 +62,7 @@ impl Renderer {
             (at..new_line.len()).find(|&x| {
                 old_line
                     .and_then(|l| l.get(x))
-                    .is_none_or(|o| o != &new_line[x])
+                    .is_none_or(|o| o != new_line.at(x))
             })?;
         }
 
@@ -81,11 +82,11 @@ impl Renderer {
     /// [`Renderer::width_is_uncertain`] can only hold under
     /// [`WidthMode::Wc`], so any other policy skips the scan rather than
     /// walking the row to a foregone answer.
-    pub(super) fn uncertain_from(&self, line: &[Cell]) -> Option<usize> {
+    pub(super) fn uncertain_from(&self, line: CellRow<'_>) -> Option<usize> {
         if self.width_mode != WidthMode::Wc {
             return None;
         }
-        (0..line.len()).find(|&x| self.width_is_uncertain(&line[x]))
+        (0..line.len()).find(|&x| self.width_is_uncertain(line.at(x)))
     }
 
     /// Move to row `y`, column `x`, to leave the cursor resting there
@@ -133,7 +134,7 @@ impl Renderer {
     ) -> io::Result<bool> {
         let Some(from) = buf
             .line(y)
-            .and_then(|l| self.uncertain_from(&l[..l.len().min(x as usize)]))
+            .and_then(|l| self.uncertain_from(l.slice(..l.len().min(x as usize))))
         else {
             return Ok(false);
         };
@@ -174,7 +175,7 @@ impl Renderer {
         Ok(true)
     }
 
-    /// Repaint `new_line[from..]` on row `y`, in place of diffing it.
+    /// Repaint `new_line.slice(from..)` on row `y`, in place of diffing it.
     ///
     /// The tail is erased and then written from one absolute move. A
     /// cluster the terminal draws narrower than the sum of its parts pulls
@@ -189,12 +190,12 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        new_line: &[Cell],
+        new_line: CellRow<'_>,
         y: u16,
         from: usize,
     ) -> io::Result<()> {
         let width = new_line.len();
-        let blank = &new_line[width - 1];
+        let blank = new_line.at(width - 1);
         let bce = self.opts.contains(Optimizations::BCE);
 
         self.move_to(out, new_buf, y, from as u16)?;
@@ -206,10 +207,10 @@ impl Renderer {
         if can_clear_with(blank, bce) {
             self.update_pen(out, Some(blank))?;
             ansi::screen::write_erase_to_eol(out)?;
-            while last > from && &new_line[last] == blank {
+            while last > from && new_line.at(last) == blank {
                 last -= 1;
             }
-            if &new_line[last] == blank {
+            if new_line.at(last) == blank {
                 // The erase drew the whole tail. This is reachable because
                 // `from` can name a column the old row held a cluster at
                 // and the new row leaves blank.

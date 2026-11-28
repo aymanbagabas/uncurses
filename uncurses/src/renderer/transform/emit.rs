@@ -2,11 +2,12 @@
 //! plain/ECH/REP), `emit_cell` (single grapheme), `put_range`
 //! (consecutive run), and `insert_cells_op` (ICH).
 
+use crate::buffer::CellRow;
 use std::io;
 
 use super::predicates::{can_clear_with, is_rep_ascii};
 use crate::ansi;
-use crate::cell::Cell;
+use crate::cell::CellRef;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 
@@ -17,10 +18,10 @@ use crate::renderer::{RenderBuffer, Renderer};
 /// on a whole one: the cursor is placed at a run's first column, and a
 /// continuation writes no bytes and moves no cursor, which would leave every
 /// glyph after it a column to the left of where it belongs.
-pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
+pub(super) fn cluster_start(line: CellRow<'_>, at: usize) -> usize {
     let here = at.min(line.len().saturating_sub(1));
     let mut start = here;
-    while start > 0 && line[start].is_continuation() {
+    while start > 0 && line.at(start).is_continuation() {
         start -= 1;
     }
     // Only a wide cell owns the columns past itself, so a walk that ends
@@ -34,7 +35,8 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
     // continuation lying past the pair is unowned too, and for the same
     // reason. `cluster_end` bounds its walk the same way, which is what
     // makes the two answer alike about the same column.
-    if start != here && (!line[start].is_wide() || here >= start + usize::from(line[start].width()))
+    if start != here
+        && (!line.at(start).is_wide() || here >= start + usize::from(line.at(start).width()))
     {
         return here;
     }
@@ -46,7 +48,7 @@ pub(super) fn cluster_start(line: &[Cell], at: usize) -> usize {
 /// The mirror of [`cluster_start`]. A run ending on a cell whose
 /// continuations lie past it would cover part of a glyph, and which end a
 /// change exposes depends on the direction it grew in, so both are closed.
-pub(super) fn cluster_end(line: &[Cell], at: usize) -> usize {
+pub(super) fn cluster_end(line: CellRow<'_>, at: usize) -> usize {
     // The mirror of the ownership rule above. A cell that is not wide draws
     // one column and owns nothing past itself, so its cluster ends on it even
     // when a continuation nothing owns follows. A wide cell owns exactly the
@@ -60,7 +62,7 @@ pub(super) fn cluster_end(line: &[Cell], at: usize) -> usize {
     }
     let owned = at + usize::from(cell.width()) - 1;
     let mut end = at;
-    while end < owned && end + 1 < line.len() && line[end + 1].is_continuation() {
+    while end < owned && end + 1 < line.len() && line.at(end + 1).is_continuation() {
         end += 1;
     }
     end
@@ -97,7 +99,7 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        line: &[Cell],
+        line: CellRow<'_>,
         first: usize,
         last: usize,
         sequential: bool,
@@ -108,7 +110,7 @@ impl Renderer {
         debug_assert!(
             line.get(first).is_none_or(|c| !c.is_continuation())
                 || first == 0
-                || !line[first - 1].is_wide(),
+                || !line.at(first - 1).is_wide(),
             "emit_range starts on a continuation at column {first}, and a cell owns it"
         );
         let surface_width = self.last_width;
@@ -121,7 +123,7 @@ impl Renderer {
         if !has_ech && !has_rep {
             let mut x = first;
             while x <= last {
-                let cell = &line[x];
+                let cell = line.at(x);
                 if cell.is_continuation() {
                     x += 1;
                     continue;
@@ -134,35 +136,35 @@ impl Renderer {
 
         let mut x = first;
         while x <= last {
+            let cell0 = line.at(x);
             // Continuation cells of a wide character produce no output
             // and never participate in an equal-run since they don't
             // compare equal to the cell that produced them.
-            if line[x].is_continuation() {
+            if cell0.is_continuation() {
                 x += 1;
                 continue;
             }
 
-            let stride = line[x].width().max(1) as usize;
+            let stride = cell0.width().max(1) as usize;
             let next_idx = x + stride;
 
             // Last cell in the interval: emit and finish.
             if next_idx > last {
-                self.emit_cell(out, &line[x], surface_width, surface_height)?;
+                self.emit_cell(out, cell0, surface_width, surface_height)?;
                 return Ok(false);
             }
 
             // Singleton: the cell differs from its successor.
-            if line[x] != line[next_idx] {
-                self.emit_cell(out, &line[x], surface_width, surface_height)?;
+            if cell0 != line.at(next_idx) {
+                self.emit_cell(out, cell0, surface_width, surface_height)?;
                 x = next_idx;
                 continue;
             }
 
             // Equal-run starting at x.
-            let cell0 = &line[x];
             let mut count = 2u16;
             let mut j = next_idx + stride;
-            while j <= last && line[j] == *cell0 {
+            while j <= last && line.at(j) == cell0 {
                 count += 1;
                 j += stride;
             }
@@ -196,10 +198,7 @@ impl Renderer {
                     )?;
                 }
                 x = j;
-            } else if has_rep
-                && (count as usize) > rep_b
-                && is_rep_ascii(cell0.content().as_bytes())
-            {
+            } else if has_rep && (count as usize) > rep_b && is_rep_ascii(cell0.content_bytes()) {
                 // Right-margin wrap: when the run would cross the
                 // right edge, REP would lose the wrapped cell to the
                 // terminal's autowrap handling, so emit one extra
@@ -211,13 +210,7 @@ impl Renderer {
                 }
 
                 self.update_pen(out, Some(cell0))?;
-                self.put_glyph_bytes(
-                    out,
-                    cell0.content().as_bytes(),
-                    1,
-                    surface_width,
-                    surface_height,
-                )?;
+                self.put_glyph_bytes(out, cell0.draw_bytes(), 1, surface_width, surface_height)?;
                 rep_count -= 1;
 
                 if rep_count > 0 {
@@ -237,7 +230,7 @@ impl Renderer {
                 if wrap_possible {
                     self.put_glyph_bytes(
                         out,
-                        cell0.content().as_bytes(),
+                        cell0.draw_bytes(),
                         1,
                         surface_width,
                         surface_height,
@@ -271,7 +264,7 @@ impl Renderer {
     pub(super) fn emit_cell(
         &mut self,
         out: &mut Vec<u8>,
-        cell: &Cell,
+        cell: CellRef<'_>,
         surface_width: u16,
         surface_height: u16,
     ) -> io::Result<()> {
@@ -287,7 +280,7 @@ impl Renderer {
             surface_height,
         )
     }
-    /// Emit cells in `new_line[start..=end]`, looking for runs of cells
+    /// Emit cells in `new_line.slice(start..=end)`, looking for runs of cells
     /// that already match the old line and skipping over them with a
     /// cursor move when the saved bytes outweigh the cost of the move.
     ///
@@ -303,8 +296,8 @@ impl Renderer {
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,
-        old_line: Option<&[Cell]>,
-        new_line: &[Cell],
+        old_line: Option<CellRow<'_>>,
+        new_line: CellRow<'_>,
         y: u16,
         start: usize,
         end: usize,
@@ -336,7 +329,7 @@ impl Renderer {
             let mut seg_start = start;
             while j <= end {
                 let old_cell = old_line.and_then(|l| l.get(j));
-                let new_cell = &new_line[j];
+                let new_cell = new_line.at(j);
                 if same == 0
                     && old_cell.is_some_and(|o| o.is_continuation())
                     && new_cell.is_continuation()
@@ -412,7 +405,7 @@ impl Renderer {
     pub(super) fn insert_cells_op(
         &mut self,
         out: &mut Vec<u8>,
-        line: &[Cell],
+        line: CellRow<'_>,
         count: usize,
     ) -> io::Result<()> {
         if count == 0 {
@@ -469,6 +462,7 @@ impl Renderer {
 #[cfg(test)]
 mod cluster_bounds {
     use super::*;
+    use crate::cell::Cell;
 
     /// A row of two-column clusters: column `2n` owns one, `2n + 1`
     /// continues it.
@@ -491,8 +485,8 @@ mod cluster_bounds {
     #[test]
     fn a_narrow_cell_does_not_own_a_following_continuation() {
         let line = vec![Cell::new("a", 1), Cell::CONTINUATION];
-        assert_eq!(cluster_start(&line, 1), 1);
-        assert_eq!(cluster_end(&line, 0), 0);
+        assert_eq!(cluster_start(CellRow::from_cells(&line), 1), 1);
+        assert_eq!(cluster_end(CellRow::from_cells(&line), 0), 0);
     }
 
     /// A wide cell owns the columns its width accounts for and no more, so a
@@ -506,45 +500,57 @@ mod cluster_bounds {
             Cell::CONTINUATION,
         ];
         assert_eq!(
-            cluster_end(&chained, 0),
+            cluster_end(CellRow::from_cells(&chained), 0),
             1,
             "the pair, not the orphan past it"
         );
-        assert_eq!(cluster_end(&chained, 1), 1, "already the last owned column");
-        assert_eq!(cluster_end(&chained, 2), 2, "an orphan stands alone");
+        assert_eq!(
+            cluster_end(CellRow::from_cells(&chained), 1),
+            1,
+            "already the last owned column"
+        );
+        assert_eq!(
+            cluster_end(CellRow::from_cells(&chained), 2),
+            2,
+            "an orphan stands alone"
+        );
 
         // `cluster_start` is the mirror, so it has to answer alike about the
         // same column: an orphan past the pair opens its own cluster, and a
         // column the pair does own still folds back into it.
         assert_eq!(
-            cluster_start(&chained, 2),
+            cluster_start(CellRow::from_cells(&chained), 2),
             2,
             "an orphan past the pair stands alone"
         );
-        assert_eq!(cluster_start(&chained, 1), 0, "inside the pair");
+        assert_eq!(
+            cluster_start(CellRow::from_cells(&chained), 1),
+            0,
+            "inside the pair"
+        );
     }
 
     #[test]
     fn a_column_owning_its_cell_is_already_closed() {
         let line = line();
-        assert_eq!(cluster_start(&line, 2), 2);
-        assert_eq!(cluster_end(&line, 2), 3);
+        assert_eq!(cluster_start(CellRow::from_cells(&line), 2), 2);
+        assert_eq!(cluster_end(CellRow::from_cells(&line), 2), 3);
     }
 
     #[test]
     fn a_continuation_closes_back_to_the_cell_that_owns_it() {
         let line = line();
-        assert_eq!(cluster_start(&line, 3), 2);
-        assert_eq!(cluster_start(&line, 5), 4);
+        assert_eq!(cluster_start(CellRow::from_cells(&line), 3), 2);
+        assert_eq!(cluster_start(CellRow::from_cells(&line), 5), 4);
     }
 
     #[test]
     fn closing_stays_inside_the_row() {
         let line = line();
-        assert_eq!(cluster_start(&line, 0), 0);
-        assert_eq!(cluster_end(&line, 5), 5);
-        assert_eq!(cluster_start(&[], 3), 0);
-        assert_eq!(cluster_end(&line, 99), 99);
+        assert_eq!(cluster_start(CellRow::from_cells(&line), 0), 0);
+        assert_eq!(cluster_end(CellRow::from_cells(&line), 5), 5);
+        assert_eq!(cluster_start(CellRow::from_cells(&[]), 3), 0);
+        assert_eq!(cluster_end(CellRow::from_cells(&line), 99), 99);
     }
 
     /// A continuation that reaches the left edge without meeting a cell
@@ -556,11 +562,11 @@ mod cluster_bounds {
     #[test]
     fn an_unowned_continuation_stands_on_its_own() {
         let line = vec![Cell::CONTINUATION; 3];
-        assert_eq!(cluster_start(&line, 2), 2);
-        assert_eq!(cluster_start(&line, 0), 0);
+        assert_eq!(cluster_start(CellRow::from_cells(&line), 2), 2);
+        assert_eq!(cluster_start(CellRow::from_cells(&line), 0), 0);
 
         // One with an owner still closes back to it.
         let owned = vec![Cell::new("\u{4e16}", 2), Cell::CONTINUATION];
-        assert_eq!(cluster_start(&owned, 1), 0);
+        assert_eq!(cluster_start(CellRow::from_cells(&owned), 1), 0);
     }
 }

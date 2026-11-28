@@ -1,12 +1,13 @@
 //! Whole-region clears (`clear_bottom`, `clear_to_end`) and the
 //! `el0_cost` heuristic that drives them.
 
+use crate::buffer::CellRow;
 use std::io;
 
 use super::predicates::{can_clear_with, cells_equal_blank};
 use crate::ansi::{self, cursor as ansi_cursor};
-use crate::buffer::{SurfaceMut, fill_line_into};
-use crate::cell::Cell;
+use crate::buffer::SurfaceMut;
+use crate::cell::{Cell, CellRef};
 use crate::layout::Position;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
@@ -35,7 +36,7 @@ impl Renderer {
         }
         let bce = self.opts.contains(Optimizations::BCE);
         // Only proceed if the current pen is reproducible via ED at all.
-        if !can_clear_with(self.cur.current_blank(), bce) {
+        if !can_clear_with(self.cur.current_blank().as_ref(), bce) {
             return Ok(height as usize);
         }
 
@@ -54,7 +55,7 @@ impl Renderer {
         // disjoint from `self.cur_buf` reads below, so the loop runs
         // without cloning the cell.
         {
-            let blank: &Cell = self.cur.current_blank();
+            let blank = self.cur.current_blank().as_ref();
             for y in (0..height).rev() {
                 let new_all_blank = match new_buf.line(y) {
                     Some(l) => l.iter().all(|c| cells_equal_blank(c, blank)),
@@ -114,7 +115,7 @@ impl Renderer {
         let bce = self.opts.contains(Optimizations::BCE);
         let blank: Cell = self.cur.bce_blank(bce).clone();
         if let Some(cb) = self.cur_buf.as_mut() {
-            cb.fill(&blank);
+            cb.fill(blank.as_ref());
         }
         Ok(())
     }
@@ -160,15 +161,15 @@ impl Renderer {
         let blank: Cell = self.cur.bce_blank(bce).clone();
         if let Some(cb) = self.cur_buf.as_mut() {
             // Cursor row: blank from col to end of line.
-            if let Some(line) = cb.line_mut(row)
+            if let Some(mut line) = cb.line_mut(row)
                 && (col as usize) < line.len()
             {
-                fill_line_into(&mut line[col as usize..], &blank);
+                line.slice(col as usize..).fill_line(blank.as_ref());
             }
             // Every row below: blank entirely.
             for y in row.saturating_add(1)..height {
-                if let Some(line) = cb.line_mut(y) {
-                    fill_line_into(line, &blank);
+                if let Some(mut line) = cb.line_mut(y) {
+                    line.fill_line(blank.as_ref());
                 }
             }
         }
@@ -198,15 +199,15 @@ impl Renderer {
     pub(super) fn clear_to_end(
         &mut self,
         out: &mut Vec<u8>,
-        old_line: Option<&[Cell]>,
-        blank: &Cell,
+        old_line: Option<CellRow<'_>>,
+        blank: CellRef<'_>,
         width: usize,
         force: bool,
     ) -> io::Result<()> {
         let cur_x = self.cur.pos().x as usize;
         let need = force
             || match old_line {
-                Some(cur) => (cur_x..width).any(|j| j >= cur.len() || cur[j] != *blank),
+                Some(cur) => (cur_x..width).any(|j| j >= cur.len() || cur.at(j) != blank),
                 None => true,
             };
         if !need {

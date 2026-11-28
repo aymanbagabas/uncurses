@@ -104,6 +104,12 @@ screen.render().unwrap();
 assert!(!screen.writer().is_empty());
 ```
 
+Use `Buffer` for an in-memory grid with a text width policy.
+`TextBuffer` is a thin wrapper with the same text and serialization support.
+Read cells as borrowed `CellRef` values. Use `to_owned()` to keep a portable snapshot.
+Use `source.blit(&mut target, at)` to copy content into a destination that owns its resources.
+See the [offscreen example](../examples/examples/offscreen.rs) for factories, copies, snapshots, and style changes.
+
 That's the shape of it; the full API and guides live at
 [uncurses.org](https://uncurses.org).
 

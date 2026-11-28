@@ -7,9 +7,9 @@
 //! when `\n` resets the column under ONLCR) feeds the horizontal
 //! cost pass.
 
+use crate::buffer::CellRow;
 use std::io;
 
-use crate::cell::Cell;
 use crate::layout::Position;
 use crate::renderer::Renderer;
 
@@ -22,7 +22,7 @@ impl Renderer {
         &self,
         from: Position,
         to: Position,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
         use_tabs: bool,
         use_backspace: bool,
     ) -> RelativePlan {
@@ -40,7 +40,7 @@ impl Renderer {
         &self,
         out: &mut Vec<u8>,
         plan: &RelativePlan,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
     ) -> io::Result<()> {
         self.emit_vertical(out, plan.vertical.shape)?;
         self.emit_horizontal(out, plan.horizontal.shape, overwrite_line)
@@ -55,7 +55,7 @@ impl Renderer {
         out: &mut Vec<u8>,
         from: Position,
         to: Position,
-        overwrite_line: Option<&[Cell]>,
+        overwrite_line: Option<CellRow<'_>>,
         use_tabs: bool,
         use_backspace: bool,
     ) -> io::Result<()> {

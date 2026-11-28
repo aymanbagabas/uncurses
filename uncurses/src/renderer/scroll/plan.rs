@@ -10,7 +10,6 @@
 use std::io;
 
 use crate::ansi;
-use crate::cell::Cell;
 use crate::renderer::caps::Optimizations;
 use crate::renderer::{RenderBuffer, Renderer};
 
@@ -72,7 +71,7 @@ pub(super) fn scrolln(
     // Split-borrow: `renderer.cur` is disjoint from `renderer.cur_buf`,
     // so the bce_blank ref lives across the cur_buf mutation below.
     let bce = renderer.opts.contains(Optimizations::BCE);
-    let bce_fill: &Cell = renderer.cur.bce_blank(bce);
+    let bce_fill = renderer.cur.bce_blank(bce).as_ref();
     if let Some(cb) = renderer.cur_buf.as_mut() {
         if n > 0 {
             cb.delete_lines(top as u16, n as u16, bottom_excl as u16, bce_fill);

@@ -13,6 +13,7 @@ repository = "https://github.com/aymanbagabas/uncurses"
 bitflags = "2"
 compact_str = "0.8"
 rustc-hash = "2"
+hashbrown = { version = "0.16", default-features = false }
 unicode-segmentation = "1"
 unicode-width = "0.2"
 icu_segmenter = { version = "2", default-features = false, features = ["compiled_data"] }

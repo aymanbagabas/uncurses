@@ -1,6 +1,6 @@
 //! Terminal cell values and grapheme segmentation.
 //!
-//! This module defines [`Cell`], the value stored by buffers and surfaces.
+//! This module defines portable [`Cell`] values and borrowed [`CellRef`] views.
 //! A cell combines grapheme content, visual style, and the number of
 //! terminal columns the content occupies.
 //!
@@ -21,11 +21,10 @@
 //!
 //! ## Construction
 //!
-//! Construct every cell with [`Cell::new`], passing the content and the
-//! number of columns it occupies. Measure that width with
-//! [`WidthMode::grapheme_width`](crate::text::WidthMode::grapheme_width)
-//! rather than assuming it. The constructor uses the default [`Style`]; use
-//! [`Cell::style()`] to attach a style afterwards.
+//! Use [`Surface::new_cell`](crate::buffer::Surface::new_cell) to validate
+//! a grapheme and measure it with a surface's width policy.
+//! [`Cell::new`] accepts explicit widths for foreign grid imports.
+//! [`Cell::style()`] attaches a style to an owned value.
 //!
 //! [`Cell::CONTINUATION`] is the placeholder that stands in the columns
 //! after a multi-column grapheme. Most callers never write one; writing a
@@ -34,7 +33,7 @@
 //! [`SurfaceMut::set_cell`](crate::buffer::SurfaceMut::set_cell) creates the
 //! placeholders automatically.
 //!
-//! ```rust,ignore
+//! ```rust
 //! use uncurses::cell::Cell;
 //!
 //! let a = Cell::new("a", 1);
@@ -72,11 +71,338 @@ use compact_str::CompactString;
 
 use crate::style::Style;
 
+pub(crate) mod storage;
+
+use crate::color::Color;
+use crate::style::{AttrFlags, Link, UnderlineStyle};
+use storage::{Glyph, PackedCell, Resources, StyleParts};
+
+/// A borrowed cell value with direct content, width, and style accessors.
+///
+/// Surface reads borrow the source resources. Copying this view preserves
+/// the owner's resource counts. The view stays valid for its source borrow.
+/// Use [`Self::to_owned`] for a portable snapshot, or [`Self::to_style`]
+/// for an owned style. [`Self::link`] borrows the shared hyperlink target.
+#[derive(Clone, Copy)]
+pub struct CellRef<'a> {
+    source: RefSource<'a>,
+    scalar: [u8; 4],
+    scalar_len: u8,
+}
+
+#[derive(Clone, Copy)]
+enum RefSource<'a> {
+    Packed(&'a PackedCell, &'a Resources),
+    Owned(&'a Cell),
+}
+
+impl<'a> CellRef<'a> {
+    fn owned_import_source(&self) -> Option<&'a Cell> {
+        match self.source {
+            RefSource::Owned(cell) => Some(cell),
+            RefSource::Packed(_, _) => None,
+        }
+    }
+
+    fn packed_import_source(&self) -> Option<PackedCell> {
+        match self.source {
+            RefSource::Packed(cell, _) => Some(*cell),
+            RefSource::Owned(_) => None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn packed(cell: &'a PackedCell, resources: &'a Resources) -> Self {
+        let mut scalar = [0; 4];
+        let scalar_len = cell
+            .scalar()
+            .map_or(0, |c| c.encode_utf8(&mut scalar).len() as u8);
+        Self {
+            source: RefSource::Packed(cell, resources),
+            scalar,
+            scalar_len,
+        }
+    }
+
+    /// Return the scalar when the content contains exactly one scalar.
+    #[inline]
+    pub fn scalar(&self) -> Option<char> {
+        match self.source {
+            RefSource::Packed(cell, _) => cell.scalar(),
+            RefSource::Owned(cell) => {
+                let mut chars = cell.content().chars();
+                let first = chars.next()?;
+                chars.next().is_none().then_some(first)
+            }
+        }
+    }
+    /// Return complex content, or `None` for a scalar or empty cell.
+    #[inline]
+    pub fn grapheme(&self) -> Option<&str> {
+        match self.source {
+            RefSource::Packed(cell, resources) => match resources.glyph(*cell) {
+                Glyph::Str(s) => Some(s),
+                _ => None,
+            },
+            RefSource::Owned(cell) => {
+                let s = cell.content();
+                s.chars().nth(1).is_some().then_some(s)
+            }
+        }
+    }
+    /// Return the cell content.
+    #[inline]
+    pub fn content(&self) -> &str {
+        match self.source {
+            RefSource::Packed(_, _) if self.scalar_len != 0 => {
+                std::str::from_utf8(&self.scalar[..self.scalar_len as usize]).unwrap()
+            }
+            RefSource::Packed(cell, resources) => match resources.glyph(*cell) {
+                Glyph::Empty => "",
+                Glyph::Str(s) => s,
+                Glyph::Scalar(_) => unreachable!("scalar content is inline"),
+            },
+            RefSource::Owned(cell) => cell.content(),
+        }
+    }
+    #[inline]
+    pub(crate) fn content_bytes(&self) -> &[u8] {
+        if self.scalar_len != 0 {
+            &self.scalar[..self.scalar_len as usize]
+        } else {
+            self.content().as_bytes()
+        }
+    }
+    /// Return the stored column width.
+    #[inline]
+    pub fn width(&self) -> u8 {
+        match self.source {
+            RefSource::Packed(cell, _) => cell.width(),
+            RefSource::Owned(cell) => cell.width(),
+        }
+    }
+    /// Test for a one-column space.
+    #[inline]
+    pub fn is_blank(&self) -> bool {
+        match self.source {
+            RefSource::Packed(cell, _) => cell.is_blank(),
+            RefSource::Owned(cell) => cell.is_blank(),
+        }
+    }
+    #[inline]
+    pub(crate) fn draw_bytes(&self) -> &[u8] {
+        const BLANKS: [u8; u8::MAX as usize] = [b' '; u8::MAX as usize];
+        if self.is_continuation() {
+            b""
+        } else {
+            let bytes = self.content_bytes();
+            if bytes.is_empty() {
+                &BLANKS[..self.width() as usize]
+            } else {
+                bytes
+            }
+        }
+    }
+    /// Test for a continuation column.
+    #[inline]
+    pub fn is_continuation(&self) -> bool {
+        self.width() == 0
+    }
+    /// Test for a primary that spans multiple columns.
+    #[inline]
+    pub fn is_wide(&self) -> bool {
+        self.width() > 1
+    }
+    /// Return the foreground color.
+    #[inline]
+    pub fn fg_color(&self) -> Option<Color> {
+        match self.source {
+            RefSource::Packed(cell, _) => storage::color_value(cell.sgr_word()),
+            RefSource::Owned(cell) => cell.style.fg_color(),
+        }
+    }
+    /// Return the background color.
+    #[inline]
+    pub fn bg_color(&self) -> Option<Color> {
+        match self.source {
+            RefSource::Packed(cell, _) => storage::color_value(cell.sgr_word() >> 25),
+            RefSource::Owned(cell) => cell.style.bg_color(),
+        }
+    }
+    /// Return the explicit underline color.
+    #[inline]
+    pub fn ul_color(&self) -> Option<Color> {
+        match self.source {
+            RefSource::Packed(cell, resources) => resources.underline_color(*cell),
+            RefSource::Owned(cell) => cell.style.ul_color(),
+        }
+    }
+    /// Return the attributes.
+    #[inline]
+    pub fn attributes(&self) -> AttrFlags {
+        match self.source {
+            RefSource::Packed(cell, _) => {
+                AttrFlags::from_bits_truncate(((cell.sgr_word() >> 50) & 0xff) as u16)
+            }
+            RefSource::Owned(cell) => cell.style.attributes(),
+        }
+    }
+    /// Return the underline shape.
+    #[inline]
+    pub fn underline_shape(&self) -> UnderlineStyle {
+        match self.source {
+            RefSource::Packed(cell, _) => storage::underline_shape(cell.sgr_word()),
+            RefSource::Owned(cell) => cell.style.underline_shape(),
+        }
+    }
+    /// Borrow the hyperlink target.
+    #[inline]
+    pub fn link(&self) -> Option<&Link> {
+        match self.source {
+            RefSource::Packed(cell, resources) => resources
+                .extras(*cell)
+                .and_then(|extras| extras.link.as_deref()),
+            RefSource::Owned(cell) => cell.style.link_target(),
+        }
+    }
+    /// Make an owned style with the same components.
+    ///
+    /// The hyperlink retains its original shared [`std::sync::Arc`] allocation.
+    pub fn to_style(&self) -> Style {
+        if let RefSource::Packed(cell, resources) = self.source {
+            return Style::from_packed_sgr(
+                cell.sgr_word(),
+                resources.underline_color(*cell),
+                resources
+                    .extras(*cell)
+                    .and_then(|extras| extras.link.as_ref()),
+            );
+        }
+        self.parts().to_owned()
+    }
+    /// Make a portable snapshot of the content, stored width, and complete style.
+    ///
+    /// The snapshot can outlive the source. Its hyperlink retains the original
+    /// shared [`std::sync::Arc`] allocation.
+    pub fn to_owned(&self) -> Cell {
+        Cell::new(self.content(), self.width()).style(self.to_style())
+    }
+    #[inline]
+    pub(crate) fn style_eq(&self, style: &Style) -> bool {
+        match self.source {
+            RefSource::Packed(cell, resources) => resources.style_eq(*cell, style),
+            RefSource::Owned(cell) => cell.style == *style,
+        }
+    }
+    #[inline]
+    pub(crate) fn style_eq_ref(&self, other: Self) -> bool {
+        match (self.source, other.source) {
+            (RefSource::Packed(cell, resources), RefSource::Packed(other, owner)) => {
+                resources.styles_eq(*cell, owner, *other)
+            }
+            (_, RefSource::Owned(cell)) => self.style_eq(&cell.style),
+            (RefSource::Owned(cell), _) => other.style_eq(&cell.style),
+        }
+    }
+    #[inline]
+    pub(crate) fn parts(&self) -> StyleParts<'a> {
+        match self.source {
+            RefSource::Packed(cell, resources) => resources.style(*cell),
+            RefSource::Owned(cell) => StyleParts::from_style(&cell.style),
+        }
+    }
+    #[inline]
+    pub(crate) fn glyph(&self) -> Glyph<'_> {
+        match self.source {
+            RefSource::Packed(cell, resources) => resources.glyph(*cell),
+            RefSource::Owned(cell) => Glyph::Str(cell.content()),
+        }
+    }
+}
+
+impl<'a> From<&'a Cell> for CellRef<'a> {
+    #[inline]
+    fn from(cell: &'a Cell) -> Self {
+        Self {
+            source: RefSource::Owned(cell),
+            scalar: [0; 4],
+            scalar_len: 0,
+        }
+    }
+}
+impl PartialEq for CellRef<'_> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        match (self.source, other.source) {
+            (RefSource::Packed(a, owner), RefSource::Packed(b, other_owner)) => {
+                owner.value_eq(*a, other_owner, *b)
+            }
+            (RefSource::Owned(a), RefSource::Owned(b)) => a == b,
+            (RefSource::Owned(cell), _) => {
+                cell.width() == other.width()
+                    && other.style_eq(&cell.style)
+                    && cell.content().as_bytes() == other.content_bytes()
+            }
+            (_, RefSource::Owned(cell)) => {
+                cell.width() == self.width()
+                    && self.style_eq(&cell.style)
+                    && cell.content().as_bytes() == self.content_bytes()
+            }
+        }
+    }
+}
+impl std::fmt::Debug for CellRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CellRef")
+            .field("content", &self.content())
+            .field("width", &self.width())
+            .field("style", &self.parts())
+            .finish()
+    }
+}
+impl Eq for CellRef<'_> {}
+impl PartialEq<Cell> for CellRef<'_> {
+    fn eq(&self, other: &Cell) -> bool {
+        *self == other.as_ref()
+    }
+}
+impl PartialEq<&Cell> for CellRef<'_> {
+    fn eq(&self, other: &&Cell) -> bool {
+        *self == other.as_ref()
+    }
+}
+impl PartialEq<CellRef<'_>> for Cell {
+    fn eq(&self, other: &CellRef<'_>) -> bool {
+        self.as_ref() == *other
+    }
+}
+
+/// A cell factory error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellError {
+    /// The input contains no grapheme.
+    Empty,
+    /// The input contains multiple graphemes.
+    MultipleGraphemes,
+    /// The grapheme occupies zero columns.
+    ZeroWidth,
+}
+impl std::fmt::Display for CellError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Empty => "cell content is empty",
+            Self::MultipleGraphemes => "cell content must contain exactly one grapheme",
+            Self::ZeroWidth => "cell content must occupy at least one column",
+        })
+    }
+}
+impl std::error::Error for CellError {}
+
 /// A single terminal-grid cell.
 ///
-/// `Cell` is the value stored in buffers and surfaces. It contains the
-/// grapheme content for a column, the style applied to that content, and the
-/// number of columns the content occupies.
+/// `Cell` is a portable value for imports, snapshots, and reusable content.
+/// It contains the content, style, and explicit column width.
+/// Buffer reads return [`CellRef`] values that borrow compact storage.
 ///
 /// Use [`Cell::new`] for construction and [`Cell::BLANK`] for an empty
 /// styled-as-default space. Continuations are normally produced by the
@@ -112,6 +438,10 @@ impl Default for Cell {
 }
 
 impl Cell {
+    /// Borrow this portable cell without a resource allocation.
+    pub fn as_ref(&self) -> CellRef<'_> {
+        self.into()
+    }
     /// A blank one-column cell with default style.
     ///
     /// The blank cell stores a single space (`" "`), uses [`Style::EMPTY`],
@@ -185,10 +515,11 @@ impl Cell {
     ///
     /// # Usage notes
     ///
-    /// This constructor does not validate that `width` matches the display
-    /// width of `content`; the caller chooses the measurement policy. Use
-    /// [`WidthMode::grapheme_width`](crate::text::WidthMode::grapheme_width)
-    /// to measure, so the stored width matches what the terminal advances.
+    /// This constructor retains the supplied symbol and explicit width.
+    /// It supports foreign grids whose symbols contain arbitrary text,
+    /// including several graphemes. Structural copies preserve that width.
+    /// Use [`Surface::new_cell`](crate::buffer::Surface::new_cell) to validate
+    /// one grapheme and measure it with a surface's width policy instead.
     ///
     /// When a cell wider than one column is written through the
     /// buffer/surface write path, the `width - 1` slots to its right are
@@ -287,6 +618,7 @@ impl Cell {
     ///
     /// Call this only on a cell that is not a continuation; a continuation
     /// draws nothing at all, and its caller returns before reaching here.
+    #[cfg(test)]
     pub(crate) fn draw_bytes(&self) -> &[u8] {
         /// Enough spaces to stand in for any width a cell can claim.
         const BLANKS: [u8; u8::MAX as usize] = [b' '; u8::MAX as usize];
@@ -368,6 +700,43 @@ impl Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_style_snapshot_preserves_explicit_underline_and_shared_link() {
+        use std::sync::Arc;
+
+        let colors = [
+            None,
+            Some(Color::Red),
+            Some(Color::Indexed(1)),
+            Some(Color::Rgb(3, 5, 7)),
+        ];
+        let linked = Style::EMPTY.link("https://example.com/snapshot", "id=snapshot");
+        let mut resources = Resources::default();
+        for fg in colors {
+            for bg in colors {
+                for ul in colors {
+                    let style = linked
+                        .clone()
+                        .fg(fg)
+                        .bg(bg)
+                        .underline_color(ul)
+                        .underline_style(UnderlineStyle::Curly)
+                        .attrs(AttrFlags::all());
+                    let packed = resources.intern(&Cell::BLANK.style(&style));
+                    let snapshot = CellRef::packed(&packed, &resources).to_style();
+                    assert_eq!(snapshot, style);
+                    assert!(Arc::ptr_eq(
+                        snapshot.link_arc().unwrap(),
+                        linked.link_arc().unwrap()
+                    ));
+                    let changed = snapshot.fg(Color::Blue).bg(Color::Green);
+                    assert_eq!(changed.ul_color(), ul);
+                    resources.release(packed);
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_blank_cell() {
@@ -465,7 +834,7 @@ mod tests {
         // content at width zero is one step from the documented path. It
         // claims no column, so the grid treats it as the placeholder it
         // structurally is and the surface declines to plant it loose.
-        use crate::buffer::{Buffer, Surface, SurfaceMut};
+        use crate::buffer::{Buffer, Surface};
         use crate::text::Encode;
 
         let mut buf = Buffer::new(3, 1);
@@ -485,6 +854,6 @@ mod tests {
     #[test]
     fn test_cell_with_style() {
         let c = Cell::new("x", 1).style(Style::default().bold());
-        assert!(c.style.attrs.contains(crate::style::AttrFlags::BOLD));
+        assert!(c.style.attributes().contains(crate::style::AttrFlags::BOLD));
     }
 }

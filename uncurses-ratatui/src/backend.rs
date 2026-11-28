@@ -834,7 +834,7 @@ where
                     let tail_x = cursor.x.min(w);
                     self.program.screen_mut().fill_rect(
                         uncurses::layout::Rect::new(tail_x, cursor.y, w - tail_x, 1),
-                        &CzCell::BLANK,
+                        CzCell::BLANK.as_ref(),
                     );
                 }
                 (cursor.y + 1 < h)
@@ -844,7 +844,7 @@ where
                 if cursor.y > 0 {
                     self.program.screen_mut().fill_rect(
                         uncurses::layout::Rect::new(0, 0, w, cursor.y),
-                        &CzCell::BLANK,
+                        CzCell::BLANK.as_ref(),
                     );
                 }
                 (cursor.y < h).then(|| {
@@ -859,7 +859,9 @@ where
                 .then(|| uncurses::layout::Rect::new(cursor.x, cursor.y, w - cursor.x, 1)),
         };
         if let Some(region) = region {
-            self.program.screen_mut().fill_rect(region, &CzCell::BLANK);
+            self.program
+                .screen_mut()
+                .fill_rect(region, CzCell::BLANK.as_ref());
         }
         self.program.screen_mut().invalidate_tracked_cursor();
         // Push the staged blanks to the wire so the clear takes effect

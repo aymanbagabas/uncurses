@@ -1,596 +1,401 @@
-//! Cell-grid storage and surface traits.
-//!
-//! This module provides [`Buffer`], row helpers, rectangular views, and
-//! owned [`Window`]s for working with terminal cells. Use it when code
-//! needs an off-screen grid, a clipped view of an existing grid, or a
-//! common [`Surface`] / [`SurfaceMut`] API that drawing code can target.
-//!
-//! ## Surface trait family
-//!
-//! The surface traits describe terminal-cell grids in layers:
-//!
-//! - [`Bounded`] exposes the rectangular extent of a grid.
-//! - [`Surface`] adds read-only cell access and the default
-//!   [`draw`](Surface::draw) blit operation.
-//! - [`SurfaceMut`] adds mutation, clearing, rectangular fills, and
-//!   terminal-style insert/delete operations.
-//!
-//! Code written against [`Surface`] or [`SurfaceMut`] can operate on a
-//! [`Buffer`], [`TextBuffer`], [`Window`], [`View`], or
-//! [`Screen`](crate::screen::Screen) without caring where the cells are
-//! stored. The shared contract is a rectangular coordinate space of
-//! [`Cell`] values addressed by
-//! [`Position`].
-//!
-//! ```rust,ignore
-//! use uncurses::buffer::{Buffer, Surface, SurfaceMut};
-//! use uncurses::cell::Cell;
-//! use uncurses::layout::Position;
-//!
-//! let mut buf = Buffer::new(4, 2);
-//! buf.set_cell(Position::new(0, 0), &Cell::new("x", 1));
-//! assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "x");
-//! ```
-//!
-//! ## Buffer storage
-//!
-//! [`Buffer`] stores a fixed-size grid in one row-major `Vec<Cell>`.
-//! Column `x` and row `y` map to `cells[y * width + x]`, so each row is a
-//! contiguous slice and cloning the buffer requires only one allocation.
-//! Resizing allocates a new row-major backing store, copies the
-//! intersection of the old and new extents, and fills new slots with
-//! [`Cell::BLANK`](crate::cell::Cell::BLANK).
-//!
-//! ```text
-//!          col:  0   1   2   3
-//!              ┌───┬───┬───────┬───┐
-//! row 0 (y=0)  │ H │ i │ 日    │ ! │
-//!              └───┴───┴───────┴───┘
-//!                         ▲
-//!                         └─ wide primary at x=2 covers columns 2 and 3
-//! ```
-//!
-//! ## Wide cells and drawing
-//!
-//! A two-column grapheme is represented by a wide primary cell followed by
-//! a continuation placeholder in the next column. [`Buffer::set`] writes
-//! that placeholder automatically, blanks stale halves when overwriting an
-//! existing wide cell, and replaces a wide cell with a blank when it would
-//! not fit at the end of a row. The default [`Surface::draw`] implementation
-//! preserves the same invariant when blitting between surfaces: orphan
-//! continuations and clipped wide primaries are emitted as blanks.
-
-mod ops;
-mod surface;
-mod view;
-mod window;
+//! Packed cell grids, portable rows, and clipped surface access.
 
 mod line;
+mod ops;
+mod surface;
 #[cfg(test)]
 mod tests;
 mod text_buffer;
+mod view;
+mod window;
 
-pub(crate) use line::fill_line_into;
+pub(crate) use line::{CellRow, CellRowMut};
 pub use line::{Line, blank_line, fill_line};
 pub use surface::{Bounded, Surface, SurfaceMut};
 pub use text_buffer::TextBuffer;
 pub use view::View;
 pub use window::Window;
 
+#[cfg(test)]
 use crate::cell::Cell;
+use crate::cell::CellRef;
+use crate::cell::storage::{PackedCell, Resources, StyleParts};
 use crate::layout::{Position, Rect, overruns};
+use crate::style::Style;
+use crate::text::{TextSurface, WidthMode};
 
-/// Off-screen storage for a rectangular grid of terminal cells.
+/// An owned, text-capable grid with a width policy and private cell resources.
 ///
-/// A `Buffer` owns `width * height` [`Cell`] values in row-major order.
-/// Row `y` lives at `cells[y * width..(y + 1) * width]`, and column `x`
-/// within that row is addressed by [`Position::new`](crate::layout::Position::new)
-/// through the [`Surface`] and [`SurfaceMut`] APIs.
+/// The grid stores sixteen bytes per column. Complex content and style
+/// extras share private resources within this buffer. Borrowed reads do
+/// not allocate. Clone makes an independent resource owner.
+/// These sixteen-byte slots are internal storage; [`crate::cell::Cell`]
+/// remains the portable owned value for imports and snapshots.
 ///
-/// Use a buffer when rendering into memory before presenting the result to
-/// another surface, when composing with [`Window`]s, or when tests need a
-/// deterministic cell grid. Writes outside the buffer bounds are ignored;
-/// reads outside the bounds return `None`.
+/// [`TextSurface`] uses this buffer's width policy for new text.
+/// [`Surface::new_cell`] validates one nonzero-width grapheme and measures it once.
+/// Copies, imports, and resize preserve stored widths.
 ///
-/// A wide primary [`Cell`] owns one continuation cell per additional column,
-/// for a total of `width - 1` continuations. Prefer [`Buffer::set`] or
-/// [`SurfaceMut::set_cell`] for writes so that continuation slots are kept
-/// consistent.
-#[derive(Debug, Clone)]
+/// Reads return [`CellRef`] views. Writes import their content and styles
+/// into this buffer's resources, so the source can be dropped after the write.
+/// Hyperlinks retain their original shared allocation.
+///
+/// Inherent insert/delete methods rotate stored columns and rows.
+/// [`TextBuffer`] uses the [`SurfaceMut`] defaults, which snapshot primaries
+/// and replay cell writes. At a span that cuts through a wide cell,
+/// these paths can affect different boundary columns. In particular,
+/// default deletion clears a primary before the span when its continuation
+/// lies inside the span; an inherent rotation retains that primary.
+///
+/// ```
+/// use uncurses::buffer::{Buffer, Surface};
+/// use uncurses::layout::Position;
+/// use uncurses::style::Style;
+/// let mut buffer = Buffer::new(4, 1);
+/// let cell = buffer.new_cell("中", Style::new()).unwrap();
+/// buffer.set_cell(Position::new(0, 0), cell.as_ref());
+/// assert!(buffer.cell(Position::new(1, 0)).unwrap().is_continuation());
+/// ```
 pub struct Buffer {
-    cells: Vec<Cell>,
+    cells: Vec<PackedCell>,
+    resources: Resources,
     width: u16,
     height: u16,
+    width_mode: WidthMode,
+    eaw_wide: bool,
+}
+
+impl Clone for Buffer {
+    fn clone(&self) -> Self {
+        let resources = self.resources.clone();
+        let cells = self.cells.clone();
+        Self {
+            cells,
+            resources,
+            width: self.width,
+            height: self.height,
+            width_mode: self.width_mode,
+            eaw_wide: self.eaw_wide,
+        }
+    }
+}
+impl std::fmt::Debug for Buffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Buffer")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("width_mode", &self.width_mode)
+            .field("eaw_wide", &self.eaw_wide)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Buffer {
-    /// Create a new blank buffer.
-    ///
-    /// The returned buffer has `width * height` cells, all initialized to
-    /// [`Cell::BLANK`]. `width` and `height` are measured in terminal cell
-    /// columns and rows, not bytes or grapheme clusters.
-    ///
-    /// # Parameters
-    ///
-    /// - `width`: number of columns in each row.
-    /// - `height`: number of rows.
-    ///
-    /// # Returns
-    ///
-    /// A row-major [`Buffer`] with bounds `Rect::new(0, 0, width, height)`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `width * height` cannot be allocated.
-    ///
-    /// # Usage notes
-    ///
-    /// Zero-sized dimensions are valid. Accessors will then return empty
-    /// rows or `None` according to the resulting bounds.
+    /// Create a blank grid with the default width policy.
     pub fn new(width: u16, height: u16) -> Self {
-        let total = (width as usize) * (height as usize);
-        let cells = vec![Cell::BLANK; total];
         Self {
-            cells,
+            cells: vec![PackedCell::BLANK; width as usize * height as usize],
+            resources: Resources::default(),
             width,
             height,
+            width_mode: WidthMode::Wc,
+            eaw_wide: false,
         }
     }
-
-    /// Return the buffer width in terminal cell columns.
-    ///
-    /// # Returns
-    ///
-    /// The number of columns in each row.
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// This is the inherent accessor for the stored width. The [`Bounded`]
-    /// implementation reports the same value through [`Bounded::width`].
+    /// Return the column count.
     pub fn width(&self) -> u16 {
         self.width
     }
-
-    /// Return the buffer height in terminal cell rows.
-    ///
-    /// # Returns
-    ///
-    /// The number of rows in the buffer.
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// This is the inherent accessor for the stored height. The [`Bounded`]
-    /// implementation reports the same value through [`Bounded::height`].
+    /// Return the row count.
     pub fn height(&self) -> u16 {
         self.height
     }
-
-    /// Borrow one row as a contiguous slice.
+    /// Select the width policy.
+    pub fn with_width_mode(mut self, mode: WidthMode) -> Self {
+        self.set_width_mode(mode);
+        self
+    }
+    /// Select the ambiguous-width policy.
+    pub fn with_eaw_wide(mut self, wide: bool) -> Self {
+        self.set_eaw_wide(wide);
+        self
+    }
+    /// Set the width policy for subsequent text.
     ///
-    /// # Parameters
+    /// Existing cells retain their stored widths, including during copies.
+    pub fn set_width_mode(&mut self, mode: WidthMode) {
+        self.width_mode = mode;
+    }
+    /// Set the ambiguous-width policy for subsequent text.
     ///
-    /// - `y`: zero-based row index in buffer coordinates.
+    /// Existing cells retain their stored widths.
+    pub fn set_eaw_wide(&mut self, wide: bool) {
+        self.eaw_wide = wide;
+    }
+    /// Borrow the underlying buffer.
+    pub fn buffer(&self) -> &Self {
+        self
+    }
+    /// Borrow the underlying buffer mutably.
+    pub fn buffer_mut(&mut self) -> &mut Self {
+        self
+    }
+    /// Return the underlying buffer.
+    pub fn into_buffer(self) -> Self {
+        self
+    }
+    /// Write a portable or borrowed cell.
     ///
-    /// # Returns
+    /// Pass a [`CellRef`] or a reference to an owned [`crate::cell::Cell`].
+    /// This imports resources and preserves the supplied width.
+    /// See [`Self::set`] for clipping and continuation behavior.
+    pub fn set_cell<'a>(&mut self, pos: Position, cell: impl Into<CellRef<'a>>) {
+        self.set(pos, cell);
+    }
+    /// Fill the buffer with a portable or borrowed cell.
+    pub fn fill<'a>(&mut self, cell: impl Into<CellRef<'a>>) {
+        SurfaceMut::fill(self, cell.into());
+    }
+    /// Fill a rectangle with a portable or borrowed cell.
+    pub fn fill_rect<'a>(&mut self, rect: Rect, cell: impl Into<CellRef<'a>>) {
+        SurfaceMut::fill_rect(self, rect, cell.into());
+    }
+    /// Iterate over one row without an allocation.
     ///
-    /// `Some(&[Cell])` with length [`Buffer::width`] when `y` is inside the
-    /// buffer, or `None` when `y >= height`.
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// The returned slice may contain continuation cells that belong to
-    /// wide primaries earlier in the same row. Do not assume every slice
-    /// element starts an independent grapheme.
-    #[inline]
-    pub fn line(&self, y: u16) -> Option<&[Cell]> {
+    /// Returns `None` when `y` is outside the grid. The iterator yields
+    /// one [`CellRef`] per column, including continuations, in column order.
+    /// It supports exact lengths, reverse iteration, and cloning.
+    /// Use `.map(|cell| cell.to_owned())` to collect portable cells.
+    pub fn line(
+        &self,
+        y: u16,
+    ) -> Option<impl ExactSizeIterator<Item = CellRef<'_>> + DoubleEndedIterator + Clone> {
+        self.row(y).map(CellRow::iter)
+    }
+    pub(crate) fn row(&self, y: u16) -> Option<CellRow<'_>> {
         if y >= self.height {
             return None;
         }
-        let w = self.width as usize;
-        let start = (y as usize) * w;
-        Some(&self.cells[start..start + w])
+        let start = y as usize * self.width as usize;
+        Some(CellRow::Packed(
+            &self.cells[start..start + self.width as usize],
+            &self.resources,
+        ))
     }
-
-    /// Mutably borrow one row as a contiguous slice.
-    ///
-    /// # Parameters
-    ///
-    /// - `y`: zero-based row index in buffer coordinates.
-    ///
-    /// # Returns
-    ///
-    /// `Some(&mut [Cell])` with length [`Buffer::width`] when `y` is inside
-    /// the buffer, or `None` when `y >= height`.
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// Direct slice mutation bypasses the wide-cell accounting performed by
-    /// [`Buffer::set`]. It is appropriate for whole-row helpers that manage
-    /// continuations themselves; prefer [`Buffer::set`] for ordinary writes.
-    #[inline]
-    pub fn line_mut(&mut self, y: u16) -> Option<&mut [Cell]> {
+    pub(crate) fn row_mut(&mut self, y: u16) -> Option<CellRowMut<'_>> {
         if y >= self.height {
             return None;
         }
-        let w = self.width as usize;
-        let start = (y as usize) * w;
-        Some(&mut self.cells[start..start + w])
+        let start = y as usize * self.width as usize;
+        Some(CellRowMut {
+            cells: &mut self.cells[start..start + self.width as usize],
+            resources: &mut self.resources,
+        })
     }
-
-    /// Swap the contents of rows `a` and `b` in place.
     fn swap_rows(&mut self, a: usize, b: usize) {
         if a == b {
             return;
         }
         let w = self.width as usize;
-        if w == 0 {
-            return;
-        }
         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-        let split = hi * w;
-        let (left, right) = self.cells.split_at_mut(split);
+        let (left, right) = self.cells.split_at_mut(hi * w);
         left[lo * w..(lo + 1) * w].swap_with_slice(&mut right[..w]);
     }
-
-    /// Borrow one cell mutably.
+    /// Write a primary cell and update its continuation columns.
     ///
-    /// # Parameters
-    ///
-    /// - `pos`: zero-based cell coordinate in buffer coordinates.
-    ///
-    /// # Returns
-    ///
-    /// `Some(&mut Cell)` for an in-bounds position, or `None` when `pos`
-    /// lies outside the buffer.
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// Mutating a cell through this handle does not update neighboring
-    /// continuation cells. Do not change a cell from narrow to wide, wide to
-    /// narrow, or continuation to primary through this handle; use
-    /// [`Buffer::set`] or [`SurfaceMut::set_cell`] when the cell width may
-    /// change.
-    pub fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        if pos.y >= self.height || pos.x >= self.width {
-            return None;
-        }
-        let w = self.width as usize;
-        Some(&mut self.cells[(pos.y as usize) * w + (pos.x as usize)])
-    }
-
-    /// Set a cell at a position while preserving wide-cell invariants.
-    ///
-    /// # Parameters
-    ///
-    /// - `pos`: zero-based destination coordinate. Any type convertible into
-    ///   [`Position`] is accepted.
-    /// - `cell`: cell to clone into the destination.
-    ///
-    /// # Behavior
-    ///
-    /// In-bounds narrow writes replace exactly one column, blanking any stale
-    /// wide-cell halves they overwrite. In-bounds wide writes place `cell` at
-    /// `pos` and write continuation placeholders into the columns it covers.
-    /// If a wide cell would extend past the right edge of the row, the
-    /// destination column is set to [`Cell::BLANK`] instead.
-    ///
-    /// Out-of-bounds writes are ignored.
-    ///
-    /// # Panics
-    ///
-    /// Never panics.
-    ///
-    /// # Usage notes
-    ///
-    /// A continuation is placed by the wide cell that owns it, as part of
-    /// that cell's own write, so a continuation passed here is ignored and
-    /// the column keeps the value its owner gave it.
-    ///
-    /// This is the implementation behind [`SurfaceMut::set_cell`] for
-    /// `Buffer`. Use it instead of [`Buffer::cell_mut`] whenever the write
-    /// might affect the width or role of neighboring cells.
-    pub fn set(&mut self, pos: impl Into<Position>, cell: &Cell) {
+    /// A continuation input leaves the grid unchanged. A clipped primary
+    /// becomes a blank with the incoming style.
+    pub fn set<'a>(&mut self, pos: impl Into<Position>, cell: impl Into<CellRef<'a>>) {
         let pos = pos.into();
-        let y = pos.y as usize;
-        let x = pos.x as usize;
+        let cell = cell.into();
+        if pos.x >= self.width || pos.y >= self.height || cell.is_continuation() {
+            return;
+        }
+        let incoming = self.resources.import(cell);
+        self.set_packed(pos, incoming);
+        self.resources.release(incoming);
+    }
+    fn replace_packed(&mut self, index: usize, incoming: PackedCell) {
+        self.resources.retain(incoming);
+        self.resources
+            .release(std::mem::replace(&mut self.cells[index], incoming));
+    }
+    fn blank_span(&mut self, start: usize, end: usize, source: PackedCell) {
+        let blank = self.resources.blank(source);
+        for i in start..end {
+            self.replace_packed(i, blank);
+        }
+        self.resources.release(blank);
+    }
+    fn set_packed(&mut self, pos: Position, incoming: PackedCell) {
         let width = self.width as usize;
-
-        if pos.y >= self.height || x >= width {
-            return;
-        }
-
-        let line = &mut self.cells[y * width..(y + 1) * width];
-
-        // A continuation is placed by the wide cell to its left, as part of
-        // that cell's own write, so one arriving here has nothing to say
-        // that the owning write did not already say. Ignoring it keeps the
-        // column exactly as its owner left it, which is what a caller
-        // mirroring a buffer cell by cell wants: it walks continuations
-        // because they are in the grid, not because it means to move them.
-        //
-        // Ignoring is also the only safe answer. Storing the cell would let
-        // a column carry a style its owner never had. Blanking it would put
-        // a one-column cell where the owner accounts for two, so the row
-        // would emit more columns than it holds. Refusing loudly would make
-        // a redundant write in an otherwise correct mirror fatal.
-        if cell.is_continuation() {
-            return;
-        }
-
-        // If we're overwriting a wide cell's continuation, blank the primary
-        // cell that owns it, so the wide grapheme does not survive with one
-        // half replaced. The branch above already returned for an incoming
-        // continuation, so the cell arriving here is narrow or wide.
-        if x > 0 && line[x].is_continuation() {
-            // Walk backward to find the primary cell
-            let mut pc = x - 1;
-            while pc > 0 && line[pc].is_continuation() {
-                pc -= 1;
+        let base = pos.y as usize * width;
+        let x = pos.x as usize;
+        if x > 0 && self.cells[base + x].is_continuation() {
+            let mut primary = x - 1;
+            while primary > 0 && self.cells[base + primary].is_continuation() {
+                primary -= 1;
             }
-            // Verify we found a wide primary; only Wide cells own
-            // the continuation slot to their right.
-            if line[pc].is_wide() {
-                let pw = line[pc].width() as usize;
-                let end = (pc + pw).min(width);
-                // Preserve the broken wide cell's bg/attributes on the
-                // blanks so clearing it doesn't punch a hole in a colored
-                // background.
-                let blank = Cell::BLANK.style(line[pc].style.clone());
-                line[pc..end].fill(blank);
-            } else if line[pc].is_continuation() {
-                // Buffer is corrupted — just blank the single cell
-                line[x] = Cell::BLANK;
+            let old = self.cells[base + primary];
+            if old.is_wide() {
+                self.blank_span(
+                    base + primary,
+                    base + (primary + old.width() as usize).min(width),
+                    old,
+                );
+            } else if old.is_continuation() {
+                self.replace_packed(base + x, PackedCell::BLANK);
             }
         }
-
-        // If we're overwriting the primary cell of a wide char, blank continuations
-        if line[x].is_wide() {
-            let w = line[x].width() as usize;
-            let end = (x + w).min(width);
-            let blank = Cell::BLANK.style(line[x].style.clone());
-            line[x + 1..end].fill(blank);
+        let old = self.cells[base + x];
+        if old.is_wide() {
+            self.blank_span(
+                base + x + 1,
+                base + (x + old.width() as usize).min(width),
+                old,
+            );
         }
-
-        let cell_width = cell.width() as usize;
-
-        // If the new cell is wide, blank cells it will cover
-        if cell.is_wide() {
-            // Truncate at end of line: if the wide cell doesn't fit, replace
-            // it with a blank that keeps the wide cell's bg/attributes.
-            //
-            // This has to be settled before any continuation is written. A
-            // cell can claim more columns than the row has left, and laying
-            // the continuations down first would leave the row holding the
-            // tail of a cell whose primary this branch then replaces.
-            if x + cell_width > width {
-                line[x] = Cell::BLANK.style(cell.style.clone());
+        let end = x + incoming.width() as usize;
+        if incoming.is_wide() {
+            if end > width {
+                self.blank_span(base + x, base + x + 1, incoming);
                 return;
             }
-
-            for i in x + 1..x + cell_width {
-                // If we'd overwrite a wide cell's primary, blank its continuations
-                if line[i].is_wide() {
-                    let w = line[i].width() as usize;
-                    let end = (i + w).min(width);
-                    let blank = Cell::BLANK.style(line[i].style.clone());
-                    line[i + 1..end].fill(blank);
+            let continuation = self.resources.continuation(incoming);
+            for i in x + 1..end {
+                let old = self.cells[base + i];
+                if old.is_wide() {
+                    self.blank_span(
+                        base + i + 1,
+                        base + (i + old.width() as usize).min(width),
+                        old,
+                    );
                 }
-                // Continuations inherit the wide primary's style so the
-                // cell's bg/attributes are coherent across both columns.
-                line[i] = Cell::CONTINUATION.style(cell.style.clone());
+                self.replace_packed(base + i, continuation);
             }
+            self.resources.release(continuation);
         }
-
-        line[x] = cell.clone();
+        self.replace_packed(base + x, incoming);
     }
-
-    /// Resize the buffer, preserving the top-left intersection.
+    /// Resize the grid and transfer the overlapping cells without remeasurement.
     ///
-    /// # Parameters
-    ///
-    /// - `width`: new row width in terminal cell columns.
-    /// - `height`: new height in terminal cell rows.
-    ///
-    /// # Behavior
-    ///
-    /// Cells inside the intersection of the old and new bounds keep their
-    /// row and column. Newly exposed cells are filled with [`Cell::BLANK`],
-    /// and cells outside the new bounds are discarded.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the resized backing store cannot be allocated.
-    ///
-    /// # Usage notes
-    ///
-    /// Resizing copies cells structurally and does not reflow wide cells. If
-    /// the new right edge cuts through a wide grapheme, the copied
-    /// continuation or primary remains as stored until later writes or draws
-    /// normalize the affected edge.
+    /// A primary at a clipped edge keeps its explicit width.
     pub fn resize(&mut self, width: u16, height: u16) {
-        if width == self.width && height == self.height {
+        if self.width == width && self.height == height {
             return;
         }
-
-        let new_total = (width as usize) * (height as usize);
-        if width == self.width {
-            self.cells.resize(new_total, Cell::BLANK);
+        if self.width == width {
+            let total = width as usize * height as usize;
+            for &cell in &self.cells[total.min(self.cells.len())..] {
+                self.resources.release(cell);
+            }
+            self.cells.resize(total, PackedCell::BLANK);
             self.height = height;
             return;
         }
-        let mut new_cells = vec![Cell::BLANK; new_total];
-
-        let copy_w = width.min(self.width) as usize;
-        let copy_h = height.min(self.height) as usize;
-        let old_w = self.width as usize;
-        let new_w = width as usize;
-        for y in 0..copy_h {
-            let src = y * old_w;
-            let dst = y * new_w;
-            new_cells[dst..dst + copy_w].clone_from_slice(&self.cells[src..src + copy_w]);
+        let mut cells = vec![PackedCell::BLANK; width as usize * height as usize];
+        for (index, cell) in self.cells.drain(..).enumerate() {
+            let x = index % self.width as usize;
+            let y = index / self.width as usize;
+            if x < width as usize && y < height as usize {
+                cells[y * width as usize + x] = cell;
+            } else {
+                self.resources.release(cell);
+            }
         }
-
-        self.cells = new_cells;
+        self.cells = cells;
         self.width = width;
         self.height = height;
     }
 }
-
 impl Bounded for Buffer {
     fn bounds(&self) -> Rect {
         Rect::new(0, 0, self.width, self.height)
     }
 }
-
 impl Surface for Buffer {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
-        if pos.y >= self.height || pos.x >= self.width {
+    #[inline]
+    fn cell(&self, pos: Position) -> Option<CellRef<'_>> {
+        if pos.x >= self.width || pos.y >= self.height {
             return None;
         }
-        let w = self.width as usize;
-        Some(&self.cells[(pos.y as usize) * w + (pos.x as usize)])
+        Some(CellRef::packed(
+            &self.cells[pos.y as usize * self.width as usize + pos.x as usize],
+            &self.resources,
+        ))
+    }
+    fn width_mode(&self) -> WidthMode {
+        self.width_mode
+    }
+    fn eaw_wide(&self) -> bool {
+        self.eaw_wide
     }
 }
-
 impl SurfaceMut for Buffer {
-    fn set_cell(&mut self, pos: Position, cell: &Cell) {
+    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>) {
         self.set(pos, cell);
     }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        Buffer::cell_mut(self, pos)
+    fn set_style(&mut self, pos: Position, style: Style) {
+        if pos.x >= self.width || pos.y >= self.height {
+            return;
+        }
+        let index = pos.y as usize * self.width as usize + pos.x as usize;
+        self.resources
+            .set_style(&mut self.cells[index], StyleParts::from_style(&style));
     }
-
-    /// Fill the clipped intersection of `rect` with `cell`. For
-    /// width-1 fills this collapses the trait default's per-cell
-    /// `set_cell` loop into one `slice::fill` per row, with explicit
-    /// wide-cell cleanup around the fill so any cell overlapping the
-    /// region leaves no orphan primary or continuation behind. A cell
-    /// wide enough can hold the whole region, in which case the cleanup
-    /// reaches past both edges of the fill. Wide fills (`cell.width() > 1`)
-    /// stay on the stepped `set_cell` path so primary/continuation
-    /// pairing and the trailing-partial-slot blank are placed by the
-    /// same wide-cell handling that `set` already implements. Partial slots
-    /// retain the fill style. Cleanup outside the rectangle retains the
-    /// old primary's style.
-    fn fill_rect(&mut self, rect: Rect, cell: &Cell) {
+    fn fill_rect(&mut self, rect: Rect, cell: CellRef<'_>) {
         let clipped = self.bounds().intersection(rect);
         if clipped.is_empty() {
             return;
         }
-
-        let step = (cell.width() as u16).max(1);
-        if step > 1 {
-            let blank = Cell::BLANK.style(cell.style.clone());
-            // Stepped wide-cell fill: identical to the trait default.
-            // Inlined here so the SurfaceMut::fill_rect dispatch goes
-            // through this impl in both arms.
-            for y in clipped.top()..clipped.bottom() {
-                let mut x = clipped.left();
-                while !overruns(x, step, clipped.right()) {
-                    self.set(Position::new(x, y), cell);
-                    x += step;
-                }
-                while x < clipped.right() {
-                    self.set(Position::new(x, y), &blank);
-                    x += 1;
-                }
+        let incoming = self.resources.import(cell);
+        let blank =
+            self.resources
+                .intern_parts(crate::cell::storage::Glyph::Scalar(' '), 1, cell.parts());
+        let step = cell.width().max(1) as u16;
+        for y in clipped.top()..clipped.bottom() {
+            let mut x = clipped.left();
+            while !overruns(x, step, clipped.right()) {
+                self.set_packed(Position::new(x, y), incoming);
+                x += step;
             }
+            while x < clipped.right() {
+                self.set_packed(Position::new(x, y), blank);
+                x += 1;
+            }
+        }
+        self.resources.release(blank);
+        self.resources.release(incoming);
+    }
+    fn set_style_rect(&mut self, rect: Rect, style: Style) {
+        let rect = self.bounds().intersection(rect);
+        if rect.is_empty() {
             return;
         }
-
-        let lo = clipped.left() as usize;
-        let hi = clipped.right() as usize;
-        let row_width = self.width as usize;
-
-        for y in clipped.top()..clipped.bottom() {
-            let row_start = (y as usize) * row_width;
-            let line = &mut self.cells[row_start..row_start + row_width];
-
-            // Left-edge straddle: a wide cell whose primary sits
-            // before `lo` and whose continuation falls at `lo`. Walk
-            // back to the primary and blank it (and any siblings
-            // outside the fill region) before the bulk fill so the
-            // primary isn't left dangling once its continuations get
-            // overwritten.
-            if lo > 0 && line[lo].is_continuation() {
-                let mut p = lo;
-                while p > 0 && line[p].is_continuation() {
-                    p -= 1;
-                }
-                if !line[p].is_continuation() {
-                    let pw = line[p].width() as usize;
-                    let blank = Cell::BLANK.style(line[p].style.clone());
-                    let end = (p + pw).min(lo);
-                    line[p..end].fill(blank.clone());
-                    // The same cell can also reach past `hi`, which is what
-                    // happens when the fill lands wholly inside it. Those
-                    // columns just lost the primary that owned them, so
-                    // they cannot stay continuations. The right-edge pass
-                    // below will not reach them: it walks back only as far
-                    // as `lo`, and this primary sits before that.
-                    if p + pw > hi {
-                        let tail = (p + pw).min(row_width);
-                        line[hi..tail].fill(blank);
-                    }
-                }
+        let hold = self.resources.intern_parts(
+            crate::cell::storage::Glyph::Scalar(' '),
+            1,
+            StyleParts::from_style(&style),
+        );
+        for y in rect.top()..rect.bottom() {
+            for x in rect.left()..rect.right() {
+                let i = y as usize * self.width as usize + x as usize;
+                self.resources.copy_style(&mut self.cells[i], hold);
             }
-
-            // Right-edge straddle: a wide cell whose primary sits at
-            // some `p` in `[lo, hi)` and whose continuations extend
-            // past `hi - 1`. The primary itself will be overwritten by
-            // the bulk fill, but the orphan continuations at
-            // `[hi, p + pw)` need explicit blanking.
-            if hi < row_width && line[hi].is_continuation() {
-                let mut p = hi - 1;
-                while p > lo && line[p].is_continuation() {
-                    p -= 1;
-                }
-                if !line[p].is_continuation() && p + (line[p].width() as usize) > hi {
-                    let pw = line[p].width() as usize;
-                    let end = (p + pw).min(row_width);
-                    let blank = Cell::BLANK.style(line[p].style.clone());
-                    line[hi..end].fill(blank);
-                }
-            }
-
-            line[lo..hi].fill(cell.clone());
         }
+        self.resources.release(hold);
     }
-
-    fn insert_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        Buffer::insert_lines(self, y, n, bounds_bottom, fill);
+    fn insert_lines(&mut self, y: u16, n: u16, bottom: u16, fill: CellRef<'_>) {
+        Buffer::insert_lines(self, y, n, bottom, fill);
     }
-
-    fn delete_lines(&mut self, y: u16, n: u16, bounds_bottom: u16, fill: &Cell) {
-        Buffer::delete_lines(self, y, n, bounds_bottom, fill);
+    fn delete_lines(&mut self, y: u16, n: u16, bottom: u16, fill: CellRef<'_>) {
+        Buffer::delete_lines(self, y, n, bottom, fill);
     }
-
-    fn insert_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        Buffer::insert_cells(self, pos, n, bounds_right, fill);
+    fn insert_cells(&mut self, pos: Position, n: u16, right: u16, fill: CellRef<'_>) {
+        Buffer::insert_cells(self, pos, n, right, fill);
     }
-
-    fn delete_cells(&mut self, pos: Position, n: u16, bounds_right: u16, fill: &Cell) {
-        Buffer::delete_cells(self, pos, n, bounds_right, fill);
+    fn delete_cells(&mut self, pos: Position, n: u16, right: u16, fill: CellRef<'_>) {
+        Buffer::delete_cells(self, pos, n, right, fill);
     }
 }
+impl TextSurface for Buffer {}

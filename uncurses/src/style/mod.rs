@@ -7,6 +7,9 @@
 //! [`UnderlineStyle`], an [`AttrFlags`] bitset, and an optional OSC 8
 //! [`Link`]. Builder methods take and return `Self`, so styles can be composed
 //! fluently and then cloned into cells or spans.
+//! Private fields keep the value consistent. Inspect components with
+//! [`Style::fg_color`], [`Style::bg_color`], [`Style::ul_color`],
+//! [`Style::attributes`], [`Style::underline_shape`], and [`Style::link_target`].
 //!
 //! ## Open/close versus wrapped rendering
 //!
@@ -180,38 +183,77 @@ pub enum UnderlineStyle {
 ///
 /// Cloning is cheap for hyperlinks: the [`Link`] is reference-counted so a
 /// long span of identically-linked cells keeps a single shared allocation.
+/// Cell imports and owned snapshots retain the original [`Arc<Link>`].
 #[derive(Debug, Clone, Default)]
 pub struct Style {
-    /// Foreground/text color.
-    ///
-    /// `None` leaves the terminal's current/default foreground unchanged when
-    /// writing a full style; diffs use `SGR 39` to clear a previous foreground.
-    pub fg: Option<Color>,
-    /// Background color.
-    ///
-    /// `None` leaves the terminal's current/default background unchanged when
-    /// writing a full style; diffs use `SGR 49` to clear a previous background.
-    pub bg: Option<Color>,
-    /// Underline color.
-    ///
-    /// Encoded with SGR `58` when present. `None` means use the terminal's
-    /// default underline color; diffs use `SGR 59` to clear a previous value.
-    pub underline_color: Option<Color>,
-    /// Underline shape.
-    pub underline: UnderlineStyle,
-    /// Boolean SGR text attributes.
-    pub attrs: AttrFlags,
-    /// Optional OSC 8 hyperlink target.
-    pub link: Option<Arc<Link>>,
+    sgr: u64,
+    // Keep an explicit underline color independent of foreground/background edits.
+    underline_color: Option<Color>,
+    link: Option<Arc<Link>>,
+}
+
+impl Style {
+    pub(crate) fn from_packed_sgr(
+        sgr: u64,
+        underline_color: Option<Color>,
+        link: Option<&Arc<Link>>,
+    ) -> Self {
+        Self {
+            // Packed cells use the top bits for the underline color selector.
+            sgr: sgr & ((1 << 61) - 1),
+            underline_color,
+            link: link.cloned(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn sgr_word(&self) -> u64 {
+        self.sgr
+    }
+
+    /// Return the foreground color.
+    pub fn fg_color(&self) -> Option<Color> {
+        crate::cell::storage::color_value(self.sgr)
+    }
+    /// Return the background color.
+    pub fn bg_color(&self) -> Option<Color> {
+        crate::cell::storage::color_value(self.sgr >> 25)
+    }
+    /// Return the explicit underline color.
+    pub fn ul_color(&self) -> Option<Color> {
+        self.underline_color
+    }
+    /// Return the attributes.
+    pub fn attributes(&self) -> AttrFlags {
+        AttrFlags::from_bits_truncate((self.sgr >> 50) as u16 & 0xff)
+    }
+    /// Return the underline shape.
+    pub fn underline_shape(&self) -> UnderlineStyle {
+        crate::cell::storage::underline_shape(self.sgr)
+    }
+    /// Borrow the hyperlink target.
+    pub fn link_target(&self) -> Option<&Link> {
+        self.link.as_deref()
+    }
+    pub(crate) fn link_arc(&self) -> Option<&Arc<Link>> {
+        self.link.as_ref()
+    }
+    pub(crate) fn from_parts(parts: crate::cell::storage::StyleParts<'_>) -> Self {
+        Self {
+            sgr: crate::cell::storage::color_word(parts.fg)
+                | (crate::cell::storage::color_word(parts.bg) << 25)
+                | (u64::from(parts.attrs.bits() & 0xff) << 50)
+                | ((parts.underline as u64) << 58),
+            underline_color: parts.underline_color,
+            link: parts.link.cloned(),
+        }
+    }
 }
 
 impl PartialEq for Style {
     fn eq(&self, other: &Self) -> bool {
-        self.fg == other.fg
-            && self.bg == other.bg
+        self.sgr == other.sgr
             && self.underline_color == other.underline_color
-            && self.underline == other.underline
-            && self.attrs == other.attrs
             && match (&self.link, &other.link) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b) || **a == **b,
@@ -224,11 +266,8 @@ impl Eq for Style {}
 
 impl std::hash::Hash for Style {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.fg.hash(state);
-        self.bg.hash(state);
+        self.sgr.hash(state);
         self.underline_color.hash(state);
-        self.underline.hash(state);
-        self.attrs.hash(state);
         if let Some(l) = &self.link {
             l.hash(state);
         }
@@ -274,11 +313,8 @@ impl Style {
     /// alternate flag (`{style:#}`) to emit an explicit return to the terminal
     /// default.
     pub const EMPTY: Style = Style {
-        fg: None,
-        bg: None,
+        sgr: 0,
         underline_color: None,
-        underline: UnderlineStyle::None,
-        attrs: AttrFlags::empty(),
         link: None,
     };
 
@@ -296,11 +332,7 @@ impl Style {
     /// The hyperlink is intentionally ignored because it is emitted via OSC 8,
     /// not SGR.
     pub(crate) fn is_sgr_empty(&self) -> bool {
-        self.fg.is_none()
-            && self.bg.is_none()
-            && self.underline_color.is_none()
-            && self.underline == UnderlineStyle::None
-            && self.attrs.is_empty()
+        self.sgr == 0 && self.underline_color.is_none()
     }
 
     /// Return whether this style carries no hyperlink.
@@ -325,25 +357,25 @@ impl Style {
     /// passed without cloning.
     pub fn inherit(&self, base: impl Borrow<Style>) -> Style {
         let base = base.borrow();
-        Style {
-            fg: self.fg.or(base.fg),
-            bg: self.bg.or(base.bg),
+        Self::from_parts(crate::cell::storage::StyleParts {
+            fg: self.fg_color().or(base.fg_color()),
+            bg: self.bg_color().or(base.bg_color()),
             underline_color: self.underline_color.or(base.underline_color),
-            underline: if self.underline == UnderlineStyle::None {
-                base.underline
+            underline: if self.underline_shape() == UnderlineStyle::None {
+                base.underline_shape()
             } else {
-                self.underline
+                self.underline_shape()
             },
-            attrs: self.attrs | base.attrs,
-            link: self.link.clone().or_else(|| base.link.clone()),
-        }
+            attrs: self.attributes() | base.attributes(),
+            link: self.link.as_ref().or(base.link.as_ref()),
+        })
     }
 
     /// Add bold intensity and return the updated style.
     ///
     /// This sets [`AttrFlags::BOLD`] and leaves all other fields unchanged.
     pub fn bold(mut self) -> Self {
-        self.attrs |= AttrFlags::BOLD;
+        self.sgr |= u64::from(AttrFlags::BOLD.bits()) << 50;
         self
     }
 
@@ -351,7 +383,7 @@ impl Style {
     ///
     /// This sets [`AttrFlags::FAINT`] and leaves all other fields unchanged.
     pub fn faint(mut self) -> Self {
-        self.attrs |= AttrFlags::FAINT;
+        self.sgr |= u64::from(AttrFlags::FAINT.bits()) << 50;
         self
     }
 
@@ -359,7 +391,7 @@ impl Style {
     ///
     /// This sets [`AttrFlags::ITALIC`] and leaves all other fields unchanged.
     pub fn italic(mut self) -> Self {
-        self.attrs |= AttrFlags::ITALIC;
+        self.sgr |= u64::from(AttrFlags::ITALIC.bits()) << 50;
         self
     }
 
@@ -368,7 +400,7 @@ impl Style {
     /// Equivalent to [`Style::underline_style`] with
     /// [`UnderlineStyle::Single`].
     pub fn underline(mut self) -> Self {
-        self.underline = UnderlineStyle::Single;
+        self.sgr = (self.sgr & !(7 << 58)) | ((UnderlineStyle::Single as u64) << 58);
         self
     }
 
@@ -377,7 +409,7 @@ impl Style {
     /// This sets [`AttrFlags::STRIKETHROUGH`] and leaves all other fields
     /// unchanged.
     pub fn strikethrough(mut self) -> Self {
-        self.attrs |= AttrFlags::STRIKETHROUGH;
+        self.sgr |= u64::from(AttrFlags::STRIKETHROUGH.bits()) << 50;
         self
     }
 
@@ -386,7 +418,7 @@ impl Style {
     /// This sets [`AttrFlags::SLOW_BLINK`] and leaves all other fields
     /// unchanged.
     pub fn blink(mut self) -> Self {
-        self.attrs |= AttrFlags::SLOW_BLINK;
+        self.sgr |= u64::from(AttrFlags::SLOW_BLINK.bits()) << 50;
         self
     }
 
@@ -395,7 +427,7 @@ impl Style {
     /// This sets [`AttrFlags::RAPID_BLINK`] and leaves all other fields
     /// unchanged.
     pub fn rapid_blink(mut self) -> Self {
-        self.attrs |= AttrFlags::RAPID_BLINK;
+        self.sgr |= u64::from(AttrFlags::RAPID_BLINK.bits()) << 50;
         self
     }
 
@@ -404,7 +436,7 @@ impl Style {
     /// This sets [`AttrFlags::REVERSE`]; it does not swap the stored `fg` and
     /// `bg` values.
     pub fn reverse(mut self) -> Self {
-        self.attrs |= AttrFlags::REVERSE;
+        self.sgr |= u64::from(AttrFlags::REVERSE.bits()) << 50;
         self
     }
 
@@ -412,7 +444,7 @@ impl Style {
     ///
     /// This sets [`AttrFlags::CONCEAL`] and leaves all other fields unchanged.
     pub fn conceal(mut self) -> Self {
-        self.attrs |= AttrFlags::CONCEAL;
+        self.sgr |= u64::from(AttrFlags::CONCEAL.bits()) << 50;
         self
     }
 
@@ -422,7 +454,7 @@ impl Style {
     /// [`Color`] or `None`.
     /// Passing `None` clears any foreground color carried by the base style.
     pub fn fg(mut self, color: impl Into<Option<Color>>) -> Self {
-        self.fg = color.into();
+        self.sgr = (self.sgr & !((1 << 25) - 1)) | crate::cell::storage::color_word(color.into());
         self
     }
 
@@ -432,7 +464,8 @@ impl Style {
     /// [`Color`] or `None`.
     /// Passing `None` clears any background color carried by the base style.
     pub fn bg(mut self, color: impl Into<Option<Color>>) -> Self {
-        self.bg = color.into();
+        self.sgr = (self.sgr & !(((1 << 25) - 1) << 25))
+            | (crate::cell::storage::color_word(color.into()) << 25);
         self
     }
 
@@ -450,7 +483,7 @@ impl Style {
     ///
     /// Use [`UnderlineStyle::None`] to clear underlining.
     pub fn underline_style(mut self, style: UnderlineStyle) -> Self {
-        self.underline = style;
+        self.sgr = (self.sgr & !(7 << 58)) | ((style as u64) << 58);
         self
     }
 
@@ -459,7 +492,7 @@ impl Style {
     /// This is useful when applying a previously computed [`AttrFlags`] value.
     /// Use the convenience builders when adding a single flag.
     pub fn attrs(mut self, attrs: AttrFlags) -> Self {
-        self.attrs = attrs;
+        self.sgr = (self.sgr & !(0xff << 50)) | (u64::from(attrs.bits() & 0xff) << 50);
         self
     }
 
@@ -564,9 +597,9 @@ mod tests {
     #[test]
     fn test_style_builder() {
         let s = Style::EMPTY.bold().italic().fg(Color::Red);
-        assert!(s.attrs.contains(AttrFlags::BOLD));
-        assert!(s.attrs.contains(AttrFlags::ITALIC));
-        assert_eq!(s.fg, Some(Color::Red));
+        assert!(s.attributes().contains(AttrFlags::BOLD));
+        assert!(s.attributes().contains(AttrFlags::ITALIC));
+        assert_eq!(s.fg_color(), Some(Color::Red));
         assert!(!s.is_empty());
     }
 
@@ -623,10 +656,10 @@ mod tests {
         let base = Style::EMPTY.bold().fg(Color::Red).bg(Color::Black);
         let merged = style.inherit(base);
         // self's fg wins; bg is inherited from base; attributes combine.
-        assert_eq!(merged.fg, Some(crate::color::Color::Blue));
-        assert_eq!(merged.bg, Some(crate::color::Color::Black));
-        assert!(merged.attrs.contains(AttrFlags::BOLD));
-        assert!(merged.attrs.contains(AttrFlags::ITALIC));
+        assert_eq!(merged.fg_color(), Some(crate::color::Color::Blue));
+        assert_eq!(merged.bg_color(), Some(crate::color::Color::Black));
+        assert!(merged.attributes().contains(AttrFlags::BOLD));
+        assert!(merged.attributes().contains(AttrFlags::ITALIC));
     }
 
     #[test]

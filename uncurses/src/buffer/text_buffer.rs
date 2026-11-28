@@ -1,158 +1,145 @@
-//! A width-aware cell buffer that paints text and serializes to escapes.
-//!
-//! [`TextBuffer`] is a [`Buffer`] plus a text-width policy. The policy is what
-//! [`TextSurface`] needs to lay out grapheme clusters into cells, so a
-//! `TextBuffer` implements [`TextSurface`] and can be painted with
-//! [`set_str`](TextSurface::set_str) directly, unlike a bare [`Buffer`].
-//!
-//! Because it is a [`Surface`], a `TextBuffer` also gets the
-//! [`Encode`](crate::text::Encode) trait for free, so you can paint a frame and
-//! serialize it to escape sequences with
-//! [`encode`](crate::text::Encode::encode) /
-//! [`encode_with`](crate::text::Encode::encode_with) or render it into a
-//! string with [`display`](crate::text::Encode::display). This makes it the
-//! tool for one-shot and append-style output: paint a full frame, encode it,
-//! and write the bytes wherever you like, with no diffing renderer and no
-//! terminal session. For in-place repainting of a live terminal across frames,
-//! reach for [`Screen`](crate::screen::Screen) instead, whose diffing renderer
-//! tracks the terminal and emits only the changed bytes.
-//!
-//! ```
-//! use uncurses::buffer::TextBuffer;
-//! use uncurses::style::Style;
-//! use uncurses::text::{Encode, TextSurface};
-//!
-//! let mut frame = TextBuffer::new(12, 1);
-//! frame.set_str((0, 0), "hello", Style::new().bold());
-//! let bytes = frame.display().to_string();
-//! assert!(bytes.contains("hello"));
-//! ```
+//! A text-capable buffer with a surface width policy.
 
-use crate::buffer::{Bounded, Buffer, Surface, SurfaceMut};
-use crate::cell::Cell;
-use crate::layout::{Position, Rect};
-use crate::text::{TextSurface, WidthMode};
-
-/// A [`Buffer`] paired with a text-width policy.
+/// A thin wrapper around [`Buffer`](super::Buffer) for text output and encoding.
 ///
-/// Construct one with [`new`](Self::new), choose the width policy with
-/// [`with_width_mode`](Self::with_width_mode) /
-/// [`with_eaw_wide`](Self::with_eaw_wide), paint with the
-/// [`TextSurface`]/[`SurfaceMut`] methods, then serialize with the
-/// [`Encode`](crate::text::Encode) trait.
+/// The underlying buffer owns the width policy and resources. Policy setters
+/// affect subsequent text and cell factories. Conversion with [`Self::into_buffer`]
+/// retains the policy, content, and styles.
+///
+/// `TextBuffer` uses the [`SurfaceMut`] defaults for insert/delete operations.
+/// They replay primary cells through writes. In contrast, [`Buffer`]'s
+/// inherent operations rotate stored rows and columns. For example, deletion
+/// that starts inside a wide cell clears its primary through the default
+/// path, while the inherent buffer rotation retains the primary before the span.
+///
+/// ```
+/// use uncurses::buffer::TextBuffer;
+/// use uncurses::style::Style;
+/// use uncurses::text::{Encode, TextSurface};
+/// let mut frame = TextBuffer::new(12, 1);
+/// frame.set_str((0, 0), "hello", Style::new().bold());
+/// assert!(frame.display().to_string().contains("hello"));
+/// ```
 #[derive(Debug, Clone)]
 pub struct TextBuffer {
-    buffer: Buffer,
-    width_mode: WidthMode,
-    eaw_wide: bool,
+    buffer: super::Buffer,
 }
 
+use super::{Bounded, Buffer, Surface, SurfaceMut};
+use crate::cell::CellRef;
+use crate::layout::{Position, Rect};
+use crate::style::Style;
+use crate::text::{TextSurface, WidthMode};
+
 impl TextBuffer {
-    /// Create a `width` by `height` text buffer of blank cells.
-    ///
-    /// The width policy defaults to [`WidthMode::Wc`] with East-Asian
-    /// Ambiguous characters measured as one cell.
+    /// Create a text buffer with the default width policy.
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             buffer: Buffer::new(width, height),
-            width_mode: WidthMode::default(),
-            eaw_wide: false,
         }
     }
-
-    /// Set the grapheme-cluster width policy and return the updated buffer.
+    /// Select the width policy for subsequent text.
     pub fn with_width_mode(mut self, mode: WidthMode) -> Self {
-        self.width_mode = mode;
+        self.set_width_mode(mode);
         self
     }
-
-    /// Set the East-Asian Ambiguous policy and return the updated buffer.
-    ///
-    /// When `true`, code points whose East-Asian-Width property is
-    /// `Ambiguous` are measured as two cells instead of one.
-    pub fn with_eaw_wide(mut self, eaw_wide: bool) -> Self {
-        self.eaw_wide = eaw_wide;
+    /// Select the ambiguous-width policy for subsequent text.
+    pub fn with_eaw_wide(mut self, wide: bool) -> Self {
+        self.set_eaw_wide(wide);
         self
     }
-
-    /// Set the grapheme-cluster width policy in place.
+    /// Set the width policy for subsequent text.
     pub fn set_width_mode(&mut self, mode: WidthMode) {
-        self.width_mode = mode;
+        self.buffer.set_width_mode(mode);
     }
-
-    /// Set the East-Asian Ambiguous policy in place.
-    pub fn set_eaw_wide(&mut self, eaw_wide: bool) {
-        self.eaw_wide = eaw_wide;
+    /// Set the ambiguous-width policy for subsequent text.
+    pub fn set_eaw_wide(&mut self, wide: bool) {
+        self.buffer.set_eaw_wide(wide);
     }
-
-    /// The width in cells.
+    /// Return the column count.
     pub fn width(&self) -> u16 {
         self.buffer.width()
     }
-
-    /// The height in cells.
+    /// Return the row count.
     pub fn height(&self) -> u16 {
         self.buffer.height()
     }
-
-    /// Resize the buffer, preserving overlapping cells.
+    /// Resize the underlying grid without remeasurement.
     pub fn resize(&mut self, width: u16, height: u16) {
         self.buffer.resize(width, height);
     }
-
-    /// Borrow the underlying [`Buffer`].
+    /// Borrow the underlying grid.
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
     }
-
-    /// Mutably borrow the underlying [`Buffer`].
+    /// Borrow the underlying grid mutably.
     pub fn buffer_mut(&mut self) -> &mut Buffer {
         &mut self.buffer
     }
-
-    /// Consume the text buffer and return the underlying [`Buffer`].
+    /// Return the underlying grid.
     pub fn into_buffer(self) -> Buffer {
         self.buffer
     }
+    /// Write a portable or borrowed cell.
+    pub fn set_cell<'a>(&mut self, pos: Position, cell: impl Into<CellRef<'a>>) {
+        self.buffer.set(pos, cell);
+    }
 }
-
 impl Bounded for TextBuffer {
     fn bounds(&self) -> Rect {
         self.buffer.bounds()
     }
 }
-
 impl Surface for TextBuffer {
-    fn cell(&self, pos: Position) -> Option<&Cell> {
+    fn cell(&self, pos: Position) -> Option<CellRef<'_>> {
         self.buffer.cell(pos)
     }
-}
-
-impl SurfaceMut for TextBuffer {
-    fn set_cell(&mut self, pos: Position, cell: &Cell) {
-        self.buffer.set_cell(pos, cell);
-    }
-
-    fn cell_mut(&mut self, pos: Position) -> Option<&mut Cell> {
-        self.buffer.cell_mut(pos)
-    }
-}
-
-impl TextSurface for TextBuffer {
     fn width_mode(&self) -> WidthMode {
-        self.width_mode
+        self.buffer.width_mode()
     }
-
     fn eaw_wide(&self) -> bool {
-        self.eaw_wide
+        self.buffer.eaw_wide()
     }
 }
+impl SurfaceMut for TextBuffer {
+    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>) {
+        self.buffer.set(pos, cell);
+    }
+    fn set_style(&mut self, pos: Position, style: Style) {
+        self.buffer.set_style(pos, style);
+    }
+}
+impl TextSurface for TextBuffer {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::Surface;
+    use crate::layout::Position;
     use crate::style::Style;
-    use crate::text::Encode;
+    use crate::text::{Encode, TextSurface};
+
+    #[test]
+    fn default_delete_clears_a_primary_before_the_deleted_span() {
+        use crate::cell::Cell;
+        use crate::color::Color;
+        let style = Style::new()
+            .fg(Color::Rgb(28, 41, 172))
+            .bg(Color::Indexed(28))
+            .link("https://example.test/arena", "id=shared");
+        let mut text = TextBuffer::new(32, 1);
+        text.set_cell((1, 0).into(), &Cell::new("", 3).style(&style));
+        let mut raw = text.buffer().clone();
+        text.delete_cells((2, 0).into(), 2, 30, Cell::BLANK.as_ref());
+        raw.delete_cells((2, 0), 2, 30, Cell::BLANK.as_ref());
+        let boundary = text.cell((1, 0).into()).unwrap();
+        assert_eq!(boundary.width(), 1);
+        assert_eq!(boundary.content(), " ");
+        assert_eq!(boundary.to_style(), style);
+        assert_eq!(raw.cell((1, 0).into()).unwrap().width(), 3);
+        text.buffer.resources.audit(&text.buffer.cells);
+        raw.resources.audit(&raw.cells);
+    }
 
     #[test]
     fn paints_and_encodes() {

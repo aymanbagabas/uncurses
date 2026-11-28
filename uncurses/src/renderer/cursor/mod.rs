@@ -38,6 +38,7 @@ mod tests {
     use super::super::Renderer;
     use super::super::caps::Optimizations;
     use super::super::tabstops::TabStops;
+    use crate::buffer::CellRow;
     use crate::cell::Cell;
     use crate::color::Color;
     use crate::layout::Position;
@@ -492,7 +493,7 @@ mod tests {
             &mut buf,
             Position { y: 0, x: 0 },
             Position { y: 2, x: 3 },
-            Some(&line),
+            Some(CellRow::from_cells(&line)),
         )
         .unwrap();
 
@@ -521,7 +522,7 @@ mod tests {
             &mut buf,
             Position { y: 0, x: 0 },
             Position { y: 0, x: 3 },
-            Some(&line),
+            Some(CellRow::from_cells(&line)),
         )
         .unwrap();
 

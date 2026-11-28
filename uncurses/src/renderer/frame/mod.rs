@@ -57,6 +57,7 @@ impl Renderer {
     ///
     /// No output is produced when the dimensions match, the buffer has
     /// no touched rows, and a force-clear is not pending.
+    #[inline]
     pub fn render(&mut self, out: &mut Vec<u8>, new_buf: &mut RenderBuffer) -> io::Result<()> {
         let width = new_buf.width();
         let height = new_buf.height();
@@ -65,6 +66,18 @@ impl Renderer {
             return Ok(());
         }
 
+        self.render_changed(out, new_buf, width, height)
+    }
+
+    // Keep the full frame's stack setup out of the unchanged-frame path.
+    #[inline(never)]
+    fn render_changed(
+        &mut self,
+        out: &mut Vec<u8>,
+        new_buf: &mut RenderBuffer,
+        width: u16,
+        height: u16,
+    ) -> io::Result<()> {
         let resized = self.prepare_frame(out, new_buf, width, height)?;
         self.diff_frame(out, new_buf, width, height)?;
         self.finalize_frame(out, new_buf, resized, height)?;

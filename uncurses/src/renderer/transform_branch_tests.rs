@@ -279,7 +279,7 @@ fn reset_pen_closes_osc8_and_emits_sgr_reset() {
         std::str::from_utf8(&out)
     );
     assert!(
-        renderer.cur.style().link.is_none(),
+        renderer.cur.style().link_target().is_none(),
         "link tracking should be cleared after reset_pen"
     );
 }
@@ -415,8 +415,13 @@ fn a_difference_on_a_continuation_re_emits_its_cluster() {
     // Disturb a continuation and leave its lead alone. Reaching the row
     // directly is the only way there, because `set` leaves a continuation to
     // the cluster that owns it.
-    if let Some(line) = buf.line_mut(0) {
-        line[13] = Cell::CONTINUATION.style(Style::default().bg(Color::Red));
+    if let Some(mut line) = buf.line_mut(0) {
+        line.set(
+            13,
+            Cell::CONTINUATION
+                .style(Style::default().bg(Color::Red))
+                .as_ref(),
+        );
     }
     buf.touch_line(0, 13, 13);
 
@@ -479,7 +484,7 @@ fn a_row_opening_on_an_unowned_continuation_renders() {
     renderer.render(&mut out, &mut buf).unwrap();
 
     // The lead falls off the row and its continuation lands at column zero.
-    buf.delete_cells((0u16, 0u16), 1, 10, &Cell::BLANK);
+    buf.delete_cells((0u16, 0u16), 1, 10, Cell::BLANK.as_ref());
     let mut out = Vec::new();
     renderer.render(&mut out, &mut buf).unwrap();
     assert!(
