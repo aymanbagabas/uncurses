@@ -14,10 +14,14 @@ fn frame(shift: u16, wide: bool) -> Buffer {
         let mut x = 0;
         while x < WIDTH {
             let cell = if wide {
-                Cell::new(if shift == 0 { "\u{754c}" } else { "\u{8a9e}" }, 2)
+                Cell::new(
+                    if shift == 0 { "\u{754c}" } else { "\u{8a9e}" },
+                    2,
+                    Style::EMPTY,
+                )
             } else {
                 let value = b'a' + ((x + (y + shift) % HEIGHT) % 26) as u8;
-                Cell::new(char::from(value).to_string(), 1)
+                Cell::new(char::from(value).to_string(), 1, Style::EMPTY)
             };
             buffer.set_cell((x, y).into(), &cell);
             x += u16::from(cell.width());
