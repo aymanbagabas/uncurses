@@ -13,7 +13,7 @@ use crate::renderer::buffer::RenderBuffer;
 impl Renderer {
     /// Run the frame epilogue: cursor snap on inline resizes plus pen
     /// reset.
-    pub(super) fn finalize_frame(
+    pub(in crate::renderer) fn finalize_frame(
         &mut self,
         out: &mut Vec<u8>,
         new_buf: &RenderBuffer,

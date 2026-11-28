@@ -152,9 +152,9 @@ fn tabs_off_advances_with_cuf_and_overwrite() {
 fn multiplexer_profiles_use_cuf_for_long_jumps_and_tabs_for_short_jumps() {
     fn scenario(r: &mut Renderer) -> Vec<u8> {
         let mut buf = RenderBuffer::new(80, 1);
-        buf.set_cell((0, 0), &Cell::new("|", 1));
-        buf.set_cell((48, 0), &Cell::new("X", 1));
-        buf.set_cell((56, 0), &Cell::new("Y", 1));
+        buf.set_cell((0, 0), &Cell::new("|", 1, Style::EMPTY));
+        buf.set_cell((48, 0), &Cell::new("X", 1, Style::EMPTY));
+        buf.set_cell((56, 0), &Cell::new("Y", 1, Style::EMPTY));
         render_to_vec(r, &mut buf)
     }
 

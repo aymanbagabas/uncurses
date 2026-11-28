@@ -177,6 +177,9 @@ impl Default for Cursor {
 /// color-profile conversion cache, scroll-detection scratch storage, and
 /// tab-stop tables. It writes only to caller-provided byte buffers; the
 /// caller decides when those bytes are flushed to an I/O sink.
+/// Placement records supply geometry and opaque bytes to the same frame
+/// pipeline. The caller confirms successful output before those records
+/// become the displayed state.
 ///
 /// # Usage notes
 ///
@@ -184,6 +187,11 @@ impl Default for Cursor {
 /// appropriate when another abstraction owns the output buffering but
 /// wants the same diff, cursor, style, and scroll planning.
 pub struct Renderer {
+    /// Allocated when a placement first needs tracking.
+    pub(crate) placements: Option<Box<super::placements::State>>,
+    pub(super) protected_rows: Vec<bool>,
+    pub(super) invalid_rows: Vec<bool>,
+    pub(super) pen_unknown: bool,
     /// The current (on-screen) buffer state.
     pub(super) cur_buf: Option<RenderBuffer>,
     /// Staging buffer: equals the caller's front buffer after
@@ -267,6 +275,10 @@ impl Renderer {
     /// Never panics.
     pub fn new() -> Self {
         Self {
+            placements: None,
+            protected_rows: Vec::new(),
+            invalid_rows: Vec::new(),
+            pen_unknown: false,
             cur_buf: None,
             back_buf: RenderBuffer::new(0, 0),
             old_hashes: Vec::new(),

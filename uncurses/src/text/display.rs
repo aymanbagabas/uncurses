@@ -71,6 +71,7 @@ pub trait Encode: Surface {
     /// primary already carries the full grapheme cluster. Colors are written
     /// as stored; use [`encode_with`](Self::encode_with) to downsample them to
     /// a color [`Profile`].
+    /// Placement cells become blanks with their stored styles.
     ///
     /// # Errors
     ///
@@ -102,6 +103,8 @@ pub trait Encode: Surface {
     /// when formatted, so `surface.display().to_string()` produces the encoded
     /// string and `write!(w, "{}", surface.display())` writes it to any
     /// [`io::Write`] or [`fmt::Write`] sink.
+    ///
+    /// Placement cells become blanks with their stored styles.
     fn display(&self) -> SurfaceDisplay<'_, Self> {
         SurfaceDisplay {
             surface: self,
@@ -168,7 +171,7 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
         // row resets to default, so everything past `last_visible` is dropped.
         let last_visible = (bounds.x..x_end).rev().find(|&x| {
             surface.cell(Position::new(x, y)).is_some_and(|cell| {
-                !cell.is_blank()
+                (!cell.is_blank() && !cell.is_placement())
                     || (profile != Profile::Disabled
                         && !convert_style(cell.style(), profile).is_empty())
             })
@@ -197,7 +200,11 @@ fn encode_surface<S: Surface + ?Sized, W: Write>(
                 write_style_diff(w, &pen, &to)?;
                 pen = to;
             }
-            w.write_all(cell.draw_bytes())?;
+            w.write_all(if cell.is_placement() {
+                b" "
+            } else {
+                cell.draw_bytes()
+            })?;
         }
 
         // Return the row to the default style, closing any open SGR state and
@@ -217,6 +224,49 @@ mod tests {
 
     fn reset() -> &'static str {
         std::str::from_utf8(RESET).unwrap()
+    }
+
+    #[test]
+    fn default_surface_trims_to_empty_rows() {
+        let buf = Buffer::new(3, 2);
+        // Every cell is an unstyled blank space, so each row trims to nothing,
+        // leaving two empty rows separated by CRLF.
+        assert_eq!(buf.display().to_string(), "\r\n");
+    }
+
+    #[test]
+    fn placement_cells_encode_like_styled_blanks_for_each_profile() {
+        use crate::color::Color;
+        for style in [
+            Style::EMPTY,
+            Style::new().bold().bg(Color::Red).link("https://e.x", ""),
+        ] {
+            let mut placements = Buffer::new(6, 2);
+            let mut blanks = Buffer::new(6, 2);
+            for buffer in [&mut placements, &mut blanks] {
+                buffer.set((1, 0), &Cell::new("界", 2, Style::EMPTY));
+                buffer.set((4, 0), &Cell::new("Z", 1, Style::EMPTY));
+            }
+            for pos in [(0, 0), (3, 0), (5, 0), (0, 1), (1, 1)] {
+                let mut placement = Cell::placement(1);
+                placement.set_style(&style);
+                placements.set(pos, &placement);
+                blanks.set(pos, &Cell::new(" ", 1, &style));
+            }
+            for profile in [
+                Profile::TrueColor,
+                Profile::Ansi256,
+                Profile::Ansi,
+                Profile::Ascii,
+                Profile::Disabled,
+            ] {
+                let expected = blanks.display_with(profile).to_string();
+                assert_eq!(placements.display_with(profile).to_string(), expected);
+                let mut bytes = Vec::new();
+                placements.encode_with(&mut bytes, profile).unwrap();
+                assert_eq!(bytes, expected.as_bytes());
+            }
+        }
     }
 
     #[test]

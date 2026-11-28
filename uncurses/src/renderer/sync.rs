@@ -8,8 +8,7 @@
 //! Both paths mark only changed spans. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
-//! Only the cells inside `front_buf.touched(y)` spans are read — no
-//! full-buffer scan.
+//! Only cells inside touched spans participate in synchronization.
 
 use crate::renderer::Renderer;
 use crate::renderer::buffer::{RenderBuffer, TouchedSpan};
@@ -20,6 +19,9 @@ use crate::cell::Cell;
 fn complete_clusters(cells: &[Cell]) -> bool {
     let mut remaining = 0;
     for cell in cells {
+        if cell.is_placement() {
+            return false;
+        }
         match (remaining, cell.width()) {
             (0, 0) => return false,
             (0, width) => remaining = width - 1,
@@ -88,6 +90,18 @@ impl Renderer {
     /// independent continuation styles. Repairs missing continuation cells
     /// under retained, fully visible primaries. Clears `front`'s touched flags.
     pub(crate) fn sync_front(&mut self, front: &mut RenderBuffer) -> bool {
+        self.sync_front_impl::<true>(front)
+            .expect("placement metadata is accepted")
+    }
+
+    pub(crate) fn sync_front_text(&mut self, front: &mut RenderBuffer) -> std::io::Result<bool> {
+        self.sync_front_impl::<false>(front)
+    }
+
+    fn sync_front_impl<const PLACEMENTS: bool>(
+        &mut self,
+        front: &mut RenderBuffer,
+    ) -> std::io::Result<bool> {
         let width = front.width();
         let height = front.height();
         if self.back_buf.width() != width || self.back_buf.height() != height {
@@ -135,16 +149,24 @@ impl Renderer {
                     }
                     continue;
                 }
-                // `RenderBuffer::set_cell` does a value-equality
-                // check before writing, so unchanged cells pay no
-                // clone and no touch.
-                self.back_buf.set_cell(pos, new_cell);
+                if new_cell.is_placement() {
+                    if !PLACEMENTS {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "unregistered placement cell",
+                        ));
+                    }
+                    self.back_buf
+                        .set_cell(pos, &Cell::new(" ", 1, new_cell.style()));
+                } else {
+                    self.back_buf.set_cell(pos, new_cell);
+                }
                 next_primary = x.saturating_add(u16::from(new_cell.width()));
             }
         }
         front.clear_touched();
 
-        self.force_clear || self.back_buf.has_changes() || self.size_changed(width, height)
+        Ok(self.force_clear || self.back_buf.has_changes() || self.size_changed(width, height))
     }
 
     pub(super) fn size_changed(&self, width: u16, height: u16) -> bool {
@@ -167,6 +189,24 @@ mod tests {
         for (x, ch) in content.chars().enumerate() {
             buf.set_cell((x as u16, y), &cell(&ch.to_string()));
         }
+    }
+
+    #[test]
+    fn sync_placement_preserves_style_in_backing_blank() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(2, 1);
+        let style = crate::style::Style::new()
+            .bold()
+            .bg(crate::color::Color::Blue)
+            .link("https://example.com", "");
+        let mut placement = Cell::placement(1);
+        placement.set_style(&style);
+        front.set_cell((0, 0), &placement);
+        renderer.sync_front(&mut front);
+        assert_eq!(
+            renderer.back_buf.cell((0, 0).into()),
+            Some(&Cell::new(" ", 1, style))
+        );
     }
 
     #[test]
@@ -241,6 +281,22 @@ mod tests {
         r.sync_front(&mut front);
         assert_eq!(r.back_buf.width(), 10);
         assert_eq!(r.back_buf.height(), 3);
+    }
+
+    #[test]
+    fn sync_normalizes_an_equal_wide_primary_clipped_by_resize() {
+        let mut renderer = Renderer::new();
+        let mut front = RenderBuffer::new(3, 1);
+        let style = crate::style::Style::new().bold();
+        front.set_cell((1, 0), &Cell::new("\u{754c}", 2, &style));
+        renderer.sync_front(&mut front);
+
+        front.resize(2, 1);
+        renderer.sync_front(&mut front);
+        assert_eq!(
+            renderer.back_buf.cell((1, 0).into()),
+            Some(&Cell::new(" ", 1, style))
+        );
     }
 
     #[test]

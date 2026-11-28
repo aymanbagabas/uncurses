@@ -13,6 +13,11 @@ impl Renderer {
     /// the default style (emits SGR reset and/or hyperlink terminator
     /// only when the current pen actually has something set).
     pub(crate) fn update_pen(&mut self, out: &mut Vec<u8>, cell: Option<&Cell>) -> io::Result<()> {
+        if self.pen_unknown {
+            out.extend_from_slice(b"\x1b]8;;\x1b\\\x1b[m");
+            self.cur.set_style(Style::default());
+            self.pen_unknown = false;
+        }
         // Raw-equality fast path: most cells in a styled run share the
         // exact same style (including any open link) as the last cell
         // that updated the pen, so a direct comparison (no clones,
