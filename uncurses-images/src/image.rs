@@ -26,6 +26,10 @@ pub struct Image {
 }
 
 impl Image {
+    pub(crate) fn same_source(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.pixels, &other.pixels)
+    }
+
     /// Maximum encoded file length: 32 MiB.
     pub const MAX_ENCODED_BYTES: u64 = 32 * 1024 * 1024;
     /// Maximum source pixel count.

@@ -15,6 +15,8 @@ use super::kitty;
 
 use uncurses::ansi::graphics::KITTY_PLACEHOLDER_DIACRITICS as DIACRITICS;
 
+pub(crate) mod compression;
+
 #[derive(Debug)]
 pub(crate) struct Resource {
     pub id: u32,
@@ -29,7 +31,8 @@ pub(crate) struct Resource {
 /// its final cells are cleared. This value performs no terminal I/O.
 ///
 /// Kitty placeholders require [`uncurses::color::Profile::TrueColor`] and
-/// underline-color support.
+/// underline-color support. [`crate::ImageRenderer`] manages their resources
+/// and frame output.
 #[derive(Clone, Debug)]
 pub struct CellImage {
     cells: Arc<Buffer>,
@@ -128,6 +131,16 @@ impl Image {
 fn placement_id(id: u32) -> u8 {
     // Separate zero and nonzero high bytes so omitted zero cannot inherit a neighboring image's nonzero byte.
     1 + u8::from(id >> 24 == 0)
+}
+
+pub(crate) fn image_id(cell: &Cell) -> Option<u32> {
+    let (_, _, high) = compression::coordinates(cell)?;
+    let high = DIACRITICS[..256].binary_search(&high).ok()? as u8;
+    let Some(Color::Rgb(red, green, blue)) = cell.style().fg else {
+        return None;
+    };
+    let id = u32::from_be_bytes([high, red, green, blue]);
+    (cell.style().underline_color == Some(Color::Rgb(0, 0, placement_id(id)))).then_some(id)
 }
 
 fn placeholder_cells(size: Size, id: u32) -> Buffer {
