@@ -180,7 +180,7 @@ pub enum UnderlineStyle {
 ///
 /// Cloning is cheap for hyperlinks: the [`Link`] is reference-counted so a
 /// long span of identically-linked cells keeps a single shared allocation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Style {
     /// Foreground/text color.
     ///
@@ -203,6 +203,30 @@ pub struct Style {
     pub attrs: AttrFlags,
     /// Optional OSC 8 hyperlink target.
     pub link: Option<Arc<Link>>,
+}
+
+impl Clone for Style {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            fg: self.fg,
+            bg: self.bg,
+            underline_color: self.underline_color,
+            underline: self.underline,
+            attrs: self.attrs,
+            link: self.link.clone(),
+        }
+    }
+
+    #[inline]
+    fn clone_from(&mut self, source: &Self) {
+        self.fg = source.fg;
+        self.bg = source.bg;
+        self.underline_color = source.underline_color;
+        self.underline = source.underline;
+        self.attrs = source.attrs;
+        self.link.clone_from(&source.link);
+    }
 }
 
 impl PartialEq for Style {

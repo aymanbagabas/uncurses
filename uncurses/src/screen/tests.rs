@@ -18,6 +18,152 @@ fn screen_is_send_sync() {
     assert_send_sync::<Screen<crate::terminal::Stdout>>();
 }
 
+#[test]
+fn shrink_then_grow_preserves_a_retained_wide_glyph() {
+    let glyph = "\u{1f469}\u{200d}\u{1f4bb}";
+    for render_clipped in [false, true] {
+        let mut screen = Screen::new(Vec::new(), (5, 1));
+        screen.set_cell((0, 0), &Cell::new(glyph, 4, Style::EMPTY));
+        screen.render().unwrap();
+
+        screen.resize((2, 1));
+        if render_clipped {
+            screen.render().unwrap();
+        }
+        screen.resize((5, 1));
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        let output = std::str::from_utf8(screen.writer()).unwrap();
+        assert!(output.contains(glyph), "render_clipped={render_clipped}");
+
+        screen.writer_mut().clear();
+        screen.cell_mut((2, 0)).unwrap();
+        screen.render().unwrap();
+        assert!(
+            screen.writer().is_empty(),
+            "render_clipped={render_clipped}"
+        );
+
+        screen.writer_mut().clear();
+        screen.set_cell((2, 0), &Cell::new("X", 1, Style::EMPTY));
+        screen.render().unwrap();
+        let output = std::str::from_utf8(screen.writer()).unwrap();
+        assert!(output.contains('X'), "render_clipped={render_clipped}");
+        assert_eq!(screen.diverge(), None, "render_clipped={render_clipped}");
+    }
+}
+
+#[test]
+fn shrink_then_grow_preserves_an_explicit_write_before_render() {
+    let glyph = "\u{1f469}\u{200d}\u{1f4bb}";
+    for (render_clipped, write_width, content) in [
+        (false, 5, "X"),
+        (true, 5, "X"),
+        (false, 3, "X"),
+        (false, 5, " "),
+    ] {
+        let mut screen = Screen::new(Vec::new(), (5, 1));
+        screen.set_cell((0, 0), &Cell::new(glyph, 4, Style::EMPTY));
+        screen.render().unwrap();
+
+        screen.resize((2, 1));
+        if render_clipped {
+            screen.render().unwrap();
+        }
+        screen.resize((write_width, 1));
+        screen.writer_mut().clear();
+        let write = Cell::new(content, 1, Style::EMPTY);
+        screen.set_cell((2, 0), &write);
+        if write_width < 5 {
+            screen.resize((5, 1));
+        }
+        screen.render().unwrap();
+
+        assert_eq!(
+            screen.cell((2, 0).into()).unwrap().content(),
+            content,
+            "render_clipped={render_clipped}"
+        );
+        let output = std::str::from_utf8(screen.writer()).unwrap();
+        if content == "X" {
+            assert!(output.contains('X'), "render_clipped={render_clipped}");
+        }
+        assert!(!output.contains(glyph), "render_clipped={render_clipped}");
+        assert_eq!(screen.diverge(), None, "render_clipped={render_clipped}");
+    }
+}
+
+#[test]
+fn clipped_continuation_style_does_not_color_a_visible_blank() {
+    let mut screen = Screen::new(Vec::new(), (5, 1));
+    screen.set_color_profile(Profile::TrueColor);
+    screen.set_cell(
+        (0, 0),
+        &Cell::new("\u{1f469}\u{200d}\u{1f4bb}", 4, Style::EMPTY),
+    );
+    screen.render().unwrap();
+    screen.resize((2, 1));
+    screen.render().unwrap();
+    assert!(screen.cell((1, 0).into()).unwrap().is_continuation());
+
+    screen.writer_mut().clear();
+    screen
+        .cell_mut((1, 0))
+        .unwrap()
+        .set_style(Style::new().bg(Color::Blue));
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn continuation_style_changes_reach_the_renderer() {
+    let mut screen = Screen::new(Vec::new(), (4, 1));
+    screen.set_cell((0, 0), &Cell::new("界", 2, Style::EMPTY));
+    screen.render().unwrap();
+
+    let style = Style::new()
+        .bg(Color::Blue)
+        .link("https://example.test/continuation", "id=continuation");
+    screen.cell_mut((1, 0)).unwrap().set_style(&style);
+    screen.render().unwrap();
+    assert_eq!(screen.diverge(), None);
+    let continuation = screen.cell((1, 0).into()).unwrap();
+    assert!(continuation.is_continuation());
+    assert_eq!(continuation.style(), style);
+
+    screen.writer_mut().clear();
+    screen.cell_mut((1, 0)).unwrap().set_style(style);
+    screen.render().unwrap();
+    assert!(screen.writer().is_empty());
+}
+
+#[test]
+fn primary_style_changes_preserve_continuation_styles() {
+    for (content, width) in [("界", 2), ("abcd", 4)] {
+        let mut screen = Screen::new(Vec::new(), (6, 1));
+        screen.set_cell((0, 0), &Cell::new(content, width, Style::EMPTY));
+        screen.render().unwrap();
+
+        screen
+            .cell_mut((0, 0))
+            .unwrap()
+            .set_style(Style::new().fg(Color::Green));
+        for x in 1..u16::from(width) {
+            screen.cell_mut((x, 0)).unwrap().set_style(
+                Style::new()
+                    .bg(Color::Indexed(x as u8))
+                    .link(format!("https://example.test/{x}"), ""),
+            );
+        }
+        screen.render().unwrap();
+        assert_eq!(screen.diverge(), None, "stored width {width}");
+
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+}
+
 /// Test-only construction and a few shims mirroring the historical renderer
 /// API the render tests were written against, so they read the same way while
 /// driving the split [`Screen`].
