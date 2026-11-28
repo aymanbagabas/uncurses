@@ -362,6 +362,7 @@ fn update_cost_blank(clear_blank: &Cell, to_line: Option<&[Cell]>, width: usize)
 mod tests {
     use super::*;
     use crate::renderer::Renderer;
+    use crate::style::Style;
 
     fn renderer_with_hashes(old: Vec<u64>, new: Vec<u64>, height: u16) -> (Renderer, RenderBuffer) {
         let mut r = Renderer::new();
@@ -479,7 +480,7 @@ mod tests {
         for y in 0..height {
             for x in 0..width {
                 let ch = char::from_u32('a' as u32 + y as u32).unwrap();
-                old_buf.set_cell((x, y), &Cell::new(ch.to_string(), 1));
+                old_buf.set_cell((x, y), &Cell::new(ch.to_string(), 1, Style::EMPTY));
             }
         }
         for y in 0..height {
@@ -491,10 +492,10 @@ mod tests {
                 } else {
                     char::from_u32('a' as u32 + (y as u32 + 1)).unwrap()
                 };
-                new_buf.set_cell((x, y), &Cell::new(src.to_string(), 1));
+                new_buf.set_cell((x, y), &Cell::new(src.to_string(), 1, Style::EMPTY));
             }
         }
-        new_buf.set_cell((0, 0), &Cell::new("Z", 1));
+        new_buf.set_cell((0, 0), &Cell::new("Z", 1, Style::EMPTY));
 
         let mut old_hashes = vec![0u64; height as usize];
         let mut new_hashes = vec![0u64; height as usize];

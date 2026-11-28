@@ -25,10 +25,11 @@
 //! ```rust,ignore
 //! use uncurses::buffer::{Buffer, Surface, SurfaceMut};
 //! use uncurses::cell::Cell;
+//! use uncurses::style::Style;
 //! use uncurses::layout::Position;
 //!
 //! let mut buf = Buffer::new(4, 2);
-//! buf.set_cell(Position::new(0, 0), &Cell::new("x", 1));
+//! buf.set_cell(Position::new(0, 0), &Cell::new("x", 1, Style::EMPTY));
 //! assert_eq!(buf.cell(Position::new(0, 0)).unwrap().content(), "x");
 //! ```
 //!
@@ -355,7 +356,8 @@ impl Buffer {
                 // Preserve the broken wide cell's bg/attributes on the
                 // blanks so clearing it doesn't punch a hole in a colored
                 // background.
-                let blank = Cell::BLANK.style(line[pc].style.clone());
+                let mut blank = Cell::BLANK;
+                blank.set_style(line[pc].style());
                 line[pc..end].fill(blank);
             } else if line[pc].is_continuation() {
                 // Buffer is corrupted — just blank the single cell
@@ -367,7 +369,8 @@ impl Buffer {
         if line[x].is_wide() {
             let w = line[x].width() as usize;
             let end = (x + w).min(width);
-            let blank = Cell::BLANK.style(line[x].style.clone());
+            let mut blank = Cell::BLANK;
+            blank.set_style(line[x].style());
             line[x + 1..end].fill(blank);
         }
 
@@ -383,7 +386,9 @@ impl Buffer {
             // the continuations down first would leave the row holding the
             // tail of a cell whose primary this branch then replaces.
             if x + cell_width > width {
-                line[x] = Cell::BLANK.style(cell.style.clone());
+                let mut blank = Cell::BLANK;
+                blank.set_style(cell.style());
+                line[x] = blank;
                 return;
             }
 
@@ -392,12 +397,15 @@ impl Buffer {
                 if line[i].is_wide() {
                     let w = line[i].width() as usize;
                     let end = (i + w).min(width);
-                    let blank = Cell::BLANK.style(line[i].style.clone());
+                    let mut blank = Cell::BLANK;
+                    blank.set_style(line[i].style());
                     line[i + 1..end].fill(blank);
                 }
                 // Continuations inherit the wide primary's style so the
                 // cell's bg/attributes are coherent across both columns.
-                line[i] = Cell::CONTINUATION.style(cell.style.clone());
+                let mut continuation = Cell::CONTINUATION;
+                continuation.set_style(cell.style());
+                line[i] = continuation;
             }
         }
 
@@ -501,7 +509,8 @@ impl SurfaceMut for Buffer {
 
         let step = (cell.width() as u16).max(1);
         if step > 1 {
-            let blank = Cell::BLANK.style(cell.style.clone());
+            let mut blank = Cell::BLANK;
+            blank.set_style(cell.style());
             // Stepped wide-cell fill: identical to the trait default.
             // Inlined here so the SurfaceMut::fill_rect dispatch goes
             // through this impl in both arms.
@@ -540,7 +549,8 @@ impl SurfaceMut for Buffer {
                 }
                 if !line[p].is_continuation() {
                     let pw = line[p].width() as usize;
-                    let blank = Cell::BLANK.style(line[p].style.clone());
+                    let mut blank = Cell::BLANK;
+                    blank.set_style(line[p].style());
                     let end = (p + pw).min(lo);
                     line[p..end].fill(blank.clone());
                     // The same cell can also reach past `hi`, which is what
@@ -569,7 +579,8 @@ impl SurfaceMut for Buffer {
                 if !line[p].is_continuation() && p + (line[p].width() as usize) > hi {
                     let pw = line[p].width() as usize;
                     let end = (p + pw).min(row_width);
-                    let blank = Cell::BLANK.style(line[p].style.clone());
+                    let mut blank = Cell::BLANK;
+                    blank.set_style(line[p].style());
                     line[hi..end].fill(blank);
                 }
             }

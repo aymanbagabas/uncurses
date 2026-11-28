@@ -129,8 +129,10 @@ Use one input consumer in steady state; shared readers compete for events.
   a position. Both `TextSurface` and `Painter` use this argument order.
 - Measure text with the destination's width policy, such as `screen.str_width`.
   Byte length and character count can differ from terminal column width.
-- `Cell::new(content, width)` takes an explicit column width. Use
-  `cell.content()` and `cell.width()` to read those values. Surface writes
+- `Cell::new(content, width, style)` takes an explicit width and style.
+  Use `Style::EMPTY` for the default style. Use `cell.style()` to read a
+  style and `cell.set_style(style)` to change it. Use `cell.content()` and
+  `cell.width()` to read the content and width. Surface writes
   create continuation cells automatically. Prefer `set_str` for ordinary text.
 - `screen.set_cursor_position((x, y))` stages a position that persists across
   frames. `render()` applies it after the cell diff.
