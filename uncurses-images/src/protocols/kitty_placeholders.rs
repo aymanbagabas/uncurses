@@ -136,11 +136,11 @@ fn placement_id(id: u32) -> u8 {
 pub(crate) fn image_id(cell: &Cell) -> Option<u32> {
     let (_, _, high) = compression::coordinates(cell)?;
     let high = DIACRITICS[..256].binary_search(&high).ok()? as u8;
-    let Some(Color::Rgb(red, green, blue)) = cell.style.fg else {
+    let Some(Color::Rgb(red, green, blue)) = cell.style().fg else {
         return None;
     };
     let id = u32::from_be_bytes([high, red, green, blue]);
-    (cell.style.underline_color == Some(Color::Rgb(0, 0, placement_id(id)))).then_some(id)
+    (cell.style().underline_color == Some(Color::Rgb(0, 0, placement_id(id)))).then_some(id)
 }
 
 fn placeholder_cells(size: Size, id: u32) -> Buffer {

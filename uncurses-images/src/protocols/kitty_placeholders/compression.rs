@@ -29,15 +29,16 @@ pub(crate) fn compressed(previous: &Cell, current: &Cell) -> Option<Cell> {
     (cy == py
         && cx == px + 1
         && ch == ph
-        && current.style.fg == previous.style.fg
-        && current.style.underline_color == previous.style.underline_color)
-        .then(|| Cell::new("\u{10eeee}", 1).style(&current.style))
+        && current.style().fg == previous.style().fg
+        && current.style().underline_color == previous.style().underline_color)
+        .then(|| Cell::new("\u{10eeee}", 1, current.style()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use uncurses::color::Color;
+    use uncurses::style::Style;
 
     fn placeholder(y: usize, x: usize, high: Option<usize>) -> Cell {
         let table = KITTY_PLACEHOLDER_DIACRITICS;
@@ -45,7 +46,7 @@ mod tests {
         if let Some(high) = high {
             text.push(table[high]);
         }
-        Cell::new(&text, 1)
+        Cell::new(&text, 1, Style::EMPTY)
     }
 
     #[test]
@@ -53,16 +54,18 @@ mod tests {
         let first = placeholder(2, 4, Some(3));
         let next = placeholder(2, 5, Some(3));
         assert_eq!(compressed(&first, &next).unwrap().content(), "\u{10eeee}");
+        let mut colored = first.clone();
+        colored.set_style(Style::new().fg(Color::Red));
+        let mut underlined = first.clone();
+        underlined.set_style(Style::new().underline_color(Color::Red));
         for previous in [
             Cell::BLANK,
-            Cell::new("\u{10eeee}", 1),
+            Cell::new("\u{10eeee}", 1, Style::EMPTY),
             placeholder(1, 4, Some(3)),
             placeholder(2, 3, Some(3)),
             placeholder(2, 4, Some(2)),
-            first
-                .clone()
-                .style(uncurses::style::Style::new().fg(Color::Red)),
-            first.style(uncurses::style::Style::new().underline_color(Color::Red)),
+            colored,
+            underlined,
         ] {
             assert_eq!(compressed(&previous, &next), None);
         }
