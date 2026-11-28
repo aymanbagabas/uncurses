@@ -231,6 +231,10 @@ impl Buffer {
         let width = self.width as usize;
         let base = pos.y as usize * width;
         let x = pos.x as usize;
+        if incoming.width() == 1 && self.cells[base + x].width() == 1 {
+            self.replace_packed(base + x, incoming);
+            return;
+        }
         if x > 0 && self.cells[base + x].is_continuation() {
             let mut primary = x - 1;
             while primary > 0 && self.cells[base + primary].is_continuation() {

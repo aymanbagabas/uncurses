@@ -30,7 +30,8 @@
 //! ```
 
 use crate::buffer::SurfaceMut;
-use crate::cell::Cell;
+use crate::cell::storage::{PackedCell, Resources};
+use crate::cell::{BorrowedCell, Cell, CellRef};
 use crate::layout::{Position, Rect, overruns};
 use crate::style::Style;
 
@@ -386,6 +387,7 @@ struct LiteralTail<'a> {
 /// edge. Each grapheme cluster is drawn with `style`; inline escapes are not
 /// interpreted (they are segmented and drawn like any other text). Newline and
 /// carriage return reposition within `clip`.
+/// A single visible scalar that fits inside the clip bypasses segmentation.
 #[allow(clippy::too_many_arguments)]
 fn paint_literal<S: SurfaceMut + ?Sized>(
     target: &mut S,
@@ -397,6 +399,46 @@ fn paint_literal<S: SurfaceMut + ?Sized>(
     eaw_wide: bool,
     style: &Style,
 ) -> Position {
+    // Test the whole input, not its first byte: ASCII can start a combining grapheme.
+    if s.len() == 1 && (b' '..=b'~').contains(&s.as_bytes()[0]) && clip.contains(start) {
+        let ascii = char::from(s.as_bytes()[0]);
+        if let Some(cell) = PackedCell::from_scalar(Some(ascii), 1, style) {
+            target.set_cell(start, CellRef::packed(&cell, Resources::empty_ref()));
+        } else {
+            target.set_cell(start, Cell::new(s, 1).style(style.clone()).as_ref());
+        }
+        return Position::new(start.x + 1, start.y);
+    }
+    paint_literal_unicode(target, start, clip, s, wrap, mode, eaw_wide, style)
+}
+
+// Keep segmentation and width measurement outside the ASCII write path.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn paint_literal_unicode<S: SurfaceMut + ?Sized>(
+    target: &mut S,
+    start: Position,
+    clip: Rect,
+    s: &str,
+    wrap: WrapMode,
+    mode: WidthMode,
+    eaw_wide: bool,
+    style: &Style,
+) -> Position {
+    if let Some(scalar) = s.chars().next()
+        && scalar.len_utf8() == s.len()
+        && clip.contains(start)
+    {
+        let width = mode.grapheme_width(s, eaw_wide);
+        if width != 0 && !overruns(start.x, u16::from(width), clip.right()) {
+            if let Some(cell) = PackedCell::from_scalar(Some(scalar), width, style) {
+                target.set_cell(start, CellRef::packed(&cell, Resources::empty_ref()));
+            } else {
+                target.set_cell(start, BorrowedCell::new(s, width, style).as_ref());
+            }
+            return Position::new(start.x + u16::from(width), start.y);
+        }
+    }
     paint_literal_inner(target, start, clip, s, wrap, mode, eaw_wide, style, None)
 }
 
@@ -515,8 +557,10 @@ fn paint_literal_inner<S: SurfaceMut + ?Sized>(
             }
         }
         if clip.contains(Position::new(x, y)) {
-            let cell = Cell::new(cluster, cw);
-            target.set_cell(Position::new(x, y), cell.style(style.clone()).as_ref());
+            target.set_cell(
+                Position::new(x, y),
+                BorrowedCell::new(cluster, cw, style).as_ref(),
+            );
         }
         x += w;
     }
@@ -551,8 +595,191 @@ fn stamp_literal_tail<S: SurfaceMut + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::TextBuffer;
+    use crate::buffer::{Buffer, Surface, TextBuffer, View};
+    use crate::color::Color;
     use crate::style::Style;
+
+    #[test]
+    fn single_ascii_matches_general_paint_at_clip_edges() {
+        let style = Style::new().fg(Color::Red).bg(Color::Blue).bold();
+        for clip in [Rect::new(2, 1, 3, 2), Rect::new(2, 1, 0, 2)] {
+            for start in [
+                (2, 1),
+                (4, 1),
+                (5, 1),
+                (5, 2),
+                (1, 1),
+                (2, 0),
+                (2, 3),
+                (u16::MAX, u16::MAX),
+            ] {
+                for wrap in [WrapMode::Truncate, WrapMode::Wrap] {
+                    let mut fast = Buffer::new(8, 4);
+                    let mut general = fast.clone();
+                    let actual = View::new(&mut fast, clip).set_str_wrap(start, "A", wrap, &style);
+                    let expected = paint_literal_inner(
+                        &mut general,
+                        start.into(),
+                        clip,
+                        "A",
+                        wrap,
+                        WidthMode::Wc,
+                        false,
+                        &style,
+                        None,
+                    );
+                    assert_eq!(actual, expected, "{clip:?}, {start:?}, {wrap:?}");
+                    for y in 0..4 {
+                        assert_eq!(fast.row(y), general.row(y));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_literal_matches_segmented_cell_writes() {
+        use crate::cell::Cell;
+
+        let plain = Style::new().fg(Color::Indexed(0)).bg(Color::Rgb(3, 5, 7));
+        let rich = plain
+            .clone()
+            .underline_color(Color::Green)
+            .link("https://example.test/unicode", "id=unicode");
+        let clip = Rect::new(2, 1, 3, 2);
+        for text in [
+            "é",
+            "界",
+            "…",
+            "🇯",
+            "\u{301}",
+            "\u{200d}",
+            "\r",
+            "\n",
+            "\r\n",
+            "\x1b",
+            "e\u{301}",
+            "👩‍💻",
+            "✋\u{fe0e}",
+            "",
+        ] {
+            for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+                for eaw in [false, true] {
+                    for style in [&plain, &rich] {
+                        for start in [(2, 1), (4, 1), (5, 1), (4, 2), (1, 1), (2, 0), (2, 3)] {
+                            for wrap in [WrapMode::Truncate, WrapMode::Wrap] {
+                                let mut actual =
+                                    Buffer::new(8, 4).with_width_mode(mode).with_eaw_wide(eaw);
+                                let mut expected = actual.clone();
+                                let result = View::new(&mut actual, clip)
+                                    .set_str_wrap(start, text, wrap, style);
+                                // Keep portable Cell construction as an independent
+                                // oracle for the borrowed import path.
+                                struct Owned<'a>(&'a mut Buffer);
+                                impl crate::buffer::Bounded for Owned<'_> {
+                                    fn bounds(&self) -> Rect {
+                                        self.0.bounds()
+                                    }
+                                }
+                                impl Surface for Owned<'_> {
+                                    fn cell(&self, pos: Position) -> Option<CellRef<'_>> {
+                                        self.0.cell(pos)
+                                    }
+                                }
+                                impl SurfaceMut for Owned<'_> {
+                                    fn set_cell(&mut self, pos: Position, cell: CellRef<'_>) {
+                                        let value = Cell::new(cell.content(), cell.width())
+                                            .style(cell.to_style());
+                                        self.0.set(pos, &value);
+                                    }
+                                    fn set_style(&mut self, pos: Position, style: Style) {
+                                        self.0.set_style(pos, style);
+                                    }
+                                }
+                                let position = paint_literal_inner(
+                                    &mut Owned(&mut expected),
+                                    start.into(),
+                                    clip,
+                                    text,
+                                    wrap,
+                                    mode,
+                                    eaw,
+                                    style,
+                                    None,
+                                );
+                                assert_eq!(
+                                    result, position,
+                                    "{text:?}, {start:?}, {mode:?}, {eaw}"
+                                );
+                                for y in 0..4 {
+                                    assert_eq!(actual.row(y), expected.row(y), "{text:?}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (text, mode, eaw, width) in [
+            ("é", WidthMode::Wc, false, 1),
+            ("界", WidthMode::Grapheme, false, 2),
+            ("…", WidthMode::Wc, true, 2),
+            ("…", WidthMode::Grapheme, false, 1),
+            ("🇯", WidthMode::Wc, false, 1),
+            ("🇯", WidthMode::Grapheme, false, 2),
+        ] {
+            let mut buffer = Buffer::new(4, 1).with_width_mode(mode).with_eaw_wide(eaw);
+            assert_eq!(
+                buffer.set_str((0, 0), text, &plain),
+                Position::new(width, 0)
+            );
+            assert_eq!(buffer.cell((0, 0).into()).unwrap().content(), text);
+        }
+    }
+
+    #[test]
+    fn literal_short_inputs_preserve_styles_and_whole_graphemes() {
+        let rich = Style::new()
+            .fg(Color::Rgb(3, 5, 7))
+            .underline_color(Color::Green)
+            .link("https://example.test/literal", "id=literal");
+        let blank = Style::new().bg(Color::Blue).italic();
+        for (text, style) in [
+            ("A", &rich),
+            (" ", &blank),
+            ("e\u{301}", &rich),
+            ("\u{301}", &blank),
+            ("\r\nA", &rich),
+            ("\x1b", &blank),
+            ("界", &rich),
+        ] {
+            for mode in [WidthMode::Wc, WidthMode::Grapheme] {
+                let mut fast = Buffer::new(4, 2).with_width_mode(mode).with_eaw_wide(true);
+                let mut general = fast.clone();
+                let original = style.clone();
+                let actual = fast.set_str((0, 0), text, style);
+                let expected = paint_literal_inner(
+                    &mut general,
+                    Position::new(0, 0),
+                    Rect::new(0, 0, 4, 2),
+                    text,
+                    WrapMode::Truncate,
+                    mode,
+                    true,
+                    style,
+                    None,
+                );
+                assert_eq!(actual, expected, "{text:?}, {mode:?}");
+                for y in 0..2 {
+                    assert_eq!(fast.row(y), general.row(y), "{text:?}, {mode:?}");
+                }
+                assert_eq!(*style, original);
+                if text == "A" || text == " " {
+                    assert!(fast.cell(Position::new(0, 0)).unwrap().style_eq(style));
+                }
+            }
+        }
+    }
 
     /// `right()` is exclusive and saturates at `u16::MAX`, so a row that ends
     /// at the top of the address space can leave `x` equal to it. Adding the

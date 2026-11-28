@@ -107,6 +107,45 @@ fn primary_style_changes_preserve_continuation_styles() {
     }
 }
 
+#[test]
+fn unicode_literal_frames_preserve_glyphs_and_independent_styles() {
+    let mut screen = Screen::new(Vec::new(), (12, 1));
+    screen.set_grapheme_clusters(true);
+    for (wide, combined, style) in [
+        ("界", "e\u{301}", Style::new()),
+        ("漢", "a\u{308}", Style::new().fg(Color::Rgb(3, 5, 7))),
+        ("漢", "e\u{301}", Style::new().fg(Color::Indexed(4))),
+        (
+            "語",
+            "a\u{308}",
+            Style::new()
+                .underline_color(Color::Green)
+                .link("https://example.test/frame", "id=frame"),
+        ),
+        ("界", "e\u{301}", Style::new()),
+    ] {
+        assert_eq!(
+            screen.set_str((0, 0), combined, &style),
+            Position::new(1, 0)
+        );
+        assert_eq!(screen.set_str((2, 0), wide, &style), Position::new(4, 0));
+        assert_eq!(screen.set_str((5, 0), "👩‍💻", &style), Position::new(7, 0));
+        screen.set_str((9, 0), "é", &style);
+        let continuation = Style::new().bg(Color::Blue);
+        screen.set_style((3, 0), continuation.clone());
+        screen.render().unwrap();
+        assert_eq!(screen.diverge(), None);
+        assert_eq!(screen.cell((0, 0).into()).unwrap().content(), combined);
+        assert_eq!(screen.cell((2, 0).into()).unwrap().content(), wide);
+        assert_eq!(screen.cell((2, 0).into()).unwrap().width(), 2);
+        assert_eq!(screen.cell((3, 0).into()).unwrap().to_style(), continuation);
+        assert!(screen.cell((2, 0).into()).unwrap().style_eq(&style));
+        screen.writer_mut().clear();
+        screen.render().unwrap();
+        assert!(screen.writer().is_empty());
+    }
+}
+
 /// Test-only construction and a few shims mirroring the historical renderer
 /// API the render tests were written against, so they read the same way while
 /// driving the split [`Screen`].
@@ -2522,6 +2561,55 @@ fn inline_erase_until_end_of_line_clears_trailing_cells() {
         cleared,
         "no clearing sequence in cumulative output: {out:?}"
     );
+}
+
+#[test]
+fn single_ascii_redraw_matches_portable_cells_and_records_precise_damage() {
+    let styles = [
+        Style::new().fg(Color::Red).bold(),
+        Style::new().bg(Color::Blue),
+        Style::new()
+            .underline_color(Color::Green)
+            .link("https://example.test/redraw", "id=redraw"),
+    ];
+    let mut fast = Screen::for_test(Vec::new(), (3, 2));
+    let mut portable = Screen::for_test(Vec::new(), (3, 2));
+    for texts in [["A", " ", "~"], ["B", " ", "!"]] {
+        for y in 0..2 {
+            for x in 0..3 {
+                let text = texts[x as usize];
+                let style = &styles[x as usize];
+                fast.set_str((x, y), text, style);
+                portable.set_cell((x, y), &Cell::new(text, 1).style(style));
+            }
+        }
+        fast.render().unwrap();
+        portable.render().unwrap();
+        assert_eq!(fast.writer(), portable.writer());
+        assert_eq!(fast.diverge(), None);
+        let bytes = fast.writer().len();
+        for y in 0..2 {
+            for x in 0..3 {
+                fast.set_str((x, y), texts[x as usize], &styles[x as usize]);
+            }
+        }
+        assert!(!fast.front_buf.has_changes());
+        fast.render().unwrap();
+        assert_eq!(fast.writer().len(), bytes);
+
+        fast.clear();
+        for y in 0..2 {
+            for x in 0..3 {
+                fast.set_str((x, y), texts[x as usize], &styles[x as usize]);
+            }
+        }
+        fast.render().unwrap();
+        assert_eq!(fast.writer().len(), bytes);
+    }
+    fast.set_str((1, 1), "X", &styles[0]);
+    let span = fast.front_buf.touched(1).unwrap();
+    assert_eq!((span.first, span.last), (1, 1));
+    assert!(fast.front_buf.touched(0).is_none());
 }
 
 #[test]

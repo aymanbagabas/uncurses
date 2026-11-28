@@ -3,8 +3,8 @@
 //! Screens write freely into their `front_buf`; `fill_rect` and bulk
 //! ops mark whole rows as touched even when the resulting content
 //! matches the previous frame. [`Renderer::sync_front`] copies those
-//! touched spans into [`Renderer::back_buf`]. Resource-free narrow spans
-//! use packed copies; other spans use [`RenderBuffer::set_cell`].
+//! touched spans into [`Renderer::back_buf`]. Complete spans use packed
+//! copies or cached arena imports; partial clusters use [`RenderBuffer::set_cell`].
 //! Both paths preserve change filtering. The diff pass then
 //! visits only rows that genuinely changed on the wire.
 //!
@@ -15,9 +15,23 @@ use crate::renderer::Renderer;
 use crate::renderer::buffer::{RenderBuffer, TouchedSpan};
 
 use crate::buffer::{CellRow, Surface};
+use crate::cell::storage::PackedCell;
+
+fn complete_clusters(cells: &[PackedCell]) -> bool {
+    let mut remaining = 0;
+    for cell in cells {
+        match (remaining, cell.width()) {
+            (0, 0) => return false,
+            (0, width) => remaining = width - 1,
+            (_, 0) => remaining -= 1,
+            _ => return false,
+        }
+    }
+    remaining == 0
+}
 
 impl Renderer {
-    fn sync_narrow_span(&mut self, front: &RenderBuffer, y: u16, span: TouchedSpan) -> bool {
+    fn sync_packed_span(&mut self, front: &RenderBuffer, y: u16, span: TouchedSpan) -> bool {
         let Some(source) = front.buffer.row(y) else {
             return false;
         };
@@ -36,21 +50,50 @@ impl Renderer {
         else {
             return false;
         };
-        if !resources.is_empty()
-            || !previous_resources.is_empty()
-            || !cells.iter().chain(previous).all(|cell| cell.width() == 1)
-        {
+        let independent = resources.is_empty() && previous_resources.is_empty()
+            || cells
+                .iter()
+                .chain(previous)
+                .all(|cell| cell.is_resource_free());
+        let narrow = cells.iter().chain(previous).all(|cell| cell.width() == 1);
+        if !narrow && (!complete_clusters(cells) || !complete_clusters(previous)) {
             return false;
         }
-        let Some(first) = cells.iter().zip(previous).position(|(a, b)| a != b) else {
-            return true;
+        let (mut first, mut last) = if independent {
+            let Some(first) = cells.iter().zip(previous).position(|(a, b)| a != b) else {
+                return true;
+            };
+            let last = cells
+                .iter()
+                .zip(previous)
+                .rposition(|(a, b)| a != b)
+                .unwrap()
+                + 1;
+            (first, last)
+        } else {
+            let equal =
+                |a: &PackedCell, b: &PackedCell| resources.value_eq(*a, previous_resources, *b);
+            let Some(first) = cells.iter().zip(previous).position(|(a, b)| !equal(a, b)) else {
+                return true;
+            };
+            let last = cells
+                .iter()
+                .zip(previous)
+                .rposition(|(a, b)| !equal(a, b))
+                .unwrap()
+                + 1;
+            (first, last)
         };
-        let last = cells
-            .iter()
-            .zip(previous)
-            .rposition(|(a, b)| a != b)
-            .unwrap()
-            + 1;
+        // Equal continuations still belong to their primary. Both rows are
+        // complete here, so common primary boundaries close the differences.
+        while cells[first].is_continuation() || previous[first].is_continuation() {
+            first -= 1;
+        }
+        while last < cells.len()
+            && (cells[last].is_continuation() || previous[last].is_continuation())
+        {
+            last += 1;
+        }
         self.back_buf
             .buffer
             .row_mut(y)
@@ -95,7 +138,7 @@ impl Renderer {
             let Some(span) = front.touched(y) else {
                 continue;
             };
-            if self.sync_narrow_span(front, y, span) {
+            if self.sync_packed_span(front, y, span) {
                 continue;
             }
             for x in span.first..=span.last {
@@ -298,7 +341,7 @@ mod tests {
                     reference.set_cell((x, 0), front.cell((x, 0).into()).unwrap());
                 }
                 let span = TouchedSpan { first: 0, last: 7 };
-                assert!(r.sync_narrow_span(&front, 0, span));
+                assert!(r.sync_packed_span(&front, 0, span));
                 for x in 0..8 {
                     assert_eq!(
                         r.back_buf.cell((x, 0).into()),
@@ -310,18 +353,17 @@ mod tests {
                     reference.touched(0).map(|s| (s.first, s.last)),
                 );
                 r.back_buf.clear_touched();
-                assert!(r.sync_narrow_span(&front, 0, span));
+                assert!(r.sync_packed_span(&front, 0, span));
                 assert!(r.back_buf.touched(0).is_none());
             }
         }
     }
 
     #[test]
-    fn narrow_sync_defers_wide_cells_and_arena_resources() {
+    fn packed_sync_imports_selected_arena_resources() {
         use crate::style::Style;
 
         for value in [
-            Cell::new("中", 2),
             Cell::new("e\u{301}", 1),
             Cell::new("l", 1).style(Style::new().link("target", "id=sync")),
         ] {
@@ -330,12 +372,16 @@ mod tests {
             let mut r = Renderer::new();
             r.back_buf.resize(4, 1);
             r.back_buf.clear_touched();
-            assert!(!r.sync_narrow_span(&front, 0, TouchedSpan { first: 0, last: 3 }));
-            assert!(r.back_buf.touched(0).is_none());
+            assert!(r.sync_packed_span(&front, 0, TouchedSpan { first: 0, last: 3 }));
+            assert!(r.back_buf.touched(0).is_some());
             r.sync_front(&mut front);
             for x in 0..4 {
                 assert_eq!(r.back_buf.cell((x, 0).into()), front.cell((x, 0).into()));
             }
+            front.set_cell((1, 0), &cell("x"));
+            assert!(r.sync_packed_span(&front, 0, TouchedSpan { first: 1, last: 2 }));
+            r.sync_front(&mut front);
+            assert_eq!(r.back_buf.buffer.row(0), front.buffer.row(0));
         }
     }
 
@@ -349,7 +395,7 @@ mod tests {
         r.back_buf.clear_touched();
         let mut reference = r.back_buf.clone();
         reference.set_cell((2, 0), &cell("x"));
-        assert!(!r.sync_narrow_span(&front, 0, TouchedSpan { first: 2, last: 2 }));
+        assert!(!r.sync_packed_span(&front, 0, TouchedSpan { first: 2, last: 2 }));
         r.sync_front(&mut front);
         for x in 0..4 {
             assert_eq!(
@@ -361,5 +407,87 @@ mod tests {
             r.back_buf.touched(0).map(|s| (s.first, s.last)),
             reference.touched(0).map(|s| (s.first, s.last)),
         );
+    }
+
+    #[test]
+    fn packed_sync_uses_complete_wide_spans_with_resources_elsewhere() {
+        use crate::color::Color;
+        use crate::style::Style;
+
+        let mut r = Renderer::new();
+        let mut front = RenderBuffer::new(8, 2);
+        let rich =
+            Cell::new("e\u{301}", 1).style(Style::new().link("https://example.test/sync", ""));
+        front.set_cell((0, 0), &rich);
+        front.set_cell((7, 1), &rich);
+        front.set_cell((2, 0), &Cell::new("界", 2));
+        front.set_cell((5, 0), &cell("a"));
+        r.sync_front(&mut front);
+        r.render_back(&mut Vec::new()).unwrap();
+
+        for glyph in ["漢", "語"] {
+            front.set_cell((2, 0), &Cell::new(glyph, 2));
+            front.set_style((3, 0), Style::new().bg(Color::Indexed(4)));
+            front.set_cell((5, 0), &cell("b"));
+            assert!(r.sync_packed_span(&front, 0, TouchedSpan { first: 2, last: 5 }));
+            assert_eq!(r.back_buf.buffer.row(0), front.buffer.row(0));
+            let span = r.back_buf.touched(0).unwrap();
+            assert!(span.first <= 2 && span.last >= 3);
+            r.back_buf.clear_touched();
+        }
+
+        // Only the primary differs; an equal continuation still belongs to it.
+        front.set_style((2, 0), Style::new().fg(Color::Rgb(3, 5, 7)));
+        assert!(r.sync_packed_span(&front, 0, TouchedSpan { first: 2, last: 3 }));
+        assert_eq!(r.back_buf.buffer.row(0), front.buffer.row(0));
+        assert_eq!(r.back_buf.cell((2, 0).into()).unwrap().width(), 2);
+        assert_eq!(r.back_buf.touched(0).unwrap().last, 3);
+        r.back_buf.clear_touched();
+        assert!(r.sync_packed_span(&front, 0, TouchedSpan { first: 2, last: 3 }));
+        assert!(!r.back_buf.has_changes());
+    }
+
+    #[test]
+    fn packed_sync_rejects_partial_source_and_destination_clusters() {
+        for source_wide in [false, true] {
+            let mut r = Renderer::new();
+            let mut front = RenderBuffer::new(6, 1);
+            r.back_buf.resize(6, 1);
+            if source_wide {
+                front.set_cell((2, 0), &Cell::new("界", 2));
+            } else {
+                r.back_buf.set_cell((2, 0), &Cell::new("界", 2));
+            }
+            r.back_buf.clear_touched();
+            for span in [
+                TouchedSpan { first: 2, last: 2 },
+                TouchedSpan { first: 3, last: 4 },
+            ] {
+                assert!(!r.sync_packed_span(&front, 0, span));
+                assert!(!r.back_buf.has_changes());
+            }
+            front.touch_full_line(0);
+            assert!(r.sync_packed_span(&front, 0, front.touched(0).unwrap()));
+            assert_eq!(r.back_buf.buffer.row(0), front.buffer.row(0));
+        }
+    }
+
+    #[test]
+    fn sync_normalizes_a_cluster_split_by_shrink_then_grow() {
+        let mut r = Renderer::new();
+        let mut front = RenderBuffer::new(6, 1);
+        front.set_cell((1, 0), &Cell::new("界", 4));
+        r.sync_front(&mut front);
+        r.render_back(&mut Vec::new()).unwrap();
+
+        front.resize(3, 1);
+        front.resize(6, 1);
+        let mut expected = r.back_buf.clone();
+        for x in 0..6 {
+            expected.set_cell((x, 0), front.cell((x, 0).into()).unwrap());
+        }
+        r.sync_front(&mut front);
+        assert_eq!(r.back_buf.buffer.row(0), expected.buffer.row(0));
+        assert!(r.back_buf.cell((1, 0).into()).unwrap().is_blank());
     }
 }

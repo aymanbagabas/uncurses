@@ -186,8 +186,11 @@ impl CellRowMut<'_> {
     pub(crate) fn copy_from(&mut self, source: CellRow<'_>) {
         assert_eq!(self.len(), source.len());
         if let CellRow::Packed(cells, resources) = source
-            && resources.is_empty()
-            && self.resources.is_empty()
+            && ((resources.is_empty() && self.resources.is_empty())
+                || cells
+                    .iter()
+                    .chain(self.cells.iter())
+                    .all(|cell| cell.is_resource_free()))
         {
             self.cells.copy_from_slice(cells);
             return;
@@ -268,9 +271,44 @@ pub fn blank_line(width: u16) -> Line {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::Buffer;
+    use crate::buffer::{Buffer, Surface};
     use crate::color::Color;
     use crate::style::Style;
+
+    #[test]
+    fn cached_row_imports_release_holds_and_follow_recycled_source_ids() {
+        use crate::text::TextSurface;
+        use std::sync::{Arc, Weak};
+
+        let mut source = Buffer::new(4, 1);
+        let mut target = Buffer::new(4, 1);
+        let mut previous: Weak<crate::style::Link> = Weak::new();
+        for n in 0..24 {
+            let text = if n % 2 == 0 { "e\u{301}" } else { "a\u{308}" };
+            let style = Style::new()
+                .underline_color(Color::Rgb(3, 5, n))
+                .link(format!("https://example.test/{n}"), "");
+            for x in 0..4 {
+                source.set_str((x, 0), text, &style);
+            }
+            target.row_mut(0).unwrap().copy_from(source.row(0).unwrap());
+            assert_eq!(source.row(0), target.row(0));
+            source.resources.audit(&source.cells);
+            target.resources.audit(&target.cells);
+            assert!(previous.upgrade().is_none());
+            previous = Arc::downgrade(style.link_arc().unwrap());
+        }
+        drop(source);
+        assert_eq!(target.cell((0, 0).into()).unwrap().content(), "a\u{308}");
+        assert_eq!(
+            target.cell((0, 0).into()).unwrap().link().unwrap().url,
+            "https://example.test/23"
+        );
+        target.fill(&Cell::BLANK);
+        target.resources.audit(&target.cells);
+        assert!(target.resources.is_empty());
+        assert!(previous.upgrade().is_none());
+    }
 
     #[test]
     fn packed_row_copy_preserves_values_after_resource_reclamation() {
